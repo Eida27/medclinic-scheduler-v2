@@ -2,16 +2,17 @@
   "name": "medclinic-scheduler-v2",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "db:migrate": "tsx scripts/db-migrate.ts",
-    "db:seed": "tsx scripts/db-seed.ts",
-    "db:reset": "tsx scripts/db-reset.ts"
+    "test": "node --env-file=.env.local ./node_modules/vitest/vitest.mjs run",
+    "test:watch": "node --env-file=.env.local ./node_modules/vitest/vitest.mjs",
+    "db:migrate": "tsx --env-file=.env.local scripts/db-migrate.ts",
+    "db:seed": "tsx --env-file=.env.local scripts/db-seed.ts",
+    "db:reset": "tsx --env-file=.env.local scripts/db-reset.ts"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

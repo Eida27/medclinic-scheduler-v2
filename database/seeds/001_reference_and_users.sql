@@ -1,0 +1,33 @@
+INSERT INTO users (id, full_name, email, password_hash, role)
+VALUES
+  ('00000000-0000-4000-8000-000000000001', 'System Admin', 'admin@medclinic.local', crypt('Admin123!', gen_salt('bf', 12)), 'ADMIN'),
+  ('00000000-0000-4000-8000-000000000002', 'Clinic Staff', 'staff@medclinic.local', crypt('Staff123!', gen_salt('bf', 12)), 'CLINIC_STAFF')
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO colleges (id, code, name)
+VALUES
+  ('10000000-0000-4000-8000-000000000001', 'COE', 'College of Engineering'),
+  ('10000000-0000-4000-8000-000000000002', 'CON', 'College of Nursing'),
+  ('10000000-0000-4000-8000-000000000003', 'CCS', 'College of Computer Studies')
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO programs (id, college_id, code, name)
+VALUES
+  ('20000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000001', 'BSCE', 'BS Civil Engineering'),
+  ('20000000-0000-4000-8000-000000000002', '10000000-0000-4000-8000-000000000002', 'BSN', 'BS Nursing'),
+  ('20000000-0000-4000-8000-000000000003', '10000000-0000-4000-8000-000000000003', 'BSIT', 'BS Information Technology')
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO priority_groups (id, name, rank_order)
+VALUES
+  ('30000000-0000-4000-8000-000000000001', 'Graduating', 1),
+  ('30000000-0000-4000-8000-000000000002', 'OJT', 2),
+  ('30000000-0000-4000-8000-000000000003', 'Tour', 3),
+  ('30000000-0000-4000-8000-000000000004', 'Regular', 4)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO clinic_capacity_settings (id, schedule_type, safe_daily_capacity, max_daily_capacity)
+VALUES
+  ('40000000-0000-4000-8000-000000000001', 'PHYSICAL_EXAM', 120, 150),
+  ('40000000-0000-4000-8000-000000000002', 'LABORATORY', 120, 150)
+ON CONFLICT (id) DO NOTHING;
