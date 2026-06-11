@@ -1,14 +1,19 @@
 import { Card, CardTitle } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { dashboardMetrics } from "@/server/repositories/tracking.repository";
 
-const cards = [
-  ["Students", "180", "Active records in the demo dataset"],
-  ["Draft batches", "4", "Ready for validation"],
-  ["Recommended capacity", "120", "Students per service each day"],
-  ["Maximum capacity", "150", "Admin override required above this"],
-];
-
-export default function DashboardPage() {
+export default async function DashboardPage() {
+  const metrics = await dashboardMetrics();
+  const cards = [
+    ["Students", metrics.totalStudents, "Active master records"],
+    ["Pending appointments", metrics.pendingAppointments, "Published appointments awaiting completion"],
+    ["Physical exams complete", metrics.completedPhysicalExams, "Recorded completed results"],
+    ["Laboratory complete", metrics.completedLaboratory, "Recorded completed results"],
+    ["No-shows", metrics.noShows, "Appointments requiring follow-up"],
+    ["Rescheduled", metrics.rescheduled, "Original appointments replaced"],
+    ["Capacity warnings", metrics.overCapacityWarnings, "Service dates above recommended capacity"],
+    ["Unpublished batches", metrics.unpublishedBatches, "Draft, validated, or generated batches"],
+  ];
   return (
     <>
       <PageHeader title="Clinic dashboard" description="A concise view of scheduling and compliance operations." />

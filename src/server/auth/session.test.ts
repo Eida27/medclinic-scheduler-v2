@@ -25,6 +25,8 @@ describe("session tokens", () => {
       role: "CLINIC_STAFF",
     });
 
-    await expect(verifySessionToken(`${token.slice(0, -1)}x`)).rejects.toThrow();
+    const parts = token.split(".");
+    parts[1] = `${parts[1].slice(0, 4)}x${parts[1].slice(5)}`;
+    await expect(verifySessionToken(parts.join("."))).rejects.toThrow();
   });
 });
