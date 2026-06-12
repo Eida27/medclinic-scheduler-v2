@@ -71,6 +71,24 @@ function serviceTypes(scheduleType: "PHYSICAL_EXAM" | "LABORATORY" | "BOTH") {
   return scheduleType === "BOTH" ? ["PHYSICAL_EXAM", "LABORATORY"] as const : [scheduleType];
 }
 
+function requestedCapacityKeys(items: Array<{
+  scheduleType: "PHYSICAL_EXAM" | "LABORATORY" | "BOTH";
+  targetDate: string | null;
+  targetWeekStart: string | null;
+  targetWeekEnd: string | null;
+}>) {
+  const keys = new Set<string>();
+  for (const item of items) {
+    const dates = item.targetDate
+      ? [item.targetDate]
+      : weekdaysInRange(String(item.targetWeekStart), String(item.targetWeekEnd));
+    for (const date of dates) {
+      for (const service of serviceTypes(item.scheduleType)) keys.add(`${date}:${service}`);
+    }
+  }
+  return keys;
+}
+
 export async function validateBatch(batchId: string, actorUserId: string) {
   const batch = await getRuleItems(batchId);
   if (!batch) throw new AppError("BATCH_NOT_FOUND", "Schedule batch not found.", 404);
@@ -106,13 +124,18 @@ export async function validateBatch(batchId: string, actorUserId: string) {
     capacities,
     existingLoad,
   });
+  const capacityKeys = requestedCapacityKeys(candidates);
+  const scopedPreview = {
+    ...preview,
+    capacityResults: preview.capacityResults.filter((result) => capacityKeys.has(`${result.date}:${result.scheduleType}`)),
+  };
 
-  for (const unscheduled of preview.unscheduledItems) {
+  for (const unscheduled of scopedPreview.unscheduledItems) {
     addIssue(unscheduled.scheduleItemId, { code: unscheduled.code, message: unscheduled.message, severity: "CONFLICT" });
   }
-  for (const capacity of preview.capacityResults.filter((result) => result.status !== "VALID")) {
+  for (const capacity of scopedPreview.capacityResults.filter((result) => result.status !== "VALID")) {
     const severity: "WARNING" | "CONFLICT" = capacity.status === "CONFLICT" ? "CONFLICT" : "WARNING";
-    const impacted = preview.appointments.filter((appointment) => appointment.appointmentDate === capacity.date && appointment.scheduleType === capacity.scheduleType);
+    const impacted = scopedPreview.appointments.filter((appointment) => appointment.appointmentDate === capacity.date && appointment.scheduleType === capacity.scheduleType);
     for (const appointment of impacted) {
       const code = capacity.status === "CONFLICT" ? "CAPACITY_CONFLICT" : "CAPACITY_WARNING";
       const existing = issues.get(appointment.scheduleItemId) ?? [];
@@ -132,11 +155,11 @@ export async function validateBatch(batchId: string, actorUserId: string) {
     validCount: itemResults.filter((item) => item.status === "VALID").length,
     warningCount: itemResults.filter((item) => item.status === "WARNING").length,
     conflictCount: itemResults.filter((item) => item.status === "CONFLICT").length,
-    capacityResults: preview.capacityResults,
+    capacityResults: scopedPreview.capacityResults,
   };
   await saveValidation(batchId, actorUserId, summary, itemResults);
   await writeAudit(actorUserId, "SCHEDULE_BATCH_VALIDATED", "schedule_batch", batchId, summary);
-  return { summary, items: itemResults, preview };
+  return { summary, items: itemResults, preview: scopedPreview };
 }
 
 export async function generateBatchAppointments(batchId: string, user: SessionUser, overrideReason?: string) {

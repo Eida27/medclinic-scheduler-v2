@@ -24,6 +24,34 @@ describe("coordinator scheduling workflow", () => {
     expect(conflict.summary.conflictCount).toBe(160);
   });
 
+  it("limits capacity summaries to dates and services requested by the batch", async () => {
+    const conflictBatchId = "50000000-0000-4000-8000-000000000160";
+    const weekBatchId = "50000000-0000-4000-8000-000000000010";
+
+    try {
+      await generateBatchAppointments(conflictBatchId, admin, "Integration test capacity override.");
+      const week = await validateBatch(weekBatchId, admin.userId);
+
+      expect(week.summary.capacityResults).toHaveLength(10);
+      expect(week.summary.capacityResults.every((result) => (
+        result.date >= "2026-07-13" && result.date <= "2026-07-17"
+      ))).toBe(true);
+    } finally {
+      await pool.query("DELETE FROM appointments WHERE batch_id=$1", [conflictBatchId]);
+      await pool.query(
+        `UPDATE schedule_batches
+            SET status='DRAFT', override_reason=NULL, overridden_at=NULL, overridden_by=NULL,
+                validated_at=NULL, validated_by=NULL, validation_summary=NULL
+          WHERE id=$1`,
+        [conflictBatchId],
+      );
+      await pool.query(
+        "UPDATE coordinator_schedule_items SET status='PENDING', validation_issues='[]'::jsonb WHERE batch_id=$1",
+        [conflictBatchId],
+      );
+    }
+  });
+
   it("creates two draft appointments for BOTH and protects generation from repeats", async () => {
     const batch = await addScheduleBatch({
       batchName: "Automated integration batch",
