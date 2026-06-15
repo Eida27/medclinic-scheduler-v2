@@ -75,9 +75,6 @@ export default function HomePage() {
             <h1 className="text-4xl font-black leading-[1.08] tracking-[-0.04em] text-cpu-navy sm:text-5xl lg:text-6xl">
               Central Philippine University Laboratory and Physical Examination
             </h1>
-            <p className="mt-5 max-w-xl text-base leading-7 text-muted-strong sm:text-lg">
-              Easy access to your clinic schedule. Safe, organized, and built for the CPU community.
-            </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
               <Link
                 href="/student-lookup"

@@ -11,7 +11,7 @@ describe("HomePage", () => {
       name: "Central Philippine University Laboratory and Physical Examination",
     })).toBeVisible();
     expect(screen.getByRole("img", { name: "Central Philippine University seal" })).toBeVisible();
-    expect(screen.getByText("Easy access to your clinic schedule. Safe, organized, and built for the CPU community.")).toBeVisible();
+    expect(screen.queryByText("Easy access to your clinic schedule. Safe, organized, and built for the CPU community.")).not.toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Medical scheduling illustration" })).toBeVisible();
     expect(screen.getByRole("heading", { level: 2, name: "Published schedules" })).toBeVisible();
     expect(screen.getByRole("heading", { level: 2, name: "Secure & private" })).toBeVisible();
