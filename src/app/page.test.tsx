@@ -13,9 +13,10 @@ describe("HomePage", () => {
     expect(screen.getByRole("img", { name: "Central Philippine University seal" })).toBeVisible();
     expect(screen.queryByText("Easy access to your clinic schedule. Safe, organized, and built for the CPU community.")).not.toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Medical scheduling illustration" })).toBeVisible();
-    expect(screen.getByRole("heading", { level: 2, name: "Published schedules" })).toBeVisible();
-    expect(screen.getByRole("heading", { level: 2, name: "Secure & private" })).toBeVisible();
-    expect(screen.getByRole("heading", { level: 2, name: "For CPU students" })).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Service benefits" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Published schedules")).not.toBeInTheDocument();
+    expect(screen.queryByText("Secure & private")).not.toBeInTheDocument();
+    expect(screen.queryByText("For CPU students")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Staff sign in" })).toHaveAttribute("href", "/login");
     expect(screen.getByRole("link", { name: "Find my schedule" })).toBeVisible();
     expect(screen.getByRole("link", { name: "Find my schedule" })).toHaveAttribute("href", "/student-lookup");

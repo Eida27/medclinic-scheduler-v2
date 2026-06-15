@@ -2,56 +2,6 @@ import Link from "next/link";
 import { BrandMark } from "@/components/branding/BrandMark";
 import { ClinicHeroIllustration } from "@/components/landing/ClinicHeroIllustration";
 
-type BenefitIconProps = {
-  type: "calendar" | "shield" | "users";
-};
-
-function BenefitIcon({ type }: BenefitIconProps) {
-  if (type === "calendar") {
-    return (
-      <svg viewBox="0 0 32 32" aria-hidden="true" className="size-8 shrink-0 fill-none stroke-current" strokeWidth="1.8">
-        <rect x="5" y="7" width="22" height="20" rx="3" />
-        <path d="M10 4v6M22 4v6M5 13h22M10 18h4M18 18h4M10 22h4" />
-      </svg>
-    );
-  }
-
-  if (type === "shield") {
-    return (
-      <svg viewBox="0 0 32 32" aria-hidden="true" className="size-8 shrink-0 fill-none stroke-current" strokeWidth="1.8">
-        <path d="M16 4 26 8v7c0 6.4-4 10.8-10 13-6-2.2-10-6.6-10-13V8Z" />
-        <path d="m11.5 16 3 3 6-6" />
-      </svg>
-    );
-  }
-
-  return (
-    <svg viewBox="0 0 32 32" aria-hidden="true" className="size-8 shrink-0 fill-none stroke-current" strokeWidth="1.8">
-      <circle cx="12" cy="11" r="4" />
-      <circle cx="22" cy="13" r="3" />
-      <path d="M4.5 27v-3a7.5 7.5 0 0 1 15 0v3M19 19.5a6 6 0 0 1 8.5 5.5v2" />
-    </svg>
-  );
-}
-
-const benefits = [
-  {
-    title: "Published schedules",
-    description: "View your confirmed appointments.",
-    icon: "calendar" as const,
-  },
-  {
-    title: "Secure & private",
-    description: "Your data is protected at all times.",
-    icon: "shield" as const,
-  },
-  {
-    title: "For CPU students",
-    description: "Built for the CPU community.",
-    icon: "users" as const,
-  },
-];
-
 export default function HomePage() {
   return (
     <main className="relative min-h-screen overflow-x-hidden bg-landing text-cpu-navy">
@@ -96,24 +46,6 @@ export default function HomePage() {
           </div>
         </section>
 
-        <section aria-label="Service benefits" className="mb-2 overflow-hidden rounded-2xl border border-landing-line bg-white/55 shadow-panel backdrop-blur-sm">
-          <div className="grid md:grid-cols-3">
-            {benefits.map((benefit, index) => (
-              <article
-                key={benefit.title}
-                className={`flex items-start gap-4 px-5 py-5 sm:px-7 ${index > 0 ? "border-t border-landing-line md:border-l md:border-t-0" : ""}`}
-              >
-                <span className="mt-0.5 text-cpu-navy" aria-hidden="true">
-                  <BenefitIcon type={benefit.icon} />
-                </span>
-                <div>
-                  <h2 className="text-sm font-bold text-cpu-navy">{benefit.title}</h2>
-                  <p className="mt-1 text-xs leading-5 text-muted-strong">{benefit.description}</p>
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
       </div>
     </main>
   );
