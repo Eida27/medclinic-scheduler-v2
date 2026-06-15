@@ -1,0 +1,49 @@
+import { render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Sidebar } from "./Sidebar";
+
+const usePathname = vi.fn();
+
+vi.mock("next/navigation", () => ({
+  usePathname: () => usePathname(),
+}));
+
+describe("Sidebar", () => {
+  beforeEach(() => usePathname.mockReturnValue("/appointments"));
+
+  it("marks the active destination for assistive technology", () => {
+    render(
+      <Sidebar user={{ userId: "1", fullName: "Clinic User", email: "clinic@example.com", role: "CLINIC_STAFF" }} />,
+    );
+
+    expect(screen.getByRole("link", { name: "Appointments" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Dashboard" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("navigation", { name: "Dashboard navigation" })).toHaveClass("scrollbar-none");
+  });
+
+  it("keeps a parent destination active on detail routes", () => {
+    usePathname.mockReturnValue("/appointments/appointment-123");
+
+    render(
+      <Sidebar user={{ userId: "1", fullName: "Clinic User", email: "clinic@example.com", role: "CLINIC_STAFF" }} />,
+    );
+
+    expect(screen.getByRole("link", { name: "Appointments" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("shows administration destinations only to administrators", () => {
+    const { rerender } = render(
+      <Sidebar user={{ userId: "1", fullName: "Clinic User", email: "clinic@example.com", role: "CLINIC_STAFF" }} />,
+    );
+
+    expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
+
+    rerender(
+      <Sidebar user={{ userId: "2", fullName: "Admin User", email: "admin@example.com", role: "ADMIN" }} />,
+    );
+
+    expect(screen.getByRole("link", { name: "Users" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Reference data" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Capacity" })).toBeVisible();
+  });
+});

@@ -1,4 +1,9 @@
+"use client";
+
 import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { BrandMark } from "@/components/branding/BrandMark";
+import { cn } from "@/lib/cn";
 import type { SessionUser } from "@/types/roles";
 
 const primaryLinks = [
@@ -17,26 +22,48 @@ const adminLinks = [
 ] as const;
 
 export function Sidebar({ user }: { user: SessionUser }) {
+  const pathname = usePathname();
+
+  function isActive(href: string) {
+    return pathname === href || (href !== "/dashboard" && pathname.startsWith(`${href}/`));
+  }
+
   return (
-    <aside className="border-b border-slate-200 bg-slate-950 text-white lg:min-h-screen lg:w-64 lg:border-b-0 lg:border-r">
-      <div className="flex h-18 items-center gap-3 px-5 py-4">
-        <div className="grid size-10 place-items-center rounded-xl bg-teal-500 font-black text-slate-950">MC</div>
-        <div>
-          <p className="font-bold">MedClinic</p>
-          <p className="text-xs text-slate-400">CPU Health Services</p>
-        </div>
+    <aside className="border-b border-white/10 bg-cpu-navy text-white lg:min-h-screen lg:w-72 lg:border-b-0 lg:border-r">
+      <div className="flex min-h-20 items-center px-5 py-4 lg:px-6">
+        <BrandMark inverse />
       </div>
-      <nav aria-label="Dashboard navigation" className="flex gap-1 overflow-x-auto px-3 pb-4 lg:block lg:space-y-1">
+      <nav aria-label="Dashboard navigation" className="scrollbar-none flex gap-1 overflow-x-auto px-3 pb-4 lg:block lg:space-y-1 lg:px-4">
         {primaryLinks.map(([label, href]) => (
-          <Link key={href} href={href} className="block whitespace-nowrap rounded-lg px-3 py-2.5 text-sm font-medium text-slate-300 transition hover:bg-white/10 hover:text-white">
+          <Link
+            key={href}
+            href={href}
+            aria-current={isActive(href) ? "page" : undefined}
+            className={cn(
+              "block whitespace-nowrap rounded-xl px-3 py-2.5 text-sm font-semibold transition duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cpu-gold",
+              isActive(href)
+                ? "bg-cpu-gold text-cpu-navy shadow-sm"
+                : "text-white/70 hover:bg-white/10 hover:text-white",
+            )}
+          >
             {label}
           </Link>
         ))}
         {user.role === "ADMIN" ? (
           <>
-            <p className="hidden px-3 pb-1 pt-5 text-xs font-bold uppercase tracking-wider text-slate-500 lg:block">Administration</p>
+            <p className="hidden px-3 pb-1 pt-5 text-xs font-bold uppercase tracking-[0.16em] text-white/60 lg:block">Administration</p>
             {adminLinks.map(([label, href]) => (
-              <Link key={href} href={href} className="block whitespace-nowrap rounded-lg px-3 py-2.5 text-sm font-medium text-slate-300 transition hover:bg-white/10 hover:text-white">
+              <Link
+                key={href}
+                href={href}
+                aria-current={isActive(href) ? "page" : undefined}
+                className={cn(
+                  "block whitespace-nowrap rounded-xl px-3 py-2.5 text-sm font-semibold transition duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cpu-gold",
+                  isActive(href)
+                    ? "bg-cpu-gold text-cpu-navy shadow-sm"
+                    : "text-white/70 hover:bg-white/10 hover:text-white",
+                )}
+              >
                 {label}
               </Link>
             ))}

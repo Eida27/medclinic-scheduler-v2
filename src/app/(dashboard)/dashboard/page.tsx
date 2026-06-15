@@ -19,16 +19,17 @@ export default async function DashboardPage() {
       <PageHeader title="Clinic dashboard" description="A concise view of scheduling and compliance operations." />
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {cards.map(([label, value, description]) => (
-          <Card key={label}>
-            <p className="text-sm font-semibold text-slate-500">{label}</p>
-            <p className="mt-2 text-3xl font-black text-slate-950">{value}</p>
-            <p className="mt-2 text-xs text-slate-500">{description}</p>
+          <Card key={label} className="relative overflow-hidden">
+            <span aria-hidden="true" className="absolute inset-x-0 top-0 h-1 bg-cpu-gold" />
+            <p className="text-sm font-semibold text-muted">{label}</p>
+            <p className="mt-2 text-3xl font-black tracking-tight text-ink">{value}</p>
+            <p className="mt-2 text-xs leading-5 text-muted">{description}</p>
           </Card>
         ))}
       </section>
       <Card>
         <CardTitle>Core workflow</CardTitle>
-        <ol className="mt-4 grid gap-3 text-sm text-slate-700 sm:grid-cols-3">
+        <ol className="mt-4 grid gap-3 text-sm text-muted-strong sm:grid-cols-3">
           {[
             "Encode a coordinator schedule batch",
             "Validate dates, students, and capacity",
@@ -37,7 +38,7 @@ export default async function DashboardPage() {
             "Publish as an administrator",
             "Track results and compliance",
           ].map((step, index) => (
-            <li key={step} className="rounded-xl bg-slate-50 p-4"><span className="mr-2 font-black text-teal-700">{index + 1}.</span>{step}</li>
+            <li key={step} className="rounded-xl border border-cpu-navy/8 bg-cpu-navy-soft/65 p-4"><span className="mr-2 font-black text-cpu-navy">{index + 1}.</span>{step}</li>
           ))}
         </ol>
       </Card>

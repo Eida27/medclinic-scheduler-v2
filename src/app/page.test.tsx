@@ -10,6 +10,7 @@ describe("HomePage", () => {
       level: 1,
       name: "Central Philippine University Laboratory and Physical Examination",
     })).toBeVisible();
+    expect(screen.getByRole("img", { name: "Central Philippine University seal" })).toBeVisible();
     expect(screen.getByRole("link", { name: "Find my schedule" })).toBeVisible();
     expect(screen.getByRole("link", { name: "Open staff dashboard" })).toBeVisible();
     expect(screen.queryByText("Clinic scheduling and compliance")).not.toBeInTheDocument();

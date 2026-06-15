@@ -1,13 +1,28 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f8fafc;
-  --foreground: #0f172a;
+  --background: #f7f5fb;
+  --foreground: #17122b;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-cpu-navy: #201050;
+  --color-cpu-navy-light: #33206d;
+  --color-cpu-navy-dark: #150936;
+  --color-cpu-navy-soft: #f0edf8;
+  --color-cpu-gold: #ffc010;
+  --color-cpu-gold-light: #ffd24d;
+  --color-cpu-gold-dark: #795000;
+  --color-canvas: #f7f5fb;
+  --color-surface: #ffffff;
+  --color-ink: #17122b;
+  --color-muted: #746e87;
+  --color-muted-strong: #514a67;
+  --color-line: #dfdae9;
+  --shadow-brand: 0 18px 45px -28px rgb(32 16 80 / 0.38);
+  --shadow-panel: 0 20px 50px -36px rgb(32 16 80 / 0.32);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -18,7 +33,25 @@ body {
   margin: 0;
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
 }
 button, input, select, textarea { font: inherit; }
 a { text-decoration: none; }
+::selection { background: #ffc010; color: #201050; }
+
+.scrollbar-none {
+  scrollbar-width: none;
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

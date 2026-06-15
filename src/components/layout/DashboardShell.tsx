@@ -5,17 +5,17 @@ import { Sidebar } from "./Sidebar";
 
 export function DashboardShell({ user, children }: PropsWithChildren<{ user: SessionUser }>) {
   return (
-    <div className="min-h-screen bg-slate-50 lg:flex">
+    <div className="min-h-screen bg-canvas lg:flex">
       <Sidebar user={user} />
       <div className="min-w-0 flex-1">
-        <header className="flex h-16 items-center justify-between border-b border-slate-200 bg-white px-4 sm:px-6">
+        <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-line bg-surface/95 px-4 backdrop-blur sm:px-6 lg:h-18 lg:px-8">
           <div>
-            <p className="text-sm font-bold text-slate-900">{user.fullName}</p>
-            <p className="text-xs text-slate-500">{user.role === "ADMIN" ? "Administrator" : "Clinic staff"}</p>
+            <p className="text-sm font-bold text-ink">{user.fullName}</p>
+            <p className="text-xs text-muted">{user.role === "ADMIN" ? "Administrator" : "Clinic staff"}</p>
           </div>
           <LogoutButton />
         </header>
-        <main className="mx-auto grid max-w-[1500px] gap-6 p-4 sm:p-6 lg:p-8">{children}</main>
+        <main className="mx-auto grid max-w-[1500px] gap-6 p-4 sm:p-6 lg:gap-7 lg:p-8">{children}</main>
       </div>
     </div>
   );

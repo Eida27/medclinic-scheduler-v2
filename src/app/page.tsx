@@ -1,24 +1,28 @@
 import Link from "next/link";
+import { BrandMark } from "@/components/branding/BrandMark";
 
 export default function HomePage() {
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
-      <div className="mx-auto flex min-h-screen max-w-6xl flex-col justify-between px-6 py-8 sm:px-10">
+    <main className="relative min-h-screen overflow-hidden bg-cpu-navy text-white">
+      <div aria-hidden="true" className="absolute -right-28 top-20 size-80 rounded-full border-[52px] border-cpu-gold/10 sm:size-[32rem]" />
+      <div aria-hidden="true" className="absolute bottom-0 left-0 h-1.5 w-full bg-cpu-gold" />
+      <div className="relative mx-auto flex min-h-screen max-w-7xl flex-col justify-between px-6 py-7 sm:px-10 lg:px-14">
         <header className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="grid size-11 place-items-center rounded-xl bg-teal-400 font-black text-slate-950">MC</div>
-            <div><p className="font-bold">MedClinic Scheduler</p><p className="text-xs text-slate-400">CPU Health Services</p></div>
-          </div>
-          <Link href="/login" className="rounded-lg border border-white/20 px-4 py-2 text-sm font-semibold transition hover:bg-white/10">Staff sign in</Link>
+          <BrandMark inverse priority />
+          <Link href="/login" className="rounded-xl border border-white/20 px-4 py-2.5 text-sm font-semibold transition duration-200 hover:border-cpu-gold/50 hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cpu-gold">Staff sign in</Link>
         </header>
-        <section className="py-20">
-          <h1 className="max-w-3xl text-4xl font-black leading-tight sm:text-6xl">Central Philippine University Laboratory and Physical Examination</h1>
-          <div className="mt-8 flex flex-wrap gap-3">
-            <Link href="/student-lookup" className="rounded-xl bg-teal-400 px-5 py-3 text-sm font-bold text-slate-950 transition hover:bg-teal-300">Find my schedule</Link>
-            <Link href="/login" className="rounded-xl border border-white/20 px-5 py-3 text-sm font-bold transition hover:bg-white/10">Open staff dashboard</Link>
+        <section className="py-20 sm:py-28">
+          <div className="mb-7 flex items-center gap-3 text-xs font-bold uppercase tracking-[0.22em] text-cpu-gold">
+            <span className="h-px w-10 bg-cpu-gold" />
+            University health scheduling
+          </div>
+          <h1 className="max-w-4xl text-4xl font-black leading-[1.05] tracking-[-0.04em] sm:text-6xl lg:text-7xl">Central Philippine University Laboratory and Physical Examination</h1>
+          <div className="mt-9 flex flex-wrap gap-3">
+            <Link href="/student-lookup" className="rounded-xl bg-cpu-gold px-5 py-3 text-sm font-bold text-cpu-navy shadow-lg shadow-black/10 transition duration-200 hover:bg-cpu-gold-light focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">Find my schedule</Link>
+            <Link href="/login" className="rounded-xl border border-white/20 bg-white/5 px-5 py-3 text-sm font-bold transition duration-200 hover:border-white/40 hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cpu-gold">Open staff dashboard</Link>
           </div>
         </section>
-        <footer className="text-xs text-slate-500">Central Philippine University clinic scheduling MVP</footer>
+        <footer className="pb-3 text-xs text-white/60">Central Philippine University clinic scheduling MVP</footer>
       </div>
     </main>
   );

@@ -29,5 +29,5 @@ export function ReferenceDataManager({ colleges, programs, priorities }: { colle
 }
 
 function List({ entries }: { entries: Entry[] }) {
-  return <div className="mt-5 divide-y divide-slate-100">{entries.map((entry) => <div key={entry.id} className="py-3 text-sm"><p className="font-bold text-slate-900">{entry.code ? `${entry.code} · ` : ""}{entry.name}</p><p className="text-xs text-slate-500">{entry.collegeName ?? (entry.rankOrder ? `Priority ${entry.rankOrder}` : "")}{!entry.isActive ? " · Inactive" : ""}</p></div>)}</div>;
+  return <div className="mt-5 divide-y divide-line">{entries.map((entry) => <div key={entry.id} className="py-3 text-sm"><p className="font-bold text-ink">{entry.code ? `${entry.code} · ` : ""}{entry.name}</p><p className="text-xs text-muted">{entry.collegeName ?? (entry.rankOrder ? `Priority ${entry.rankOrder}` : "")}{!entry.isActive ? " · Inactive" : ""}</p></div>)}</div>;
 }

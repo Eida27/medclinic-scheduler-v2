@@ -2,15 +2,16 @@ import { forwardRef, type ButtonHTMLAttributes } from "react";
 import { cn } from "@/lib/cn";
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "primary" | "secondary" | "danger" | "ghost";
+  variant?: "primary" | "accent" | "secondary" | "danger" | "ghost";
   size?: "sm" | "md";
 };
 
 const variants = {
-  primary: "bg-teal-700 text-white hover:bg-teal-800 focus-visible:outline-teal-700",
-  secondary: "border border-slate-300 bg-white text-slate-800 hover:bg-slate-50 focus-visible:outline-slate-500",
+  primary: "bg-cpu-navy text-white shadow-sm hover:bg-cpu-navy-light focus-visible:outline-cpu-navy",
+  accent: "bg-cpu-gold text-cpu-navy shadow-sm hover:bg-cpu-gold-light focus-visible:outline-cpu-gold-dark",
+  secondary: "border border-line bg-surface text-ink hover:border-cpu-navy/25 hover:bg-canvas focus-visible:outline-cpu-navy",
   danger: "bg-red-700 text-white hover:bg-red-800 focus-visible:outline-red-700",
-  ghost: "text-slate-700 hover:bg-slate-100 focus-visible:outline-slate-500",
+  ghost: "text-muted-strong hover:bg-cpu-navy-soft hover:text-cpu-navy focus-visible:outline-cpu-navy",
 };
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
@@ -22,7 +23,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       ref={ref}
       type={type}
       className={cn(
-        "inline-flex items-center justify-center rounded-lg font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
+        "inline-flex items-center justify-center whitespace-nowrap rounded-xl font-semibold transition duration-200 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
         size === "sm" ? "h-9 px-3 text-sm" : "h-11 px-4 text-sm",
         variants[variant],
         className,

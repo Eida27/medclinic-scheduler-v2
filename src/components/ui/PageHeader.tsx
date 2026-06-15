@@ -4,8 +4,9 @@ export function PageHeader({ title, description, actions }: { title: string; des
   return (
     <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-950">{title}</h1>
-        {description ? <p className="mt-1 text-sm text-slate-600">{description}</p> : null}
+        <p className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-cpu-gold-dark">CPU Health Services</p>
+        <h1 className="text-2xl font-bold tracking-tight text-ink sm:text-3xl">{title}</h1>
+        {description ? <p className="mt-1.5 text-sm text-muted">{description}</p> : null}
       </div>
       {actions}
     </header>

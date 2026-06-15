@@ -41,16 +41,17 @@ export function ConfirmDialog({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 p-4">
+    <div className="fixed inset-0 z-50 grid place-items-center bg-cpu-navy-dark/70 p-4 backdrop-blur-sm">
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="confirm-dialog-title"
         aria-describedby="confirm-dialog-description"
-        className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl"
+        className="w-full max-w-md rounded-3xl border border-line bg-surface p-6 shadow-2xl"
       >
-        <h2 id="confirm-dialog-title" className="text-xl font-bold text-slate-950">{title}</h2>
-        <p id="confirm-dialog-description" className="mt-2 text-sm leading-6 text-slate-600">{description}</p>
+        <div className="mb-5 h-1.5 w-14 rounded-full bg-cpu-gold" />
+        <h2 id="confirm-dialog-title" className="text-xl font-bold text-ink">{title}</h2>
+        <p id="confirm-dialog-description" className="mt-2 text-sm leading-6 text-muted">{description}</p>
         <div className="mt-6 flex justify-end gap-3">
           <Button ref={cancelButtonRef} variant="secondary" onClick={onCancel} disabled={pending}>Cancel</Button>
           <Button variant={danger ? "danger" : "primary"} onClick={onConfirm} disabled={pending}>
