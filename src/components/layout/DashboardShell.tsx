@@ -1,5 +1,6 @@
 import type { PropsWithChildren } from "react";
 import type { SessionUser } from "@/types/roles";
+import { AppointmentBackLink } from "./AppointmentBackLink";
 import { LogoutButton } from "./LogoutButton";
 import { Sidebar } from "./Sidebar";
 
@@ -9,9 +10,12 @@ export function DashboardShell({ user, children }: PropsWithChildren<{ user: Ses
       <Sidebar user={user} />
       <div className="min-w-0 flex-1">
         <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-line bg-surface/95 px-4 backdrop-blur sm:px-6 lg:h-18 lg:px-8">
-          <div>
-            <p className="text-sm font-bold text-ink">{user.fullName}</p>
-            <p className="text-xs text-muted">{user.role === "ADMIN" ? "Administrator" : "Clinic staff"}</p>
+          <div className="flex min-w-0 items-center gap-3 sm:gap-4">
+            <AppointmentBackLink />
+            <div className="min-w-0">
+              <p className="truncate text-sm font-bold text-ink">{user.fullName}</p>
+              <p className="text-xs text-muted">{user.role === "ADMIN" ? "Administrator" : "Clinic staff"}</p>
+            </div>
           </div>
           <LogoutButton />
         </header>
