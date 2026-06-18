@@ -25,19 +25,39 @@ describe("DashboardShell", () => {
     expect(screen.getByRole("link", { name: "Back to appointments" })).toHaveAttribute("href", "/appointments");
   });
 
-  it("does not show the back link on the appointments list", () => {
-    usePathname.mockReturnValue("/appointments");
-
-    render(<DashboardShell user={user}>Appointments</DashboardShell>);
-
-    expect(screen.queryByRole("link", { name: "Back to appointments" })).not.toBeInTheDocument();
-  });
-
-  it("does not show the back link on unrelated dashboard routes", () => {
-    usePathname.mockReturnValue("/students/student-123");
+  it("shows an accessible link back to the students list on student details", () => {
+    usePathname.mockReturnValue("/students/DEMO-0001");
 
     render(<DashboardShell user={user}>Student details</DashboardShell>);
 
-    expect(screen.queryByRole("link", { name: "Back to appointments" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Back to students" })).toHaveAttribute("href", "/students");
+  });
+
+  it("shows an accessible link back to coordinator schedules on batch details", () => {
+    usePathname.mockReturnValue("/coordinator-schedules/batch-123");
+
+    render(<DashboardShell user={user}>Batch details</DashboardShell>);
+
+    expect(screen.getByRole("link", { name: "Back to coordinator schedules" })).toHaveAttribute(
+      "href",
+      "/coordinator-schedules",
+    );
+  });
+
+  it.each([
+    "/appointments",
+    "/students",
+    "/coordinator-schedules",
+    "/students/new",
+    "/coordinator-schedules/new",
+    "/students/DEMO-0001/history",
+    "/coordinator-schedules/batch-123/items",
+    "/results/result-123",
+  ])("does not show a back link on %s", (pathname) => {
+    usePathname.mockReturnValue(pathname);
+
+    render(<DashboardShell user={user}>Dashboard content</DashboardShell>);
+
+    expect(screen.queryByRole("link", { name: /^Back to / })).not.toBeInTheDocument();
   });
 });
