@@ -124,6 +124,15 @@ export async function getStudent(studentNumber: string) {
   return result.rows[0] ? mapStudent(result.rows[0]) : null;
 }
 
+export async function registeredStudentNumbers(studentNumbers: string[]) {
+  if (studentNumbers.length === 0) return new Set<string>();
+  const result = await query<{ student_number: string }>(
+    "SELECT student_number FROM students WHERE student_number = ANY($1::varchar[])",
+    [studentNumbers],
+  );
+  return new Set(result.rows.map((row) => row.student_number));
+}
+
 export async function programBelongsToCollege(programId: string, collegeId: string): Promise<boolean> {
   const result = await query("SELECT 1 FROM programs WHERE id = $1 AND college_id = $2 AND is_active = TRUE", [programId, collegeId]);
   return Boolean(result.rowCount);

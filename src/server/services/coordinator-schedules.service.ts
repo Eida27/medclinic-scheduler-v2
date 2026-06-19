@@ -17,6 +17,7 @@ import {
   type ValidationIssue,
 } from "@/server/repositories/coordinator-schedules.repository";
 import { generateSchedule } from "@/server/rule-engine";
+import { registeredStudentNumbers } from "@/server/repositories/students.repository";
 import type { SessionUser } from "@/types/roles";
 import { parseCoordinatorScheduleCsv } from "./coordinator-schedule-csv";
 
@@ -94,6 +95,21 @@ export async function importCoordinatorScheduleCsv(raw: unknown, actorUserId: st
 
 export async function addScheduleBatch(raw: unknown, actorUserId: string) {
   const input = createBatchSchema.parse(raw);
+  const registered = await registeredStudentNumbers([...new Set(input.items.map((item) => item.studentNumber))]);
+  const fields: Record<string, string[]> = {};
+  input.items.forEach((item, index) => {
+    if (!registered.has(item.studentNumber)) {
+      fields[`items.${index}.studentNumber`] = [`Student number ${item.studentNumber} is not registered.`];
+    }
+  });
+  if (Object.keys(fields).length) {
+    throw new AppError(
+      "SCHEDULE_STUDENTS_NOT_FOUND",
+      "Some students are not registered. Add them before creating the batch, or use CSV import.",
+      422,
+      fields,
+    );
+  }
   try {
     const id = await createScheduleBatch(input, actorUserId);
     await writeAudit(actorUserId, "SCHEDULE_BATCH_CREATED", "schedule_batch", id, { itemCount: input.items.length });

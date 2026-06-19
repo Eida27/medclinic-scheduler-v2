@@ -15,6 +15,48 @@ afterAll(async () => {
 });
 
 describe("coordinator scheduling workflow", () => {
+  it("reports every missing student before creating a batch", async () => {
+    const batchName = "Missing student validation integration";
+
+    await expect(addScheduleBatch({
+      batchName,
+      collegeId: "10000000-0000-4000-8000-000000000003",
+      programId: "20000000-0000-4000-8000-000000000003",
+      submittedByName: "Test",
+      description: "Must not persist",
+      items: [
+        {
+          studentNumber: "MISSING-STUDENT-1",
+          scheduleType: "PHYSICAL_EXAM",
+          priorityGroupId: "30000000-0000-4000-8000-000000000004",
+          targetDate: "2026-08-03",
+          targetWeekStart: null,
+          targetWeekEnd: null,
+          remarks: "",
+        },
+        {
+          studentNumber: "MISSING-STUDENT-2",
+          scheduleType: "LABORATORY",
+          priorityGroupId: "30000000-0000-4000-8000-000000000004",
+          targetDate: "2026-08-04",
+          targetWeekStart: null,
+          targetWeekEnd: null,
+          remarks: "",
+        },
+      ],
+    }, admin.userId)).rejects.toMatchObject({
+      code: "SCHEDULE_STUDENTS_NOT_FOUND",
+      status: 422,
+      fields: {
+        "items.0.studentNumber": ["Student number MISSING-STUDENT-1 is not registered."],
+        "items.1.studentNumber": ["Student number MISSING-STUDENT-2 is not registered."],
+      },
+    });
+
+    const batches = await pool.query("SELECT 1 FROM schedule_batches WHERE batch_name=$1", [batchName]);
+    expect(batches.rowCount).toBe(0);
+  });
+
   it("classifies the seeded warning and conflict capacity fixtures", async () => {
     const warning = await validateBatch("50000000-0000-4000-8000-000000000130", admin.userId);
     const conflict = await validateBatch("50000000-0000-4000-8000-000000000160", admin.userId);
