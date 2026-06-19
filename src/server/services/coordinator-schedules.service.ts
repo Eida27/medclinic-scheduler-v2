@@ -6,6 +6,7 @@ import { writeAudit } from "@/server/repositories/audit.repository";
 import {
   activeAppointmentKeys,
   capacitySettings,
+  createImportedScheduleBatch,
   createScheduleBatch,
   currentAppointmentLoad,
   getRuleItems,
@@ -17,6 +18,7 @@ import {
 } from "@/server/repositories/coordinator-schedules.repository";
 import { generateSchedule } from "@/server/rule-engine";
 import type { SessionUser } from "@/types/roles";
+import { parseCoordinatorScheduleCsv } from "./coordinator-schedule-csv";
 
 const blankToNull = z.union([z.string(), z.null(), z.undefined()]).transform((value) => value?.trim() || null);
 const dateOrNull = z.union([z.iso.date(), z.literal(""), z.null(), z.undefined()]).transform((value) => value || null);
@@ -54,6 +56,41 @@ export const createBatchSchema = z.object({
   });
   if (batch.programId && !batch.collegeId) context.addIssue({ code: "custom", path: ["collegeId"], message: "College is required when a program is selected." });
 });
+
+const csvImportSchema = z.object({
+  fileName: z.string().trim().min(1),
+  fileSize: z.number().int().positive(),
+  contents: z.string().min(1),
+  batchName: z.string().trim().min(3).max(150),
+  priorityGroupId: z.string().uuid(),
+  submittedByName: blankToNull,
+  description: blankToNull,
+});
+
+export async function importCoordinatorScheduleCsv(raw: unknown, actorUserId: string) {
+  const input = csvImportSchema.parse(raw);
+  const fields: Record<string, string[]> = {};
+  if (!input.fileName.toLocaleLowerCase().endsWith(".csv")) fields.file = ["Choose a file with a .csv extension."];
+  if (input.fileSize > 1024 * 1024 || Buffer.byteLength(input.contents) > 1024 * 1024) {
+    fields.file = ["CSV files may not exceed 1 MB."];
+  }
+  if (Object.keys(fields).length) {
+    throw new AppError("CSV_IMPORT_INVALID", "Please correct the CSV import errors.", 422, fields);
+  }
+
+  const result = await createImportedScheduleBatch({
+    batchName: input.batchName,
+    priorityGroupId: input.priorityGroupId,
+    submittedByName: input.submittedByName,
+    description: input.description,
+    fileName: input.fileName,
+    rows: parseCoordinatorScheduleCsv(input.contents),
+  }, actorUserId);
+  if ("fields" in result) {
+    throw new AppError("CSV_IMPORT_INVALID", "Please correct the CSV import errors.", 422, result.fields);
+  }
+  return result;
+}
 
 export async function addScheduleBatch(raw: unknown, actorUserId: string) {
   const input = createBatchSchema.parse(raw);

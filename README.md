@@ -7,6 +7,7 @@ Coordinator-driven physical examination and laboratory scheduling for Central Ph
 - JWT login for administrators and clinic staff
 - Student, college, program, priority group, user, and capacity management
 - Manual coordinator schedule batch encoding
+- Atomic coordinator CSV import with missing-student creation and row-level validation
 - Missing-data, enrollment, active-appointment, and daily-capacity validation
 - Deterministic weekday distribution ordered by priority and student number
 - Independent physical examination and laboratory appointments for `BOTH` requests
@@ -16,7 +17,7 @@ Coordinator-driven physical examination and laboratory scheduling for Central Ph
 - Compliance filters and live dashboard metrics
 - Raw PostgreSQL migrations, deterministic demo data, and audit logs
 
-CSV import, doctor scheduling, notifications, holidays, QR check-in, and student self-rescheduling are intentionally outside this MVP.
+Doctor scheduling, notifications, holidays, QR check-in, and student self-rescheduling are intentionally outside this MVP.
 
 ## Requirements
 
@@ -82,6 +83,24 @@ The seed includes 180 students and four coordinator batches:
 
 Students use identifiers `DEMO-0001` through `DEMO-0180`.
 
+## Coordinator CSV Format
+
+Use UTF-8 CSV files with these headers in this exact order:
+
+```csv
+Student ID,Name,College,Course,Year,Appointment Date,Appointment Type
+23-1212-97,Juan Dela Cruz,College of Computer Studies,BSIT,3,06-19-2026,Physical + Laboratory
+```
+
+- `Appointment Date` uses `MM-DD-YYYY`.
+- `Appointment Type` accepts `Physical Examination`, `Laboratory`, or `Physical + Laboratory`.
+- Files may contain up to 500 data rows and may not exceed 1 MB.
+- Staff choose one active priority group for the entire upload.
+- College names and course codes must match active reference data. Matching is case-insensitive.
+- Missing students are created from the CSV. For new records, the first word of `Name` is stored as the first name and the remainder as the last name.
+- Existing students are never overwritten. A name, college, course, or year mismatch rejects the entire file with row-specific errors.
+- Successful imports create a draft batch. Staff still validate, generate, and publish it through the normal workflow.
+
 ## Database Commands
 
 ```powershell
@@ -111,7 +130,7 @@ Tests cover rule-engine boundaries, priority distribution, database constraints 
 ## Demonstration Flow
 
 1. Sign in as clinic staff and review or add students.
-2. Create a coordinator batch with an exact date or Monday-Friday target range.
+2. Import the official coordinator CSV or manually create a batch with an exact date or Monday-Friday target range.
 3. Validate the batch and review per-item warnings or conflicts.
 4. Generate draft appointments. Capacity conflicts require an administrator and an override reason.
 5. Sign in as administrator and publish the generated batch.
