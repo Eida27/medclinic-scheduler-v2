@@ -21,6 +21,25 @@ describe("ScheduleCsvImportForm", () => {
     refresh.mockReset();
   });
 
+  it("opens the CSV picker from the Upload button and displays the selected filename", async () => {
+    const user = userEvent.setup();
+    render(<ScheduleCsvImportForm priorities={priorities} />);
+
+    const fileInput = screen.getByLabelText("CSV file") as HTMLInputElement;
+    const inputClick = vi.spyOn(fileInput, "click");
+
+    expect(screen.getByText("No file chosen")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Upload" }));
+    expect(inputClick).toHaveBeenCalledOnce();
+
+    await user.upload(
+      fileInput,
+      new File(["Student ID,Name"], "Clinic Appointments.csv", { type: "text/csv" }),
+    );
+
+    expect(screen.getByText("Clinic Appointments.csv")).toBeInTheDocument();
+  });
+
   it("uploads the CSV as multipart data and opens the imported draft batch", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

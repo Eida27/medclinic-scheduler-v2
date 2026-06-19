@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Card, CardTitle } from "@/components/ui/Card";
@@ -26,7 +26,9 @@ function fieldLabel(field: string) {
 
 export function ScheduleCsvImportForm({ priorities }: { priorities: PriorityGroup[] }) {
   const router = useRouter();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [batchName, setBatchName] = useState("");
+  const [selectedFileName, setSelectedFileName] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<ImportError>();
 
@@ -70,18 +72,36 @@ export function ScheduleCsvImportForm({ priorities }: { priorities: PriorityGrou
           </Alert>
         ) : null}
         <div className="grid gap-4 md:grid-cols-2">
-          <Field label="CSV file">
-            <Input
+          <div className="grid gap-1.5 text-sm font-semibold text-muted-strong">
+            <label htmlFor="coordinator-csv-file">CSV file</label>
+            <div className="flex h-11 min-w-0 items-center gap-3 rounded-xl border border-line bg-surface p-1 pr-3 shadow-sm">
+              <Button
+                type="button"
+                size="sm"
+                className="shrink-0"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                Upload
+              </Button>
+              <span className="min-w-0 flex-1 truncate font-normal text-ink" aria-live="polite">
+                {selectedFileName || "No file chosen"}
+              </span>
+            </div>
+            <input
+              ref={fileInputRef}
+              id="coordinator-csv-file"
+              className="sr-only"
               name="file"
               type="file"
               accept=".csv,text/csv"
               required
               onChange={(event) => {
                 const file = event.target.files?.[0];
+                setSelectedFileName(file?.name ?? "");
                 if (file && !batchName) setBatchName(file.name.replace(/\.csv$/i, ""));
               }}
             />
-          </Field>
+          </div>
           <Field label="Batch name">
             <Input name="batchName" value={batchName} onChange={(event) => setBatchName(event.target.value)} required />
           </Field>
