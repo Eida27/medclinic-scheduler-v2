@@ -11,6 +11,20 @@ vi.mock("next/navigation", () => ({
 describe("Sidebar", () => {
   beforeEach(() => usePathname.mockReturnValue("/appointments"));
 
+  it("pins the sidebar to the viewport only on desktop", () => {
+    render(
+      <Sidebar user={{ userId: "1", fullName: "Clinic User", email: "clinic@example.com", role: "CLINIC_STAFF" }} />,
+    );
+
+    expect(screen.getByRole("complementary")).toHaveClass(
+      "lg:sticky",
+      "lg:top-0",
+      "lg:h-screen",
+      "lg:self-start",
+      "lg:overflow-y-auto",
+    );
+  });
+
   it("marks the active destination for assistive technology", () => {
     render(
       <Sidebar user={{ userId: "1", fullName: "Clinic User", email: "clinic@example.com", role: "CLINIC_STAFF" }} />,

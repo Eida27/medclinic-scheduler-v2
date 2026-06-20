@@ -29,7 +29,7 @@ export function Sidebar({ user }: { user: SessionUser }) {
   }
 
   return (
-    <aside className="border-b border-white/10 bg-cpu-navy text-white lg:min-h-screen lg:w-72 lg:border-b-0 lg:border-r">
+    <aside className="border-b border-white/10 bg-cpu-navy text-white lg:sticky lg:top-0 lg:h-screen lg:w-72 lg:self-start lg:overflow-y-auto lg:border-b-0 lg:border-r">
       <div className="flex min-h-20 items-center px-5 py-4 lg:px-6">
         <BrandMark inverse />
       </div>
