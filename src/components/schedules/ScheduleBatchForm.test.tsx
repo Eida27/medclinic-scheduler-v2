@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ScheduleBatchForm } from "./ScheduleBatchForm";
@@ -33,6 +33,20 @@ describe("ScheduleBatchForm", () => {
     vi.restoreAllMocks();
     push.mockReset();
     refresh.mockReset();
+  });
+
+  it("groups the manual scheduling controls in one labeled form", () => {
+    render(<ScheduleBatchForm colleges={colleges} programs={programs} priorities={priorities} />);
+
+    const manualForm = screen.getByRole("form", { name: "Create schedule manually" });
+    const manualWorkflow = within(manualForm);
+
+    expect(manualWorkflow.getByRole("heading", { name: "Create schedule manually" })).toBeVisible();
+    expect(manualWorkflow.getByRole("heading", { name: "Batch details" })).toBeVisible();
+    expect(manualWorkflow.getByLabelText("Batch name")).toBeVisible();
+    expect(manualWorkflow.getByRole("heading", { name: "Schedule items" })).toBeVisible();
+    expect(manualWorkflow.getByRole("button", { name: "Add row" })).toBeVisible();
+    expect(manualWorkflow.getByRole("button", { name: "Create schedule batch" })).toBeVisible();
   });
 
   it("preserves the form and marks every missing-student row", async () => {

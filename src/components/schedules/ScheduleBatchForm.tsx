@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState, type FormEvent } from "react";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
-import { Card } from "@/components/ui/Card";
+import { Card, CardTitle } from "@/components/ui/Card";
 import { Field } from "@/components/ui/Field";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
@@ -104,66 +104,75 @@ export function ScheduleBatchForm({
   }
 
   return (
-    <form onSubmit={submit} className="grid gap-6">
-      {error ? (
-        <Alert tone="danger">
-          <p>{error.message}</p>
-          {error.code === "SCHEDULE_STUDENTS_NOT_FOUND" ? (
-            <p className="mt-2 font-normal">
-              <Link
-                href="/students/new"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-semibold underline underline-offset-2"
-              >
-                Add student
-              </Link>{" "}
-              in a new tab, then return to this form.
-            </p>
-          ) : null}
-        </Alert>
-      ) : null}
-
-      <Card className="grid gap-4">
-        <div className="grid gap-4 md:grid-cols-2">
-          <Field label="Batch name"><Input name="batchName" required /></Field>
-          <Field label="Submitted by"><Input name="submittedByName" /></Field>
-          <Field label="College">
-            <Select name="collegeId" value={collegeId} onChange={(event) => setCollegeId(event.target.value)}>
-              <option value="">Mixed / unspecified</option>
-              {colleges.filter((college) => college.isActive).map((college) => (
-                <option key={college.id} value={college.id}>{college.name}</option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="Program">
-            <Select name="programId">
-              <option value="">Mixed / unspecified</option>
-              {filteredPrograms.filter((program) => program.isActive).map((program) => (
-                <option key={program.id} value={program.id}>{program.name}</option>
-              ))}
-            </Select>
-          </Field>
+    <form onSubmit={submit} aria-labelledby="manual-schedule-heading">
+      <Card className="grid gap-6">
+        <div>
+          <div id="manual-schedule-heading"><CardTitle>Create schedule manually</CardTitle></div>
+          <p className="mt-1 text-sm text-muted">
+            Enter batch information and individual student requests to create a draft schedule batch.
+          </p>
         </div>
-        <Field label="Description"><Textarea name="description" /></Field>
-      </Card>
 
-      <Card className="grid gap-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="font-bold text-ink">Schedule items</h2>
-            <p className="text-sm text-muted">Add each coordinator-provided student request.</p>
+        {error ? (
+          <Alert tone="danger">
+            <p>{error.message}</p>
+            {error.code === "SCHEDULE_STUDENTS_NOT_FOUND" ? (
+              <p className="mt-2 font-normal">
+                <Link
+                  href="/students/new"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-semibold underline underline-offset-2"
+                >
+                  Add student
+                </Link>{" "}
+                in a new tab, then return to this form.
+              </p>
+            ) : null}
+          </Alert>
+        ) : null}
+
+        <section className="grid gap-4" aria-labelledby="batch-details-heading">
+          <h3 id="batch-details-heading" className="font-bold text-ink">Batch details</h3>
+          <div className="grid gap-4 md:grid-cols-2">
+            <Field label="Batch name"><Input name="batchName" required /></Field>
+            <Field label="Submitted by"><Input name="submittedByName" /></Field>
+            <Field label="College">
+              <Select name="collegeId" value={collegeId} onChange={(event) => setCollegeId(event.target.value)}>
+                <option value="">Mixed / unspecified</option>
+                {colleges.filter((college) => college.isActive).map((college) => (
+                  <option key={college.id} value={college.id}>{college.name}</option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Program">
+              <Select name="programId">
+                <option value="">Mixed / unspecified</option>
+                {filteredPrograms.filter((program) => program.isActive).map((program) => (
+                  <option key={program.id} value={program.id}>{program.name}</option>
+                ))}
+              </Select>
+            </Field>
           </div>
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => setItems((current) => [...current, emptyItem()])}
-          >
-            Add row
-          </Button>
-        </div>
+          <Field label="Description"><Textarea name="description" /></Field>
+        </section>
 
-        <div className="grid gap-4">
+        <section className="grid gap-4 border-t border-line pt-6" aria-labelledby="schedule-items-heading">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h3 id="schedule-items-heading" className="font-bold text-ink">Schedule items</h3>
+              <p className="text-sm text-muted">Add each coordinator-provided student request.</p>
+            </div>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => setItems((current) => [...current, emptyItem()])}
+            >
+              Add row
+            </Button>
+          </div>
+
+          <div className="grid gap-4">
           {items.map((item, index) => {
             const studentError = error?.fields?.[`items.${index}.studentNumber`]?.[0];
             const studentErrorId = `schedule-item-${item.clientId}-student-error`;
@@ -261,12 +270,15 @@ export function ScheduleBatchForm({
               </div>
             );
           })}
+          </div>
+        </section>
+
+        <div className="border-t border-line pt-6">
+          <Button type="submit" disabled={pending}>
+            {pending ? "Creating batch..." : "Create schedule batch"}
+          </Button>
         </div>
       </Card>
-
-      <Button type="submit" disabled={pending} className="justify-self-start">
-        {pending ? "Creating batch..." : "Create schedule batch"}
-      </Button>
     </form>
   );
 }
