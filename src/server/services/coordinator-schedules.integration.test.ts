@@ -68,14 +68,25 @@ describe("coordinator scheduling workflow", () => {
 
   it("limits capacity summaries to dates and services requested by the batch", async () => {
     const conflictBatchId = "50000000-0000-4000-8000-000000000160";
-    const weekBatchId = "50000000-0000-4000-8000-000000000010";
+    const weekBatches = await pool.query<{ id: string; schedule_type: string }>(
+      `SELECT b.id, MIN(i.schedule_type) AS schedule_type
+         FROM schedule_batches b
+         JOIN coordinator_schedule_items i ON i.batch_id=b.id
+        WHERE i.student_number BETWEEN 'DEMO-0161' AND 'DEMO-0180'
+        GROUP BY b.id
+        ORDER BY schedule_type`,
+    );
+    const physicalWeekBatchId = weekBatches.rows.find((row) => row.schedule_type === "PHYSICAL_EXAM")!.id;
+    const laboratoryWeekBatchId = weekBatches.rows.find((row) => row.schedule_type === "LABORATORY")!.id;
 
     try {
       await generateBatchAppointments(conflictBatchId, admin, "Integration test capacity override.");
-      const week = await validateBatch(weekBatchId, admin.userId);
+      const physicalWeek = await validateBatch(physicalWeekBatchId, admin.userId);
+      const laboratoryWeek = await validateBatch(laboratoryWeekBatchId, admin.userId);
 
-      expect(week.summary.capacityResults).toHaveLength(10);
-      expect(week.summary.capacityResults.every((result) => (
+      expect(physicalWeek.summary.capacityResults).toHaveLength(5);
+      expect(laboratoryWeek.summary.capacityResults).toHaveLength(5);
+      expect([...physicalWeek.summary.capacityResults, ...laboratoryWeek.summary.capacityResults].every((result) => (
         result.date >= "2026-07-13" && result.date <= "2026-07-17"
       ))).toBe(true);
     } finally {
@@ -94,9 +105,9 @@ describe("coordinator scheduling workflow", () => {
     }
   });
 
-  it("creates two draft appointments for BOTH and protects generation from repeats", async () => {
+  it("splits BOTH into clinic-specific batches, schedule items, and draft appointments", async () => {
     const batch = await addScheduleBatch({
-      batchName: "Automated integration batch",
+      batchName: "Automated split integration batch",
       collegeId: "10000000-0000-4000-8000-000000000003",
       programId: "20000000-0000-4000-8000-000000000003",
       submittedByName: "Test",
@@ -111,22 +122,52 @@ describe("coordinator scheduling workflow", () => {
         remarks: "",
       }],
     }, admin.userId);
-    const batchId = String(batch?.id);
+    const batchIds = "batchIds" in batch! ? batch.batchIds : [String(batch?.id)];
 
     try {
-      await generateBatchAppointments(batchId, admin);
+      const batches = await pool.query(
+        `SELECT b.id, b.batch_name, c.code AS clinic_code
+           FROM schedule_batches b
+           JOIN clinics c ON c.id = b.clinic_id
+          WHERE b.id = ANY($1::uuid[])
+          ORDER BY c.code`,
+        [batchIds],
+      );
+      expect(batches.rows).toEqual([
+        expect.objectContaining({ batch_name: "Automated split integration batch - CPU Clinic", clinic_code: "CPU_CLINIC" }),
+        expect.objectContaining({ batch_name: "Automated split integration batch - KABALAKA Clinic", clinic_code: "KABALAKA_CLINIC" }),
+      ]);
+
+      const items = await pool.query(
+        `SELECT i.schedule_type, c.code AS clinic_code
+           FROM coordinator_schedule_items i
+           JOIN clinics c ON c.id = i.clinic_id
+          WHERE i.batch_id = ANY($1::uuid[])
+          ORDER BY i.schedule_type`,
+        [batchIds],
+      );
+      expect(items.rows).toEqual([
+        { schedule_type: "LABORATORY", clinic_code: "KABALAKA_CLINIC" },
+        { schedule_type: "PHYSICAL_EXAM", clinic_code: "CPU_CLINIC" },
+      ]);
+
+      for (const batchId of batchIds) await generateBatchAppointments(batchId, admin);
       const appointments = await pool.query(
-        "SELECT schedule_type, status, is_published FROM appointments WHERE batch_id=$1 ORDER BY schedule_type",
-        [batchId],
+        `SELECT a.schedule_type, c.code AS clinic_code, a.status, a.is_published
+           FROM appointments a
+           JOIN clinics c ON c.id = a.clinic_id
+          WHERE a.batch_id = ANY($1::uuid[])
+          ORDER BY a.schedule_type`,
+        [batchIds],
       );
       expect(appointments.rows).toEqual([
-        { schedule_type: "LABORATORY", status: "DRAFT", is_published: false },
-        { schedule_type: "PHYSICAL_EXAM", status: "DRAFT", is_published: false },
+        { schedule_type: "LABORATORY", clinic_code: "KABALAKA_CLINIC", status: "DRAFT", is_published: false },
+        { schedule_type: "PHYSICAL_EXAM", clinic_code: "CPU_CLINIC", status: "DRAFT", is_published: false },
       ]);
-      await expect(generateBatchAppointments(batchId, admin)).rejects.toMatchObject({ code: "BATCH_IMMUTABLE" });
+      await expect(generateBatchAppointments(batchIds[0], admin)).rejects.toMatchObject({ code: "BATCH_IMMUTABLE" });
     } finally {
-      await pool.query("DELETE FROM appointments WHERE batch_id=$1", [batchId]);
-      await pool.query("DELETE FROM schedule_batches WHERE id=$1", [batchId]);
+      await pool.query("DELETE FROM appointments WHERE batch_id = ANY($1::uuid[])", [batchIds]);
+      await pool.query("DELETE FROM schedule_batches WHERE id = ANY($1::uuid[])", [batchIds]);
     }
   });
 });

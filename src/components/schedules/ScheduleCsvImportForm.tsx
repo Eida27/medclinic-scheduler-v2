@@ -24,7 +24,15 @@ function fieldLabel(field: string) {
   return field.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, (letter) => letter.toLocaleUpperCase());
 }
 
-export function ScheduleCsvImportForm({ priorities }: { priorities: PriorityGroup[] }) {
+export function ScheduleCsvImportForm({
+  priorities,
+  clinicCode,
+  redirectBase = "/coordinator-schedules",
+}: {
+  priorities: PriorityGroup[];
+  clinicCode?: "KABALAKA_CLINIC" | "CPU_CLINIC";
+  redirectBase?: string;
+}) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [batchName, setBatchName] = useState("");
@@ -46,7 +54,7 @@ export function ScheduleCsvImportForm({ priorities }: { priorities: PriorityGrou
       setPending(false);
       return;
     }
-    router.push(`/coordinator-schedules/${payload.data.id}`);
+    router.push(`${redirectBase}/${payload.data.id}`);
     router.refresh();
   }
 
@@ -71,6 +79,7 @@ export function ScheduleCsvImportForm({ priorities }: { priorities: PriorityGrou
             ) : null}
           </Alert>
         ) : null}
+        {clinicCode ? <input type="hidden" name="clinicCode" value={clinicCode} /> : null}
         <div className="grid gap-4 md:grid-cols-2">
           <div className="grid gap-1.5 text-sm font-semibold text-muted-strong">
             <label htmlFor="coordinator-csv-file">CSV file</label>

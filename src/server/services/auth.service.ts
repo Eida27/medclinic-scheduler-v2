@@ -11,7 +11,15 @@ export async function authenticate(email: string, password: string): Promise<Ses
     throw new AppError("INVALID_CREDENTIALS", "Invalid email or password.", 401);
   }
 
-  return { userId: user.id, fullName: user.fullName, email: user.email, role: user.role };
+  return {
+    userId: user.id,
+    fullName: user.fullName,
+    email: user.email,
+    role: user.role,
+    clinicId: user.clinicId,
+    clinicCode: user.clinicCode,
+    clinicName: user.clinicName,
+  };
 }
 
 export async function authorizeSession(user: SessionUser, allowedRoles?: UserRole[]): Promise<SessionUser> {
@@ -27,5 +35,8 @@ export async function authorizeSession(user: SessionUser, allowedRoles?: UserRol
     fullName: current.fullName,
     email: current.email,
     role: current.role,
+    clinicId: current.clinicId,
+    clinicCode: current.clinicCode,
+    clinicName: current.clinicName,
   };
 }

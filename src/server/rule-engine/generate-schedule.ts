@@ -15,13 +15,13 @@ function servicesFor(item: ScheduleItemInput): AppointmentScheduleType[] {
   return item.scheduleType === "BOTH" ? ["PHYSICAL_EXAM", "LABORATORY"] : [item.scheduleType];
 }
 
-function loadKey(date: string, scheduleType: AppointmentScheduleType): string {
-  return `${date}:${scheduleType}`;
+function loadKey(clinicId: string, date: string, scheduleType: AppointmentScheduleType): string {
+  return `${clinicId}:${date}:${scheduleType}`;
 }
 
-function capacityFor(settings: CapacitySetting[], scheduleType: AppointmentScheduleType): CapacitySetting {
-  const setting = settings.find((entry) => entry.scheduleType === scheduleType);
-  if (!setting) throw new Error(`Missing capacity setting for ${scheduleType}`);
+function capacityFor(settings: CapacitySetting[], clinicId: string, scheduleType: AppointmentScheduleType): CapacitySetting {
+  const setting = settings.find((entry) => entry.clinicId === clinicId && entry.scheduleType === scheduleType);
+  if (!setting) throw new Error(`Missing capacity setting for ${clinicId}:${scheduleType}`);
   return setting;
 }
 
@@ -36,7 +36,7 @@ function eligibleDates(item: ScheduleItemInput): string[] {
 export function generateSchedule(input: GenerateScheduleInput): GenerateScheduleOutput {
   const loads = new Map<string, number>();
   for (const entry of input.existingLoad) {
-    loads.set(loadKey(entry.date, entry.scheduleType), entry.count);
+    loads.set(loadKey(entry.clinicId, entry.date, entry.scheduleType), entry.count);
   }
 
   const appointments: DraftAppointment[] = [];
@@ -63,13 +63,13 @@ export function generateSchedule(input: GenerateScheduleInput): GenerateSchedule
       selectedDate = dates
         .filter((date) =>
           services.every((service) => {
-            const setting = capacityFor(input.capacities, service);
-            return (loads.get(loadKey(date, service)) ?? 0) < setting.maxDailyCapacity;
+            const setting = capacityFor(input.capacities, item.clinicId, service);
+            return (loads.get(loadKey(item.clinicId, date, service)) ?? 0) < setting.maxDailyCapacity;
           }),
         )
         .sort((left, right) => {
-          const leftLoad = services.reduce((sum, service) => sum + (loads.get(loadKey(left, service)) ?? 0), 0);
-          const rightLoad = services.reduce((sum, service) => sum + (loads.get(loadKey(right, service)) ?? 0), 0);
+          const leftLoad = services.reduce((sum, service) => sum + (loads.get(loadKey(item.clinicId, left, service)) ?? 0), 0);
+          const rightLoad = services.reduce((sum, service) => sum + (loads.get(loadKey(item.clinicId, right, service)) ?? 0), 0);
           return leftLoad - rightLoad || left.localeCompare(right);
         })[0];
     }
@@ -87,23 +87,22 @@ export function generateSchedule(input: GenerateScheduleInput): GenerateSchedule
     for (const service of services) {
       appointments.push({
         scheduleItemId: item.id,
+        clinicId: item.clinicId,
         studentNumber: item.studentNumber,
         scheduleType: service,
         appointmentDate: selectedDate,
       });
-      const key = loadKey(selectedDate, service);
+      const key = loadKey(item.clinicId, selectedDate, service);
       loads.set(key, (loads.get(key) ?? 0) + 1);
     }
   }
 
   const capacityResults = [...loads.entries()]
     .map(([key, count]) => {
-      const separator = key.lastIndexOf(":");
-      const date = key.slice(0, separator);
-      const scheduleType = key.slice(separator + 1) as AppointmentScheduleType;
-      return checkCapacity(date, scheduleType, count, capacityFor(input.capacities, scheduleType));
+      const [clinicId, date, scheduleType] = key.split(":") as [string, string, AppointmentScheduleType];
+      return checkCapacity(clinicId, date, scheduleType, count, capacityFor(input.capacities, clinicId, scheduleType));
     })
-    .sort((left, right) => left.date.localeCompare(right.date) || left.scheduleType.localeCompare(right.scheduleType));
+    .sort((left, right) => left.clinicId.localeCompare(right.clinicId) || left.date.localeCompare(right.date) || left.scheduleType.localeCompare(right.scheduleType));
 
   return { appointments, unscheduledItems, capacityResults };
 }

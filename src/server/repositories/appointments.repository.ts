@@ -1,21 +1,24 @@
 import "server-only";
 import { query, transaction } from "@/server/db/pool";
+import type { ClinicCode } from "@/server/clinics";
 
 export type AppointmentStatus = "DRAFT" | "PENDING" | "COMPLETED" | "NO_SHOW" | "RESCHEDULED" | "CANCELLED";
 type AppointmentDetail = {
   id: string; batchId: string | null; studentNumber: string; studentName: string; scheduleType: string;
+  clinicId: string; clinicCode: string; clinicName: string;
   appointmentDate: string; appointmentTime: string | null; status: AppointmentStatus; isPublished: boolean;
   notes: string | null; rescheduledFrom: string | null; collegeName: string; programName: string;
 };
 type StatusLog = { id: string; oldStatus: string | null; newStatus: string; notes: string | null; createdAt: Date; changedByName: string | null };
 
 export async function listAppointments(filters: {
-  appointmentDate?: string; scheduleType?: string; status?: string; collegeId?: string; programId?: string;
+  clinicCode?: ClinicCode; appointmentDate?: string; scheduleType?: string; status?: string; collegeId?: string; programId?: string;
   studentNumber?: string; isPublished?: boolean; page: number; limit: number; offset: number;
 }) {
   const clauses = ["1=1"]; const values: unknown[] = [];
   const add = (sql: string, value: unknown) => { values.push(value); clauses.push(sql.replace("?", `$${values.length}`)); };
   if (filters.appointmentDate) add("a.appointment_date = ?::date", filters.appointmentDate);
+  if (filters.clinicCode) add("cl.code = ?", filters.clinicCode);
   if (filters.scheduleType) add("a.schedule_type = ?", filters.scheduleType);
   if (filters.status) add("a.status = ?", filters.status);
   if (filters.collegeId) add("s.college_id = ?::uuid", filters.collegeId);
@@ -23,14 +26,21 @@ export async function listAppointments(filters: {
   if (filters.studentNumber) add("a.student_number ILIKE ?", `%${filters.studentNumber}%`);
   if (filters.isPublished !== undefined) add("a.is_published = ?::boolean", filters.isPublished);
   const where = clauses.join(" AND ");
-  const count = await query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM appointments a JOIN students s ON s.student_number=a.student_number WHERE ${where}`, values);
+  const count = await query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count FROM appointments a
+      JOIN clinics cl ON cl.id=a.clinic_id
+      JOIN students s ON s.student_number=a.student_number WHERE ${where}`,
+    values,
+  );
   values.push(filters.limit, filters.offset);
   const result = await query<AppointmentDetail>(
     `SELECT a.id, a.batch_id AS "batchId", a.student_number AS "studentNumber",
             CONCAT_WS(' ', s.first_name, s.last_name) AS "studentName", a.schedule_type AS "scheduleType",
+            a.clinic_id AS "clinicId", cl.code AS "clinicCode", cl.name AS "clinicName",
             a.appointment_date::text AS "appointmentDate", a.appointment_time::text AS "appointmentTime",
             a.status, a.is_published AS "isPublished", c.name AS "collegeName", p.name AS "programName"
      FROM appointments a JOIN students s ON s.student_number=a.student_number
+     JOIN clinics cl ON cl.id=a.clinic_id
      JOIN colleges c ON c.id=s.college_id JOIN programs p ON p.id=s.program_id
      WHERE ${where} ORDER BY a.appointment_date, s.last_name, s.first_name
      LIMIT $${values.length - 1} OFFSET $${values.length}`,
@@ -44,9 +54,11 @@ export async function getAppointment(id: string) {
     `SELECT a.id, a.batch_id AS "batchId", a.student_number AS "studentNumber",
             CONCAT_WS(' ', s.first_name, s.middle_name, s.last_name, s.suffix) AS "studentName",
             a.schedule_type AS "scheduleType", a.appointment_date::text AS "appointmentDate",
+            a.clinic_id AS "clinicId", cl.code AS "clinicCode", cl.name AS "clinicName",
             a.appointment_time::text AS "appointmentTime", a.status, a.is_published AS "isPublished",
             a.notes, a.rescheduled_from AS "rescheduledFrom", c.name AS "collegeName", p.name AS "programName"
      FROM appointments a JOIN students s ON s.student_number=a.student_number
+     JOIN clinics cl ON cl.id=a.clinic_id
      JOIN colleges c ON c.id=s.college_id JOIN programs p ON p.id=s.program_id WHERE a.id=$1`, [id]);
   if (!result.rows[0]) return null;
   const logs = await query<StatusLog>(
@@ -71,18 +83,18 @@ export async function rescheduleAppointment(id: string, appointmentDate: string,
   return transaction(async (client) => {
     const current = await client.query<{
       id: string; batch_id: string | null; schedule_item_id: string | null; student_number: string;
-      schedule_type: string; status: AppointmentStatus; is_published: boolean;
-    }>("SELECT id,batch_id,schedule_item_id,student_number,schedule_type,status,is_published FROM appointments WHERE id=$1 FOR UPDATE", [id]);
+      clinic_id: string; schedule_type: string; status: AppointmentStatus; is_published: boolean;
+    }>("SELECT id,batch_id,schedule_item_id,clinic_id,student_number,schedule_type,status,is_published FROM appointments WHERE id=$1 FOR UPDATE", [id]);
     if (!current.rows[0]) return null;
     const row = current.rows[0];
     await client.query("UPDATE appointments SET status='RESCHEDULED', updated_by=$2 WHERE id=$1", [id, actorUserId]);
     await client.query("INSERT INTO appointment_status_logs (appointment_id, old_status, new_status, notes, changed_by) VALUES ($1,$2,'RESCHEDULED',$3,$4)", [id, row.status, notes, actorUserId]);
     const replacement = await client.query<{ id: string }>(
       `INSERT INTO appointments (
-        batch_id, student_number, schedule_type, appointment_date, appointment_time,
+        batch_id, clinic_id, student_number, schedule_type, appointment_date, appointment_time,
         status, is_published, notes, rescheduled_from, created_by, updated_by
-      ) VALUES ($1,$2,$3,$4,$5,'PENDING',$6,$7,$8,$9,$9) RETURNING id`,
-      [row.batch_id, row.student_number, row.schedule_type, appointmentDate, appointmentTime, row.is_published, notes, id, actorUserId],
+      ) VALUES ($1,$2,$3,$4,$5,$6,'PENDING',$7,$8,$9,$10,$10) RETURNING id`,
+      [row.batch_id, row.clinic_id, row.student_number, row.schedule_type, appointmentDate, appointmentTime, row.is_published, notes, id, actorUserId],
     );
     await client.query("INSERT INTO appointment_status_logs (appointment_id, old_status, new_status, notes, changed_by) VALUES ($1,NULL,'PENDING',$2,$3)", [replacement.rows[0].id, notes, actorUserId]);
     return replacement.rows[0].id;
@@ -131,15 +143,18 @@ export async function publicStudentSchedule(studentNumber: string) {
 
 export async function getCapacitySettings() {
   return (await query(
-    `SELECT schedule_type AS "scheduleType", safe_daily_capacity AS "safeDailyCapacity",
-            max_daily_capacity AS "maxDailyCapacity" FROM clinic_capacity_settings ORDER BY schedule_type`,
+    `SELECT s.schedule_type AS "scheduleType", c.code AS "clinicCode", c.name AS "clinicName",
+            s.safe_daily_capacity AS "safeDailyCapacity", s.max_daily_capacity AS "maxDailyCapacity"
+       FROM clinic_capacity_settings s JOIN clinics c ON c.id=s.clinic_id
+      ORDER BY c.code, s.schedule_type`,
   )).rows;
 }
 
-export async function updateCapacitySetting(scheduleType: string, safe: number, max: number) {
+export async function updateCapacitySetting(clinicCode: string, scheduleType: string, safe: number, max: number) {
   return (await query(
-    `UPDATE clinic_capacity_settings SET safe_daily_capacity=$2,max_daily_capacity=$3
-     WHERE schedule_type=$1 RETURNING schedule_type AS "scheduleType",
-     safe_daily_capacity AS "safeDailyCapacity", max_daily_capacity AS "maxDailyCapacity"`, [scheduleType, safe, max],
+    `UPDATE clinic_capacity_settings SET safe_daily_capacity=$3,max_daily_capacity=$4
+     WHERE clinic_id=(SELECT id FROM clinics WHERE code=$1) AND schedule_type=$2
+     RETURNING schedule_type AS "scheduleType",
+     safe_daily_capacity AS "safeDailyCapacity", max_daily_capacity AS "maxDailyCapacity"`, [clinicCode, scheduleType, safe, max],
   )).rows[0] ?? null;
 }

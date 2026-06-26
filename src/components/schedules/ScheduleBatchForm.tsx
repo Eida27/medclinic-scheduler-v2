@@ -46,14 +46,20 @@ export function ScheduleBatchForm({
   colleges,
   programs,
   priorities,
+  clinicCode,
+  forcedScheduleType,
+  redirectBase = "/coordinator-schedules",
 }: {
   colleges: College[];
   programs: Program[];
   priorities: PriorityGroup[];
+  clinicCode?: "KABALAKA_CLINIC" | "CPU_CLINIC";
+  forcedScheduleType?: "PHYSICAL_EXAM" | "LABORATORY";
+  redirectBase?: string;
 }) {
   const router = useRouter();
   const [collegeId, setCollegeId] = useState("");
-  const [items, setItems] = useState<Item[]>([emptyItem()]);
+  const [items, setItems] = useState<Item[]>([{ ...emptyItem(), scheduleType: forcedScheduleType ?? "BOTH" }]);
   const [error, setError] = useState<BatchError>();
   const [pending, setPending] = useState(false);
   const filteredPrograms = useMemo(
@@ -74,13 +80,14 @@ export function ScheduleBatchForm({
     const form = new FormData(event.currentTarget);
     const body = {
       batchName: form.get("batchName"),
+      clinicCode,
       collegeId: form.get("collegeId"),
       programId: form.get("programId"),
       submittedByName: form.get("submittedByName"),
       description: form.get("description"),
       items: items.map((item) => ({
         studentNumber: item.studentNumber,
-        scheduleType: item.scheduleType,
+        scheduleType: forcedScheduleType ?? item.scheduleType,
         priorityGroupId: item.priorityGroupId,
         targetDate: item.mode === "date" ? item.targetDate : null,
         targetWeekStart: item.mode === "week" ? item.targetWeekStart : null,
@@ -99,7 +106,7 @@ export function ScheduleBatchForm({
       setPending(false);
       return;
     }
-    router.push(`/coordinator-schedules/${payload.data.id}`);
+    router.push(`${redirectBase}/${payload.data.id}`);
     router.refresh();
   }
 
@@ -166,7 +173,7 @@ export function ScheduleBatchForm({
             <Button
               size="sm"
               variant="secondary"
-              onClick={() => setItems((current) => [...current, emptyItem()])}
+              onClick={() => setItems((current) => [...current, { ...emptyItem(), scheduleType: forcedScheduleType ?? "BOTH" }])}
             >
               Add row
             </Button>
@@ -196,15 +203,21 @@ export function ScheduleBatchForm({
                     <p id={studentErrorId} className="text-xs font-medium text-red-700">{studentError}</p>
                   ) : null}
                 </div>
-                <Select
-                  aria-label={`Service ${index + 1}`}
-                  value={item.scheduleType}
-                  onChange={(event) => update(index, { scheduleType: event.target.value as Item["scheduleType"] })}
-                >
-                  <option value="BOTH">Both services</option>
-                  <option value="PHYSICAL_EXAM">Physical exam</option>
-                  <option value="LABORATORY">Laboratory</option>
-                </Select>
+                {forcedScheduleType ? (
+                  <div className="rounded-xl border border-line bg-surface px-3 py-2 text-sm font-semibold text-muted-strong">
+                    {forcedScheduleType === "PHYSICAL_EXAM" ? "Physical exam" : "Laboratory"}
+                  </div>
+                ) : (
+                  <Select
+                    aria-label={`Service ${index + 1}`}
+                    value={item.scheduleType}
+                    onChange={(event) => update(index, { scheduleType: event.target.value as Item["scheduleType"] })}
+                  >
+                    <option value="BOTH">Both services</option>
+                    <option value="PHYSICAL_EXAM">Physical exam</option>
+                    <option value="LABORATORY">Laboratory</option>
+                  </Select>
+                )}
                 <Select
                   aria-label={`Priority ${index + 1}`}
                   value={item.priorityGroupId}

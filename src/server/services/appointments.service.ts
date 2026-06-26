@@ -57,6 +57,7 @@ export async function publishScheduleBatch(batchId: string, actorUserId: string)
 }
 
 export const capacitySchema = z.object({
+  clinicCode: z.enum(["KABALAKA_CLINIC", "CPU_CLINIC"]),
   scheduleType: z.enum(["PHYSICAL_EXAM", "LABORATORY"]),
   safeDailyCapacity: z.coerce.number().int().positive(),
   maxDailyCapacity: z.coerce.number().int().positive(),
@@ -64,8 +65,8 @@ export const capacitySchema = z.object({
 
 export async function changeCapacity(raw: unknown, actorUserId: string) {
   const input = capacitySchema.parse(raw);
-  const result = await updateCapacitySetting(input.scheduleType, input.safeDailyCapacity, input.maxDailyCapacity);
+  const result = await updateCapacitySetting(input.clinicCode, input.scheduleType, input.safeDailyCapacity, input.maxDailyCapacity);
   if (!result) throw new AppError("CAPACITY_NOT_FOUND", "Capacity setting not found.", 404);
-  await writeAudit(actorUserId, "CAPACITY_UPDATED", "capacity_setting", input.scheduleType, input);
+  await writeAudit(actorUserId, "CAPACITY_UPDATED", "capacity_setting", `${input.clinicCode}:${input.scheduleType}`, input);
   return result;
 }

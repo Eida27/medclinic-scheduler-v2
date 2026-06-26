@@ -20,6 +20,7 @@ import { generateSchedule } from "@/server/rule-engine";
 import { registeredStudentNumbers } from "@/server/repositories/students.repository";
 import type { SessionUser } from "@/types/roles";
 import { parseCoordinatorScheduleCsv } from "./coordinator-schedule-csv";
+import { clinicCodeByScheduleType, isClinicCode, type ClinicCode } from "@/server/clinics";
 
 const blankToNull = z.union([z.string(), z.null(), z.undefined()]).transform((value) => value?.trim() || null);
 const dateOrNull = z.union([z.iso.date(), z.literal(""), z.null(), z.undefined()]).transform((value) => value || null);
@@ -41,7 +42,16 @@ const itemSchema = z.object({
   }
 });
 
+function expandedRequestKeys(item: z.infer<typeof itemSchema>, clinicCode?: ClinicCode | null) {
+  const services = item.scheduleType === "BOTH" ? ["PHYSICAL_EXAM", "LABORATORY"] as const : [item.scheduleType];
+  return services.flatMap((service) => {
+    const itemClinicCode = clinicCodeByScheduleType[service];
+    return clinicCode && itemClinicCode !== clinicCode ? [] : [`${item.studentNumber}:${itemClinicCode}:${service}`];
+  });
+}
+
 export const createBatchSchema = z.object({
+  clinicCode: z.enum(["KABALAKA_CLINIC", "CPU_CLINIC"]).optional().nullable(),
   batchName: z.string().trim().min(3).max(150),
   collegeId: z.union([z.string().uuid(), z.literal(""), z.null(), z.undefined()]).transform((value) => value || null),
   programId: z.union([z.string().uuid(), z.literal(""), z.null(), z.undefined()]).transform((value) => value || null),
@@ -51,14 +61,16 @@ export const createBatchSchema = z.object({
 }).superRefine((batch, context) => {
   const seen = new Set<string>();
   batch.items.forEach((item, index) => {
-    const key = `${item.studentNumber}:${item.scheduleType}`;
-    if (seen.has(key)) context.addIssue({ code: "custom", path: ["items", index], message: "Duplicate student and schedule type in this batch." });
-    seen.add(key);
+    for (const key of expandedRequestKeys(item, batch.clinicCode)) {
+      if (seen.has(key)) context.addIssue({ code: "custom", path: ["items", index], message: "Duplicate student and schedule type in this batch." });
+      seen.add(key);
+    }
   });
   if (batch.programId && !batch.collegeId) context.addIssue({ code: "custom", path: ["collegeId"], message: "College is required when a program is selected." });
 });
 
 const csvImportSchema = z.object({
+  clinicCode: z.enum(["KABALAKA_CLINIC", "CPU_CLINIC"]).optional().nullable(),
   fileName: z.string().trim().min(1),
   fileSize: z.number().int().positive(),
   contents: z.string().min(1),
@@ -68,8 +80,26 @@ const csvImportSchema = z.object({
   description: blankToNull,
 });
 
-export async function importCoordinatorScheduleCsv(raw: unknown, actorUserId: string) {
-  const input = csvImportSchema.parse(raw);
+type Actor = string | SessionUser;
+
+function actorUserId(actor: Actor) {
+  return typeof actor === "string" ? actor : actor.userId;
+}
+
+function scopedInput<T extends { clinicCode?: ClinicCode | null }>(input: T, actor: Actor): T {
+  if (typeof actor === "string" || actor.role === "ADMIN") return input;
+  if (!actor.clinicCode || !isClinicCode(actor.clinicCode)) {
+    throw new AppError("CLINIC_ACCESS_REQUIRED", "Your account is not assigned to a clinic.", 403);
+  }
+  if (input.clinicCode && input.clinicCode !== actor.clinicCode) {
+    throw new AppError("CLINIC_ACCESS_DENIED", "You can only manage your assigned clinic.", 403);
+  }
+  return { ...input, clinicCode: actor.clinicCode };
+}
+
+export async function importCoordinatorScheduleCsv(raw: unknown, actor: Actor) {
+  const input = scopedInput(csvImportSchema.parse(raw), actor);
+  const userId = actorUserId(actor);
   const fields: Record<string, string[]> = {};
   if (!input.fileName.toLocaleLowerCase().endsWith(".csv")) fields.file = ["Choose a file with a .csv extension."];
   if (input.fileSize > 1024 * 1024 || Buffer.byteLength(input.contents) > 1024 * 1024) {
@@ -80,21 +110,23 @@ export async function importCoordinatorScheduleCsv(raw: unknown, actorUserId: st
   }
 
   const result = await createImportedScheduleBatch({
+    clinicCode: input.clinicCode,
     batchName: input.batchName,
     priorityGroupId: input.priorityGroupId,
     submittedByName: input.submittedByName,
     description: input.description,
     fileName: input.fileName,
     rows: parseCoordinatorScheduleCsv(input.contents),
-  }, actorUserId);
+  }, userId);
   if ("fields" in result) {
     throw new AppError("CSV_IMPORT_INVALID", "Please correct the CSV import errors.", 422, result.fields);
   }
   return result;
 }
 
-export async function addScheduleBatch(raw: unknown, actorUserId: string) {
-  const input = createBatchSchema.parse(raw);
+export async function addScheduleBatch(raw: unknown, actor: Actor) {
+  const input = scopedInput(createBatchSchema.parse(raw), actor);
+  const userId = actorUserId(actor);
   const registered = await registeredStudentNumbers([...new Set(input.items.map((item) => item.studentNumber))]);
   const fields: Record<string, string[]> = {};
   input.items.forEach((item, index) => {
@@ -111,10 +143,12 @@ export async function addScheduleBatch(raw: unknown, actorUserId: string) {
     );
   }
   try {
-    const id = await createScheduleBatch(input, actorUserId);
-    await writeAudit(actorUserId, "SCHEDULE_BATCH_CREATED", "schedule_batch", id, { itemCount: input.items.length });
-    return getScheduleBatch(id);
+    const created = await createScheduleBatch(input, userId);
+    await writeAudit(userId, "SCHEDULE_BATCH_CREATED", "schedule_batch", created.id, { itemCount: created.itemCount, batchIds: created.batchIds });
+    const batch = await getScheduleBatch(created.id);
+    return batch ? { ...batch, batchIds: created.batchIds } : batch;
   } catch (error) {
+    if (error instanceof Error && error.message === "NO_MATCHING_CLINIC_ITEMS") throw new AppError("NO_MATCHING_CLINIC_ITEMS", "No schedule requests match the selected clinic.", 422);
     if (isPostgresUniqueViolation(error)) throw new AppError("DUPLICATE_SCHEDULE_ITEM", "A student appears more than once for the same service.", 409);
     throw error;
   }
@@ -125,6 +159,7 @@ function serviceTypes(scheduleType: "PHYSICAL_EXAM" | "LABORATORY" | "BOTH") {
 }
 
 function requestedCapacityKeys(items: Array<{
+  clinicId: string;
   scheduleType: "PHYSICAL_EXAM" | "LABORATORY" | "BOTH";
   targetDate: string | null;
   targetWeekStart: string | null;
@@ -136,7 +171,7 @@ function requestedCapacityKeys(items: Array<{
       ? [item.targetDate]
       : weekdaysInRange(String(item.targetWeekStart), String(item.targetWeekEnd));
     for (const date of dates) {
-      for (const service of serviceTypes(item.scheduleType)) keys.add(`${date}:${service}`);
+      for (const service of serviceTypes(item.scheduleType)) keys.add(`${item.clinicId}:${date}:${service}`);
     }
   }
   return keys;
@@ -162,7 +197,7 @@ export async function validateBatch(batchId: string, actorUserId: string) {
       addIssue(item.id, { code: "NO_WEEKDAY", message: "The selected range contains no Monday-Friday clinic dates.", severity: "CONFLICT" });
     }
     for (const service of serviceTypes(item.scheduleType)) {
-      if (activeKeys.has(`${item.studentNumber}:${service}`)) addIssue(item.id, { code: "ACTIVE_APPOINTMENT", message: `Student already has an active ${service.replaceAll("_", " ").toLowerCase()} appointment.`, severity: "CONFLICT", scheduleType: service });
+      if (activeKeys.has(`${item.studentNumber}:${item.clinicId}:${service}`)) addIssue(item.id, { code: "ACTIVE_APPOINTMENT", message: `Student already has an active ${service.replaceAll("_", " ").toLowerCase()} appointment.`, severity: "CONFLICT", scheduleType: service });
     }
   }
 
@@ -170,7 +205,7 @@ export async function validateBatch(batchId: string, actorUserId: string) {
   const [capacities, existingLoad] = await Promise.all([capacitySettings(), currentAppointmentLoad()]);
   const preview = generateSchedule({
     items: candidates.map((item) => ({
-      id: item.id, studentNumber: item.studentNumber, scheduleType: item.scheduleType,
+      id: item.id, clinicId: item.clinicId, studentNumber: item.studentNumber, scheduleType: item.scheduleType,
       priorityRank: item.priorityRank, targetDate: item.targetDate,
       targetWeekStart: item.targetWeekStart, targetWeekEnd: item.targetWeekEnd,
     })),
@@ -180,7 +215,7 @@ export async function validateBatch(batchId: string, actorUserId: string) {
   const capacityKeys = requestedCapacityKeys(candidates);
   const scopedPreview = {
     ...preview,
-    capacityResults: preview.capacityResults.filter((result) => capacityKeys.has(`${result.date}:${result.scheduleType}`)),
+    capacityResults: preview.capacityResults.filter((result) => capacityKeys.has(`${result.clinicId}:${result.date}:${result.scheduleType}`)),
   };
 
   for (const unscheduled of scopedPreview.unscheduledItems) {

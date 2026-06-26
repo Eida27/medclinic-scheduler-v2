@@ -7,6 +7,43 @@ afterAll(async () => {
 });
 
 describe("database constraints", () => {
+  it("seeds the two clinic schedulers and scopes capacity settings to clinics", async () => {
+    const clinics = await pool.query<{ code: string; name: string }>(
+      "SELECT code, name FROM clinics ORDER BY code",
+    );
+    expect(clinics.rows).toEqual([
+      { code: "CPU_CLINIC", name: "CPU Clinic" },
+      { code: "KABALAKA_CLINIC", name: "KABALAKA Clinic" },
+    ]);
+
+    const capacity = await pool.query<{ code: string; schedule_type: string; safe_daily_capacity: number; max_daily_capacity: number }>(
+      `SELECT c.code, s.schedule_type, s.safe_daily_capacity, s.max_daily_capacity
+         FROM clinic_capacity_settings s
+         JOIN clinics c ON c.id = s.clinic_id
+        ORDER BY c.code, s.schedule_type`,
+    );
+    expect(capacity.rows).toEqual([
+      { code: "CPU_CLINIC", schedule_type: "PHYSICAL_EXAM", safe_daily_capacity: 120, max_daily_capacity: 150 },
+      { code: "KABALAKA_CLINIC", schedule_type: "LABORATORY", safe_daily_capacity: 120, max_daily_capacity: 150 },
+    ]);
+  });
+
+  it("rejects persisted BOTH coordinator schedule items", async () => {
+    await expect(
+      pool.query(
+        `INSERT INTO coordinator_schedule_items (
+          batch_id, student_number, schedule_type, priority_group_id, clinic_id, target_date
+        ) VALUES ($1, $2, 'BOTH', $3, $4, DATE '2026-09-01')`,
+        [
+          "50000000-0000-4000-8000-000000000120",
+          "DEMO-0001",
+          "30000000-0000-4000-8000-000000000004",
+          "60000000-0000-4000-8000-000000000001",
+        ],
+      ),
+    ).rejects.toMatchObject({ code: "23514" });
+  });
+
   it("contains the deterministic demo fixtures", async () => {
     const students = await pool.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM students");
     const batches = await pool.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM schedule_batches");

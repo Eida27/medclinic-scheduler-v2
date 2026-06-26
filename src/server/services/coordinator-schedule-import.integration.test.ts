@@ -19,9 +19,9 @@ function input(contents: string) {
   };
 }
 
-async function cleanup(batchId: string, studentNumbers: string[]) {
-  await pool.query("DELETE FROM audit_logs WHERE entity_type='schedule_batch' AND entity_id=$1", [batchId]);
-  await pool.query("DELETE FROM schedule_batches WHERE id=$1", [batchId]);
+async function cleanup(batchIds: string[], studentNumbers: string[]) {
+  await pool.query("DELETE FROM audit_logs WHERE entity_type='schedule_batch' AND entity_id = ANY($1::varchar[])", [batchIds]);
+  await pool.query("DELETE FROM schedule_batches WHERE id = ANY($1::uuid[])", [batchIds]);
   await pool.query("DELETE FROM students WHERE student_number = ANY($1::varchar[])", [studentNumbers]);
 }
 
@@ -40,7 +40,7 @@ describe("coordinator schedule CSV import", () => {
     const imported = await importCoordinatorScheduleCsv(input(contents), actorUserId);
 
     try {
-      expect(imported).toMatchObject({ status: "DRAFT", itemCount: 3, createdStudentCount: 3 });
+      expect(imported).toMatchObject({ status: "DRAFT", itemCount: 4, createdStudentCount: 3 });
       const students = await pool.query(
         `SELECT student_number, first_name, last_name, year_level
            FROM students WHERE student_number = ANY($1::varchar[]) ORDER BY student_number`,
@@ -53,26 +53,30 @@ describe("coordinator schedule CSV import", () => {
       ]);
 
       const items = await pool.query(
-        `SELECT student_number, schedule_type, target_date::text
-           FROM coordinator_schedule_items WHERE batch_id=$1 ORDER BY student_number`,
-        [imported.id],
+        `SELECT i.student_number, i.schedule_type, c.code AS clinic_code, i.target_date::text
+           FROM coordinator_schedule_items i
+           JOIN clinics c ON c.id=i.clinic_id
+          WHERE i.batch_id = ANY($1::uuid[])
+          ORDER BY i.student_number, i.schedule_type`,
+        [imported.batchIds],
       );
       expect(items.rows).toEqual([
-        { student_number: studentNumbers[0], schedule_type: "PHYSICAL_EXAM", target_date: "2026-06-19" },
-        { student_number: studentNumbers[1], schedule_type: "LABORATORY", target_date: "2026-06-20" },
-        { student_number: studentNumbers[2], schedule_type: "BOTH", target_date: "2026-06-21" },
+        { student_number: studentNumbers[0], schedule_type: "PHYSICAL_EXAM", clinic_code: "CPU_CLINIC", target_date: "2026-06-19" },
+        { student_number: studentNumbers[1], schedule_type: "LABORATORY", clinic_code: "KABALAKA_CLINIC", target_date: "2026-06-20" },
+        { student_number: studentNumbers[2], schedule_type: "LABORATORY", clinic_code: "KABALAKA_CLINIC", target_date: "2026-06-21" },
+        { student_number: studentNumbers[2], schedule_type: "PHYSICAL_EXAM", clinic_code: "CPU_CLINIC", target_date: "2026-06-21" },
       ]);
 
       const audit = await pool.query(
         "SELECT action, metadata FROM audit_logs WHERE entity_type='schedule_batch' AND entity_id=$1",
         [imported.id],
       );
-      expect(audit.rows).toEqual([{
+      expect(audit.rows).toEqual([expect.objectContaining({
         action: "SCHEDULE_BATCH_CSV_IMPORTED",
-        metadata: { createdStudentCount: 3, fileName: "coordinator-schedule.csv", itemCount: 3 },
-      }]);
+        metadata: expect.objectContaining({ createdStudentCount: 3, fileName: "coordinator-schedule.csv", itemCount: 4 }),
+      })]);
     } finally {
-      await cleanup(imported.id, studentNumbers);
+      await cleanup(imported.batchIds, studentNumbers);
     }
   });
 
@@ -101,7 +105,7 @@ describe("coordinator schedule CSV import", () => {
       expect(batches.rowCount).toBe(0);
     } finally {
       const batches = await pool.query<{ id: string }>("SELECT id FROM schedule_batches WHERE batch_name=$1", [batchName]);
-      for (const batch of batches.rows) await cleanup(batch.id, studentNumbers);
+      for (const batch of batches.rows) await cleanup([batch.id], studentNumbers);
       await pool.query("DELETE FROM students WHERE student_number = ANY($1::varchar[])", [studentNumbers]);
     }
   });
@@ -134,7 +138,7 @@ describe("coordinator schedule CSV import", () => {
       );
       expect(student.rows[0]).toEqual({ first_name: "Student", last_name: "0001", year_level: 4 });
     } finally {
-      await cleanup(imported.id, []);
+      await cleanup(imported.batchIds, []);
     }
   });
 
@@ -179,7 +183,7 @@ describe("coordinator schedule CSV import", () => {
       expect((await pool.query("SELECT 1 FROM schedule_batches WHERE batch_name=$1", [batchName])).rowCount).toBe(0);
     } finally {
       const batches = await pool.query<{ id: string }>("SELECT id FROM schedule_batches WHERE batch_name=$1", [batchName]);
-      for (const batch of batches.rows) await cleanup(batch.id, []);
+      for (const batch of batches.rows) await cleanup([batch.id], []);
       await pool.query("DELETE FROM students WHERE student_number=$1", [studentNumber]);
     }
   });

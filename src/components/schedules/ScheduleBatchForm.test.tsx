@@ -94,4 +94,40 @@ describe("ScheduleBatchForm", () => {
     expect(push).not.toHaveBeenCalled();
     expect(refresh).not.toHaveBeenCalled();
   });
+
+  it("forces clinic and schedule type when rendered from a clinic dashboard", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { id: "lab-batch" } }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(
+      <ScheduleBatchForm
+        colleges={colleges}
+        programs={programs}
+        priorities={priorities}
+        clinicCode="KABALAKA_CLINIC"
+        forcedScheduleType="LABORATORY"
+        redirectBase="/laboratory/coordinator-schedules"
+      />,
+    );
+
+    expect(screen.getByText("Laboratory")).toBeVisible();
+    expect(screen.queryByLabelText("Service 1")).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Batch name"), "Laboratory Batch");
+    await user.type(screen.getByLabelText("Student number 1"), "DEMO-0001");
+    await user.selectOptions(screen.getByLabelText("Priority 1"), priorities[0].id);
+    fireEvent.change(screen.getByLabelText("Target date 1"), { target: { value: "2026-06-20" } });
+
+    fireEvent.submit(screen.getByRole("button", { name: "Create schedule batch" }).closest("form")!);
+
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/laboratory/coordinator-schedules/lab-batch"));
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.clinicCode).toBe("KABALAKA_CLINIC");
+    expect(body.items).toEqual([
+      expect.objectContaining({ studentNumber: "DEMO-0001", scheduleType: "LABORATORY" }),
+    ]);
+  });
 });

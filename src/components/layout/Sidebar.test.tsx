@@ -32,6 +32,8 @@ describe("Sidebar", () => {
 
     expect(screen.getByRole("link", { name: "Appointments" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "Dashboard" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("link", { name: "Laboratory" })).toHaveAttribute("href", "/laboratory");
+    expect(screen.getByRole("link", { name: "Physical exam" })).toHaveAttribute("href", "/physical-exam");
     expect(screen.getByRole("navigation", { name: "Dashboard navigation" })).toHaveClass("scrollbar-none");
   });
 

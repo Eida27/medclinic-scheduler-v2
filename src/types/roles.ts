@@ -5,4 +5,7 @@ export type SessionUser = {
   fullName: string;
   email: string;
   role: UserRole;
+  clinicId?: string | null;
+  clinicCode?: string | null;
+  clinicName?: string | null;
 };

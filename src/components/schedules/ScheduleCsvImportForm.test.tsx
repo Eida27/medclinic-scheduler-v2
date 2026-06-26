@@ -115,4 +115,31 @@ describe("ScheduleCsvImportForm", () => {
     resolveFetch({ ok: true, json: async () => ({ data: { id: "pending-batch" } }) });
     await waitFor(() => expect(push).toHaveBeenCalledWith("/coordinator-schedules/pending-batch"));
   });
+
+  it("submits hidden clinic context and redirects inside a clinic dashboard", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { id: "clinic-import" } }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(
+      <ScheduleCsvImportForm
+        priorities={priorities}
+        clinicCode="CPU_CLINIC"
+        redirectBase="/physical-exam/coordinator-schedules"
+      />,
+    );
+
+    await user.upload(
+      screen.getByLabelText("CSV file"),
+      new File(["Student ID,Name"], "physical.csv", { type: "text/csv" }),
+    );
+    await user.selectOptions(screen.getByLabelText("Priority group"), priorities[0].id);
+    fireEvent.submit(screen.getByRole("button", { name: "Import CSV" }).closest("form")!);
+
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/physical-exam/coordinator-schedules/clinic-import"));
+    const [, request] = fetchMock.mock.calls[0];
+    expect(request.body.get("clinicCode")).toBe("CPU_CLINIC");
+  });
 });

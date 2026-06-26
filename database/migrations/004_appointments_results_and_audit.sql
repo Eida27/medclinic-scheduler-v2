@@ -2,6 +2,7 @@ CREATE TABLE appointments (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   batch_id UUID REFERENCES schedule_batches(id),
   schedule_item_id UUID REFERENCES coordinator_schedule_items(id),
+  clinic_id UUID NOT NULL REFERENCES clinics(id),
   student_number VARCHAR(20) NOT NULL REFERENCES students(student_number),
   schedule_type VARCHAR(30) NOT NULL CHECK (schedule_type IN ('PHYSICAL_EXAM', 'LABORATORY')),
   appointment_date DATE NOT NULL,
@@ -20,7 +21,7 @@ CREATE TABLE appointments (
 );
 
 CREATE UNIQUE INDEX appointments_one_active_service_idx
-  ON appointments (student_number, schedule_type)
+  ON appointments (student_number, clinic_id, schedule_type)
   WHERE status IN ('DRAFT', 'PENDING');
 
 CREATE TABLE appointment_status_logs (
@@ -72,7 +73,7 @@ CREATE TABLE audit_logs (
   CHECK (LENGTH(TRIM(action)) > 0 AND LENGTH(TRIM(entity_type)) > 0)
 );
 
-CREATE INDEX appointments_date_service_idx ON appointments (appointment_date, schedule_type, status);
+CREATE INDEX appointments_date_service_idx ON appointments (clinic_id, appointment_date, schedule_type, status);
 CREATE INDEX appointments_student_idx ON appointments (student_number, created_at DESC);
 CREATE INDEX appointments_batch_idx ON appointments (batch_id, status);
 CREATE INDEX status_logs_appointment_idx ON appointment_status_logs (appointment_id, created_at DESC);

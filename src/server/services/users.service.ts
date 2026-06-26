@@ -9,6 +9,12 @@ const userSchema = z.object({
   fullName: z.string().trim().min(2).max(150),
   email: z.string().trim().toLowerCase().email().max(150),
   role: z.enum(["ADMIN", "CLINIC_STAFF"]),
+  clinicCode: z.union([z.enum(["KABALAKA_CLINIC", "CPU_CLINIC"]), z.literal(""), z.null(), z.undefined()])
+    .transform((value) => value || null),
+}).superRefine((input, context) => {
+  if (input.role === "CLINIC_STAFF" && !input.clinicCode) {
+    context.addIssue({ code: "custom", path: ["clinicCode"], message: "Clinic staff must be assigned to a clinic." });
+  }
 });
 
 export async function createUser(raw: unknown, actorUserId: string) {

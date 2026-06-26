@@ -48,11 +48,12 @@ describe("POST /api/coordinator-schedules/import", () => {
       fileName: "appointments.csv",
       fileSize: contents.length,
       contents,
+      clinicCode: null,
       batchName: "June coordinator schedule",
       priorityGroupId: "30000000-0000-4000-8000-000000000004",
       submittedByName: "CCS Coordinator",
       description: "Imported schedule",
-    }, "staff-user");
+    }, { userId: "staff-user", role: "CLINIC_STAFF" });
   });
 
   it("returns a field error when no CSV file is supplied", async () => {

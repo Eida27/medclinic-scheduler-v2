@@ -1,0 +1,17 @@
+import Link from "next/link";
+import { Badge } from "@/components/ui/Badge";
+import { Card } from "@/components/ui/Card";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { requireUser } from "@/server/auth/current-user";
+import { assertClinicAccess } from "@/server/clinic-access";
+import { clinicConfigs } from "@/server/clinics";
+import { listScheduleBatches } from "@/server/repositories/coordinator-schedules.repository";
+
+const clinic = clinicConfigs.CPU_CLINIC;
+
+export default async function PhysicalExamScheduleBatchesPage() {
+  const user = await requireUser();
+  assertClinicAccess(user, clinic.code);
+  const batches = await listScheduleBatches({ clinicCode: clinic.code });
+  return <><PageHeader title="Physical examination coordinator schedules" description="CPU Clinic physical examination coordinator submissions." actions={<Link href="/physical-exam/coordinator-schedules/new" className="rounded-xl bg-cpu-navy px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-cpu-navy-light focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cpu-navy">New batch</Link>} /><Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="bg-cpu-navy-soft/70"><tr><th className="px-5 py-3">Batch</th><th className="px-5 py-3">Items</th><th className="px-5 py-3">Validation</th><th className="px-5 py-3">Status</th><th className="px-5 py-3"></th></tr></thead><tbody className="divide-y divide-line">{batches.map((batch) => <tr key={batch.id} className="transition hover:bg-cpu-navy-soft/35"><td className="px-5 py-4"><p className="font-bold text-ink">{batch.batchName}</p><p className="text-xs text-muted">{batch.programName ?? batch.collegeName ?? batch.clinicName}</p></td><td className="px-5 py-4">{batch.itemCount}</td><td className="px-5 py-4"><span className="text-red-700">{batch.conflictCount} conflicts</span> / <span className="text-amber-700">{batch.warningCount} warnings</span></td><td className="px-5 py-4"><Badge tone={batch.status === "PUBLISHED" ? "success" : batch.status === "GENERATED" ? "info" : "neutral"}>{batch.status}</Badge></td><td className="px-5 py-4 text-right"><Link className="font-bold text-cpu-navy hover:underline" href={`/physical-exam/coordinator-schedules/${batch.id}`}>Open</Link></td></tr>)}</tbody></table></div></Card></>;
+}

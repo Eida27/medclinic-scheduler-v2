@@ -8,6 +8,8 @@ import type { SessionUser } from "@/types/roles";
 
 const primaryLinks = [
   ["Dashboard", "/dashboard"],
+  ["Laboratory", "/laboratory"],
+  ["Physical exam", "/physical-exam"],
   ["Students", "/students"],
   ["Coordinator schedules", "/coordinator-schedules"],
   ["Appointments", "/appointments"],

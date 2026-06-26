@@ -17,6 +17,7 @@ CREATE TABLE students (
 
 CREATE TABLE schedule_batches (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  clinic_id UUID NOT NULL REFERENCES clinics(id),
   batch_name VARCHAR(150) NOT NULL,
   college_id UUID REFERENCES colleges(id),
   program_id UUID,
@@ -46,8 +47,9 @@ CREATE TABLE schedule_batches (
 CREATE TABLE coordinator_schedule_items (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   batch_id UUID NOT NULL REFERENCES schedule_batches(id) ON DELETE CASCADE,
+  clinic_id UUID NOT NULL REFERENCES clinics(id),
   student_number VARCHAR(20) NOT NULL REFERENCES students(student_number),
-  schedule_type VARCHAR(30) NOT NULL CHECK (schedule_type IN ('PHYSICAL_EXAM', 'LABORATORY', 'BOTH')),
+  schedule_type VARCHAR(30) NOT NULL CHECK (schedule_type IN ('PHYSICAL_EXAM', 'LABORATORY')),
   priority_group_id UUID NOT NULL REFERENCES priority_groups(id),
   target_date DATE,
   target_week_start DATE,
@@ -70,8 +72,8 @@ CREATE TABLE coordinator_schedule_items (
 
 CREATE INDEX students_name_search_idx ON students (last_name, first_name);
 CREATE INDEX students_reference_idx ON students (college_id, program_id, year_level);
-CREATE INDEX batches_status_idx ON schedule_batches (status, created_at DESC);
-CREATE INDEX schedule_items_batch_idx ON coordinator_schedule_items (batch_id, status);
+CREATE INDEX batches_status_idx ON schedule_batches (clinic_id, status, created_at DESC);
+CREATE INDEX schedule_items_batch_idx ON coordinator_schedule_items (batch_id, clinic_id, status);
 
 CREATE TRIGGER students_updated_at BEFORE UPDATE ON students FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER batches_updated_at BEFORE UPDATE ON schedule_batches FOR EACH ROW EXECUTE FUNCTION set_updated_at();

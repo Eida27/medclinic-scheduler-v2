@@ -15,6 +15,9 @@ export async function createSessionToken(user: SessionUser): Promise<string> {
     fullName: user.fullName,
     email: user.email,
     role: user.role,
+    clinicId: user.clinicId ?? null,
+    clinicCode: user.clinicCode ?? null,
+    clinicName: user.clinicName ?? null,
   })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(user.userId)
@@ -29,7 +32,10 @@ export async function verifySessionToken(token: string): Promise<SessionUser> {
     !payload.sub ||
     typeof payload.fullName !== "string" ||
     typeof payload.email !== "string" ||
-    (payload.role !== "ADMIN" && payload.role !== "CLINIC_STAFF")
+    (payload.role !== "ADMIN" && payload.role !== "CLINIC_STAFF") ||
+    (payload.clinicId !== null && payload.clinicId !== undefined && typeof payload.clinicId !== "string") ||
+    (payload.clinicCode !== null && payload.clinicCode !== undefined && typeof payload.clinicCode !== "string") ||
+    (payload.clinicName !== null && payload.clinicName !== undefined && typeof payload.clinicName !== "string")
   ) {
     throw new Error("Invalid session payload");
   }
@@ -38,5 +44,8 @@ export async function verifySessionToken(token: string): Promise<SessionUser> {
     fullName: payload.fullName,
     email: payload.email,
     role: payload.role as UserRole,
+    clinicId: typeof payload.clinicId === "string" ? payload.clinicId : null,
+    clinicCode: typeof payload.clinicCode === "string" ? payload.clinicCode : null,
+    clinicName: typeof payload.clinicName === "string" ? payload.clinicName : null,
   };
 }

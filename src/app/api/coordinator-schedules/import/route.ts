@@ -21,11 +21,12 @@ export async function POST(request: Request) {
       fileName: file.name,
       fileSize: file.size,
       contents: await file.text(),
+      clinicCode: form.get("clinicCode"),
       batchName: form.get("batchName"),
       priorityGroupId: form.get("priorityGroupId"),
       submittedByName: form.get("submittedByName"),
       description: form.get("description"),
-    }, user.userId);
+    }, user);
     return dataResponse(result, { status: 201 });
   } catch (error) {
     return errorResponse(error);

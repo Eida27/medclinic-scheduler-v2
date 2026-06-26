@@ -1,9 +1,20 @@
+CREATE TABLE clinics (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  code VARCHAR(50) UNIQUE NOT NULL,
+  name VARCHAR(150) UNIQUE NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT clinics_code_normalized CHECK (code = UPPER(code))
+);
+
 CREATE TABLE users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   full_name VARCHAR(150) NOT NULL,
   email VARCHAR(150) NOT NULL,
   password_hash TEXT NOT NULL,
   role VARCHAR(30) NOT NULL CHECK (role IN ('ADMIN', 'CLINIC_STAFF')),
+  clinic_id UUID REFERENCES clinics(id),
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -44,15 +55,18 @@ CREATE TABLE priority_groups (
 
 CREATE TABLE clinic_capacity_settings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  schedule_type VARCHAR(30) UNIQUE NOT NULL CHECK (schedule_type IN ('PHYSICAL_EXAM', 'LABORATORY')),
+  clinic_id UUID NOT NULL REFERENCES clinics(id),
+  schedule_type VARCHAR(30) NOT NULL CHECK (schedule_type IN ('PHYSICAL_EXAM', 'LABORATORY')),
   safe_daily_capacity INTEGER NOT NULL DEFAULT 120 CHECK (safe_daily_capacity > 0),
   max_daily_capacity INTEGER NOT NULL DEFAULT 150,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (clinic_id, schedule_type),
   CHECK (max_daily_capacity >= safe_daily_capacity)
 );
 
+CREATE TRIGGER clinics_updated_at BEFORE UPDATE ON clinics FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER users_updated_at BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER colleges_updated_at BEFORE UPDATE ON colleges FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER programs_updated_at BEFORE UPDATE ON programs FOR EACH ROW EXECUTE FUNCTION set_updated_at();

@@ -1,7 +1,13 @@
-INSERT INTO users (id, full_name, email, password_hash, role)
+INSERT INTO clinics (id, code, name)
 VALUES
-  ('00000000-0000-4000-8000-000000000001', 'System Admin', 'admin@medclinic.local', crypt('Admin123!', gen_salt('bf', 12)), 'ADMIN'),
-  ('00000000-0000-4000-8000-000000000002', 'Clinic Staff', 'staff@medclinic.local', crypt('Staff123!', gen_salt('bf', 12)), 'CLINIC_STAFF')
+  ('60000000-0000-4000-8000-000000000001', 'KABALAKA_CLINIC', 'KABALAKA Clinic'),
+  ('60000000-0000-4000-8000-000000000002', 'CPU_CLINIC', 'CPU Clinic')
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO users (id, full_name, email, password_hash, role, clinic_id)
+VALUES
+  ('00000000-0000-4000-8000-000000000001', 'System Admin', 'admin@medclinic.local', crypt('Admin123!', gen_salt('bf', 12)), 'ADMIN', NULL),
+  ('00000000-0000-4000-8000-000000000002', 'Clinic Staff', 'staff@medclinic.local', crypt('Staff123!', gen_salt('bf', 12)), 'CLINIC_STAFF', '60000000-0000-4000-8000-000000000001')
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO colleges (id, code, name)
@@ -26,8 +32,8 @@ VALUES
   ('30000000-0000-4000-8000-000000000004', 'Regular', 4)
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO clinic_capacity_settings (id, schedule_type, safe_daily_capacity, max_daily_capacity)
+INSERT INTO clinic_capacity_settings (id, clinic_id, schedule_type, safe_daily_capacity, max_daily_capacity)
 VALUES
-  ('40000000-0000-4000-8000-000000000001', 'PHYSICAL_EXAM', 120, 150),
-  ('40000000-0000-4000-8000-000000000002', 'LABORATORY', 120, 150)
+  ('40000000-0000-4000-8000-000000000001', '60000000-0000-4000-8000-000000000002', 'PHYSICAL_EXAM', 120, 150),
+  ('40000000-0000-4000-8000-000000000002', '60000000-0000-4000-8000-000000000001', 'LABORATORY', 120, 150)
 ON CONFLICT (id) DO NOTHING;

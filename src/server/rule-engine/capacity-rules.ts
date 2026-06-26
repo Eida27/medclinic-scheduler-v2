@@ -2,6 +2,7 @@ import "server-only";
 import type { AppointmentScheduleType, CapacityCheckResult, CapacitySetting } from "./types";
 
 export function checkCapacity(
+  clinicId: string,
   date: string,
   scheduleType: AppointmentScheduleType,
   count: number,
@@ -17,6 +18,7 @@ export function checkCapacity(
 
   return {
     status,
+    clinicId,
     date,
     scheduleType,
     count,

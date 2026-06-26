@@ -5,6 +5,7 @@ export type AppointmentScheduleType = Exclude<CoordinatorScheduleType, "BOTH">;
 export type CapacityStatus = "VALID" | "WARNING" | "CONFLICT";
 
 export type CapacitySetting = {
+  clinicId: string;
   scheduleType: AppointmentScheduleType;
   safeDailyCapacity: number;
   maxDailyCapacity: number;
@@ -12,6 +13,7 @@ export type CapacitySetting = {
 
 export type ScheduleItemInput = {
   id: string;
+  clinicId: string;
   studentNumber: string;
   scheduleType: CoordinatorScheduleType;
   priorityRank: number;
@@ -21,6 +23,7 @@ export type ScheduleItemInput = {
 };
 
 export type ExistingLoad = {
+  clinicId: string;
   date: string;
   scheduleType: AppointmentScheduleType;
   count: number;
@@ -28,6 +31,7 @@ export type ExistingLoad = {
 
 export type DraftAppointment = {
   scheduleItemId: string;
+  clinicId: string;
   studentNumber: string;
   scheduleType: AppointmentScheduleType;
   appointmentDate: string;
@@ -35,6 +39,7 @@ export type DraftAppointment = {
 
 export type CapacityCheckResult = {
   status: CapacityStatus;
+  clinicId: string;
   date: string;
   scheduleType: AppointmentScheduleType;
   count: number;
