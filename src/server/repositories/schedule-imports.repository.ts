@@ -65,7 +65,24 @@ export type ScheduleImportListItem = {
   updatedAt: string;
 };
 
-export type ImportChildBatch = NonNullable<Awaited<ReturnType<typeof getScheduleBatch>>>;
+type StoredImportChildBatch = NonNullable<Awaited<ReturnType<typeof getScheduleBatch>>>;
+
+export type ScheduleImportAppointment = {
+  id: string;
+  batchId: string;
+  studentNumber: string;
+  studentName: string;
+  scheduleType: AppointmentScheduleType;
+  appointmentDate: string;
+  appointmentTime: string | null;
+  status: string;
+  isPublished: boolean;
+  notes: string | null;
+};
+
+export type ImportChildBatch = StoredImportChildBatch & {
+  appointments: ScheduleImportAppointment[];
+};
 
 export type ScheduleImportDetail = ScheduleImportListItem & {
   childBatches: ImportChildBatch[];
@@ -554,10 +571,45 @@ export async function getImportChildBatches(
   const ids = client
     ? await client.query<{ id: string }>(sql, [importId])
     : await query<{ id: string }>(sql, [importId]);
+  const appointmentsSql = `SELECT appointment.id,
+                                  appointment.batch_id AS "batchId",
+                                  appointment.student_number AS "studentNumber",
+                                  CONCAT_WS(
+                                    ' ', student.first_name, student.middle_name,
+                                    student.last_name, student.suffix
+                                  ) AS "studentName",
+                                  appointment.schedule_type AS "scheduleType",
+                                  appointment.appointment_date::text AS "appointmentDate",
+                                  appointment.appointment_time::text AS "appointmentTime",
+                                  appointment.status,
+                                  appointment.is_published AS "isPublished",
+                                  appointment.notes
+                             FROM appointments appointment
+                             JOIN schedule_batches batch ON batch.id=appointment.batch_id
+                             JOIN students student ON student.student_number=appointment.student_number
+                            WHERE batch.import_group_id=$1
+                            ORDER BY appointment.appointment_date,
+                                     appointment.appointment_time NULLS LAST,
+                                     student.last_name, student.first_name, appointment.id`;
+  const appointmentResult = client
+    ? await client.query<ScheduleImportAppointment>(appointmentsSql, [importId])
+    : await query<ScheduleImportAppointment>(appointmentsSql, [importId]);
+  const appointmentsByBatch = new Map<string, ScheduleImportAppointment[]>();
+  for (const appointment of appointmentResult.rows) {
+    appointmentsByBatch.set(appointment.batchId, [
+      ...(appointmentsByBatch.get(appointment.batchId) ?? []),
+      appointment,
+    ]);
+  }
   const children: ImportChildBatch[] = [];
   for (const { id } of ids.rows) {
     const child = await getScheduleBatch(id, client);
-    if (child) children.push(child);
+    if (child) {
+      children.push({
+        ...child,
+        appointments: appointmentsByBatch.get(id) ?? [],
+      });
+    }
   }
   return children;
 }

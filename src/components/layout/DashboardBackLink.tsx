@@ -12,8 +12,20 @@ const backLinks = {
   },
 } as const;
 
+const scheduleImportsBackLink = {
+  href: "/students?view=schedule-imports",
+  label: "Back to schedule imports",
+} as const;
+
 function getBackLink(pathname: string) {
   const segments = pathname.split("/").filter(Boolean);
+  if (
+    segments.length === 3
+    && segments[0] === "students"
+    && segments[1] === "schedule-imports"
+  ) {
+    return scheduleImportsBackLink;
+  }
   if (segments.length !== 2 || segments[1] === "new") return null;
 
   return backLinks[segments[0] as keyof typeof backLinks] ?? null;

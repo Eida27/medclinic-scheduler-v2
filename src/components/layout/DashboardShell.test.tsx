@@ -33,6 +33,20 @@ describe("DashboardShell", () => {
     expect(screen.getByRole("link", { name: "Back to students" })).toHaveAttribute("href", "/students");
   });
 
+  it.each([
+    "/students/schedule-imports/new",
+    "/students/schedule-imports/import-123",
+  ])("shows an accessible link back to schedule imports on %s", (pathname) => {
+    usePathname.mockReturnValue(pathname);
+
+    render(<DashboardShell user={user}>Schedule import</DashboardShell>);
+
+    expect(screen.getByRole("link", { name: "Back to schedule imports" })).toHaveAttribute(
+      "href",
+      "/students?view=schedule-imports",
+    );
+  });
+
   it("shows an accessible link back to coordinator schedules on batch details", () => {
     usePathname.mockReturnValue("/coordinator-schedules/batch-123");
 
