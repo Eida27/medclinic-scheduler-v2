@@ -56,7 +56,11 @@ export async function insertNumberedTestStudents(prefix: string, count: number) 
   return studentNumbers;
 }
 
-export async function cleanupTestFixtures(studentNumberPattern: string, batchNamePattern: string) {
+export async function cleanupTestFixtures(
+  studentNumberPattern: string,
+  batchNamePattern: string,
+  importNamePattern?: string,
+) {
   await transaction(async (client) => {
     await client.query(
       `CREATE TEMP TABLE test_fixture_students ON COMMIT DROP AS
@@ -66,8 +70,20 @@ export async function cleanupTestFixtures(studentNumberPattern: string, batchNam
     await client.query("ALTER TABLE test_fixture_students ADD PRIMARY KEY (student_number)");
 
     await client.query(
+      `CREATE TEMP TABLE test_fixture_import_groups ON COMMIT DROP AS
+       SELECT id
+         FROM schedule_import_groups
+        WHERE $1::text IS NOT NULL AND import_name LIKE $1`,
+      [importNamePattern ?? null],
+    );
+    await client.query("ALTER TABLE test_fixture_import_groups ADD PRIMARY KEY (id)");
+
+    await client.query(
       `CREATE TEMP TABLE test_fixture_batches ON COMMIT DROP AS
-       SELECT id FROM schedule_batches WHERE batch_name LIKE $1`,
+       SELECT id
+         FROM schedule_batches
+        WHERE batch_name LIKE $1
+           OR import_group_id IN (SELECT id FROM test_fixture_import_groups)`,
       [batchNamePattern],
     );
     await client.query("ALTER TABLE test_fixture_batches ADD PRIMARY KEY (id)");
@@ -90,7 +106,9 @@ export async function cleanupTestFixtures(studentNumberPattern: string, batchNam
 
     await client.query(
       `DELETE FROM audit_logs audit
-        WHERE (audit.entity_type='schedule_batch'
+        WHERE (audit.entity_type='schedule_import_group'
+               AND audit.entity_id IN (SELECT id::text FROM test_fixture_import_groups))
+           OR (audit.entity_type='schedule_batch'
                AND audit.entity_id IN (SELECT id::text FROM test_fixture_batches))
            OR (audit.entity_type='student'
                AND audit.entity_id IN (SELECT student_number FROM test_fixture_students))
@@ -132,6 +150,7 @@ export async function cleanupTestFixtures(studentNumberPattern: string, batchNam
            OR student_number IN (SELECT student_number FROM test_fixture_students)`,
     );
     await client.query("DELETE FROM schedule_batches WHERE id IN (SELECT id FROM test_fixture_batches)");
+    await client.query("DELETE FROM schedule_import_groups WHERE id IN (SELECT id FROM test_fixture_import_groups)");
     await client.query("DELETE FROM students WHERE student_number IN (SELECT student_number FROM test_fixture_students)");
   });
 }
