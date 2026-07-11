@@ -275,6 +275,31 @@ describe("parseStudentScheduleCsv", () => {
     });
   });
 
+  it("rejects Unicode upper/lowercase variants of the same student ID", () => {
+    const lowercaseSharpS = "A\u00df1";
+    const uppercaseSharpS = "A\u1e9e1";
+
+    expect(fieldsFrom([
+      header,
+      `${lowercaseSharpS},"Rivera, Ria",College of Computing,BSIT,2,07-05-2026,`,
+      `${uppercaseSharpS},"Rivera, Ria",College of Computing,BSIT,2,,07-06-2026`,
+    ].join("\n"))).toEqual({
+      "rows.3.Student ID": ["This student ID already appears in row 2."],
+    });
+  });
+
+  it("keeps distinct Unicode student IDs separate when uppercase mapping is lossy", () => {
+    const latinI = "Ai1";
+    const dotlessI = "A\u01311";
+    const rows = parseStudentScheduleCsv([
+      header,
+      `${latinI},"Salazar, Sol",College of Computing,BSIT,2,07-05-2026,`,
+      `${dotlessI},"Torres, Tala",College of Computing,BSIT,2,07-06-2026,`,
+    ].join("\n"));
+
+    expect(rows.map((row) => row.studentNumber)).toEqual([latinI, dotlessI]);
+  });
+
   it("reports repeated student IDs even when either occurrence has an invalid column count", () => {
     expect(fieldsFrom([
       header,

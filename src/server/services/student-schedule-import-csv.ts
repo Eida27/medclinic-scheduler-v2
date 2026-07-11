@@ -57,6 +57,10 @@ function characterCount(value: string): number {
   return Array.from(value).length;
 }
 
+function caselessStudentIdKey(value: string): string {
+  return value.normalize("NFKC").toLowerCase().normalize("NFKC");
+}
+
 function isoDate(value: string): string | null {
   const match = /^(\d{2})-(\d{2})-(\d{4})$/.exec(value);
   if (!match) return null;
@@ -134,7 +138,7 @@ export function parseStudentScheduleCsv(
     let duplicateStudentId = false;
 
     if (candidateStudentNumber) {
-      const key = candidateStudentNumber.toUpperCase();
+      const key = caselessStudentIdKey(candidateStudentNumber);
       const firstRow = firstRowsByStudentId.get(key);
       if (firstRow !== undefined) {
         addError(
