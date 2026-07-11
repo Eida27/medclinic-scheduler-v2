@@ -1,18 +1,24 @@
 // @vitest-environment node
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { pool } from "@/server/db/pool";
+import {
+  cleanupTestFixtures,
+  insertTestStudent,
+  TEST_REFERENCE_IDS,
+} from "@/test/integration-fixtures";
 import { importCoordinatorScheduleCsv } from "./coordinator-schedules.service";
 
-const actorUserId = "00000000-0000-4000-8000-000000000002";
-const regularPriorityId = "30000000-0000-4000-8000-000000000004";
+const actorUserId = TEST_REFERENCE_IDS.clinicStaffUser;
+const regularPriorityId = TEST_REFERENCE_IDS.regularPriority;
 const header = "Student ID,Name,College,Course,Year,Appointment Date,Appointment Type";
+const existingStudentNumber = "TEST-CSV-EXISTING";
 
 function input(contents: string) {
   return {
     fileName: "coordinator-schedule.csv",
     fileSize: Buffer.byteLength(contents),
     contents,
-    batchName: "CSV import integration test",
+    batchName: "TEST CSV import integration test",
     priorityGroupId: regularPriorityId,
     submittedByName: "Test Coordinator",
     description: "Disposable import fixture",
@@ -25,11 +31,24 @@ async function cleanup(batchIds: string[], studentNumbers: string[]) {
   await pool.query("DELETE FROM students WHERE student_number = ANY($1::varchar[])", [studentNumbers]);
 }
 
-afterAll(async () => pool.end());
+beforeAll(async () => {
+  await cleanupTestFixtures("TEST-CSV-%", "TEST CSV %");
+  await insertTestStudent({
+    studentNumber: existingStudentNumber,
+    firstName: "Existing",
+    lastName: "Student",
+    yearLevel: 4,
+  });
+});
+
+afterAll(async () => {
+  await cleanupTestFixtures("TEST-CSV-%", "TEST CSV %");
+  await pool.end();
+});
 
 describe("coordinator schedule CSV import", () => {
   it("atomically creates missing students, a draft batch, schedule items, and an audit entry", async () => {
-    const studentNumbers = ["CSV-TDD-0001", "CSV-TDD-0002", "CSV-TDD-0003"];
+    const studentNumbers = ["TEST-CSV-0001", "TEST-CSV-0002", "TEST-CSV-0003"];
     const contents = [
       header,
       `${studentNumbers[0]},Anna Dela Cruz,College of Computer Studies,BSIT,3,06-19-2026,Physical Examination`,
@@ -81,8 +100,8 @@ describe("coordinator schedule CSV import", () => {
   });
 
   it("rolls back the entire import when any reference value is invalid", async () => {
-    const studentNumbers = ["CSV-TDD-ROLLBACK-1", "CSV-TDD-ROLLBACK-2"];
-    const batchName = "CSV rollback integration test";
+    const studentNumbers = ["TEST-CSV-ROLLBACK-1", "TEST-CSV-ROLLBACK-2"];
+    const batchName = "TEST CSV rollback integration test";
     const contents = [
       header,
       `${studentNumbers[0]},Valid Student,College of Computer Studies,BSIT,3,06-19-2026,Laboratory`,
@@ -111,10 +130,10 @@ describe("coordinator schedule CSV import", () => {
   });
 
   it("rejects CSV profile data that does not match an existing student", async () => {
-    const batchName = "CSV mismatch integration test";
+    const batchName = "TEST CSV mismatch integration test";
     const contents = [
       header,
-      "DEMO-0001,Wrong Person,College of Computer Studies,BSIT,4,06-19-2026,Laboratory",
+      `${existingStudentNumber},Wrong Person,College of Computer Studies,BSIT,4,06-19-2026,Laboratory`,
     ].join("\n");
 
     await expect(importCoordinatorScheduleCsv({ ...input(contents), batchName }, actorUserId)).rejects.toMatchObject({
@@ -127,24 +146,25 @@ describe("coordinator schedule CSV import", () => {
   it("uses a matching existing student without overwriting the student record", async () => {
     const contents = [
       header,
-      "DEMO-0001,Student 0001,College of Computer Studies,BSIT,4,06-19-2026,Laboratory",
+      `${existingStudentNumber},Existing Student,College of Computer Studies,BSIT,4,06-19-2026,Laboratory`,
     ].join("\n");
     const imported = await importCoordinatorScheduleCsv(input(contents), actorUserId);
 
     try {
       expect(imported.createdStudentCount).toBe(0);
       const student = await pool.query(
-        "SELECT first_name, last_name, year_level FROM students WHERE student_number='DEMO-0001'",
+        "SELECT first_name, last_name, year_level FROM students WHERE student_number=$1",
+        [existingStudentNumber],
       );
-      expect(student.rows[0]).toEqual({ first_name: "Student", last_name: "0001", year_level: 4 });
+      expect(student.rows[0]).toEqual({ first_name: "Existing", last_name: "Student", year_level: 4 });
     } finally {
       await cleanup(imported.batchIds, []);
     }
   });
 
   it("rejects an inactive or unknown priority before writing records", async () => {
-    const studentNumber = "CSV-TDD-PRIORITY";
-    const batchName = "CSV priority integration test";
+    const studentNumber = "TEST-CSV-PRIORITY";
+    const batchName = "TEST CSV priority integration test";
     const contents = [
       header,
       `${studentNumber},Priority Student,College of Computer Studies,BSIT,3,06-19-2026,Laboratory`,
@@ -163,16 +183,16 @@ describe("coordinator schedule CSV import", () => {
   });
 
   it("reports a year mismatch when an existing student has no year level", async () => {
-    const studentNumber = "CSV-TDD-NULL-YEAR";
-    const batchName = "CSV null year integration test";
+    const studentNumber = "TEST-CSV-NULL-YEAR";
+    const batchName = "TEST CSV null year integration test";
     const contents = [
       header,
       `${studentNumber},Null Year,College of Computer Studies,BSIT,3,06-19-2026,Laboratory`,
     ].join("\n");
     await pool.query(
       `INSERT INTO students (student_number, first_name, last_name, college_id, program_id, year_level)
-       VALUES ($1,'Null','Year','10000000-0000-4000-8000-000000000003','20000000-0000-4000-8000-000000000003',NULL)`,
-      [studentNumber],
+       VALUES ($1,'Null','Year',$2,$3,NULL)`,
+      [studentNumber, TEST_REFERENCE_IDS.college, TEST_REFERENCE_IDS.program],
     );
 
     try {
