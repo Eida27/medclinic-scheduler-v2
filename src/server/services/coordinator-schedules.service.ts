@@ -1,4 +1,5 @@
 import "server-only";
+import type { PoolClient } from "pg";
 import { z } from "zod";
 import { weekdaysInRange } from "@/lib/dates";
 import { AppError, isPostgresUniqueViolation } from "@/lib/errors";
@@ -50,13 +51,21 @@ function expandedRequestKeys(item: z.infer<typeof itemSchema>, clinicCode?: Clin
   });
 }
 
-export const createBatchSchema = z.object({
+const batchMetadataShape = {
   clinicCode: z.enum(["KABALAKA_CLINIC", "CPU_CLINIC"]).optional().nullable(),
   batchName: z.string().trim().min(3).max(150),
   collegeId: z.union([z.string().uuid(), z.literal(""), z.null(), z.undefined()]).transform((value) => value || null),
   programId: z.union([z.string().uuid(), z.literal(""), z.null(), z.undefined()]).transform((value) => value || null),
   submittedByName: blankToNull,
   description: blankToNull,
+} as const;
+
+const batchMetadataSchema = z.object(batchMetadataShape).superRefine((batch, context) => {
+  if (batch.programId && !batch.collegeId) context.addIssue({ code: "custom", path: ["collegeId"], message: "College is required when a program is selected." });
+});
+
+export const createBatchSchema = z.object({
+  ...batchMetadataShape,
   items: z.array(itemSchema).min(1).max(500),
 }).superRefine((batch, context) => {
   const seen = new Set<string>();
@@ -68,6 +77,12 @@ export const createBatchSchema = z.object({
   });
   if (batch.programId && !batch.collegeId) context.addIssue({ code: "custom", path: ["collegeId"], message: "College is required when a program is selected." });
 });
+
+const groupedBatchError = () => new AppError(
+  "GROUPED_BATCH_ACTION_REQUIRED",
+  "This batch belongs to a grouped schedule import. Use the grouped import action instead.",
+  409,
+);
 
 const csvImportSchema = z.object({
   clinicCode: z.enum(["KABALAKA_CLINIC", "CPU_CLINIC"]).optional().nullable(),
@@ -177,16 +192,22 @@ function requestedCapacityKeys(items: Array<{
   return keys;
 }
 
-export async function validateBatch(batchId: string, actorUserId: string) {
-  const batch = await getRuleItems(batchId);
+export async function validateBatchWithClient(
+  batchId: string,
+  actorUserId: string,
+  client?: PoolClient,
+  allowGrouped = false,
+) {
+  const batch = await getRuleItems(batchId, client);
   if (!batch) throw new AppError("BATCH_NOT_FOUND", "Schedule batch not found.", 404);
+  if (batch.importGroupId && !allowGrouped) throw groupedBatchError();
   if (["GENERATED", "PUBLISHED", "CANCELLED"].includes(batch.status)) {
     throw new AppError("BATCH_IMMUTABLE", "This batch can no longer be validated or edited.", 409);
   }
 
   const issues = new Map<string, ValidationIssue[]>();
   const addIssue = (itemId: string, issue: ValidationIssue) => issues.set(itemId, [...(issues.get(itemId) ?? []), issue]);
-  const activeKeys = await activeAppointmentKeys(batch.items.map((item) => item.studentNumber));
+  const activeKeys = await activeAppointmentKeys(batch.items.map((item) => item.studentNumber), client);
 
   for (const item of batch.items) {
     if (!item.studentActive) addIssue(item.id, { code: "INACTIVE_STUDENT", message: "Student record is inactive.", severity: "CONFLICT" });
@@ -202,7 +223,7 @@ export async function validateBatch(batchId: string, actorUserId: string) {
   }
 
   const candidates = batch.items.filter((item) => !(issues.get(item.id) ?? []).some((issue) => issue.severity === "CONFLICT"));
-  const [capacities, existingLoad] = await Promise.all([capacitySettings(), currentAppointmentLoad()]);
+  const [capacities, existingLoad] = await Promise.all([capacitySettings(client), currentAppointmentLoad(client)]);
   const preview = generateSchedule({
     items: candidates.map((item) => ({
       id: item.id, clinicId: item.clinicId, studentNumber: item.studentNumber, scheduleType: item.scheduleType,
@@ -245,13 +266,23 @@ export async function validateBatch(batchId: string, actorUserId: string) {
     conflictCount: itemResults.filter((item) => item.status === "CONFLICT").length,
     capacityResults: scopedPreview.capacityResults,
   };
-  await saveValidation(batchId, actorUserId, summary, itemResults);
-  await writeAudit(actorUserId, "SCHEDULE_BATCH_VALIDATED", "schedule_batch", batchId, summary);
+  await saveValidation(batchId, actorUserId, summary, itemResults, client);
+  await writeAudit(actorUserId, "SCHEDULE_BATCH_VALIDATED", "schedule_batch", batchId, summary, client);
   return { summary, items: itemResults, preview: scopedPreview };
 }
 
-export async function generateBatchAppointments(batchId: string, user: SessionUser, overrideReason?: string) {
-  const validation = await validateBatch(batchId, user.userId);
+export async function validateBatch(batchId: string, actorUserId: string) {
+  return validateBatchWithClient(batchId, actorUserId);
+}
+
+export async function generateBatchAppointmentsWithClient(
+  batchId: string,
+  user: SessionUser,
+  overrideReason?: string,
+  client?: PoolClient,
+  allowGrouped = false,
+) {
+  const validation = await validateBatchWithClient(batchId, user.userId, client, allowGrouped);
   const conflicts = validation.items.flatMap((item) => item.issues.filter((issue) => issue.severity === "CONFLICT"));
   const nonCapacityConflicts = conflicts.filter((issue) => issue.code !== "CAPACITY_CONFLICT");
   if (nonCapacityConflicts.length) throw new AppError("BATCH_CONFLICTS", "Resolve non-capacity conflicts before generating appointments.", 409);
@@ -264,17 +295,28 @@ export async function generateBatchAppointments(batchId: string, user: SessionUs
       batchId, user.userId, validation.preview.appointments,
       validation.preview.unscheduledItems.map((item) => item.scheduleItemId),
       conflicts.length ? overrideReason?.trim() : undefined,
+      client,
     );
-    await writeAudit(user.userId, "APPOINTMENTS_GENERATED", "schedule_batch", batchId, { count: validation.preview.appointments.length, overrideReason: conflicts.length ? overrideReason : null });
-    return result;
+    await writeAudit(user.userId, "APPOINTMENTS_GENERATED", "schedule_batch", batchId, { count: validation.preview.appointments.length, overrideReason: conflicts.length ? overrideReason?.trim() : null }, client);
+    return {
+      batch: result,
+      appointmentCount: validation.preview.appointments.length,
+      appliedOverrideReason: conflicts.length ? overrideReason?.trim() ?? null : null,
+    };
   } catch (error) {
     if (error instanceof Error && error.message === "BATCH_ALREADY_GENERATED") throw new AppError("BATCH_ALREADY_GENERATED", "Appointments were already generated for this batch.", 409);
     throw error;
   }
 }
 
+export async function generateBatchAppointments(batchId: string, user: SessionUser, overrideReason?: string) {
+  return (await generateBatchAppointmentsWithClient(batchId, user, overrideReason)).batch;
+}
+
 export async function editBatch(batchId: string, raw: unknown, actorUserId: string) {
-  const input = createBatchSchema.omit({ items: true }).parse(raw);
+  const current = await getScheduleBatch(batchId);
+  if (current?.importGroupId) throw groupedBatchError();
+  const input = batchMetadataSchema.parse(raw);
   if (!(await updateBatchMetadata(batchId, input))) throw new AppError("BATCH_IMMUTABLE", "Only draft or validated batch metadata can be edited.", 409);
   await writeAudit(actorUserId, "SCHEDULE_BATCH_UPDATED", "schedule_batch", batchId);
   return getScheduleBatch(batchId);

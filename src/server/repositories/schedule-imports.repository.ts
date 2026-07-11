@@ -71,6 +71,12 @@ export type ScheduleImportDetail = ScheduleImportListItem & {
   childBatches: ImportChildBatch[];
 };
 
+export type LockedImportChild = {
+  id: string;
+  status: string;
+  clinicCode: ClinicCode;
+};
+
 type CollegeReference = {
   id: string;
   name: string;
@@ -107,14 +113,14 @@ type ChildService = {
 
 const childServices: ChildService[] = [
   {
-    scheduleType: "PHYSICAL_EXAM",
-    clinicCode: "CPU_CLINIC",
-    dateField: "physicalExaminationDate",
-  },
-  {
     scheduleType: "LABORATORY",
     clinicCode: "KABALAKA_CLINIC",
     dateField: "laboratoryDate",
+  },
+  {
+    scheduleType: "PHYSICAL_EXAM",
+    clinicCode: "CPU_CLINIC",
+    dateField: "physicalExaminationDate",
   },
 ];
 
@@ -484,6 +490,52 @@ async function loadScheduleImportGroups(importId?: string) {
 
 export async function listScheduleImportGroups(): Promise<ScheduleImportListItem[]> {
   return loadScheduleImportGroups();
+}
+
+export async function withLockedScheduleImport<T>(
+  importId: string,
+  callback: (client: PoolClient, children: LockedImportChild[]) => Promise<T>,
+): Promise<T | null> {
+  return transaction(async (client) => {
+    const group = await client.query(
+      "SELECT id FROM schedule_import_groups WHERE id=$1 FOR UPDATE",
+      [importId],
+    );
+    if (!group.rowCount) return null;
+
+    const children = await client.query<{
+      id: string;
+      status: string;
+      clinic_code: ClinicCode;
+    }>(
+      `SELECT batch.id, batch.status, clinic.code AS clinic_code
+         FROM schedule_batches batch
+         JOIN clinics clinic ON clinic.id=batch.clinic_id
+        WHERE batch.import_group_id=$1
+        ORDER BY CASE clinic.code
+          WHEN 'KABALAKA_CLINIC' THEN 1
+          WHEN 'CPU_CLINIC' THEN 2
+          ELSE 3
+        END, batch.id
+        FOR UPDATE OF batch`,
+      [importId],
+    );
+    return callback(client, children.rows.map((child) => ({
+      id: child.id,
+      status: child.status,
+      clinicCode: child.clinic_code,
+    })));
+  });
+}
+
+export async function touchScheduleImportGroup(
+  importId: string,
+  client: PoolClient,
+): Promise<void> {
+  await client.query(
+    "UPDATE schedule_import_groups SET updated_at=NOW() WHERE id=$1",
+    [importId],
+  );
 }
 
 export async function getImportChildBatches(

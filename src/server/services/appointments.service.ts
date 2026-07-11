@@ -1,4 +1,5 @@
 import "server-only";
+import type { PoolClient } from "pg";
 import { z } from "zod";
 import { AppError, isPostgresUniqueViolation } from "@/lib/errors";
 import { writeAudit } from "@/server/repositories/audit.repository";
@@ -6,6 +7,7 @@ import {
   changeAppointmentStatus, getAppointment, publishBatch, rescheduleAppointment,
   updateCapacitySetting, type AppointmentStatus,
 } from "@/server/repositories/appointments.repository";
+import { getScheduleBatch } from "@/server/repositories/coordinator-schedules.repository";
 
 const transitions: Record<AppointmentStatus, AppointmentStatus[]> = {
   DRAFT: ["PENDING", "CANCELLED"],
@@ -48,12 +50,30 @@ export async function updateAppointment(id: string, raw: unknown, actorUserId: s
   return getAppointment(id);
 }
 
-export async function publishScheduleBatch(batchId: string, actorUserId: string) {
-  const result = await publishBatch(batchId, actorUserId);
+export async function publishScheduleBatchWithClient(
+  batchId: string,
+  actorUserId: string,
+  client?: PoolClient,
+  allowGrouped = false,
+) {
+  const batch = await getScheduleBatch(batchId, client);
+  if (!batch) throw new AppError("BATCH_NOT_FOUND", "Schedule batch not found.", 404);
+  if (batch.importGroupId && !allowGrouped) {
+    throw new AppError(
+      "GROUPED_BATCH_ACTION_REQUIRED",
+      "This batch belongs to a grouped schedule import. Use the grouped import action instead.",
+      409,
+    );
+  }
+  const result = await publishBatch(batchId, actorUserId, client);
   if (!result) throw new AppError("BATCH_NOT_FOUND", "Schedule batch not found.", 404);
   if ("invalidStatus" in result) throw new AppError("BATCH_NOT_GENERATED", "Only generated batches can be published.", 409);
-  await writeAudit(actorUserId, "SCHEDULE_BATCH_PUBLISHED", "schedule_batch", batchId, result);
+  await writeAudit(actorUserId, "SCHEDULE_BATCH_PUBLISHED", "schedule_batch", batchId, result, client);
   return result;
+}
+
+export async function publishScheduleBatch(batchId: string, actorUserId: string) {
+  return publishScheduleBatchWithClient(batchId, actorUserId);
 }
 
 export const capacitySchema = z.object({

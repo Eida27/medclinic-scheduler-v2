@@ -1,7 +1,19 @@
 import { dataResponse, errorResponse } from "@/lib/api-response";
 import { AppError } from "@/lib/errors";
 import { requireUser } from "@/server/auth/current-user";
-import { importStudentScheduleCsv } from "@/server/services/schedule-imports.service";
+import {
+  importStudentScheduleCsv,
+  listScheduleImports,
+} from "@/server/services/schedule-imports.service";
+
+export async function GET() {
+  try {
+    const user = await requireUser(["ADMIN"]);
+    return dataResponse(await listScheduleImports(user));
+  } catch (error) {
+    return errorResponse(error);
+  }
+}
 
 export async function POST(request: Request) {
   try {
@@ -21,7 +33,7 @@ export async function POST(request: Request) {
       fileName: file.name,
       fileSize: file.size,
       contents: new Uint8Array(await file.arrayBuffer()),
-      importName: form.get("importName") ?? form.get("batchName"),
+      importName: form.get("importName"),
       priorityGroupId: form.get("priorityGroupId"),
       submittedByName: form.get("submittedByName"),
       description: form.get("description"),

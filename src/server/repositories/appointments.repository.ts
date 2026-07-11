@@ -1,4 +1,5 @@
 import "server-only";
+import type { PoolClient } from "pg";
 import { query, transaction } from "@/server/db/pool";
 import type { ClinicCode } from "@/server/clinics";
 
@@ -101,18 +102,20 @@ export async function rescheduleAppointment(id: string, appointmentDate: string,
   });
 }
 
-export async function publishBatch(batchId: string, actorUserId: string) {
-  return transaction(async (client) => {
-    const batch = await client.query<{ status: string }>("SELECT status FROM schedule_batches WHERE id=$1 FOR UPDATE", [batchId]);
+export async function publishBatch(batchId: string, actorUserId: string, client?: PoolClient) {
+  const publish = async (transactionClient: PoolClient) => {
+    const batch = await transactionClient.query<{ status: string }>("SELECT status FROM schedule_batches WHERE id=$1 FOR UPDATE", [batchId]);
     if (!batch.rows[0]) return null;
     if (batch.rows[0].status !== "GENERATED") return { invalidStatus: batch.rows[0].status };
-    const appointments = await client.query("UPDATE appointments SET status='PENDING', is_published=TRUE, updated_by=$2 WHERE batch_id=$1 AND status='DRAFT' RETURNING id", [batchId, actorUserId]);
+    const appointments = await transactionClient.query("UPDATE appointments SET status='PENDING', is_published=TRUE, updated_by=$2 WHERE batch_id=$1 AND status='DRAFT' RETURNING id", [batchId, actorUserId]);
     for (const appointment of appointments.rows) {
-      await client.query("INSERT INTO appointment_status_logs (appointment_id, old_status, new_status, changed_by) VALUES ($1,'DRAFT','PENDING',$2)", [appointment.id, actorUserId]);
+      await transactionClient.query("INSERT INTO appointment_status_logs (appointment_id, old_status, new_status, changed_by) VALUES ($1,'DRAFT','PENDING',$2)", [appointment.id, actorUserId]);
     }
-    await client.query("UPDATE schedule_batches SET status='PUBLISHED', published_by=$2, published_at=NOW() WHERE id=$1", [batchId, actorUserId]);
+    await transactionClient.query("UPDATE schedule_batches SET status='PUBLISHED', published_by=$2, published_at=NOW() WHERE id=$1", [batchId, actorUserId]);
     return { count: appointments.rowCount ?? 0 };
-  });
+  };
+  if (client) return publish(client);
+  return transaction(publish);
 }
 
 export async function publicStudentSchedule(studentNumber: string) {

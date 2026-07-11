@@ -352,7 +352,7 @@ export async function getScheduleBatch(batchId: string, client?: PoolClient) {
                       cl.name AS "clinicName", b.college_id AS "collegeId", c.name AS "collegeName",
                       b.program_id AS "programId", p.name AS "programName", b.submitted_by_name AS "submittedByName",
                       b.description, b.status, b.validation_summary AS "validationSummary", b.override_reason AS "overrideReason",
-                      b.published_at AS "publishedAt", b.created_at AS "createdAt"
+                      b.import_group_id AS "importGroupId", b.published_at AS "publishedAt", b.created_at AS "createdAt"
                FROM schedule_batches b
                JOIN clinics cl ON cl.id=b.clinic_id
                LEFT JOIN colleges c ON c.id=b.college_id LEFT JOIN programs p ON p.id=b.program_id
@@ -381,28 +381,40 @@ export async function getScheduleBatch(batchId: string, client?: PoolClient) {
   return { ...result.rows[0], items: items.rows };
 }
 
-export async function getRuleItems(batchId: string) {
-  const batch = await query<{
-    id: string; clinic_id: string; status: string; college_id: string | null; program_id: string | null;
-  }>("SELECT id, clinic_id, status, college_id, program_id FROM schedule_batches WHERE id=$1", [batchId]);
+export async function getRuleItems(batchId: string, client?: PoolClient) {
+  const batchSql = "SELECT id, clinic_id, status, college_id, program_id, import_group_id FROM schedule_batches WHERE id=$1";
+  const batch = client
+    ? await client.query<{
+        id: string; clinic_id: string; status: string; college_id: string | null;
+        program_id: string | null; import_group_id: string | null;
+      }>(batchSql, [batchId])
+    : await query<{
+        id: string; clinic_id: string; status: string; college_id: string | null;
+        program_id: string | null; import_group_id: string | null;
+      }>(batchSql, [batchId]);
   if (!batch.rows[0]) return null;
-  const items = await query<{
-    id: string; clinic_id: string; student_number: string; schedule_type: RuleItemRow["scheduleType"]; priority_group_id: string;
-    priority_rank: number; priority_active: boolean; student_active: boolean; student_college_id: string;
-    student_program_id: string; target_date: string | null; target_week_start: string | null; target_week_end: string | null;
-  }>(
-    `SELECT i.id, i.clinic_id, i.student_number, i.schedule_type, i.priority_group_id, pg.rank_order AS priority_rank,
+  const itemsSql = `SELECT i.id, i.clinic_id, i.student_number, i.schedule_type, i.priority_group_id, pg.rank_order AS priority_rank,
             pg.is_active AS priority_active, s.is_active AS student_active,
             s.college_id AS student_college_id, s.program_id AS student_program_id,
             i.target_date::text, i.target_week_start::text, i.target_week_end::text
      FROM coordinator_schedule_items i JOIN students s ON s.student_number=i.student_number
-     JOIN priority_groups pg ON pg.id=i.priority_group_id WHERE i.batch_id=$1`,
-    [batchId],
-  );
+     JOIN priority_groups pg ON pg.id=i.priority_group_id WHERE i.batch_id=$1`;
+  const items = client
+    ? await client.query<{
+        id: string; clinic_id: string; student_number: string; schedule_type: RuleItemRow["scheduleType"]; priority_group_id: string;
+        priority_rank: number; priority_active: boolean; student_active: boolean; student_college_id: string;
+        student_program_id: string; target_date: string | null; target_week_start: string | null; target_week_end: string | null;
+      }>(itemsSql, [batchId])
+    : await query<{
+    id: string; clinic_id: string; student_number: string; schedule_type: RuleItemRow["scheduleType"]; priority_group_id: string;
+    priority_rank: number; priority_active: boolean; student_active: boolean; student_college_id: string;
+    student_program_id: string; target_date: string | null; target_week_start: string | null; target_week_end: string | null;
+      }>(itemsSql, [batchId]);
   return {
     id: batch.rows[0].id,
     clinicId: batch.rows[0].clinic_id,
     status: batch.rows[0].status,
+    importGroupId: batch.rows[0].import_group_id,
     collegeId: batch.rows[0].college_id,
     programId: batch.rows[0].program_id,
     items: items.rows.map((row) => ({
@@ -415,28 +427,30 @@ export async function getRuleItems(batchId: string) {
   };
 }
 
-export async function activeAppointmentKeys(studentNumbers: string[]) {
+export async function activeAppointmentKeys(studentNumbers: string[], client?: PoolClient) {
   if (studentNumbers.length === 0) return new Set<string>();
-  const result = await query<{ student_number: string; clinic_id: string; schedule_type: string }>(
-    `SELECT student_number, clinic_id, schedule_type FROM appointments
-     WHERE student_number = ANY($1::varchar[]) AND status IN ('DRAFT','PENDING')`,
-    [studentNumbers],
-  );
+  const sql = `SELECT student_number, clinic_id, schedule_type FROM appointments
+     WHERE student_number = ANY($1::varchar[]) AND status IN ('DRAFT','PENDING')`;
+  const result = client
+    ? await client.query<{ student_number: string; clinic_id: string; schedule_type: string }>(sql, [studentNumbers])
+    : await query<{ student_number: string; clinic_id: string; schedule_type: string }>(sql, [studentNumbers]);
   return new Set(result.rows.map((row) => `${row.student_number}:${row.clinic_id}:${row.schedule_type}`));
 }
 
-export async function currentAppointmentLoad() {
-  const result = await query<{ clinic_id: string; date: string; schedule_type: AppointmentScheduleType; count: number }>(
-    `SELECT clinic_id, appointment_date::text AS date, schedule_type, COUNT(*)::int AS count
-     FROM appointments WHERE status IN ('DRAFT','PENDING') GROUP BY clinic_id, appointment_date, schedule_type`,
-  );
+export async function currentAppointmentLoad(client?: PoolClient) {
+  const sql = `SELECT clinic_id, appointment_date::text AS date, schedule_type, COUNT(*)::int AS count
+     FROM appointments WHERE status IN ('DRAFT','PENDING') GROUP BY clinic_id, appointment_date, schedule_type`;
+  const result = client
+    ? await client.query<{ clinic_id: string; date: string; schedule_type: AppointmentScheduleType; count: number }>(sql)
+    : await query<{ clinic_id: string; date: string; schedule_type: AppointmentScheduleType; count: number }>(sql);
   return result.rows.map((row) => ({ clinicId: row.clinic_id, date: row.date, scheduleType: row.schedule_type, count: row.count }));
 }
 
-export async function capacitySettings() {
-  const result = await query<{ clinic_id: string; schedule_type: AppointmentScheduleType; safe_daily_capacity: number; max_daily_capacity: number }>(
-    "SELECT clinic_id, schedule_type, safe_daily_capacity, max_daily_capacity FROM clinic_capacity_settings WHERE is_active=TRUE",
-  );
+export async function capacitySettings(client?: PoolClient) {
+  const sql = "SELECT clinic_id, schedule_type, safe_daily_capacity, max_daily_capacity FROM clinic_capacity_settings WHERE is_active=TRUE";
+  const result = client
+    ? await client.query<{ clinic_id: string; schedule_type: AppointmentScheduleType; safe_daily_capacity: number; max_daily_capacity: number }>(sql)
+    : await query<{ clinic_id: string; schedule_type: AppointmentScheduleType; safe_daily_capacity: number; max_daily_capacity: number }>(sql);
   return result.rows.map((row) => ({ clinicId: row.clinic_id, scheduleType: row.schedule_type, safeDailyCapacity: row.safe_daily_capacity, maxDailyCapacity: row.max_daily_capacity }));
 }
 
@@ -445,20 +459,23 @@ export async function saveValidation(
   actorUserId: string,
   summary: Record<string, unknown>,
   items: Array<{ id: string; status: string; issues: ValidationIssue[] }>,
+  client?: PoolClient,
 ) {
-  await transaction(async (client) => {
-    await client.query(
+  const persist = async (transactionClient: PoolClient) => {
+    await transactionClient.query(
       `UPDATE schedule_batches SET status='VALIDATED', validation_summary=$2::jsonb,
        validated_by=$3, validated_at=NOW() WHERE id=$1`,
       [batchId, JSON.stringify(summary), actorUserId],
     );
     for (const item of items) {
-      await client.query(
+      await transactionClient.query(
         "UPDATE coordinator_schedule_items SET status=$2, validation_issues=$3::jsonb WHERE id=$1",
         [item.id, item.status, JSON.stringify(item.issues)],
       );
     }
-  });
+  };
+  if (client) return persist(client);
+  return transaction(persist);
 }
 
 export async function persistGeneratedAppointments(
@@ -467,14 +484,15 @@ export async function persistGeneratedAppointments(
   appointments: DraftAppointment[],
   unscheduledItemIds: string[],
   overrideReason?: string,
+  client?: PoolClient,
 ) {
-  return transaction(async (client) => {
-    const locked = await client.query<{ status: string }>("SELECT status FROM schedule_batches WHERE id=$1 FOR UPDATE", [batchId]);
+  const persist = async (transactionClient: PoolClient) => {
+    const locked = await transactionClient.query<{ status: string }>("SELECT status FROM schedule_batches WHERE id=$1 FOR UPDATE", [batchId]);
     if (locked.rows[0]?.status !== "VALIDATED") throw new Error("BATCH_NOT_VALIDATED");
-    const existing = await client.query("SELECT 1 FROM appointments WHERE batch_id=$1 LIMIT 1", [batchId]);
+    const existing = await transactionClient.query("SELECT 1 FROM appointments WHERE batch_id=$1 LIMIT 1", [batchId]);
     if (existing.rowCount) throw new Error("BATCH_ALREADY_GENERATED");
     for (const appointment of appointments) {
-      await client.query(
+      await transactionClient.query(
         `INSERT INTO appointments (
           batch_id, schedule_item_id, clinic_id, student_number, schedule_type, appointment_date,
           status, is_published, created_by, updated_by
@@ -490,23 +508,25 @@ export async function persistGeneratedAppointments(
         ],
       );
     }
-    await client.query(
+    await transactionClient.query(
       `UPDATE coordinator_schedule_items SET status='SCHEDULED'
        WHERE batch_id=$1 AND id = ANY($2::uuid[])`,
       [batchId, [...new Set(appointments.map((appointment) => appointment.scheduleItemId))]],
     );
     if (unscheduledItemIds.length) {
-      await client.query("UPDATE coordinator_schedule_items SET status='UNSCHEDULED' WHERE id = ANY($1::uuid[])", [unscheduledItemIds]);
+      await transactionClient.query("UPDATE coordinator_schedule_items SET status='UNSCHEDULED' WHERE id = ANY($1::uuid[])", [unscheduledItemIds]);
     }
-    await client.query(
+    await transactionClient.query(
       `UPDATE schedule_batches SET status='GENERATED', override_reason=$2,
        overridden_by=CASE WHEN $2::text IS NULL THEN NULL ELSE $3::uuid END,
        overridden_at=CASE WHEN $2::text IS NULL THEN NULL ELSE NOW() END
        WHERE id=$1`,
       [batchId, overrideReason ?? null, actorUserId],
     );
-    return getScheduleBatch(batchId, client);
-  });
+    return getScheduleBatch(batchId, transactionClient);
+  };
+  if (client) return persist(client);
+  return transaction(persist);
 }
 
 export async function updateBatchMetadata(batchId: string, input: Omit<BatchCreate, "items">) {

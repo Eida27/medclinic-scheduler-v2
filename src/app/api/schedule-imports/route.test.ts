@@ -2,22 +2,27 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppError } from "@/lib/errors";
 
-const { requireUser, importStudentScheduleCsv } = vi.hoisted(() => ({
+const { requireUser, importStudentScheduleCsv, listScheduleImports } = vi.hoisted(() => ({
   requireUser: vi.fn(),
   importStudentScheduleCsv: vi.fn(),
+  listScheduleImports: vi.fn(),
 }));
 
 vi.mock("@/server/auth/current-user", () => ({ requireUser }));
-vi.mock("@/server/services/schedule-imports.service", () => ({ importStudentScheduleCsv }));
+vi.mock("@/server/services/schedule-imports.service", () => ({
+  importStudentScheduleCsv,
+  listScheduleImports,
+}));
 
-import { POST } from "./route";
+import { GET, POST } from "./route";
 
 const admin = { userId: "admin-user", role: "ADMIN" as const };
 
-describe("POST /api/coordinator-schedules/import", () => {
+describe("/api/schedule-imports", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     requireUser.mockResolvedValue(admin);
+    listScheduleImports.mockResolvedValue([{ id: "import-id", status: "DRAFT" }]);
     importStudentScheduleCsv.mockResolvedValue({
       importId: "import-id",
       status: "DRAFT",
@@ -30,7 +35,18 @@ describe("POST /api/coordinator-schedules/import", () => {
     });
   });
 
-  it("aliases the seven-column grouped import for ADMIN users", async () => {
+  it("lists grouped imports for ADMIN users", async () => {
+    const response = await GET();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      data: [{ id: "import-id", status: "DRAFT" }],
+    });
+    expect(requireUser).toHaveBeenCalledWith(["ADMIN"]);
+    expect(listScheduleImports).toHaveBeenCalledWith(admin);
+  });
+
+  it("passes multipart file bytes and metadata to grouped import", async () => {
     const contents = [
       "Student ID,Name,College,Course,Year,Laboratory Schedule,Physical Examination Schedule",
       '23-0001-01,"Santos, Maria",College of Computer Studies,BSIT,3,06-19-2026,06-20-2026',
@@ -38,13 +54,11 @@ describe("POST /api/coordinator-schedules/import", () => {
     const form = new FormData();
     form.set("file", new File([contents], "appointments.csv", { type: "text/csv" }));
     form.set("importName", "June grouped schedule");
-    form.set("batchName", "Ignored fallback name");
-    form.set("clinicCode", "CPU_CLINIC");
     form.set("priorityGroupId", "30000000-0000-4000-8000-000000000004");
     form.set("submittedByName", "CCS Coordinator");
     form.set("description", "Imported schedule");
 
-    const response = await POST(new Request("http://localhost/api/coordinator-schedules/import", {
+    const response = await POST(new Request("http://localhost/api/schedule-imports", {
       method: "POST",
       body: form,
     }));
@@ -77,56 +91,23 @@ describe("POST /api/coordinator-schedules/import", () => {
     expect(actor).toEqual(admin);
   });
 
-  it("uses batchName as a transitional importName fallback", async () => {
-    const form = new FormData();
-    form.set("file", new File(["csv"], "appointments.csv", { type: "text/csv" }));
-    form.set("batchName", "Legacy field name");
-    form.set("priorityGroupId", "30000000-0000-4000-8000-000000000004");
-
-    await POST(new Request("http://localhost/api/coordinator-schedules/import", {
-      method: "POST",
-      body: form,
-    }));
-
-    expect(importStudentScheduleCsv.mock.calls[0][0].importName).toBe("Legacy field name");
-  });
-
-  it("rejects clinic staff before invoking the import service", async () => {
+  it("requires ADMIN for both collection operations", async () => {
     requireUser.mockRejectedValue(new AppError(
       "FORBIDDEN",
       "You do not have permission to perform this action.",
       403,
     ));
 
-    const response = await POST(new Request("http://localhost/api/coordinator-schedules/import", {
+    const getResponse = await GET();
+    const postResponse = await POST(new Request("http://localhost/api/schedule-imports", {
       method: "POST",
       body: new FormData(),
     }));
 
-    expect(response.status).toBe(403);
-    await expect(response.json()).resolves.toEqual({
-      error: {
-        code: "FORBIDDEN",
-        message: "You do not have permission to perform this action.",
-      },
-    });
-    expect(requireUser).toHaveBeenCalledWith(["ADMIN"]);
+    expect(getResponse.status).toBe(403);
+    expect(postResponse.status).toBe(403);
+    expect(requireUser.mock.calls).toEqual([[['ADMIN']], [['ADMIN']]]);
+    expect(listScheduleImports).not.toHaveBeenCalled();
     expect(importStudentScheduleCsv).not.toHaveBeenCalled();
-  });
-
-  it("returns a field error when no CSV file is supplied", async () => {
-    const response = await POST(new Request("http://localhost/api/coordinator-schedules/import", {
-      method: "POST",
-      body: new FormData(),
-    }));
-
-    expect(response.status).toBe(422);
-    await expect(response.json()).resolves.toEqual({
-      error: {
-        code: "CSV_IMPORT_INVALID",
-        message: "Choose a CSV file to import.",
-        fields: { file: ["Choose a CSV file to import."] },
-      },
-    });
   });
 });
