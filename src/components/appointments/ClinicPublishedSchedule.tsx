@@ -4,15 +4,27 @@ import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Select } from "@/components/ui/Select";
-import { listAppointments } from "@/server/repositories/appointments.repository";
 
-type Appointment = {
+type ClinicAppointment = {
   id: string;
   studentNumber: string;
   studentName: string;
   scheduleType: string;
   appointmentDate: string;
+  appointmentTime?: string | null;
   status: string;
+};
+
+type ClinicPublishedScheduleProps = {
+  title: string;
+  description: string;
+  emptyMessage: string;
+  filters: {
+    studentNumber?: string;
+    appointmentDate?: string;
+    status?: string;
+  };
+  appointments: ClinicAppointment[];
 };
 
 const operationalStatuses = ["PENDING", "COMPLETED", "NO_SHOW", "RESCHEDULED", "CANCELLED"];
@@ -23,55 +35,33 @@ function statusTone(status: string) {
   return "warning" as const;
 }
 
-export default async function AppointmentsPage({
-  searchParams,
-}: {
-  searchParams: Promise<Record<string, string | undefined>>;
-}) {
-  const params = await searchParams;
-  const result = await listAppointments({
-    appointmentDate: params.appointmentDate,
-    scheduleType: params.scheduleType,
-    status: params.status,
-    studentNumber: params.studentNumber,
-    isPublished: true,
-    page: 1,
-    limit: 100,
-    offset: 0,
-  });
-  const singular = result.total === 1;
-
+export function ClinicPublishedSchedule({
+  title,
+  description,
+  emptyMessage,
+  filters,
+  appointments,
+}: ClinicPublishedScheduleProps) {
   return (
     <>
-      <PageHeader
-        title="Published appointments"
-        description={`${result.total} published appointment${singular ? "" : "s"} ${singular ? "matches" : "match"} the current filters.`}
-      />
+      <PageHeader title={title} description={description} />
       <Card>
-        <form className="grid gap-3 md:grid-cols-5">
+        <form className="grid gap-3 md:grid-cols-4">
           <label className="grid gap-1.5 text-sm font-bold text-ink">
             <span>Student name or number</span>
             <Input
               name="studentNumber"
-              defaultValue={params.studentNumber}
+              defaultValue={filters.studentNumber}
               placeholder="Search by name or student number"
             />
           </label>
           <label className="grid gap-1.5 text-sm font-bold text-ink">
             <span>Appointment date</span>
-            <Input name="appointmentDate" type="date" defaultValue={params.appointmentDate} />
-          </label>
-          <label className="grid gap-1.5 text-sm font-bold text-ink">
-            <span>Service</span>
-            <Select name="scheduleType" defaultValue={params.scheduleType}>
-              <option value="">All services</option>
-              <option value="PHYSICAL_EXAM">Physical examination</option>
-              <option value="LABORATORY">Laboratory</option>
-            </Select>
+            <Input name="appointmentDate" type="date" defaultValue={filters.appointmentDate} />
           </label>
           <label className="grid gap-1.5 text-sm font-bold text-ink">
             <span>Status</span>
-            <Select name="status" defaultValue={params.status}>
+            <Select name="status" defaultValue={filters.status}>
               <option value="">All operational statuses</option>
               {operationalStatuses.map((status) => <option key={status}>{status}</option>)}
             </Select>
@@ -85,8 +75,8 @@ export default async function AppointmentsPage({
         </form>
       </Card>
       <Card className="overflow-hidden p-0">
-        {result.items.length === 0 ? (
-          <p className="p-8 text-center text-sm text-muted">No published appointments match these filters.</p>
+        {appointments.length === 0 ? (
+          <p className="p-8 text-center text-sm text-muted">{emptyMessage}</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
@@ -100,7 +90,7 @@ export default async function AppointmentsPage({
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">
-                {(result.items as Appointment[]).map((appointment) => (
+                {appointments.map((appointment) => (
                   <tr key={appointment.id} className="transition hover:bg-cpu-navy-soft/35">
                     <td className="px-5 py-4">
                       <p className="font-bold text-ink">{appointment.studentName}</p>

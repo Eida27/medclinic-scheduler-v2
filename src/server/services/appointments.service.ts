@@ -4,7 +4,7 @@ import { z } from "zod";
 import { AppError, isPostgresUniqueViolation } from "@/lib/errors";
 import { writeAudit } from "@/server/repositories/audit.repository";
 import {
-  changeAppointmentStatus, getAppointment, publishBatch, rescheduleAppointment,
+  changeAppointmentStatus, getPublishedAppointment, publishBatch, rescheduleAppointment,
   updateCapacitySetting, type AppointmentStatus,
 } from "@/server/repositories/appointments.repository";
 import { getScheduleBatch } from "@/server/repositories/coordinator-schedules.repository";
@@ -28,15 +28,15 @@ export const appointmentUpdateSchema = z.object({
 }).refine((input) => input.status || input.appointmentDate, "Provide a status or a reschedule date.");
 
 export async function updateAppointment(id: string, raw: unknown, actorUserId: string) {
-  const input = appointmentUpdateSchema.parse(raw);
-  const current = await getAppointment(id);
+  const current = await getPublishedAppointment(id);
   if (!current) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
+  const input = appointmentUpdateSchema.parse(raw);
   if (input.appointmentDate) {
     if (!["PENDING", "NO_SHOW"].includes(String(current.status))) throw new AppError("INVALID_RESCHEDULE", "Only pending or no-show appointments can be rescheduled.", 422);
     try {
       const replacementId = await rescheduleAppointment(id, input.appointmentDate, input.appointmentTime || null, input.notes?.trim() || null, actorUserId);
       await writeAudit(actorUserId, "APPOINTMENT_RESCHEDULED", "appointment", id, { replacementId, appointmentDate: input.appointmentDate });
-      return getAppointment(String(replacementId));
+      return getPublishedAppointment(String(replacementId));
     } catch (error) {
       if (isPostgresUniqueViolation(error)) throw new AppError("ACTIVE_APPOINTMENT_EXISTS", "The student already has an active appointment for this service.", 409);
       throw error;
@@ -47,7 +47,7 @@ export async function updateAppointment(id: string, raw: unknown, actorUserId: s
     await changeAppointmentStatus(id, input.status, input.notes?.trim() || null, actorUserId);
     await writeAudit(actorUserId, "APPOINTMENT_STATUS_CHANGED", "appointment", id, { oldStatus: current.status, newStatus: input.status });
   }
-  return getAppointment(id);
+  return getPublishedAppointment(id);
 }
 
 export async function publishScheduleBatchWithClient(

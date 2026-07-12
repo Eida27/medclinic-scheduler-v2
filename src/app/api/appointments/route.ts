@@ -13,7 +13,7 @@ export async function GET(request: Request) {
       scheduleType: params.get("scheduleType") || undefined, status: params.get("status") || undefined,
       collegeId: params.get("collegeId") || undefined, programId: params.get("programId") || undefined,
       studentNumber: params.get("studentNumber") || undefined,
-      isPublished: params.has("isPublished") ? params.get("isPublished") === "true" : undefined,
+      isPublished: true,
     })), page: paging.page, limit: paging.limit });
   } catch (error) { return errorResponse(error); }
 }

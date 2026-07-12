@@ -310,13 +310,13 @@ export async function createImportedScheduleBatch(input: CsvImportBatchCreate, a
 }
 
 export async function listScheduleBatches(filters: { clinicCode?: ClinicCode } = {}) {
-  const clauses: string[] = [];
+  const clauses = ["b.import_group_id IS NULL"];
   const values: unknown[] = [];
   if (filters.clinicCode) {
     values.push(filters.clinicCode);
     clauses.push(`cl.code = $${values.length}`);
   }
-  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const where = `WHERE ${clauses.join(" AND ")}`;
   const result = await query<{
     id: string; batch_name: string; status: string; clinic_code: ClinicCode; clinic_name: string;
     college_name: string | null; program_name: string | null;

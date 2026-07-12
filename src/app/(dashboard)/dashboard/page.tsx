@@ -12,7 +12,6 @@ export default async function DashboardPage() {
     ["No-shows", metrics.noShows, "Appointments requiring follow-up"],
     ["Rescheduled", metrics.rescheduled, "Original appointments replaced"],
     ["Capacity warnings", metrics.overCapacityWarnings, "Service dates above recommended capacity"],
-    ["Unpublished batches", metrics.unpublishedBatches, "Draft, validated, or generated batches"],
   ];
   return (
     <>
@@ -31,12 +30,12 @@ export default async function DashboardPage() {
         <CardTitle>Core workflow</CardTitle>
         <ol className="mt-4 grid gap-3 text-sm text-muted-strong sm:grid-cols-3">
           {[
-            "Encode a coordinator schedule batch",
-            "Validate dates, students, and capacity",
-            "Generate draft appointments",
-            "Review conflicts and assignments",
-            "Publish as an administrator",
-            "Track results and compliance",
+            "Open Students & Schedules",
+            "Import the official schedule CSV",
+            "Review and validate the grouped import",
+            "Generate laboratory and physical exam drafts",
+            "Publish the complete import as an administrator",
+            "Track published schedules, results, and compliance",
           ].map((step, index) => (
             <li key={step} className="rounded-xl border border-cpu-navy/8 bg-cpu-navy-soft/65 p-4"><span className="mr-2 font-black text-cpu-navy">{index + 1}.</span>{step}</li>
           ))}

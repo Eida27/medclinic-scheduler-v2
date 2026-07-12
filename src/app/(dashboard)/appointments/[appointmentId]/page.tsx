@@ -3,7 +3,80 @@ import { AppointmentActions } from "@/components/appointments/AppointmentActions
 import { Badge } from "@/components/ui/Badge";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { getAppointment } from "@/server/repositories/appointments.repository";
+import { getPublishedAppointment } from "@/server/repositories/appointments.repository";
 
-type Log = { id: string; oldStatus: string | null; newStatus: string; notes: string | null; changedByName: string | null; createdAt: Date };
-export default async function AppointmentPage({ params }: { params: Promise<{ appointmentId: string }> }) { const appointment = await getAppointment((await params).appointmentId); if (!appointment) notFound(); return <><PageHeader title={String(appointment.studentName)} description={`${appointment.studentNumber} · ${String(appointment.scheduleType).replaceAll("_", " ")}`} actions={<Badge tone={appointment.status === "COMPLETED" ? "success" : "warning"}>{String(appointment.status)}</Badge>} /><Card><div className="grid gap-4 sm:grid-cols-3"><div><p className="text-xs font-bold uppercase tracking-wide text-muted">Appointment date</p><p className="mt-1 font-bold text-ink">{String(appointment.appointmentDate)}</p></div><div><p className="text-xs font-bold uppercase tracking-wide text-muted">Time</p><p className="mt-1 font-bold text-ink">{String(appointment.appointmentTime ?? "Not assigned")}</p></div><div><p className="text-xs font-bold uppercase tracking-wide text-muted">Visibility</p><p className="mt-1 font-bold text-ink">{appointment.isPublished ? "Published" : "Internal draft"}</p></div></div></Card><Card><CardTitle>Update appointment</CardTitle><div className="mt-4"><AppointmentActions id={String(appointment.id)} status={String(appointment.status)} /></div></Card><Card><CardTitle>Status history</CardTitle><div className="mt-4 grid gap-3">{(appointment.statusLogs as Log[]).map((log) => <div key={log.id} className="rounded-xl border border-cpu-navy/8 bg-cpu-navy-soft/55 p-4 text-sm"><p className="font-bold text-ink">{log.oldStatus ?? "Created"} → {log.newStatus}</p><p className="text-muted">{log.changedByName ?? "System"} · {new Date(log.createdAt).toLocaleString("en-PH")}</p>{log.notes ? <p className="mt-2">{log.notes}</p> : null}</div>)}</div></Card></>; }
+type Log = {
+  id: string;
+  oldStatus: string | null;
+  newStatus: string;
+  notes: string | null;
+  changedByName: string | null;
+  createdAt: Date;
+};
+
+function statusLogTimestamp(value: Date) {
+  return new Intl.DateTimeFormat("en-PH", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "Asia/Manila",
+  }).format(new Date(value));
+}
+
+export default async function AppointmentPage({
+  params,
+}: {
+  params: Promise<{ appointmentId: string }>;
+}) {
+  const appointment = await getPublishedAppointment((await params).appointmentId);
+  if (!appointment) notFound();
+
+  return (
+    <>
+      <PageHeader
+        title={String(appointment.studentName)}
+        description={`${appointment.studentNumber} · ${String(appointment.scheduleType).replaceAll("_", " ")}`}
+        actions={(
+          <Badge tone={appointment.status === "COMPLETED" ? "success" : "warning"}>
+            {String(appointment.status)}
+          </Badge>
+        )}
+      />
+      <Card>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wide text-muted">Appointment date</p>
+            <p className="mt-1 font-bold text-ink">{String(appointment.appointmentDate)}</p>
+          </div>
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wide text-muted">Time</p>
+            <p className="mt-1 font-bold text-ink">{String(appointment.appointmentTime ?? "Not assigned")}</p>
+          </div>
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wide text-muted">Visibility</p>
+            <p className="mt-1 font-bold text-ink">Published</p>
+          </div>
+        </div>
+      </Card>
+      <Card>
+        <CardTitle>Update appointment</CardTitle>
+        <div className="mt-4">
+          <AppointmentActions id={String(appointment.id)} status={String(appointment.status)} />
+        </div>
+      </Card>
+      <Card>
+        <CardTitle>Status history</CardTitle>
+        <div className="mt-4 grid gap-3">
+          {(appointment.statusLogs as Log[]).map((log) => (
+            <div key={log.id} className="rounded-xl border border-cpu-navy/8 bg-cpu-navy-soft/55 p-4 text-sm">
+              <p className="font-bold text-ink">{log.oldStatus ?? "Created"} → {log.newStatus}</p>
+              <p className="text-muted">
+                {log.changedByName ?? "System"} · {statusLogTimestamp(log.createdAt)}
+              </p>
+              {log.notes ? <p className="mt-2">{log.notes}</p> : null}
+            </div>
+          ))}
+        </div>
+      </Card>
+    </>
+  );
+}

@@ -14,18 +14,23 @@ type StatusLog = { id: string; oldStatus: string | null; newStatus: string; note
 
 export async function listAppointments(filters: {
   clinicCode?: ClinicCode; appointmentDate?: string; scheduleType?: string; status?: string; collegeId?: string; programId?: string;
-  studentNumber?: string; isPublished?: boolean; page: number; limit: number; offset: number;
+  studentNumber?: string; isPublished?: true; page: number; limit: number; offset: number;
 }) {
-  const clauses = ["1=1"]; const values: unknown[] = [];
-  const add = (sql: string, value: unknown) => { values.push(value); clauses.push(sql.replace("?", `$${values.length}`)); };
+  const clauses = ["a.is_published=TRUE"]; const values: unknown[] = [];
+  const add = (sql: string, value: unknown) => { values.push(value); clauses.push(sql.replaceAll("?", `$${values.length}`)); };
   if (filters.appointmentDate) add("a.appointment_date = ?::date", filters.appointmentDate);
   if (filters.clinicCode) add("cl.code = ?", filters.clinicCode);
   if (filters.scheduleType) add("a.schedule_type = ?", filters.scheduleType);
   if (filters.status) add("a.status = ?", filters.status);
   if (filters.collegeId) add("s.college_id = ?::uuid", filters.collegeId);
   if (filters.programId) add("s.program_id = ?::uuid", filters.programId);
-  if (filters.studentNumber) add("a.student_number ILIKE ?", `%${filters.studentNumber}%`);
-  if (filters.isPublished !== undefined) add("a.is_published = ?::boolean", filters.isPublished);
+  if (filters.studentNumber) {
+    add(
+      `(a.student_number ILIKE ?
+        OR CONCAT_WS(' ', s.first_name, s.middle_name, s.last_name, s.suffix) ILIKE ?)`,
+      `%${filters.studentNumber}%`,
+    );
+  }
   const where = clauses.join(" AND ");
   const count = await query<{ count: string }>(
     `SELECT COUNT(*)::text AS count FROM appointments a
@@ -50,7 +55,7 @@ export async function listAppointments(filters: {
   return { items: result.rows, total: Number(count.rows[0].count) };
 }
 
-export async function getAppointment(id: string) {
+export async function getPublishedAppointment(id: string) {
   const result = await query<AppointmentDetail>(
     `SELECT a.id, a.batch_id AS "batchId", a.student_number AS "studentNumber",
             CONCAT_WS(' ', s.first_name, s.middle_name, s.last_name, s.suffix) AS "studentName",
@@ -60,7 +65,8 @@ export async function getAppointment(id: string) {
             a.notes, a.rescheduled_from AS "rescheduledFrom", c.name AS "collegeName", p.name AS "programName"
      FROM appointments a JOIN students s ON s.student_number=a.student_number
      JOIN clinics cl ON cl.id=a.clinic_id
-     JOIN colleges c ON c.id=s.college_id JOIN programs p ON p.id=s.program_id WHERE a.id=$1`, [id]);
+     JOIN colleges c ON c.id=s.college_id JOIN programs p ON p.id=s.program_id
+     WHERE a.id=$1 AND a.is_published=TRUE`, [id]);
   if (!result.rows[0]) return null;
   const logs = await query<StatusLog>(
     `SELECT l.id, l.old_status AS "oldStatus", l.new_status AS "newStatus", l.notes,
@@ -72,7 +78,10 @@ export async function getAppointment(id: string) {
 
 export async function changeAppointmentStatus(id: string, status: AppointmentStatus, notes: string | null, actorUserId: string) {
   return transaction(async (client) => {
-    const current = await client.query<{ status: AppointmentStatus }>("SELECT status FROM appointments WHERE id=$1 FOR UPDATE", [id]);
+    const current = await client.query<{ status: AppointmentStatus }>(
+      "SELECT status FROM appointments WHERE id=$1 AND is_published=TRUE FOR UPDATE",
+      [id],
+    );
     if (!current.rows[0]) return null;
     await client.query("UPDATE appointments SET status=$2, notes=COALESCE($3, notes), updated_by=$4 WHERE id=$1", [id, status, notes, actorUserId]);
     await client.query("INSERT INTO appointment_status_logs (appointment_id, old_status, new_status, notes, changed_by) VALUES ($1,$2,$3,$4,$5)", [id, current.rows[0].status, status, notes, actorUserId]);
@@ -85,7 +94,8 @@ export async function rescheduleAppointment(id: string, appointmentDate: string,
     const current = await client.query<{
       id: string; batch_id: string | null; schedule_item_id: string | null; student_number: string;
       clinic_id: string; schedule_type: string; status: AppointmentStatus; is_published: boolean;
-    }>("SELECT id,batch_id,schedule_item_id,clinic_id,student_number,schedule_type,status,is_published FROM appointments WHERE id=$1 FOR UPDATE", [id]);
+    }>(`SELECT id,batch_id,schedule_item_id,clinic_id,student_number,schedule_type,status,is_published
+         FROM appointments WHERE id=$1 AND is_published=TRUE FOR UPDATE`, [id]);
     if (!current.rows[0]) return null;
     const row = current.rows[0];
     await client.query("UPDATE appointments SET status='RESCHEDULED', updated_by=$2 WHERE id=$1", [id, actorUserId]);
@@ -132,8 +142,22 @@ export async function publicStudentSchedule(studentNumber: string) {
     physical_exam: string; laboratory: string;
   }>(
     `SELECT
-      COALESCE((SELECT result_status FROM exam_results WHERE student_number=$1 ORDER BY completed_at DESC NULLS LAST, created_at DESC LIMIT 1), 'PENDING') AS physical_exam,
-      COALESCE((SELECT result_status FROM laboratory_results WHERE student_number=$1 ORDER BY completed_at DESC NULLS LAST, created_at DESC LIMIT 1), 'PENDING') AS laboratory`,
+      COALESCE((
+        SELECT result.result_status
+          FROM exam_results result
+          LEFT JOIN appointments appointment ON appointment.id=result.appointment_id
+         WHERE result.student_number=$1
+           AND (result.appointment_id IS NULL OR appointment.is_published=TRUE)
+         ORDER BY result.completed_at DESC NULLS LAST, result.created_at DESC LIMIT 1
+      ), 'PENDING') AS physical_exam,
+      COALESCE((
+        SELECT result.result_status
+          FROM laboratory_results result
+          LEFT JOIN appointments appointment ON appointment.id=result.appointment_id
+         WHERE result.student_number=$1
+           AND (result.appointment_id IS NULL OR appointment.is_published=TRUE)
+         ORDER BY result.completed_at DESC NULLS LAST, result.created_at DESC LIMIT 1
+      ), 'PENDING') AS laboratory`,
     [studentNumber],
   );
   return {

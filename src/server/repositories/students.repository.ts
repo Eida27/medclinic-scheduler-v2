@@ -167,17 +167,28 @@ export async function deactivateStudentRecord(studentNumber: string): Promise<bo
 export async function studentHistory(studentNumber: string) {
   const appointments = await query<AppointmentHistory>(
     `SELECT id, schedule_type, appointment_date::text, appointment_time::text, status, is_published, notes
-     FROM appointments WHERE student_number = $1 ORDER BY appointment_date DESC, created_at DESC`,
+     FROM appointments WHERE student_number = $1 AND is_published=TRUE
+     ORDER BY appointment_date DESC, created_at DESC`,
     [studentNumber],
   );
   const examResults = await query<ResultHistory>(
-    `SELECT id, appointment_id, result_status, completed_at::text, remarks
-     FROM exam_results WHERE student_number = $1 ORDER BY completed_at DESC NULLS LAST, created_at DESC`,
+    `SELECT result.id, result.appointment_id, result.result_status,
+            result.completed_at::text, result.remarks
+       FROM exam_results result
+       LEFT JOIN appointments appointment ON appointment.id=result.appointment_id
+      WHERE result.student_number = $1
+        AND (result.appointment_id IS NULL OR appointment.is_published=TRUE)
+      ORDER BY result.completed_at DESC NULLS LAST, result.created_at DESC`,
     [studentNumber],
   );
   const laboratoryResults = await query<ResultHistory>(
-    `SELECT id, appointment_id, result_status, completed_at::text, remarks
-     FROM laboratory_results WHERE student_number = $1 ORDER BY completed_at DESC NULLS LAST, created_at DESC`,
+    `SELECT result.id, result.appointment_id, result.result_status,
+            result.completed_at::text, result.remarks
+       FROM laboratory_results result
+       LEFT JOIN appointments appointment ON appointment.id=result.appointment_id
+      WHERE result.student_number = $1
+        AND (result.appointment_id IS NULL OR appointment.is_published=TRUE)
+      ORDER BY result.completed_at DESC NULLS LAST, result.created_at DESC`,
     [studentNumber],
   );
   return { appointments: appointments.rows, examResults: examResults.rows, laboratoryResults: laboratoryResults.rows };

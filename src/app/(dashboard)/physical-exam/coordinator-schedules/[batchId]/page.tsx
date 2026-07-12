@@ -1,19 +1,9 @@
-import { notFound } from "next/navigation";
-import { PublishButton } from "@/components/appointments/PublishButton";
-import { BatchActions } from "@/components/schedules/BatchActions";
-import { Badge } from "@/components/ui/Badge";
-import { Card, CardTitle } from "@/components/ui/Card";
-import { PageHeader } from "@/components/ui/PageHeader";
-import { requireUser } from "@/server/auth/current-user";
-import { assertClinicAccess } from "@/server/clinic-access";
-import { clinicConfigs } from "@/server/clinics";
-import { getScheduleBatch } from "@/server/repositories/coordinator-schedules.repository";
+import { redirect } from "next/navigation";
 
-const clinic = clinicConfigs.CPU_CLINIC;
-type BatchItem = { id: string; studentNumber: string; studentName: string; scheduleType: string; priorityGroupName: string; targetDate: string | null; targetWeekStart: string | null; targetWeekEnd: string | null; status: string; validationIssues: Array<{ message: string; severity: string }> };
-
-export default async function PhysicalExamBatchDetailsPage({ params }: { params: Promise<{ batchId: string }> }) {
-  const user = await requireUser(); assertClinicAccess(user, clinic.code); const batch = await getScheduleBatch((await params).batchId); if (!batch || batch.clinicCode !== clinic.code) notFound();
-  const items = batch.items as BatchItem[];
-  return <><PageHeader title={String(batch.batchName)} description={`${batch.programName ?? batch.collegeName ?? "Mixed groups"} / ${items.length} physical examination requests`} actions={<div className="flex items-center gap-3"><Badge tone={batch.status === "PUBLISHED" ? "success" : batch.status === "GENERATED" ? "info" : "neutral"}>{String(batch.status)}</Badge>{batch.status === "GENERATED" && user.role === "ADMIN" ? <PublishButton batchId={String(batch.id)} /> : null}</div>} /><Card><CardTitle>Batch actions</CardTitle><p className="my-3 text-sm text-muted">Generate drafts validates this CPU Clinic batch and creates internal appointments for review.</p><BatchActions batchId={String(batch.id)} status={String(batch.status)} isAdmin={user.role === "ADMIN"} /></Card>{batch.validationSummary ? <Card><CardTitle>Validation summary</CardTitle><div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">{Object.entries(batch.validationSummary as Record<string, unknown>).filter(([key]) => key.endsWith("Count") || key === "totalItems").map(([key, value]) => <div key={key} className="rounded-xl border border-cpu-navy/8 bg-cpu-navy-soft/60 p-4"><p className="text-2xl font-black text-ink">{String(value)}</p><p className="text-xs text-muted">{key.replace(/([A-Z])/g, " $1")}</p></div>)}</div></Card> : null}<Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="bg-cpu-navy-soft/70"><tr><th className="px-5 py-3">Student</th><th className="px-5 py-3">Service</th><th className="px-5 py-3">Target</th><th className="px-5 py-3">Priority</th><th className="px-5 py-3">Status</th></tr></thead><tbody className="divide-y divide-line">{items.map((item) => <tr key={item.id} className="transition hover:bg-cpu-navy-soft/35"><td className="px-5 py-4"><p className="font-bold text-ink">{item.studentName}</p><p className="font-mono text-xs text-muted">{item.studentNumber}</p>{item.validationIssues?.map((issue, index) => <p key={index} className={`mt-1 text-xs ${issue.severity === "CONFLICT" ? "text-red-700" : "text-amber-700"}`}>{issue.message}</p>)}</td><td className="px-5 py-4">{item.scheduleType.replaceAll("_", " ")}</td><td className="px-5 py-4">{item.targetDate ?? `${item.targetWeekStart} to ${item.targetWeekEnd}`}</td><td className="px-5 py-4">{item.priorityGroupName}</td><td className="px-5 py-4"><Badge tone={item.status === "CONFLICT" ? "danger" : item.status === "WARNING" ? "warning" : item.status === "SCHEDULED" ? "success" : "neutral"}>{item.status}</Badge></td></tr>)}</tbody></table></div></Card></>;
+export default async function PhysicalExamBatchDetailsPage({
+  params,
+}: {
+  params: Promise<{ batchId: string }>;
+}) {
+  redirect(`/coordinator-schedules/${encodeURIComponent((await params).batchId)}`);
 }

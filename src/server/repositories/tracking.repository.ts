@@ -16,16 +16,24 @@ export async function resultsForStudent(studentNumber: string) {
             r.completed_at::text AS "completedAt", r.remarks, r.created_at AS "createdAt",
             a.appointment_date::text AS "appointmentDate"
      FROM exam_results r LEFT JOIN appointments a ON a.id=r.appointment_id
-     WHERE r.student_number=$1 ORDER BY r.completed_at DESC NULLS LAST, r.created_at DESC`, [studentNumber]);
+     WHERE r.student_number=$1
+       AND (r.appointment_id IS NULL OR a.is_published=TRUE)
+     ORDER BY r.completed_at DESC NULLS LAST, r.created_at DESC`, [studentNumber]);
   const laboratory = await query(
     `SELECT r.id, r.appointment_id AS "appointmentId", r.result_status AS "resultStatus",
             r.completed_at::text AS "completedAt", r.remarks, r.created_at AS "createdAt",
             a.appointment_date::text AS "appointmentDate"
      FROM laboratory_results r LEFT JOIN appointments a ON a.id=r.appointment_id
-     WHERE r.student_number=$1 ORDER BY r.completed_at DESC NULLS LAST, r.created_at DESC`, [studentNumber]);
+     WHERE r.student_number=$1
+       AND (r.appointment_id IS NULL OR a.is_published=TRUE)
+     ORDER BY r.completed_at DESC NULLS LAST, r.created_at DESC`, [studentNumber]);
   const appointments = await query(
     `SELECT id, schedule_type AS "scheduleType", appointment_date::text AS "appointmentDate", status
-     FROM appointments WHERE student_number=$1 AND status IN ('PENDING','COMPLETED','NO_SHOW') ORDER BY appointment_date DESC`, [studentNumber]);
+     FROM appointments
+     WHERE student_number=$1
+       AND is_published=TRUE
+       AND status IN ('PENDING','COMPLETED','NO_SHOW')
+     ORDER BY appointment_date DESC`, [studentNumber]);
   return { ...student.rows[0], examResults: exam.rows, laboratoryResults: laboratory.rows, appointments: appointments.rows };
 }
 
@@ -35,7 +43,10 @@ export async function upsertResult(input: {
 }) {
   const table = input.resultType === "PHYSICAL_EXAM" ? "exam_results" : "laboratory_results";
   if (input.appointmentId) {
-    const appointment = await query<{ schedule_type: string; student_number: string }>("SELECT schedule_type, student_number FROM appointments WHERE id=$1", [input.appointmentId]);
+    const appointment = await query<{ schedule_type: string; student_number: string }>(
+      "SELECT schedule_type, student_number FROM appointments WHERE id=$1 AND is_published=TRUE",
+      [input.appointmentId],
+    );
     if (!appointment.rows[0]) return { error: "APPOINTMENT_NOT_FOUND" as const };
     if (appointment.rows[0].student_number !== input.studentNumber || appointment.rows[0].schedule_type !== input.resultType) return { error: "APPOINTMENT_MISMATCH" as const };
   }
@@ -72,12 +83,28 @@ export async function complianceReport(filters: {
   }
   const where = clauses.join(" AND ");
   const joins = `
-    LEFT JOIN LATERAL (SELECT result_status FROM exam_results WHERE student_number=s.student_number ORDER BY completed_at DESC NULLS LAST, created_at DESC LIMIT 1) exam ON TRUE
-    LEFT JOIN LATERAL (SELECT result_status FROM laboratory_results WHERE student_number=s.student_number ORDER BY completed_at DESC NULLS LAST, created_at DESC LIMIT 1) lab ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT result.result_status
+        FROM exam_results result
+        LEFT JOIN appointments result_appointment ON result_appointment.id=result.appointment_id
+       WHERE result.student_number=s.student_number
+         AND (result.appointment_id IS NULL OR result_appointment.is_published=TRUE)
+       ORDER BY result.completed_at DESC NULLS LAST, result.created_at DESC LIMIT 1
+    ) exam ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT result.result_status
+        FROM laboratory_results result
+        LEFT JOIN appointments result_appointment ON result_appointment.id=result.appointment_id
+       WHERE result.student_number=s.student_number
+         AND (result.appointment_id IS NULL OR result_appointment.is_published=TRUE)
+       ORDER BY result.completed_at DESC NULLS LAST, result.created_at DESC LIMIT 1
+    ) lab ON TRUE
     LEFT JOIN LATERAL (
       SELECT a.status, c.code AS clinic_code
         FROM appointments a JOIN clinics c ON c.id=a.clinic_id
-       WHERE a.student_number=s.student_number AND a.status NOT IN ('RESCHEDULED','CANCELLED')
+       WHERE a.student_number=s.student_number
+         AND a.is_published=TRUE
+         AND a.status NOT IN ('RESCHEDULED','CANCELLED')
        ORDER BY a.appointment_date DESC, a.created_at DESC LIMIT 1
     ) latest_appointment ON TRUE
     LEFT JOIN LATERAL (SELECT priority_group_id FROM coordinator_schedule_items WHERE student_number=s.student_number ORDER BY created_at DESC LIMIT 1) latest_item ON TRUE`;
@@ -105,25 +132,24 @@ export async function dashboardMetrics(filters: { clinicCode?: ClinicCode } = {}
   const values = filters.clinicCode ? [filters.clinicCode] : [];
   const result = await query<{
     total_students: number; pending_appointments: number; completed_exam: number; completed_lab: number;
-    no_shows: number; rescheduled: number; unpublished_batches: number; over_capacity_dates: number;
+    no_shows: number; rescheduled: number; over_capacity_dates: number;
   }>(`
     SELECT
       (SELECT COUNT(*)::int FROM students WHERE is_active=TRUE) AS total_students,
-      (SELECT COUNT(*)::int FROM appointments a JOIN clinics c ON c.id=a.clinic_id WHERE a.status='PENDING'${clinicWhere}) AS pending_appointments,
-      (SELECT COUNT(*)::int FROM exam_results r JOIN appointments a ON a.id=r.appointment_id JOIN clinics c ON c.id=a.clinic_id WHERE r.result_status='COMPLETED'${clinicWhere}) AS completed_exam,
-      (SELECT COUNT(*)::int FROM laboratory_results r JOIN appointments a ON a.id=r.appointment_id JOIN clinics c ON c.id=a.clinic_id WHERE r.result_status='COMPLETED'${clinicWhere}) AS completed_lab,
-      (SELECT COUNT(*)::int FROM appointments a JOIN clinics c ON c.id=a.clinic_id WHERE a.status='NO_SHOW'${clinicWhere}) AS no_shows,
-      (SELECT COUNT(*)::int FROM appointments a JOIN clinics c ON c.id=a.clinic_id WHERE a.status='RESCHEDULED'${clinicWhere}) AS rescheduled,
-      (SELECT COUNT(*)::int FROM schedule_batches b JOIN clinics c ON c.id=b.clinic_id WHERE b.status IN ('DRAFT','VALIDATED','GENERATED')${clinicWhere}) AS unpublished_batches,
+      (SELECT COUNT(*)::int FROM appointments a JOIN clinics c ON c.id=a.clinic_id WHERE a.status='PENDING' AND a.is_published=TRUE${clinicWhere}) AS pending_appointments,
+      (SELECT COUNT(*)::int FROM exam_results r JOIN appointments a ON a.id=r.appointment_id JOIN clinics c ON c.id=a.clinic_id WHERE r.result_status='COMPLETED' AND a.is_published=TRUE${clinicWhere}) AS completed_exam,
+      (SELECT COUNT(*)::int FROM laboratory_results r JOIN appointments a ON a.id=r.appointment_id JOIN clinics c ON c.id=a.clinic_id WHERE r.result_status='COMPLETED' AND a.is_published=TRUE${clinicWhere}) AS completed_lab,
+      (SELECT COUNT(*)::int FROM appointments a JOIN clinics c ON c.id=a.clinic_id WHERE a.status='NO_SHOW' AND a.is_published=TRUE${clinicWhere}) AS no_shows,
+      (SELECT COUNT(*)::int FROM appointments a JOIN clinics c ON c.id=a.clinic_id WHERE a.status='RESCHEDULED' AND a.is_published=TRUE${clinicWhere}) AS rescheduled,
       (SELECT COUNT(*)::int FROM (
         SELECT a.clinic_id,a.appointment_date,a.schedule_type FROM appointments a
         JOIN clinics cl ON cl.id=a.clinic_id
         JOIN clinic_capacity_settings c ON c.clinic_id=a.clinic_id AND c.schedule_type=a.schedule_type
-        WHERE a.status IN ('DRAFT','PENDING')${filters.clinicCode ? " AND cl.code=$1" : ""}
+        WHERE a.status='PENDING' AND a.is_published=TRUE${filters.clinicCode ? " AND cl.code=$1" : ""}
         GROUP BY a.clinic_id,a.appointment_date,a.schedule_type,c.safe_daily_capacity
         HAVING COUNT(*) > c.safe_daily_capacity
       ) x) AS over_capacity_dates
   `, values);
   const row = result.rows[0];
-  return { totalStudents: row.total_students, pendingAppointments: row.pending_appointments, completedPhysicalExams: row.completed_exam, completedLaboratory: row.completed_lab, noShows: row.no_shows, rescheduled: row.rescheduled, unpublishedBatches: row.unpublished_batches, overCapacityWarnings: row.over_capacity_dates };
+  return { totalStudents: row.total_students, pendingAppointments: row.pending_appointments, completedPhysicalExams: row.completed_exam, completedLaboratory: row.completed_lab, noShows: row.no_shows, rescheduled: row.rescheduled, overCapacityWarnings: row.over_capacity_dates };
 }
