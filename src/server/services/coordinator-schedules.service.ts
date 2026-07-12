@@ -7,7 +7,6 @@ import { writeAudit } from "@/server/repositories/audit.repository";
 import {
   activeAppointmentKeys,
   capacitySettings,
-  createImportedScheduleBatch,
   createScheduleBatch,
   currentAppointmentLoad,
   getRuleItems,
@@ -20,7 +19,6 @@ import {
 import { generateSchedule } from "@/server/rule-engine";
 import { registeredStudentNumbers } from "@/server/repositories/students.repository";
 import type { SessionUser } from "@/types/roles";
-import { parseCoordinatorScheduleCsv } from "./coordinator-schedule-csv";
 import { clinicCodeByScheduleType, isClinicCode, type ClinicCode } from "@/server/clinics";
 
 const blankToNull = z.union([z.string(), z.null(), z.undefined()]).transform((value) => value?.trim() || null);
@@ -84,17 +82,6 @@ const groupedBatchError = () => new AppError(
   409,
 );
 
-const csvImportSchema = z.object({
-  clinicCode: z.enum(["KABALAKA_CLINIC", "CPU_CLINIC"]).optional().nullable(),
-  fileName: z.string().trim().min(1),
-  fileSize: z.number().int().positive(),
-  contents: z.string().min(1),
-  batchName: z.string().trim().min(3).max(150),
-  priorityGroupId: z.string().uuid(),
-  submittedByName: blankToNull,
-  description: blankToNull,
-});
-
 type Actor = string | SessionUser;
 
 function actorUserId(actor: Actor) {
@@ -110,33 +97,6 @@ function scopedInput<T extends { clinicCode?: ClinicCode | null }>(input: T, act
     throw new AppError("CLINIC_ACCESS_DENIED", "You can only manage your assigned clinic.", 403);
   }
   return { ...input, clinicCode: actor.clinicCode };
-}
-
-export async function importCoordinatorScheduleCsv(raw: unknown, actor: Actor) {
-  const input = scopedInput(csvImportSchema.parse(raw), actor);
-  const userId = actorUserId(actor);
-  const fields: Record<string, string[]> = {};
-  if (!input.fileName.toLocaleLowerCase().endsWith(".csv")) fields.file = ["Choose a file with a .csv extension."];
-  if (input.fileSize > 1024 * 1024 || Buffer.byteLength(input.contents) > 1024 * 1024) {
-    fields.file = ["CSV files may not exceed 1 MB."];
-  }
-  if (Object.keys(fields).length) {
-    throw new AppError("CSV_IMPORT_INVALID", "Please correct the CSV import errors.", 422, fields);
-  }
-
-  const result = await createImportedScheduleBatch({
-    clinicCode: input.clinicCode,
-    batchName: input.batchName,
-    priorityGroupId: input.priorityGroupId,
-    submittedByName: input.submittedByName,
-    description: input.description,
-    fileName: input.fileName,
-    rows: parseCoordinatorScheduleCsv(input.contents),
-  }, userId);
-  if ("fields" in result) {
-    throw new AppError("CSV_IMPORT_INVALID", "Please correct the CSV import errors.", 422, result.fields);
-  }
-  return result;
 }
 
 export async function addScheduleBatch(raw: unknown, actor: Actor) {

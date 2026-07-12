@@ -1,6 +1,5 @@
 import "server-only";
 import type { PoolClient } from "pg";
-import { writeAudit } from "@/server/repositories/audit.repository";
 import { query, transaction } from "@/server/db/pool";
 import type { DraftAppointment } from "@/server/rule-engine/types";
 import {
@@ -28,29 +27,6 @@ export type BatchCreate = {
   submittedByName: string | null;
   description: string | null;
   items: ScheduleItemCreate[];
-};
-
-export type CsvImportScheduleRow = {
-  rowNumber: number;
-  studentNumber: string;
-  fullName: string;
-  firstName: string;
-  lastName: string;
-  collegeName: string;
-  courseCode: string;
-  yearLevel: number;
-  targetDate: string;
-  scheduleType: "PHYSICAL_EXAM" | "LABORATORY" | "BOTH";
-};
-
-export type CsvImportBatchCreate = {
-  clinicCode?: ClinicCode | null;
-  batchName: string;
-  priorityGroupId: string;
-  submittedByName: string | null;
-  description: string | null;
-  fileName: string;
-  rows: CsvImportScheduleRow[];
 };
 
 export type ValidationIssue = {
@@ -159,153 +135,6 @@ export async function createScheduleBatch(input: BatchCreate, actorUserId: strin
     const batchIds: string[] = [];
     for (const batch of batches) batchIds.push(await insertClinicBatch(client, batch, actorUserId));
     return { id: batchIds[0], batchIds, itemCount: batches.reduce((sum, batch) => sum + batch.items.length, 0) };
-  });
-}
-
-function normalized(value: string) {
-  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
-}
-
-function addImportError(fields: Record<string, string[]>, field: string, message: string) {
-  fields[field] = [...(fields[field] ?? []), message];
-}
-
-export async function createImportedScheduleBatch(input: CsvImportBatchCreate, actorUserId: string) {
-  return transaction(async (client) => {
-    const fields: Record<string, string[]> = {};
-    const priority = await client.query(
-      "SELECT id FROM priority_groups WHERE id=$1 AND is_active=TRUE",
-      [input.priorityGroupId],
-    );
-    if (!priority.rowCount) addImportError(fields, "priorityGroupId", "Select an active priority group.");
-
-    const collegeNames = [...new Set(input.rows.map((row) => normalized(row.collegeName)))];
-    const colleges = await client.query<{ id: string; name: string }>(
-      "SELECT id, name FROM colleges WHERE is_active=TRUE AND LOWER(name) = ANY($1::text[])",
-      [collegeNames],
-    );
-    const collegeByName = new Map(colleges.rows.map((college) => [normalized(college.name), college]));
-
-    const collegeIds = colleges.rows.map((college) => college.id);
-    const courseCodes = [...new Set(input.rows.map((row) => normalized(row.courseCode)))];
-    const programs = collegeIds.length
-      ? await client.query<{ id: string; college_id: string; code: string }>(
-          `SELECT id, college_id, code FROM programs
-           WHERE is_active=TRUE AND college_id = ANY($1::uuid[]) AND LOWER(code) = ANY($2::text[])`,
-          [collegeIds, courseCodes],
-        )
-      : { rows: [] as Array<{ id: string; college_id: string; code: string }> };
-    const programByCollegeAndCode = new Map(
-      programs.rows.map((program) => [`${program.college_id}:${normalized(program.code)}`, program]),
-    );
-
-    const resolvedRows = input.rows.map((row) => {
-      const college = collegeByName.get(normalized(row.collegeName));
-      if (!college) {
-        addImportError(fields, `rows.${row.rowNumber}.College`, "College must match an active college name.");
-        return null;
-      }
-      const program = programByCollegeAndCode.get(`${college.id}:${normalized(row.courseCode)}`);
-      if (!program) {
-        addImportError(fields, `rows.${row.rowNumber}.Course`, "Course must match an active code in the selected college.");
-        return null;
-      }
-      return { ...row, collegeId: college.id, programId: program.id };
-    }).filter((row): row is NonNullable<typeof row> => Boolean(row));
-
-    const existingStudents = await client.query<{
-      student_number: string;
-      full_name: string;
-      college_id: string;
-      program_id: string;
-      year_level: number | null;
-    }>(
-      `SELECT student_number, CONCAT_WS(' ', first_name, middle_name, last_name, suffix) AS full_name,
-              college_id, program_id, year_level
-         FROM students WHERE student_number = ANY($1::varchar[])`,
-      [[...new Set(resolvedRows.map((row) => row.studentNumber))]],
-    );
-    const existingByStudentNumber = new Map(existingStudents.rows.map((student) => [student.student_number, student]));
-    const firstRowByStudentNumber = new Map<string, (typeof resolvedRows)[number]>();
-
-    for (const row of resolvedRows) {
-      const existing = existingByStudentNumber.get(row.studentNumber);
-      const firstRow = firstRowByStudentNumber.get(row.studentNumber);
-      if (existing || firstRow) {
-        if (normalized(existing ? existing.full_name : firstRow!.fullName) !== normalized(row.fullName)) {
-          addImportError(fields, `rows.${row.rowNumber}.Name`, "Name does not match the existing student data in this import.");
-        }
-        if ((existing ? existing.college_id : firstRow!.collegeId) !== row.collegeId) {
-          addImportError(fields, `rows.${row.rowNumber}.College`, "College does not match the existing student data in this import.");
-        }
-        if ((existing ? existing.program_id : firstRow!.programId) !== row.programId) {
-          addImportError(fields, `rows.${row.rowNumber}.Course`, "Course does not match the existing student data in this import.");
-        }
-        if ((existing ? existing.year_level : firstRow!.yearLevel) !== row.yearLevel) {
-          addImportError(fields, `rows.${row.rowNumber}.Year`, "Year does not match the existing student data in this import.");
-        }
-      } else {
-        firstRowByStudentNumber.set(row.studentNumber, row);
-      }
-    }
-
-    if (Object.keys(fields).length) return { fields } as const;
-
-    const missingStudents = [...firstRowByStudentNumber.values()];
-    for (const student of missingStudents) {
-      await client.query(
-        `INSERT INTO students (
-          student_number, first_name, last_name, college_id, program_id, year_level
-        ) VALUES ($1,$2,$3,$4,$5,$6)`,
-        [student.studentNumber, student.firstName, student.lastName, student.collegeId, student.programId, student.yearLevel],
-      );
-    }
-
-    const commonCollegeIds = new Set(resolvedRows.map((row) => row.collegeId));
-    const commonProgramIds = new Set(resolvedRows.map((row) => row.programId));
-    const batches = splitByClinic({
-      clinicCode: input.clinicCode,
-      batchName: input.batchName,
-      collegeId: commonCollegeIds.size === 1 ? [...commonCollegeIds][0] : null,
-      programId: commonCollegeIds.size === 1 && commonProgramIds.size === 1 ? [...commonProgramIds][0] : null,
-      submittedByName: input.submittedByName,
-      description: input.description,
-      items: resolvedRows.map((row) => ({
-        studentNumber: row.studentNumber,
-        scheduleType: row.scheduleType,
-        priorityGroupId: input.priorityGroupId,
-        targetDate: row.targetDate,
-        targetWeekStart: null,
-        targetWeekEnd: null,
-        remarks: null,
-      })),
-    });
-    if (!batches.length) {
-      const clinic = input.clinicCode ? clinicConfigForCode(input.clinicCode) : null;
-      return {
-        fields: {
-          file: [clinic ? `CSV file does not contain any ${clinic.serviceLabel.toLowerCase()} requests for ${clinic.name}.` : "CSV file does not contain any schedule requests."],
-        } satisfies Record<string, string[]>,
-      };
-    }
-    const batchIds: string[] = [];
-    for (const batch of batches) batchIds.push(await insertClinicBatch(client, batch, actorUserId));
-    const itemCount = batches.reduce((sum, batch) => sum + batch.items.length, 0);
-
-    await writeAudit(actorUserId, "SCHEDULE_BATCH_CSV_IMPORTED", "schedule_batch", batchIds[0], {
-      fileName: input.fileName,
-      itemCount,
-      batchIds,
-      createdStudentCount: missingStudents.length,
-    }, client);
-
-    return {
-      id: batchIds[0],
-      batchIds,
-      status: "DRAFT" as const,
-      itemCount,
-      createdStudentCount: missingStudents.length,
-    };
   });
 }
 

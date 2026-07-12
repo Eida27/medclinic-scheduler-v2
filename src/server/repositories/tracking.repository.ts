@@ -107,7 +107,18 @@ export async function complianceReport(filters: {
          AND a.status NOT IN ('RESCHEDULED','CANCELLED')
        ORDER BY a.appointment_date DESC, a.created_at DESC LIMIT 1
     ) latest_appointment ON TRUE
-    LEFT JOIN LATERAL (SELECT priority_group_id FROM coordinator_schedule_items WHERE student_number=s.student_number ORDER BY created_at DESC LIMIT 1) latest_item ON TRUE`;
+    LEFT JOIN LATERAL (
+      SELECT item.priority_group_id
+        FROM coordinator_schedule_items item
+       WHERE item.student_number=s.student_number
+         AND EXISTS (
+           SELECT 1
+             FROM appointments item_appointment
+            WHERE item_appointment.schedule_item_id=item.id
+              AND item_appointment.is_published=TRUE
+         )
+       ORDER BY item.created_at DESC LIMIT 1
+    ) latest_item ON TRUE`;
   const count = await query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM students s ${joins} WHERE ${where}`, values);
   values.push(filters.limit, filters.offset);
   const items = await query(
