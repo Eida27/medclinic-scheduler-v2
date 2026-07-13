@@ -44,3 +44,7 @@ next-env.d.ts
 # local worktrees
 .worktrees/
 .postgres/
+
+#agents
+.codex
+.agents
