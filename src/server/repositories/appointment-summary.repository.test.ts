@@ -11,7 +11,6 @@ import {
 
 function mockReportQueries() {
   query
-    .mockResolvedValueOnce({ rows: [{ count: "1" }] })
     .mockResolvedValueOnce({ rows: [] })
     .mockResolvedValueOnce({
       rows: [{
@@ -56,18 +55,17 @@ describe("appointmentSummaryReport", () => {
         pendingAny: 1,
       },
     });
-    expect(query).toHaveBeenCalledTimes(3);
+    expect(query).toHaveBeenCalledTimes(2);
 
-    const countSql = query.mock.calls[0][0] as string;
-    const itemSql = query.mock.calls[1][0] as string;
-    expect(countSql).toContain("a.is_published=TRUE");
-    expect(countSql).toContain("a.status IN ('PENDING','COMPLETED','NO_SHOW')");
-    expect(countSql).toContain("item_appointment.is_published=TRUE");
-    expect(countSql).toContain("summary_rows.\"overallStatus\"=$9");
+    const itemSql = query.mock.calls[0][0] as string;
+    expect(itemSql).toContain("a.is_published=TRUE");
+    expect(itemSql).toContain("a.status IN ('PENDING','COMPLETED','NO_SHOW')");
+    expect(itemSql).toContain("item_appointment.is_published=TRUE");
+    expect(itemSql).toContain("summary_rows.\"overallStatus\"=$9");
     expect(itemSql).toContain(
       'ORDER BY summary_rows."lastName" DESC, summary_rows."firstName" DESC, summary_rows."studentNumber" DESC',
     );
-    expect(query.mock.calls[1][1]).toEqual([
+    expect(query.mock.calls[0][1]).toEqual([
       "%Aaron%",
       "2026-07-29",
       "PENDING",
@@ -92,7 +90,7 @@ describe("appointmentSummaryReport", () => {
   ])("uses the deterministic %s order", async (sort, expectedOrder) => {
     await appointmentSummaryReport({ page: 1, limit: 150, offset: 0, sort });
 
-    const itemSql = query.mock.calls[1][0] as string;
+    const itemSql = query.mock.calls[0][0] as string;
     expect(itemSql).toContain(expectedOrder);
     expect(itemSql).toContain('summary_rows."studentNumber"');
   });

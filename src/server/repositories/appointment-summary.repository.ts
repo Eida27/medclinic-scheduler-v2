@@ -29,6 +29,7 @@ export type AppointmentSummaryFilters = {
   search?: string;
   appointmentDate?: string;
   appointmentStatus?: string;
+  legacyAppointmentStatus?: string;
   collegeId?: string;
   programId?: string;
   priorityGroupId?: string;
@@ -54,6 +55,7 @@ const summaryRowsCte = `
       p.name AS "programName",
       latest_item.priority_group_id AS "priorityGroupId",
       COALESCE(latest_appointment.status, 'UNSCHEDULED') AS "appointmentStatus",
+      latest_appointment.clinic_code AS "latestAppointmentClinicCode",
       COALESCE(exam.result_status, 'PENDING') AS "physicalExamStatus",
       COALESCE(lab.result_status, 'PENDING') AS "laboratoryStatus",
       physical_appointment.id AS "physicalExamAppointmentId",
@@ -93,8 +95,14 @@ const summaryRowsCte = `
       FROM exam_results result
       LEFT JOIN appointments result_appointment ON result_appointment.id=result.appointment_id
       WHERE result.student_number=s.student_number
-        AND (result.appointment_id IS NULL OR result_appointment.is_published=TRUE)
-      ORDER BY result.completed_at DESC NULLS LAST, result.created_at DESC
+        AND (
+          result.appointment_id IS NULL
+          OR (
+            result_appointment.is_published=TRUE
+            AND result_appointment.status IN ('PENDING','COMPLETED','NO_SHOW')
+          )
+        )
+      ORDER BY result.updated_at DESC, result.created_at DESC, result.id
       LIMIT 1
     ) exam ON TRUE
     LEFT JOIN LATERAL (
@@ -102,8 +110,14 @@ const summaryRowsCte = `
       FROM laboratory_results result
       LEFT JOIN appointments result_appointment ON result_appointment.id=result.appointment_id
       WHERE result.student_number=s.student_number
-        AND (result.appointment_id IS NULL OR result_appointment.is_published=TRUE)
-      ORDER BY result.completed_at DESC NULLS LAST, result.created_at DESC
+        AND (
+          result.appointment_id IS NULL
+          OR (
+            result_appointment.is_published=TRUE
+            AND result_appointment.status IN ('PENDING','COMPLETED','NO_SHOW')
+          )
+        )
+      ORDER BY result.updated_at DESC, result.created_at DESC, result.id
       LIMIT 1
     ) lab ON TRUE
     LEFT JOIN LATERAL (
@@ -139,8 +153,9 @@ const summaryRowsCte = `
       LIMIT 1
     ) laboratory_appointment ON TRUE
     LEFT JOIN LATERAL (
-      SELECT a.status
+      SELECT a.status, clinic.code AS clinic_code
       FROM appointments a
+      JOIN clinics clinic ON clinic.id=a.clinic_id
       WHERE a.student_number=s.student_number
         AND a.is_published=TRUE
         AND a.status NOT IN ('RESCHEDULED','CANCELLED')
@@ -223,6 +238,9 @@ export async function appointmentSummaryReport(filters: AppointmentSummaryFilter
       filters.appointmentStatus,
     );
   }
+  if (filters.legacyAppointmentStatus) {
+    add(`summary_rows."appointmentStatus"=?`, filters.legacyAppointmentStatus);
+  }
   if (filters.collegeId) add(`summary_rows."collegeId"=?::uuid`, filters.collegeId);
   if (filters.programId) add(`summary_rows."programId"=?::uuid`, filters.programId);
   if (filters.priorityGroupId) add(`summary_rows."priorityGroupId"=?::uuid`, filters.priorityGroupId);
@@ -230,48 +248,42 @@ export async function appointmentSummaryReport(filters: AppointmentSummaryFilter
   if (filters.laboratoryStatus) add(`summary_rows."laboratoryStatus"=?`, filters.laboratoryStatus);
   if (filters.overallStatus) add(`summary_rows."overallStatus"=?`, filters.overallStatus);
   if (filters.clinicCode) {
-    add(
-      `(summary_rows."laboratoryClinicCode"=? OR summary_rows."physicalExamClinicCode"=?)`,
-      filters.clinicCode,
-    );
+    add(`summary_rows."latestAppointmentClinicCode"=?`, filters.clinicCode);
   }
 
   const where = clauses.join(" AND ");
-  const count = await query<{ count: string }>(
-    `${summaryRowsCte}
-     SELECT COUNT(*)::text AS count FROM summary_rows WHERE ${where}`,
-    values,
-  );
   const itemValues = [...values, filters.limit, filters.offset];
-  const items = await query<AppointmentSummaryItem>(
-    `${summaryRowsCte}
-     SELECT ${itemColumns}
-     FROM summary_rows
-     WHERE ${where}
-     ORDER BY ${orderBy[filters.sort]}
-     LIMIT $${itemValues.length - 1} OFFSET $${itemValues.length}`,
-    itemValues,
-  );
-  const summary = await query<{
-    total: number;
-    physical_completed: number;
-    laboratory_completed: number;
-    pending_any: number;
-  }>(
-    `${summaryRowsCte}
-     SELECT COUNT(*)::int AS total,
-       COUNT(*) FILTER (WHERE summary_rows."physicalExamStatus"='COMPLETED')::int AS physical_completed,
-       COUNT(*) FILTER (WHERE summary_rows."laboratoryStatus"='COMPLETED')::int AS laboratory_completed,
-       COUNT(*) FILTER (WHERE summary_rows."overallStatus"<>'COMPLETE')::int AS pending_any
-     FROM summary_rows
-     WHERE ${where}`,
-    values,
-  );
+  const [items, summary] = await Promise.all([
+    query<AppointmentSummaryItem>(
+      `${summaryRowsCte}
+       SELECT ${itemColumns}
+       FROM summary_rows
+       WHERE ${where}
+       ORDER BY ${orderBy[filters.sort]}
+       LIMIT $${itemValues.length - 1} OFFSET $${itemValues.length}`,
+      itemValues,
+    ),
+    query<{
+      total: number;
+      physical_completed: number;
+      laboratory_completed: number;
+      pending_any: number;
+    }>(
+      `${summaryRowsCte}
+       SELECT COUNT(*)::int AS total,
+         COUNT(*) FILTER (WHERE summary_rows."physicalExamStatus"='COMPLETED')::int AS physical_completed,
+         COUNT(*) FILTER (WHERE summary_rows."laboratoryStatus"='COMPLETED')::int AS laboratory_completed,
+         COUNT(*) FILTER (WHERE summary_rows."overallStatus"<>'COMPLETE')::int AS pending_any
+       FROM summary_rows
+       WHERE ${where}`,
+      values,
+    ),
+  ]);
   const totals = summary.rows[0];
 
   return {
     items: items.rows,
-    total: Number(count.rows[0].count),
+    total: totals.total,
     summary: {
       totalStudents: totals.total,
       physicalCompleted: totals.physical_completed,

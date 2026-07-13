@@ -74,8 +74,10 @@ export async function complianceReport(filters: {
   laboratoryStatus?: string; appointmentStatus?: string; appointmentDate?: string; overallStatus?: OverallStatus;
   search?: string; sort?: string; page: number; limit: number; offset: number;
 }) {
+  const { appointmentStatus, ...summaryFilters } = filters;
   return appointmentSummaryReport({
-    ...filters,
+    ...summaryFilters,
+    legacyAppointmentStatus: appointmentStatus,
     sort: parseAppointmentSummarySort(filters.sort),
   });
 }
