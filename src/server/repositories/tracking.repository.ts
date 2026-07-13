@@ -1,6 +1,11 @@
 import "server-only";
+import {
+  parseAppointmentSummarySort,
+  type OverallStatus,
+} from "@/components/appointments/appointment-summary";
 import { query } from "@/server/db/pool";
 import type { ClinicCode } from "@/server/clinics";
+import { appointmentSummaryReport } from "./appointment-summary.repository";
 
 export type ResultType = "PHYSICAL_EXAM" | "LABORATORY";
 
@@ -66,76 +71,13 @@ export async function upsertResult(input: {
 export async function complianceReport(filters: {
   clinicCode?: ClinicCode;
   collegeId?: string; programId?: string; priorityGroupId?: string; physicalExamStatus?: string;
-  laboratoryStatus?: string; appointmentStatus?: string; search?: string; page: number; limit: number; offset: number;
+  laboratoryStatus?: string; appointmentStatus?: string; appointmentDate?: string; overallStatus?: OverallStatus;
+  search?: string; sort?: string; page: number; limit: number; offset: number;
 }) {
-  const clauses = ["s.is_active=TRUE"]; const values: unknown[] = [];
-  const add = (sql: string, value: unknown) => { values.push(value); clauses.push(sql.replace("?", `$${values.length}`)); };
-  if (filters.collegeId) add("s.college_id=?::uuid", filters.collegeId);
-  if (filters.clinicCode) add("latest_appointment.clinic_code=?", filters.clinicCode);
-  if (filters.programId) add("s.program_id=?::uuid", filters.programId);
-  if (filters.priorityGroupId) add("latest_item.priority_group_id=?::uuid", filters.priorityGroupId);
-  if (filters.physicalExamStatus) add("COALESCE(exam.result_status,'PENDING')=?", filters.physicalExamStatus);
-  if (filters.laboratoryStatus) add("COALESCE(lab.result_status,'PENDING')=?", filters.laboratoryStatus);
-  if (filters.appointmentStatus) add("latest_appointment.status=?", filters.appointmentStatus);
-  if (filters.search) {
-    values.push(`%${filters.search}%`);
-    clauses.push(`(s.student_number ILIKE $${values.length} OR CONCAT_WS(' ',s.first_name,s.last_name) ILIKE $${values.length})`);
-  }
-  const where = clauses.join(" AND ");
-  const joins = `
-    LEFT JOIN LATERAL (
-      SELECT result.result_status
-        FROM exam_results result
-        LEFT JOIN appointments result_appointment ON result_appointment.id=result.appointment_id
-       WHERE result.student_number=s.student_number
-         AND (result.appointment_id IS NULL OR result_appointment.is_published=TRUE)
-       ORDER BY result.completed_at DESC NULLS LAST, result.created_at DESC LIMIT 1
-    ) exam ON TRUE
-    LEFT JOIN LATERAL (
-      SELECT result.result_status
-        FROM laboratory_results result
-        LEFT JOIN appointments result_appointment ON result_appointment.id=result.appointment_id
-       WHERE result.student_number=s.student_number
-         AND (result.appointment_id IS NULL OR result_appointment.is_published=TRUE)
-       ORDER BY result.completed_at DESC NULLS LAST, result.created_at DESC LIMIT 1
-    ) lab ON TRUE
-    LEFT JOIN LATERAL (
-      SELECT a.status, c.code AS clinic_code
-        FROM appointments a JOIN clinics c ON c.id=a.clinic_id
-       WHERE a.student_number=s.student_number
-         AND a.is_published=TRUE
-         AND a.status NOT IN ('RESCHEDULED','CANCELLED')
-       ORDER BY a.appointment_date DESC, a.created_at DESC LIMIT 1
-    ) latest_appointment ON TRUE
-    LEFT JOIN LATERAL (
-      SELECT item.priority_group_id
-        FROM coordinator_schedule_items item
-       WHERE item.student_number=s.student_number
-         AND EXISTS (
-           SELECT 1
-             FROM appointments item_appointment
-            WHERE item_appointment.schedule_item_id=item.id
-              AND item_appointment.is_published=TRUE
-         )
-       ORDER BY item.created_at DESC LIMIT 1
-    ) latest_item ON TRUE`;
-  const count = await query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM students s ${joins} WHERE ${where}`, values);
-  values.push(filters.limit, filters.offset);
-  const items = await query(
-    `SELECT s.student_number AS "studentNumber", CONCAT_WS(' ',s.first_name,s.last_name) AS "studentName",
-            c.name AS "collegeName", p.name AS "programName", COALESCE(latest_appointment.status,'UNSCHEDULED') AS "appointmentStatus",
-            COALESCE(exam.result_status,'PENDING') AS "physicalExamStatus", COALESCE(lab.result_status,'PENDING') AS "laboratoryStatus"
-     FROM students s JOIN colleges c ON c.id=s.college_id JOIN programs p ON p.id=s.program_id ${joins}
-     WHERE ${where} ORDER BY s.last_name,s.first_name LIMIT $${values.length - 1} OFFSET $${values.length}`, values);
-  const summary = await query<{
-    total: number; physical_completed: number; laboratory_completed: number; pending_any: number;
-  }>(
-    `SELECT COUNT(*)::int AS total,
-      COUNT(*) FILTER (WHERE COALESCE(exam.result_status,'PENDING')='COMPLETED')::int AS physical_completed,
-      COUNT(*) FILTER (WHERE COALESCE(lab.result_status,'PENDING')='COMPLETED')::int AS laboratory_completed,
-      COUNT(*) FILTER (WHERE COALESCE(exam.result_status,'PENDING')<>'COMPLETED' OR COALESCE(lab.result_status,'PENDING')<>'COMPLETED')::int AS pending_any
-     FROM students s ${joins} WHERE ${where}`, values.slice(0, -2));
-  return { items: items.rows, total: Number(count.rows[0].count), summary: { totalStudents: summary.rows[0].total, physicalCompleted: summary.rows[0].physical_completed, laboratoryCompleted: summary.rows[0].laboratory_completed, pendingAny: summary.rows[0].pending_any } };
+  return appointmentSummaryReport({
+    ...filters,
+    sort: parseAppointmentSummarySort(filters.sort),
+  });
 }
 
 export async function dashboardMetrics(filters: { clinicCode?: ClinicCode } = {}) {

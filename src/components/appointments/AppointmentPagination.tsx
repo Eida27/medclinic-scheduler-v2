@@ -6,6 +6,14 @@ type AppointmentPaginationFilters = {
   appointmentDate?: string;
   scheduleType?: string;
   status?: string;
+  appointmentStatus?: string;
+  collegeId?: string;
+  programId?: string;
+  priorityGroupId?: string;
+  physicalExamStatus?: string;
+  laboratoryStatus?: string;
+  overallStatus?: string;
+  sort?: string;
 };
 
 type AppointmentPaginationProps = {
@@ -15,7 +23,20 @@ type AppointmentPaginationProps = {
   filters: AppointmentPaginationFilters;
 };
 
-const filterNames = ["studentNumber", "appointmentDate", "scheduleType", "status"] as const;
+const filterNames = [
+  "studentNumber",
+  "overallStatus",
+  "sort",
+  "appointmentDate",
+  "scheduleType",
+  "status",
+  "appointmentStatus",
+  "collegeId",
+  "programId",
+  "priorityGroupId",
+  "physicalExamStatus",
+  "laboratoryStatus",
+] as const;
 
 function pageHref(basePath: string, filters: AppointmentPaginationFilters, page: number) {
   const query = new URLSearchParams();

@@ -27,27 +27,36 @@ describe("GET /api/compliance", () => {
     });
   });
 
-  it("does not forward the internal DRAFT status as a compliance filter", async () => {
+  it("normalizes unsupported summary filters instead of forwarding them", async () => {
     const response = await GET(new Request(
-      "http://localhost/api/compliance?appointmentStatus=DRAFT&page=1&limit=20",
+      "http://localhost/api/compliance?appointmentStatus=DRAFT&physicalExamStatus=UNKNOWN&laboratoryStatus=UNKNOWN&overallStatus=UNKNOWN&sort=unsafe&page=1&limit=20",
     ));
 
     expect(response.status).toBe(200);
     expect(complianceReport).toHaveBeenCalledWith(expect.objectContaining({
       appointmentStatus: undefined,
+      physicalExamStatus: undefined,
+      laboratoryStatus: undefined,
+      overallStatus: undefined,
+      sort: "upcoming_asc",
       page: 1,
       limit: 20,
       offset: 0,
     }));
   });
 
-  it("forwards published operational appointment statuses", async () => {
+  it("forwards supported filters and sort values", async () => {
     await GET(new Request(
-      "http://localhost/api/compliance?appointmentStatus=PENDING&page=1&limit=20",
+      "http://localhost/api/compliance?appointmentDate=2026-07-30&appointmentStatus=PENDING&physicalExamStatus=COMPLETED&laboratoryStatus=REQUIRES_FOLLOW_UP&overallStatus=FOLLOW_UP&sort=name_desc&page=1&limit=20",
     ));
 
     expect(complianceReport).toHaveBeenCalledWith(expect.objectContaining({
+      appointmentDate: "2026-07-30",
       appointmentStatus: "PENDING",
+      physicalExamStatus: "COMPLETED",
+      laboratoryStatus: "REQUIRES_FOLLOW_UP",
+      overallStatus: "FOLLOW_UP",
+      sort: "name_desc",
     }));
   });
 });

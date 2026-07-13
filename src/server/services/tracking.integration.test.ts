@@ -14,9 +14,11 @@ const studentNumber = "TEST-TRACK-0001";
 const draftHistoryStudentNumber = "TEST-TRACK-0002";
 const draftResultStudentNumber = "TEST-TRACK-0003";
 const draftPriorityStudentNumber = "TEST-TRACK-0004";
+const summaryStudentNumber = "TEST-SUMMARY-0001";
 
 beforeAll(async () => {
   await cleanupTestFixtures("TEST-TRACK-%", "TEST tracking fixture%");
+  await cleanupTestFixtures("TEST-SUMMARY-%", "TEST summary fixture%");
   await insertTestStudent({
     studentNumber,
     firstName: "Tracking",
@@ -41,10 +43,17 @@ beforeAll(async () => {
     lastName: "Priority",
     yearLevel: 2,
   });
+  await insertTestStudent({
+    studentNumber: summaryStudentNumber,
+    firstName: "Summary",
+    lastName: "Student",
+    yearLevel: 2,
+  });
 });
 
 afterAll(async () => {
   await cleanupTestFixtures("TEST-TRACK-%", "TEST tracking fixture%");
+  await cleanupTestFixtures("TEST-SUMMARY-%", "TEST summary fixture%");
   await pool.end();
 });
 
@@ -69,6 +78,76 @@ describe("results and compliance", () => {
     } finally {
       await pool.query("DELETE FROM exam_results WHERE id=$1", [result.id]);
     }
+  });
+
+  it("summarizes both services by preferring pending appointments and deriving overall follow-up", async () => {
+    const completedPhysical = await pool.query<{ id: string }>(
+      `INSERT INTO appointments (
+         clinic_id, student_number, schedule_type, appointment_date,
+         status, is_published, created_by, updated_by
+       ) VALUES ($1,$2,'PHYSICAL_EXAM','2045-12-25','COMPLETED',TRUE,$3,$3)
+       RETURNING id`,
+      [TEST_REFERENCE_IDS.physicalExamClinic, summaryStudentNumber, actorUserId],
+    );
+    const pendingPhysical = await pool.query<{ id: string }>(
+      `INSERT INTO appointments (
+         clinic_id, student_number, schedule_type, appointment_date,
+         status, is_published, created_by, updated_by
+       ) VALUES ($1,$2,'PHYSICAL_EXAM','2045-12-20','PENDING',TRUE,$3,$3)
+       RETURNING id`,
+      [TEST_REFERENCE_IDS.physicalExamClinic, summaryStudentNumber, actorUserId],
+    );
+    const completedLaboratory = await pool.query<{ id: string }>(
+      `INSERT INTO appointments (
+         clinic_id, student_number, schedule_type, appointment_date,
+         status, is_published, created_by, updated_by
+       ) VALUES ($1,$2,'LABORATORY','2045-12-19','COMPLETED',TRUE,$3,$3)
+       RETURNING id`,
+      [TEST_REFERENCE_IDS.laboratoryClinic, summaryStudentNumber, actorUserId],
+    );
+    await pool.query(
+      `INSERT INTO exam_results (
+         student_number, appointment_id, result_status, completed_at, encoded_by
+       ) VALUES ($1,$2,'COMPLETED','2045-12-20',$3)`,
+      [summaryStudentNumber, pendingPhysical.rows[0].id, actorUserId],
+    );
+    await pool.query(
+      `INSERT INTO laboratory_results (
+         student_number, appointment_id, result_status, completed_at, encoded_by
+       ) VALUES ($1,$2,'REQUIRES_FOLLOW_UP','2045-12-19',$3)`,
+      [summaryStudentNumber, completedLaboratory.rows[0].id, actorUserId],
+    );
+
+    const report = await complianceReport({
+      search: summaryStudentNumber,
+      page: 1,
+      limit: 150,
+      offset: 0,
+    });
+
+    expect(report.items).toEqual([
+      expect.objectContaining({
+        studentNumber: summaryStudentNumber,
+        appointmentStatus: "COMPLETED",
+        physicalExamStatus: "COMPLETED",
+        laboratoryStatus: "REQUIRES_FOLLOW_UP",
+        physicalExamAppointmentId: pendingPhysical.rows[0].id,
+        physicalExamAppointmentDate: "2045-12-20",
+        physicalExamAppointmentStatus: "PENDING",
+        laboratoryAppointmentId: completedLaboratory.rows[0].id,
+        laboratoryAppointmentDate: "2045-12-19",
+        laboratoryAppointmentStatus: "COMPLETED",
+        nextSchedule: "2045-12-20",
+        overallStatus: "FOLLOW_UP",
+      }),
+    ]);
+    expect(report.summary).toEqual({
+      totalStudents: 1,
+      physicalCompleted: 1,
+      laboratoryCompleted: 0,
+      pendingAny: 1,
+    });
+    expect(completedPhysical.rows[0].id).not.toBe(pendingPhysical.rows[0].id);
   });
 
   it("keeps generated appointments out of compliance until publication", async () => {

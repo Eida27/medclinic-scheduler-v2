@@ -14,9 +14,9 @@ Student master-data and grouped physical examination/laboratory scheduling for C
 - Atomic grouped validation, generation, and publication
 - Draft review only inside administrator import detail
 - Published-only clinic/global schedules, status history, and replacement-based rescheduling
-- Public lookup and result/compliance views that expose published appointment data only
+- Public lookup and result views that expose published appointment data only
 - Physical examination and laboratory result history
-- Compliance filters and live dashboard metrics
+- Combined appointment/completion filters, student summaries, and live dashboard metrics
 - Raw PostgreSQL migrations, reference-data seeds, narrow demo cleanup, and audit logs
 
 Doctor scheduling, notifications, holidays, QR check-in, and student self-rescheduling are intentionally outside this MVP.
@@ -134,11 +134,11 @@ Tests cover CSV/name parsing, grouped transaction rollback, atomic lifecycle act
 3. Upload the official seven-column CSV, choose a priority, and open its grouped detail.
 4. Confirm the laboratory and physical examination item counts and dates, then validate the whole import.
 5. Review row issues and capacity conflicts. A capacity override requires an administrator reason.
-6. Generate the grouped appointments and confirm they remain absent from Laboratory, Physical Exam, global appointments, compliance, results, and public lookup.
+6. Generate the grouped appointments and confirm they remain absent from Laboratory, Physical Exam, Appointments & Completion, results, and public lookup.
 7. Publish the complete import, then verify its appointments in `/laboratory` and `/physical-exam`.
 8. Search several student numbers and compare both published dates with the source CSV.
 9. Sign in as clinic staff. Confirm the master import tab/control is unavailable while manual student management and permitted appointment/result work remain available.
-10. Update a published appointment or create a linked replacement, encode results, and review `/compliance` and the dashboard.
+10. Update a published appointment or create a linked replacement, encode results, and review **Appointments & Completion** and the dashboard.
 
 ## Architecture
 

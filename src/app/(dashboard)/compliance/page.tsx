@@ -1,12 +1,31 @@
-import Link from "next/link";
-import { Badge } from "@/components/ui/Badge";
-import { Card } from "@/components/ui/Card";
-import { Input } from "@/components/ui/Input";
-import { PageHeader } from "@/components/ui/PageHeader";
-import { Select } from "@/components/ui/Select";
-import { listColleges, listPriorityGroups, listPrograms } from "@/server/repositories/reference-data.repository";
-import { complianceReport } from "@/server/repositories/tracking.repository";
+import { redirect } from "next/navigation";
 
-type ComplianceItem = { studentNumber: string; studentName: string; collegeName: string; programName: string; appointmentStatus: string; physicalExamStatus: string; laboratoryStatus: string };
-export default async function CompliancePage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) { const params = await searchParams; const [report, colleges, programs, priorities] = await Promise.all([complianceReport({ collegeId: params.collegeId, programId: params.programId, priorityGroupId: params.priorityGroupId, physicalExamStatus: params.physicalExamStatus, laboratoryStatus: params.laboratoryStatus, appointmentStatus: params.appointmentStatus, search: params.search, page: 1, limit: 100, offset: 0 }), listColleges(), listPrograms(), listPriorityGroups()]); return <><PageHeader title="Compliance" description="Identify completed, pending, no-show, and follow-up students." /><section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{[["Students",report.summary.totalStudents],["Physical complete",report.summary.physicalCompleted],["Laboratory complete",report.summary.laboratoryCompleted],["Pending any",report.summary.pendingAny]].map(([label,value]) => <Card key={label} className="relative overflow-hidden"><span aria-hidden="true" className="absolute inset-x-0 top-0 h-1 bg-cpu-gold" /><p className="text-sm font-semibold text-muted">{label}</p><p className="mt-2 text-3xl font-black tracking-tight text-ink">{value}</p></Card>)}</section><Card><form className="grid gap-3 md:grid-cols-3 xl:grid-cols-6"><Input name="search" defaultValue={params.search} placeholder="Student number or name" /><Select name="collegeId" defaultValue={params.collegeId}><option value="">All colleges</option>{colleges.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select><Select name="programId" defaultValue={params.programId}><option value="">All programs</option>{programs.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select><Select name="priorityGroupId" defaultValue={params.priorityGroupId}><option value="">All priorities</option>{priorities.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select><Select name="physicalExamStatus" defaultValue={params.physicalExamStatus}><option value="">Physical: any</option><option value="PENDING">Pending</option><option value="COMPLETED">Completed</option><option value="REQUIRES_FOLLOW_UP">Follow-up</option></Select><button className="rounded-xl border border-line bg-surface font-bold text-ink transition hover:border-cpu-navy/25 hover:bg-cpu-navy-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cpu-navy">Filter</button></form></Card><Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="bg-cpu-navy-soft/70"><tr><th className="px-5 py-3">Student</th><th className="px-5 py-3">Appointment</th><th className="px-5 py-3">Physical</th><th className="px-5 py-3">Laboratory</th><th className="px-5 py-3"></th></tr></thead><tbody className="divide-y divide-line">{(report.items as ComplianceItem[]).map((item) => <tr key={item.studentNumber} className="transition hover:bg-cpu-navy-soft/35"><td className="px-5 py-4"><p className="font-bold text-ink">{item.studentName}</p><p className="text-xs text-muted">{item.studentNumber} · {item.programName}</p></td><td className="px-5 py-4"><Status value={item.appointmentStatus} /></td><td className="px-5 py-4"><Status value={item.physicalExamStatus} /></td><td className="px-5 py-4"><Status value={item.laboratoryStatus} /></td><td className="px-5 py-4 text-right"><Link className="font-bold text-cpu-navy hover:underline" href={`/students/${encodeURIComponent(item.studentNumber)}`}>View</Link></td></tr>)}</tbody></table></div></Card></>; }
-function Status({ value }: { value: string }) { return <Badge tone={value === "COMPLETED" ? "success" : value === "NO_SHOW" ? "danger" : value === "REQUIRES_FOLLOW_UP" ? "warning" : "neutral"}>{value}</Badge>; }
+type ComplianceSearchParams = Record<string, string | undefined>;
+
+const passthroughFilters = [
+  "appointmentStatus",
+  "collegeId",
+  "programId",
+  "priorityGroupId",
+  "physicalExamStatus",
+  "laboratoryStatus",
+  "overallStatus",
+  "sort",
+  "page",
+  "appointmentDate",
+] as const;
+
+export default async function CompliancePage({
+  searchParams,
+}: {
+  searchParams: Promise<ComplianceSearchParams>;
+}) {
+  const params = await searchParams;
+  const query = new URLSearchParams();
+  const studentNumber = params.studentNumber ?? params.search;
+  if (studentNumber) query.set("studentNumber", studentNumber);
+  for (const name of passthroughFilters) {
+    if (params[name]) query.set(name, params[name]);
+  }
+  redirect(`/appointments${query.size ? `?${query.toString()}` : ""}`);
+}
