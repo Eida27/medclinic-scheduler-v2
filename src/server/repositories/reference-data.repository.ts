@@ -1,4 +1,5 @@
 import "server-only";
+import type { PoolClient } from "pg";
 import { query } from "@/server/db/pool";
 
 export type College = { id: string; code: string; name: string; isActive: boolean };
@@ -77,4 +78,21 @@ export async function updateReference(
      RETURNING id, name, rank_order AS "rankOrder", is_active AS "isActive"`,
     [input.id, input.name, input.rankOrder, input.isActive],
   )).rows[0];
+}
+
+export async function deleteReference(
+  type: "college" | "program" | "priorityGroup",
+  id: string,
+  client?: PoolClient,
+) {
+  const table = type === "college"
+    ? "colleges"
+    : type === "program"
+      ? "programs"
+      : "priority_groups";
+  const sql = `DELETE FROM ${table} WHERE id=$1 RETURNING id`;
+  const result = client
+    ? await client.query<{ id: string }>(sql, [id])
+    : await query<{ id: string }>(sql, [id]);
+  return result.rows[0];
 }

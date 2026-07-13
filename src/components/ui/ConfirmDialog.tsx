@@ -9,6 +9,7 @@ type ConfirmDialogProps = {
   description: string;
   confirmLabel: string;
   pending?: boolean;
+  pendingLabel?: string;
   danger?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
@@ -20,6 +21,7 @@ export function ConfirmDialog({
   description,
   confirmLabel,
   pending = false,
+  pendingLabel = "Working...",
   danger = false,
   onCancel,
   onConfirm,
@@ -55,7 +57,7 @@ export function ConfirmDialog({
         <div className="mt-6 flex justify-end gap-3">
           <Button ref={cancelButtonRef} variant="secondary" onClick={onCancel} disabled={pending}>Cancel</Button>
           <Button variant={danger ? "danger" : "primary"} onClick={onConfirm} disabled={pending}>
-            {pending ? "Working..." : confirmLabel}
+            {pending ? pendingLabel : confirmLabel}
           </Button>
         </div>
       </div>
