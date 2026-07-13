@@ -1,4 +1,9 @@
 import Link from "next/link";
+import { AppointmentPagination } from "@/components/appointments/AppointmentPagination";
+import {
+  APPOINTMENT_PAGE_SIZE,
+  parseAppointmentPage,
+} from "@/components/appointments/appointment-pagination";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
@@ -29,15 +34,16 @@ export default async function AppointmentsPage({
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
   const params = await searchParams;
+  const page = parseAppointmentPage(params.page);
   const result = await listAppointments({
     appointmentDate: params.appointmentDate,
     scheduleType: params.scheduleType,
     status: params.status,
     studentNumber: params.studentNumber,
     isPublished: true,
-    page: 1,
-    limit: 100,
-    offset: 0,
+    page,
+    limit: APPOINTMENT_PAGE_SIZE,
+    offset: (page - 1) * APPOINTMENT_PAGE_SIZE,
   });
   const singular = result.total === 1;
 
@@ -120,6 +126,12 @@ export default async function AppointmentsPage({
             </table>
           </div>
         )}
+        <AppointmentPagination
+          basePath="/appointments"
+          page={page}
+          total={result.total}
+          filters={params}
+        />
       </Card>
     </>
   );

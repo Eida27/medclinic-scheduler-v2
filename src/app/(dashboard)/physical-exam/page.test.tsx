@@ -56,12 +56,54 @@ describe("PhysicalExamPage", () => {
       studentNumber: "Ben Reyes",
       isPublished: true,
       page: 1,
-      limit: 100,
+      limit: 150,
       offset: 0,
     });
     expect(screen.getByRole("heading", { level: 1, name: "Published physical examination schedule" })).toBeVisible();
     expect(screen.getByText("No published physical examination appointments match these filters.")).toBeVisible();
     expect(screen.queryByRole("link", { name: /coordinator schedules/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /new batch|import/i })).not.toBeInTheDocument();
+  });
+
+  it("loads and renders the second physical examination page", async () => {
+    listAppointments.mockResolvedValue({
+      items: [{
+        id: "physical-appointment-151",
+        studentNumber: "23-8200-01",
+        studentName: "Ben Reyes",
+        scheduleType: "PHYSICAL_EXAM",
+        appointmentDate: "2026-08-19",
+        appointmentTime: null,
+        status: "PENDING",
+      }],
+      total: 280,
+    });
+
+    render(await PhysicalExamPage({
+      searchParams: Promise.resolve({
+        studentNumber: "Ben Reyes",
+        appointmentDate: "2026-08-19",
+        status: "NO_SHOW",
+        page: "2",
+      }),
+    }));
+
+    expect(listAppointments).toHaveBeenCalledWith({
+      clinicCode: "CPU_CLINIC",
+      appointmentDate: "2026-08-19",
+      scheduleType: "PHYSICAL_EXAM",
+      status: "NO_SHOW",
+      studentNumber: "Ben Reyes",
+      isPublished: true,
+      page: 2,
+      limit: 150,
+      offset: 150,
+    });
+    expect(screen.getByText("Page 2 of 2")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Previous page" })).toHaveAttribute(
+      "href",
+      "/physical-exam?studentNumber=Ben+Reyes&appointmentDate=2026-08-19&status=NO_SHOW&page=1",
+    );
+    expect(screen.queryByRole("link", { name: "Next page" })).not.toBeInTheDocument();
   });
 });

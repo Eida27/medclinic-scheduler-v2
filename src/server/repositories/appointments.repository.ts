@@ -48,7 +48,7 @@ export async function listAppointments(filters: {
      FROM appointments a JOIN students s ON s.student_number=a.student_number
      JOIN clinics cl ON cl.id=a.clinic_id
      JOIN colleges c ON c.id=s.college_id JOIN programs p ON p.id=s.program_id
-     WHERE ${where} ORDER BY a.appointment_date, s.last_name, s.first_name
+     WHERE ${where} ORDER BY a.appointment_date, s.last_name, s.first_name, a.student_number, a.id
      LIMIT $${values.length - 1} OFFSET $${values.length}`,
     values,
   );

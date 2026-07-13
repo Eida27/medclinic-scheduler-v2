@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { AppointmentPagination } from "@/components/appointments/AppointmentPagination";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
@@ -16,9 +17,12 @@ type ClinicAppointment = {
 };
 
 type ClinicPublishedScheduleProps = {
+  basePath: string;
   title: string;
   description: string;
   emptyMessage: string;
+  page: number;
+  total: number;
   filters: {
     studentNumber?: string;
     appointmentDate?: string;
@@ -36,9 +40,12 @@ function statusTone(status: string) {
 }
 
 export function ClinicPublishedSchedule({
+  basePath,
   title,
   description,
   emptyMessage,
+  page,
+  total,
   filters,
   appointments,
 }: ClinicPublishedScheduleProps) {
@@ -110,6 +117,12 @@ export function ClinicPublishedSchedule({
             </table>
           </div>
         )}
+        <AppointmentPagination
+          basePath={basePath}
+          page={page}
+          total={total}
+          filters={filters}
+        />
       </Card>
     </>
   );

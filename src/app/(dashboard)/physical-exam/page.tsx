@@ -1,4 +1,8 @@
 import { ClinicPublishedSchedule } from "@/components/appointments/ClinicPublishedSchedule";
+import {
+  APPOINTMENT_PAGE_SIZE,
+  parseAppointmentPage,
+} from "@/components/appointments/appointment-pagination";
 import { requireUser } from "@/server/auth/current-user";
 import { assertClinicAccess } from "@/server/clinic-access";
 import { clinicConfigs } from "@/server/clinics";
@@ -14,6 +18,7 @@ export default async function PhysicalExamPage({
   const user = await requireUser();
   assertClinicAccess(user, clinic.code);
   const params = await searchParams;
+  const page = parseAppointmentPage(params.page);
   const result = await listAppointments({
     clinicCode: "CPU_CLINIC",
     appointmentDate: params.appointmentDate,
@@ -21,17 +26,20 @@ export default async function PhysicalExamPage({
     status: params.status,
     studentNumber: params.studentNumber,
     isPublished: true,
-    page: 1,
-    limit: 100,
-    offset: 0,
+    page,
+    limit: APPOINTMENT_PAGE_SIZE,
+    offset: (page - 1) * APPOINTMENT_PAGE_SIZE,
   });
   const singular = result.total === 1;
 
   return (
     <ClinicPublishedSchedule
+      basePath="/physical-exam"
       title="Published physical examination schedule"
       description={`${result.total} published CPU Clinic physical examination appointment${singular ? "" : "s"} ${singular ? "matches" : "match"} the current filters.`}
       emptyMessage="No published physical examination appointments match these filters."
+      page={page}
+      total={result.total}
       filters={params}
       appointments={result.items}
     />

@@ -20,6 +20,7 @@ describe("AppointmentsPage", () => {
         appointmentDate: "2026-08-20",
         scheduleType: "PHYSICAL_EXAM",
         status: "PENDING",
+        page: "invalid",
         isPublished: "false",
       }),
     }));
@@ -31,7 +32,7 @@ describe("AppointmentsPage", () => {
       studentNumber: "Maria Cruz",
       isPublished: true,
       page: 1,
-      limit: 100,
+      limit: 150,
       offset: 0,
     });
     expect(screen.getByRole("heading", { level: 1, name: "Published appointments" })).toBeVisible();
@@ -45,4 +46,61 @@ describe("AppointmentsPage", () => {
     expect(screen.queryByRole("combobox", { name: /visibility/i })).not.toBeInTheDocument();
     expect(screen.getByText("No published appointments match these filters.")).toBeVisible();
   });
+
+  it("paginates appointments and preserves active filters in both navigation links", async () => {
+    listAppointments.mockResolvedValue({
+      items: [{
+        id: "appointment-1",
+        studentNumber: "23-8200-01",
+        studentName: "Aaron Abad",
+        scheduleType: "PHYSICAL_EXAM",
+        appointmentDate: "2026-07-30",
+        status: "PENDING",
+      }],
+      total: 560,
+    });
+
+    render(await AppointmentsPage({
+      searchParams: Promise.resolve({
+        studentNumber: "Aaron",
+        appointmentDate: "2026-07-30",
+        scheduleType: "PHYSICAL_EXAM",
+        status: "PENDING",
+        page: "2",
+      }),
+    }));
+
+    expect(listAppointments).toHaveBeenCalledWith({
+      appointmentDate: "2026-07-30",
+      scheduleType: "PHYSICAL_EXAM",
+      status: "PENDING",
+      studentNumber: "Aaron",
+      isPublished: true,
+      page: 2,
+      limit: 150,
+      offset: 150,
+    });
+    expect(screen.getByText("Page 2 of 4")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Previous page" })).toHaveAttribute(
+      "href",
+      "/appointments?studentNumber=Aaron&appointmentDate=2026-07-30&scheduleType=PHYSICAL_EXAM&status=PENDING&page=1",
+    );
+    expect(screen.getByRole("link", { name: "Next page" })).toHaveAttribute(
+      "href",
+      "/appointments?studentNumber=Aaron&appointmentDate=2026-07-30&scheduleType=PHYSICAL_EXAM&status=PENDING&page=3",
+    );
+  });
+
+  it.each(["0", "-2", "1.5", "1e3", "Infinity"])(
+    "normalizes the malformed page value %s to page one",
+    async (page) => {
+      render(await AppointmentsPage({ searchParams: Promise.resolve({ page }) }));
+
+      expect(listAppointments).toHaveBeenCalledWith(expect.objectContaining({
+        page: 1,
+        limit: 150,
+        offset: 0,
+      }));
+    },
+  );
 });

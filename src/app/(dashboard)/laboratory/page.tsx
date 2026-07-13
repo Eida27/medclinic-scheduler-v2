@@ -1,4 +1,8 @@
 import { ClinicPublishedSchedule } from "@/components/appointments/ClinicPublishedSchedule";
+import {
+  APPOINTMENT_PAGE_SIZE,
+  parseAppointmentPage,
+} from "@/components/appointments/appointment-pagination";
 import { requireUser } from "@/server/auth/current-user";
 import { assertClinicAccess } from "@/server/clinic-access";
 import { clinicConfigs } from "@/server/clinics";
@@ -14,6 +18,7 @@ export default async function LaboratoryPage({
   const user = await requireUser();
   assertClinicAccess(user, clinic.code);
   const params = await searchParams;
+  const page = parseAppointmentPage(params.page);
   const result = await listAppointments({
     clinicCode: "KABALAKA_CLINIC",
     appointmentDate: params.appointmentDate,
@@ -21,17 +26,20 @@ export default async function LaboratoryPage({
     status: params.status,
     studentNumber: params.studentNumber,
     isPublished: true,
-    page: 1,
-    limit: 100,
-    offset: 0,
+    page,
+    limit: APPOINTMENT_PAGE_SIZE,
+    offset: (page - 1) * APPOINTMENT_PAGE_SIZE,
   });
   const singular = result.total === 1;
 
   return (
     <ClinicPublishedSchedule
+      basePath="/laboratory"
       title="Published laboratory schedule"
       description={`${result.total} published KABALAKA Clinic laboratory appointment${singular ? "" : "s"} ${singular ? "matches" : "match"} the current filters.`}
       emptyMessage="No published laboratory appointments match these filters."
+      page={page}
+      total={result.total}
       filters={params}
       appointments={result.items}
     />

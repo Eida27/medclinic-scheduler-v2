@@ -16,9 +16,12 @@ describe("ClinicPublishedSchedule", () => {
   it("renders published schedule filters and appointments without draft or visibility controls", () => {
     render(
       <ClinicPublishedSchedule
+        basePath="/laboratory"
         title="Published laboratory schedule"
         description="1 published KABALAKA Clinic laboratory appointment matches the current filters."
         emptyMessage="No published laboratory appointments match these filters."
+        page={1}
+        total={1}
         filters={{
           studentNumber: "Ana Santos",
           appointmentDate: "2026-08-18",
@@ -45,6 +48,9 @@ describe("ClinicPublishedSchedule", () => {
       "href",
       "/appointments/appointment-1",
     );
+    expect(screen.getByText("Page 1 of 1")).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Previous page" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Next page" })).not.toBeInTheDocument();
   });
 
   it.each([
@@ -53,9 +59,12 @@ describe("ClinicPublishedSchedule", () => {
   ])("renders the configured exact empty state: %s", (emptyMessage) => {
     render(
       <ClinicPublishedSchedule
+        basePath="/laboratory"
         title="Published schedule"
         description="No published appointments match the current filters."
         emptyMessage={emptyMessage}
+        page={1}
+        total={0}
         filters={{}}
         appointments={[]}
       />,
@@ -63,5 +72,32 @@ describe("ClinicPublishedSchedule", () => {
 
     expect(screen.getByText(emptyMessage)).toBeVisible();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Appointment pagination" })).not.toBeInTheDocument();
+  });
+
+  it("renders clinic pagination and preserves clinic filters", () => {
+    render(
+      <ClinicPublishedSchedule
+        basePath="/physical-exam"
+        title="Published physical examination schedule"
+        description="280 published appointments match the current filters."
+        emptyMessage="No published physical examination appointments match these filters."
+        page={1}
+        total={280}
+        filters={{
+          studentNumber: "Ana Santos",
+          appointmentDate: "2026-08-18",
+          status: "PENDING",
+        }}
+        appointments={[{ ...appointment, scheduleType: "PHYSICAL_EXAM" }]}
+      />,
+    );
+
+    expect(screen.getByText("Page 1 of 2")).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Previous page" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Next page" })).toHaveAttribute(
+      "href",
+      "/physical-exam?studentNumber=Ana+Santos&appointmentDate=2026-08-18&status=PENDING&page=2",
+    );
   });
 });
