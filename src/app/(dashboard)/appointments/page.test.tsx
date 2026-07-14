@@ -38,7 +38,7 @@ const summaryItem = {
   physicalExamAppointmentStatus: "PENDING",
   laboratoryAppointmentId: "laboratory-1",
   laboratoryAppointmentDate: "2026-07-29",
-  laboratoryAppointmentStatus: "COMPLETED",
+  laboratoryAppointmentStatus: "NO_SHOW",
   nextSchedule: "2026-07-30",
   overallStatus: "FOLLOW_UP",
 };
@@ -138,6 +138,8 @@ describe("AppointmentsPage", () => {
     expect(within(row).queryByText("2026-07-29")).not.toBeInTheDocument();
     expect(within(row).queryByText("2026-07-30")).not.toBeInTheDocument();
     expect(within(row).queryByText("Result")).not.toBeInTheDocument();
+    expect(within(row).queryByText("PENDING")).not.toBeInTheDocument();
+    expect(within(row).queryByText("NO_SHOW")).not.toBeInTheDocument();
     expect(within(row).queryByRole("link", { name: "Open laboratory appointment" })).not.toBeInTheDocument();
     expect(within(row).queryByRole("link", { name: "Open physical exam appointment" })).not.toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: "Next schedule" })).not.toBeInTheDocument();
