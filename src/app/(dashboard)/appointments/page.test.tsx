@@ -61,7 +61,7 @@ describe("AppointmentsPage", () => {
     listPriorityGroups.mockResolvedValue([{ id: "priority-1", name: "Graduating" }]);
   });
 
-  it("renders the combined metrics, filters, and both service summaries", async () => {
+  it("renders the combined metrics, filters, and result-only service summaries", async () => {
     appointmentSummaryReport.mockResolvedValue({
       items: [summaryItem],
       total: 301,
@@ -115,22 +115,32 @@ describe("AppointmentsPage", () => {
     expect(screen.getByRole("combobox", { name: "Sort" })).toHaveValue("name_desc");
     expect(screen.getByText("More filters").closest("details")).toHaveAttribute("open");
 
+    const headers = screen.getAllByRole("columnheader");
+    expect(headers).toHaveLength(4);
+    expect(headers.map((header) => header.textContent)).toEqual([
+      "Student",
+      "Laboratory",
+      "Physical exam",
+      "Overall",
+    ]);
+
     const row = screen.getByRole("row", { name: /Aaron Abad/ });
-    expect(within(row).getByRole("link", { name: "Aaron Abad" })).toHaveAttribute(
+    expect(within(row).getAllByRole("cell")).toHaveLength(4);
+    const studentLink = within(row).getByRole("link", { name: "Aaron Abad" });
+    expect(studentLink).toHaveAttribute(
       "href",
       "/students/23-8200-01",
     );
-    expect(within(row).getByRole("link", { name: "Open laboratory appointment" })).toHaveAttribute(
-      "href",
-      "/appointments/laboratory-1",
-    );
-    expect(within(row).getByRole("link", { name: "Open physical exam appointment" })).toHaveAttribute(
-      "href",
-      "/appointments/physical-1",
-    );
-    expect(within(row).getByText("2026-07-29")).toBeVisible();
+    expect(within(row).getAllByRole("link")).toEqual([studentLink]);
     expect(within(row).getByText("REQUIRES_FOLLOW_UP")).toBeVisible();
+    expect(within(row).getByText("COMPLETED")).toBeVisible();
     expect(within(row).getByText("FOLLOW_UP")).toBeVisible();
+    expect(within(row).queryByText("2026-07-29")).not.toBeInTheDocument();
+    expect(within(row).queryByText("2026-07-30")).not.toBeInTheDocument();
+    expect(within(row).queryByText("Result")).not.toBeInTheDocument();
+    expect(within(row).queryByRole("link", { name: "Open laboratory appointment" })).not.toBeInTheDocument();
+    expect(within(row).queryByRole("link", { name: "Open physical exam appointment" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Next schedule" })).not.toBeInTheDocument();
     expect(screen.getByText("Page 2 of 3")).toBeVisible();
 
     const nextHref = screen.getByRole("link", { name: "Next page" }).getAttribute("href");

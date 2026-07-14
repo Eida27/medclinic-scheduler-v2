@@ -48,44 +48,6 @@ function statusTone(value: string | null) {
   return "neutral" as const;
 }
 
-function ServiceSummary({
-  appointmentId,
-  appointmentDate,
-  appointmentStatus,
-  resultStatus,
-  serviceName,
-}: {
-  appointmentId: string | null;
-  appointmentDate: string | null;
-  appointmentStatus: string | null;
-  resultStatus: string;
-  serviceName: "laboratory" | "physical exam";
-}) {
-  return (
-    <div className="grid min-w-40 gap-2">
-      {appointmentId ? (
-        <>
-          <p className="font-semibold text-ink">{appointmentDate}</p>
-          <div><Badge tone={statusTone(appointmentStatus)}>{appointmentStatus}</Badge></div>
-          <Link
-            className="text-xs font-bold text-cpu-navy hover:underline"
-            href={`/appointments/${appointmentId}`}
-            aria-label={`Open ${serviceName} appointment`}
-          >
-            Open appointment
-          </Link>
-        </>
-      ) : (
-        <p className="text-sm text-muted">Unscheduled</p>
-      )}
-      <div className="flex items-center gap-2 text-xs text-muted">
-        <span>Result</span>
-        <Badge tone={statusTone(resultStatus)}>{resultStatus}</Badge>
-      </div>
-    </div>
-  );
-}
-
 export default async function AppointmentsPage({
   searchParams,
 }: {
@@ -258,7 +220,6 @@ export default async function AppointmentsPage({
                   <th className="px-5 py-3">Student</th>
                   <th className="px-5 py-3">Laboratory</th>
                   <th className="px-5 py-3">Physical exam</th>
-                  <th className="px-5 py-3">Next schedule</th>
                   <th className="px-5 py-3">Overall</th>
                 </tr>
               </thead>
@@ -273,24 +234,11 @@ export default async function AppointmentsPage({
                       <p className="mt-1 text-xs text-muted">{item.programName}</p>
                     </td>
                     <td className="px-5 py-4">
-                      <ServiceSummary
-                        appointmentId={item.laboratoryAppointmentId}
-                        appointmentDate={item.laboratoryAppointmentDate}
-                        appointmentStatus={item.laboratoryAppointmentStatus}
-                        resultStatus={item.laboratoryStatus}
-                        serviceName="laboratory"
-                      />
+                      <Badge tone={statusTone(item.laboratoryStatus)}>{item.laboratoryStatus}</Badge>
                     </td>
                     <td className="px-5 py-4">
-                      <ServiceSummary
-                        appointmentId={item.physicalExamAppointmentId}
-                        appointmentDate={item.physicalExamAppointmentDate}
-                        appointmentStatus={item.physicalExamAppointmentStatus}
-                        resultStatus={item.physicalExamStatus}
-                        serviceName="physical exam"
-                      />
+                      <Badge tone={statusTone(item.physicalExamStatus)}>{item.physicalExamStatus}</Badge>
                     </td>
-                    <td className="px-5 py-4 font-semibold text-ink">{item.nextSchedule ?? "No upcoming schedule"}</td>
                     <td className="px-5 py-4"><Badge tone={statusTone(item.overallStatus)}>{item.overallStatus}</Badge></td>
                   </tr>
                 ))}
