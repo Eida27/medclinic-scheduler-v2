@@ -17,7 +17,7 @@ The appointments summary table inherits `text-left` from the table element. Afte
 - Run the focused page test before implementation and confirm it fails because the Overall header and cell are not centered.
 - Apply the two class changes and rerun the focused test to green.
 - Run the full test suite, lint, and production build.
-- Use the in-app Browser on `/appointments` at the desktop width represented by the supplied screenshot and at a narrow viewport. Confirm the Overall header and badge share the final column's horizontal center, the other columns are unchanged, and no new overflow or clipping appears.
+- Use the in-app Browser on `/appointments` at `1365x768` (the supplied screenshot size) and `768x900`. At each viewport, confirm the Overall badge center is within one pixel of its header cell center, the other columns retain their existing alignment, and no new overflow or clipping appears.
 
 ## Scope
 
