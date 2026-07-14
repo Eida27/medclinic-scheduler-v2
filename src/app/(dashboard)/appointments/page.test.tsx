@@ -123,9 +123,18 @@ describe("AppointmentsPage", () => {
       "Physical exam",
       "Overall",
     ]);
+    headers.slice(0, 3).forEach((header) => {
+      expect(header).not.toHaveClass("text-center");
+    });
+    expect(headers[3]).toHaveClass("text-center");
 
     const row = screen.getByRole("row", { name: /Aaron Abad/ });
-    expect(within(row).getAllByRole("cell")).toHaveLength(4);
+    const cells = within(row).getAllByRole("cell");
+    expect(cells).toHaveLength(4);
+    cells.slice(0, 3).forEach((cell) => {
+      expect(cell).not.toHaveClass("text-center");
+    });
+    expect(cells[3]).toHaveClass("text-center");
     const studentLink = within(row).getByRole("link", { name: "Aaron Abad" });
     expect(studentLink).toHaveAttribute(
       "href",

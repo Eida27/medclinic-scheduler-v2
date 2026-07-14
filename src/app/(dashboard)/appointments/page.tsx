@@ -220,7 +220,7 @@ export default async function AppointmentsPage({
                   <th className="px-5 py-3">Student</th>
                   <th className="px-5 py-3">Laboratory</th>
                   <th className="px-5 py-3">Physical exam</th>
-                  <th className="px-5 py-3">Overall</th>
+                  <th className="px-5 py-3 text-center">Overall</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">
@@ -239,7 +239,9 @@ export default async function AppointmentsPage({
                     <td className="px-5 py-4">
                       <Badge tone={statusTone(item.physicalExamStatus)}>{item.physicalExamStatus}</Badge>
                     </td>
-                    <td className="px-5 py-4"><Badge tone={statusTone(item.overallStatus)}>{item.overallStatus}</Badge></td>
+                    <td className="px-5 py-4 text-center">
+                      <Badge tone={statusTone(item.overallStatus)}>{item.overallStatus}</Badge>
+                    </td>
                   </tr>
                 ))}
               </tbody>
