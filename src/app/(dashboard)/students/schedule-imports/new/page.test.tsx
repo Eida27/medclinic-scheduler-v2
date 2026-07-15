@@ -29,10 +29,10 @@ describe("NewScheduleImportPage", () => {
     listPriorityGroups.mockResolvedValue(priorities);
   });
 
-  it("requires ADMIN, loads priorities, and renders only the grouped master importer", async () => {
+  it("allows administrators and coordinators, loads priorities, and renders only the grouped master importer", async () => {
     render(await NewScheduleImportPage());
 
-    expect(requireUser).toHaveBeenCalledWith(["ADMIN"]);
+    expect(requireUser).toHaveBeenCalledWith(["ADMIN", "COORDINATOR"]);
     expect(listPriorityGroups).toHaveBeenCalledOnce();
     expect(screen.getByRole("heading", { name: "Import schedule CSV" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Master student and schedule CSV" })).toBeVisible();

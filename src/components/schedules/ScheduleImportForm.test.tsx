@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ScheduleImportForm } from "./ScheduleImportForm";
@@ -39,6 +39,12 @@ async function completeRequiredFields(user: ReturnType<typeof userEvent.setup>, 
   await user.selectOptions(screen.getByLabelText("Priority group"), priorities[0].id);
 }
 
+async function reviewImport(user: ReturnType<typeof userEvent.setup>, name = "July schedules.csv") {
+  await completeRequiredFields(user, name);
+  fireEvent.submit(screen.getByRole("button", { name: "Review import" }).closest("form")!);
+  return screen.getByRole("dialog", { name: "Import and publish this CSV?" });
+}
+
 describe("ScheduleImportForm", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -46,76 +52,65 @@ describe("ScheduleImportForm", () => {
     refresh.mockReset();
   });
 
-  it("explains the master CSV contract and links to the public template", () => {
+  it("shows only the CSV and priority inputs with the existing import guidance", () => {
     render(<ScheduleImportForm priorities={priorities} />);
 
     expect(screen.getByText(headers)).toBeVisible();
     expect(screen.getByText(/UTF-8 CSV/i)).toBeVisible();
-    expect(screen.getByText(/MM-DD-YYYY/)).toBeVisible();
-    expect(screen.getByText(/1 MB/)).toBeVisible();
-    expect(screen.getByText(/500 data rows/)).toBeVisible();
-    expect(screen.getByText(/at least one service date/i)).toBeVisible();
     expect(screen.getByRole("link", { name: "Download CSV template" })).toHaveAttribute(
       "href",
       "/templates/student-schedule-import-template.csv",
     );
+    expect(screen.getByLabelText("CSV file")).toBeRequired();
+    expect(screen.getByLabelText("Priority group")).toBeRequired();
+    expect(screen.queryByLabelText("Import name")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Submitted by")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Description")).not.toBeInTheDocument();
   });
 
-  it("shows the selected file and derives an editable import name without overwriting a custom name", async () => {
+  it("reviews one confirmation and cancel sends no request", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
     render(<ScheduleImportForm priorities={priorities} />);
 
-    expect(screen.getByText("No file chosen")).toBeVisible();
-    await user.upload(screen.getByLabelText("CSV file"), csvFile("Clinic appointments.csv"));
+    const dialog = await reviewImport(user, "Clinic appointments.csv");
+    expect(dialog).toHaveTextContent("Clinic appointments.csv");
+    expect(dialog).toHaveTextContent("Regular");
+    expect(dialog).toHaveTextContent(/publish.*Laboratory.*Physical Examination/i);
+    expect(fetchMock).not.toHaveBeenCalled();
 
-    expect(screen.getByText("Clinic appointments.csv")).toBeVisible();
-    expect(screen.getByLabelText("Import name")).toHaveValue("Clinic appointments");
-
-    await user.clear(screen.getByLabelText("Import name"));
-    await user.type(screen.getByLabelText("Import name"), "Coordinator master schedule");
-    await user.upload(screen.getByLabelText("CSV file"), csvFile("Replacement.csv"));
-
-    expect(screen.getByText("Replacement.csv")).toBeVisible();
-    expect(screen.getByLabelText("Import name")).toHaveValue("Coordinator master schedule");
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("posts the five multipart fields and opens the grouped import detail", async () => {
+  it("posts exactly once after agreement and opens the published import detail", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ data: { importId: "grouped-import-id" } }),
+      json: async () => ({ data: { outcome: "PUBLISHED", importId: "grouped-import-id" } }),
     });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
     render(<ScheduleImportForm priorities={priorities} />);
 
-    await completeRequiredFields(user);
-    expect(screen.getByLabelText("Priority group")).toHaveValue(priorities[0].id);
-    fireEvent.change(screen.getByLabelText("Import name"), { target: { value: "July grouped schedule" } });
-    expect(screen.getByLabelText("Priority group")).toHaveValue(priorities[0].id);
-    fireEvent.change(screen.getByLabelText("Submitted by"), { target: { value: "CCS Coordinator" } });
-    fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Master clinic schedule" } });
-    expect(screen.getByLabelText("Priority group")).toHaveValue(priorities[0].id);
-    fireEvent.submit(screen.getByRole("button", { name: "Import CSV" }).closest("form")!);
+    const dialog = await reviewImport(user);
+    await user.click(within(dialog).getByRole("button", { name: "Agree and import" }));
 
-    await waitFor(() => {
-      expect(push).toHaveBeenCalledWith("/students/schedule-imports/grouped-import-id");
-    });
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/students/schedule-imports/grouped-import-id"));
     expect(refresh).toHaveBeenCalledOnce();
     expect(fetchMock).toHaveBeenCalledOnce();
 
     const [url, request] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/api/schedule-imports");
     expect(request.method).toBe("POST");
-    expect(request.body).toBeInstanceOf(FormData);
     const body = request.body as FormData;
     expect(body.get("file")).toBeInstanceOf(File);
-    expect(body.get("importName")).toBe("July grouped schedule");
     expect(body.get("priorityGroupId")).toBe(priorities[0].id);
-    expect(body.get("submittedByName")).toBe("CCS Coordinator");
-    expect(body.get("description")).toBe("Master clinic schedule");
+    expect([...body.keys()].sort()).toEqual(["file", "priorityGroupId"]);
   });
 
-  it("renders top-level and row-column errors while preserving every entered value", async () => {
+  it("preserves the selected values and validation details after a rejected file", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: false,
       json: async () => ({
@@ -123,7 +118,6 @@ describe("ScheduleImportForm", () => {
           message: "Please correct the CSV import errors.",
           fields: {
             "rows.2.Course": ["Course does not match an active program."],
-            "rows.2.Physical Examination Schedule": ["Use MM-DD-YYYY."],
             file: ["CSV files may not exceed 1 MB."],
           },
         },
@@ -132,43 +126,63 @@ describe("ScheduleImportForm", () => {
     const user = userEvent.setup();
     render(<ScheduleImportForm priorities={priorities} />);
 
-    await completeRequiredFields(user, "invalid.csv");
-    fireEvent.change(screen.getByLabelText("Import name"), { target: { value: "Needs correction" } });
-    fireEvent.change(screen.getByLabelText("Submitted by"), { target: { value: "Coordinator Name" } });
-    fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Keep these values" } });
-    fireEvent.submit(screen.getByRole("button", { name: "Import CSV" }).closest("form")!);
+    const dialog = await reviewImport(user, "invalid.csv");
+    await user.click(within(dialog).getByRole("button", { name: "Agree and import" }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Please correct the CSV import errors.");
     expect(alert).toHaveTextContent("Row 2 · Course: Course does not match an active program.");
-    expect(alert).toHaveTextContent("Row 2 · Physical Examination Schedule: Use MM-DD-YYYY.");
     expect(alert).toHaveTextContent("File: CSV files may not exceed 1 MB.");
     expect(screen.getByText("invalid.csv")).toBeVisible();
-    expect(screen.getByLabelText("Import name")).toHaveValue("Needs correction");
     expect(screen.getByLabelText("Priority group")).toHaveValue(priorities[0].id);
-    expect(screen.getByLabelText("Submitted by")).toHaveValue("Coordinator Name");
-    expect(screen.getByLabelText("Description")).toHaveValue("Keep these values");
-    expect(screen.getByRole("button", { name: "Import CSV" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Review import" })).toBeEnabled();
   });
 
-  it("disables duplicate submission while the import is pending", async () => {
+  it("locks the confirmation against duplicate requests while publishing", async () => {
     let resolveFetch!: (value: unknown) => void;
     const fetchMock = vi.fn().mockReturnValue(new Promise((resolve) => { resolveFetch = resolve; }));
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
     render(<ScheduleImportForm priorities={priorities} />);
 
-    await completeRequiredFields(user);
-    fireEvent.submit(screen.getByRole("button", { name: "Import CSV" }).closest("form")!);
+    const dialog = await reviewImport(user);
+    await user.click(within(dialog).getByRole("button", { name: "Agree and import" }));
 
-    const pendingButton = await screen.findByRole("button", { name: "Importing..." });
+    const pendingButton = await screen.findByRole("button", { name: "Importing and publishing…" });
     expect(pendingButton).toBeDisabled();
     await user.click(pendingButton);
     expect(fetchMock).toHaveBeenCalledOnce();
 
-    resolveFetch({ ok: true, json: async () => ({ data: { importId: "pending-import" } }) });
-    await waitFor(() => {
-      expect(push).toHaveBeenCalledWith("/students/schedule-imports/pending-import");
-    });
+    resolveFetch({ ok: true, json: async () => ({ data: { outcome: "PUBLISHED", importId: "pending-import" } }) });
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/students/schedule-imports/pending-import"));
+  });
+
+  it("links to the saved review checkpoint instead of navigating automatically", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          outcome: "REVIEW_REQUIRED",
+          importId: "review-import",
+          status: "VALIDATED",
+          stage: "GENERATE",
+          issue: { code: "ADMIN_OVERRIDE_REQUIRED", message: "Capacity override requires an administrator." },
+        },
+      }),
+    }));
+    const user = userEvent.setup();
+    render(<ScheduleImportForm priorities={priorities} />);
+
+    const dialog = await reviewImport(user);
+    await user.click(within(dialog).getByRole("button", { name: "Agree and import" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Capacity override requires an administrator.");
+    expect(alert).toHaveTextContent(/saved at validated/i);
+    expect(screen.getByRole("link", { name: "Review saved import" })).toHaveAttribute(
+      "href",
+      "/students/schedule-imports/review-import",
+    );
+    expect(push).not.toHaveBeenCalled();
   });
 });

@@ -170,12 +170,17 @@ describe("database constraints", () => {
     const users = await pool.query<{ full_name: string; email: string; role: string; clinic_code: string | null }>(
       `SELECT u.full_name, u.email, u.role, c.code AS clinic_code
          FROM users u LEFT JOIN clinics c ON c.id=u.clinic_id
-        WHERE u.id IN ('00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000002')
+        WHERE u.id IN (
+          '00000000-0000-4000-8000-000000000001',
+          '00000000-0000-4000-8000-000000000002',
+          '00000000-0000-4000-8000-000000000003'
+        )
         ORDER BY u.id`,
     );
     expect(users.rows).toEqual([
       { full_name: "System Admin", email: "admin@medclinic.local", role: "ADMIN", clinic_code: null },
       { full_name: "Clinic Staff", email: "staff@medclinic.local", role: "CLINIC_STAFF", clinic_code: "KABALAKA_CLINIC" },
+      { full_name: "Schedule Coordinator", email: "coordinator@medclinic.local", role: "COORDINATOR", clinic_code: null },
     ]);
 
     const programs = await pool.query<{ college_code: string; program_code: string }>(
@@ -210,6 +215,14 @@ describe("database constraints", () => {
       { name: "Tour", rank_order: 3 },
       { name: "Regular", rank_order: 4 },
     ]);
+  });
+
+  it("keeps coordinator accounts global at the database boundary", async () => {
+    await expect(pool.query(
+      `INSERT INTO users (full_name, email, password_hash, role, clinic_id)
+       VALUES ('Scoped Coordinator', 'scoped.coordinator@example.com', 'not-used', 'COORDINATOR',
+         '60000000-0000-4000-8000-000000000001')`,
+    )).rejects.toMatchObject({ constraint: "users_coordinator_global" });
   });
 
   it("rejects persisted BOTH coordinator schedule items", async () => {

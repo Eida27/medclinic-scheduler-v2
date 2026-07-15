@@ -11,6 +11,7 @@ import {
 import {
   generateScheduleImport,
   getScheduleImport,
+  importAndPublishStudentScheduleCsv,
   importStudentScheduleCsv,
   publishScheduleImport,
   validateScheduleImport,
@@ -50,6 +51,16 @@ const clinicStaff = {
   clinicId: TEST_REFERENCE_IDS.laboratoryClinic,
   clinicCode: "KABALAKA_CLINIC",
   clinicName: "KABALAKA Clinic",
+} satisfies SessionUser;
+
+const coordinator = {
+  userId: TEST_REFERENCE_IDS.adminUser,
+  fullName: "Schedule Coordinator",
+  email: "coordinator@medclinic.local",
+  role: "COORDINATOR",
+  clinicId: null,
+  clinicCode: null,
+  clinicName: null,
 } satisfies SessionUser;
 
 const studentPattern = "TEST-LIFE-%";
@@ -212,6 +223,111 @@ describe("grouped schedule import lifecycle", () => {
       code: "FORBIDDEN",
       status: 403,
     });
+  });
+
+  it("automatically imports, validates, generates, and publishes for a coordinator", async () => {
+    const contents = csv(
+      'TEST-LIFE-AUTO-001,"Tester, Automatic",College of Computer Studies,BSIT,3,02-02-2027,02-03-2027',
+    );
+
+    const result = await importAndPublishStudentScheduleCsv({
+      fileName: "  TEST   Lifecycle automatic.csv ",
+      fileSize: Buffer.byteLength(contents),
+      contents,
+      priorityGroupId: TEST_REFERENCE_IDS.regularPriority,
+    }, coordinator);
+
+    expect(result).toMatchObject({
+      outcome: "PUBLISHED",
+      status: "PUBLISHED",
+      totalRows: 1,
+      createdStudentCount: 1,
+      matchedStudentCount: 0,
+      appointmentCount: 2,
+      publishedAppointmentCount: 2,
+    });
+    const detail = await getScheduleImport(result.importId, coordinator);
+    expect(detail).toMatchObject({
+      importName: "TEST Lifecycle automatic",
+      status: "PUBLISHED",
+      submittedByName: null,
+      description: null,
+    });
+    expect(detail.childBatches.flatMap((batch) => batch.appointments)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: "PENDING", isPublished: true }),
+        expect.objectContaining({ status: "PENDING", isPublished: true }),
+      ]),
+    );
+  });
+
+  it("keeps a validated checkpoint when a coordinator needs an administrator capacity override", async () => {
+    const original = await pool.query<{
+      safe_daily_capacity: number;
+      max_daily_capacity: number;
+    }>(
+      `SELECT safe_daily_capacity, max_daily_capacity
+         FROM clinic_capacity_settings
+        WHERE clinic_id=$1 AND schedule_type='LABORATORY'`,
+      [TEST_REFERENCE_IDS.laboratoryClinic],
+    );
+    await pool.query(
+      `UPDATE clinic_capacity_settings
+          SET safe_daily_capacity=1, max_daily_capacity=1
+        WHERE clinic_id=$1 AND schedule_type='LABORATORY'`,
+      [TEST_REFERENCE_IDS.laboratoryClinic],
+    );
+    try {
+      const contents = csv(
+        'TEST-LIFE-AUTO-002,"Tester, Capacity One",College of Computer Studies,BSIT,3,02-04-2027,',
+        'TEST-LIFE-AUTO-003,"Tester, Capacity Two",College of Computer Studies,BSIT,3,02-04-2027,',
+      );
+
+      const result = await importAndPublishStudentScheduleCsv({
+        fileName: "TEST Lifecycle capacity.csv",
+        fileSize: Buffer.byteLength(contents),
+        contents,
+        priorityGroupId: TEST_REFERENCE_IDS.regularPriority,
+      }, coordinator);
+
+      expect(result).toMatchObject({
+        outcome: "REVIEW_REQUIRED",
+        status: "VALIDATED",
+        stage: "GENERATE",
+        issue: {
+          code: "ADMIN_OVERRIDE_REQUIRED",
+          message: "An administrator must approve capacity conflicts.",
+        },
+      });
+      expect((await getScheduleImport(result.importId, coordinator)).status).toBe("VALIDATED");
+      expect((await pool.query(
+        `SELECT 1 FROM appointments appointment
+          JOIN schedule_batches batch ON batch.id=appointment.batch_id
+         WHERE batch.import_group_id=$1`,
+        [result.importId],
+      )).rowCount).toBe(0);
+
+      await expect(generateScheduleImport(
+        result.importId,
+        coordinator,
+        "Coordinator attempted capacity override",
+      )).rejects.toMatchObject({ code: "ADMIN_OVERRIDE_REQUIRED", status: 403 });
+
+      await generateScheduleImport(result.importId, admin, "Approved capacity exception");
+      await publishScheduleImport(result.importId, admin);
+      expect((await getScheduleImport(result.importId, admin)).status).toBe("PUBLISHED");
+    } finally {
+      await pool.query(
+        `UPDATE clinic_capacity_settings
+            SET safe_daily_capacity=$2, max_daily_capacity=$3
+          WHERE clinic_id=$1 AND schedule_type='LABORATORY'`,
+        [
+          TEST_REFERENCE_IDS.laboratoryClinic,
+          original.rows[0].safe_daily_capacity,
+          original.rows[0].max_daily_capacity,
+        ],
+      );
+    }
   });
 
   it("validates, generates, and publishes both child batches as one lifecycle", async () => {

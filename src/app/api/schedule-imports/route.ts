@@ -2,13 +2,13 @@ import { dataResponse, errorResponse } from "@/lib/api-response";
 import { AppError } from "@/lib/errors";
 import { requireUser } from "@/server/auth/current-user";
 import {
-  importStudentScheduleCsv,
+  importAndPublishStudentScheduleCsv,
   listScheduleImports,
 } from "@/server/services/schedule-imports.service";
 
 export async function GET() {
   try {
-    const user = await requireUser(["ADMIN"]);
+    const user = await requireUser(["ADMIN", "COORDINATOR"]);
     return dataResponse(await listScheduleImports(user));
   } catch (error) {
     return errorResponse(error);
@@ -17,7 +17,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const user = await requireUser(["ADMIN"]);
+    const user = await requireUser(["ADMIN", "COORDINATOR"]);
     const form = await request.formData();
     const file = form.get("file");
     if (!(file instanceof File)) {
@@ -29,14 +29,11 @@ export async function POST(request: Request) {
       );
     }
 
-    const result = await importStudentScheduleCsv({
+    const result = await importAndPublishStudentScheduleCsv({
       fileName: file.name,
       fileSize: file.size,
       contents: new Uint8Array(await file.arrayBuffer()),
-      importName: form.get("importName"),
       priorityGroupId: form.get("priorityGroupId"),
-      submittedByName: form.get("submittedByName"),
-      description: form.get("description"),
     }, user);
     return dataResponse(result, { status: 201 });
   } catch (error) {

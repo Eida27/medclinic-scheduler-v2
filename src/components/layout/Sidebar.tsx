@@ -23,6 +23,9 @@ const adminLinks = [
 
 export function Sidebar({ user }: { user: SessionUser }) {
   const pathname = usePathname();
+  const visiblePrimaryLinks = user.role === "COORDINATOR"
+    ? primaryLinks.filter(([, href]) => href === "/dashboard" || href === "/students")
+    : primaryLinks;
 
   function isActive(href: string) {
     return pathname === href || (href !== "/dashboard" && pathname.startsWith(`${href}/`));
@@ -34,7 +37,7 @@ export function Sidebar({ user }: { user: SessionUser }) {
         <BrandMark inverse />
       </div>
       <nav aria-label="Dashboard navigation" className="scrollbar-none flex gap-1 overflow-x-auto px-3 pb-4 lg:block lg:space-y-1 lg:px-4">
-        {primaryLinks.map(([label, href]) => (
+        {visiblePrimaryLinks.map(([label, href]) => (
           <Link
             key={href}
             href={href}

@@ -15,8 +15,8 @@ const { admin, getScheduleImport, requireUser } = vi.hoisted(() => ({
 vi.mock("@/server/auth/current-user", () => ({ requireUser }));
 vi.mock("@/server/services/schedule-imports.service", () => ({ getScheduleImport }));
 vi.mock("@/components/schedules/ScheduleImportActions", () => ({
-  ScheduleImportActions: ({ importId, status }: { importId: string; status: string }) => (
-    <div>Grouped actions for {importId} in {status}</div>
+  ScheduleImportActions: ({ importId, status, actorRole }: { importId: string; status: string; actorRole: string }) => (
+    <div>Grouped actions for {importId} in {status} as {actorRole}</div>
   ),
 }));
 
@@ -84,7 +84,7 @@ function childBatch({
 }
 
 describe("ScheduleImportDetailPage", () => {
-  it("does not load grouped detail when ADMIN authorization fails", async () => {
+  it("does not load grouped detail when import-operator authorization fails", async () => {
     requireUser.mockRejectedValueOnce(new Error("forbidden"));
 
     await expect(ScheduleImportDetailPage({
@@ -93,7 +93,7 @@ describe("ScheduleImportDetailPage", () => {
     expect(getScheduleImport).not.toHaveBeenCalled();
   });
 
-  it("requires ADMIN and renders grouped metadata, counts, actions, and both clinic panels", async () => {
+  it("allows administrators and coordinators and passes the role to grouped actions", async () => {
     requireUser.mockResolvedValue(admin);
     getScheduleImport.mockResolvedValue({
       importId: "import-1",
@@ -132,7 +132,7 @@ describe("ScheduleImportDetailPage", () => {
       params: Promise.resolve({ importId: "import-1" }),
     }));
 
-    expect(requireUser).toHaveBeenCalledWith(["ADMIN"]);
+    expect(requireUser).toHaveBeenCalledWith(["ADMIN", "COORDINATOR"]);
     expect(getScheduleImport).toHaveBeenCalledWith("import-1", admin);
     expect(screen.getByRole("heading", { name: "December graduation schedules", level: 1 })).toBeVisible();
     expect(screen.getByText("graduation-schedules.csv")).toBeVisible();
@@ -145,7 +145,7 @@ describe("ScheduleImportDetailPage", () => {
     expect(screen.getByText("1 created", { exact: false })).toBeVisible();
     expect(screen.getByText("2 Laboratory requests")).toBeVisible();
     expect(screen.getByText("1 Physical examination request")).toBeVisible();
-    expect(screen.getByText("Grouped actions for import-1 in GENERATED")).toBeVisible();
+    expect(screen.getByText("Grouped actions for import-1 in GENERATED as ADMIN")).toBeVisible();
     expect(screen.getByRole("region", { name: "Laboratory schedule review" })).toBeVisible();
     expect(screen.getByRole("region", { name: "Physical examination schedule review" })).toBeVisible();
     expect(screen.getAllByText("Draft — not published")).toHaveLength(2);

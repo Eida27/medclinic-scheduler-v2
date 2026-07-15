@@ -74,4 +74,19 @@ describe("DashboardShell", () => {
 
     expect(screen.queryByRole("link", { name: /^Back to / })).not.toBeInTheDocument();
   });
+
+  it("labels coordinator sessions distinctly", () => {
+    render(
+      <DashboardShell user={{
+        userId: "3",
+        fullName: "Schedule Coordinator",
+        email: "coordinator@example.com",
+        role: "COORDINATOR",
+      }}>
+        Coordinator content
+      </DashboardShell>,
+    );
+
+    expect(screen.getByText("Coordinator")).toBeVisible();
+  });
 });

@@ -32,7 +32,7 @@ export async function verifySessionToken(token: string): Promise<SessionUser> {
     !payload.sub ||
     typeof payload.fullName !== "string" ||
     typeof payload.email !== "string" ||
-    (payload.role !== "ADMIN" && payload.role !== "CLINIC_STAFF") ||
+    (payload.role !== "ADMIN" && payload.role !== "COORDINATOR" && payload.role !== "CLINIC_STAFF") ||
     (payload.clinicId !== null && payload.clinicId !== undefined && typeof payload.clinicId !== "string") ||
     (payload.clinicCode !== null && payload.clinicCode !== undefined && typeof payload.clinicCode !== "string") ||
     (payload.clinicName !== null && payload.clinicName !== undefined && typeof payload.clinicName !== "string")

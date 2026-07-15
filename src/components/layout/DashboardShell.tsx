@@ -5,6 +5,12 @@ import { LogoutButton } from "./LogoutButton";
 import { Sidebar } from "./Sidebar";
 
 export function DashboardShell({ user, children }: PropsWithChildren<{ user: SessionUser }>) {
+  const roleLabel = user.role === "ADMIN"
+    ? "Administrator"
+    : user.role === "COORDINATOR"
+      ? "Coordinator"
+      : "Clinic staff";
+
   return (
     <div className="min-h-screen bg-canvas lg:flex">
       <Sidebar user={user} />
@@ -14,7 +20,7 @@ export function DashboardShell({ user, children }: PropsWithChildren<{ user: Ses
             <DashboardBackLink />
             <div className="min-w-0">
               <p className="truncate text-sm font-bold text-ink">{user.fullName}</p>
-              <p className="text-xs text-muted">{user.role === "ADMIN" ? "Administrator" : "Clinic staff"}</p>
+              <p className="text-xs text-muted">{roleLabel}</p>
             </div>
           </div>
           <LogoutButton />

@@ -5,15 +5,15 @@ type StudentsSchedulesView = "students" | "schedule-imports";
 
 export function StudentsSchedulesTabs({
   activeView,
-  isAdmin,
+  canManageImports,
 }: {
   activeView: StudentsSchedulesView;
-  isAdmin: boolean;
+  canManageImports: boolean;
 }) {
   const tabs: Array<{ label: string; href: string; view: StudentsSchedulesView }> = [
     { label: "Students", href: "/students", view: "students" },
   ];
-  if (isAdmin) {
+  if (canManageImports) {
     tabs.push({
       label: "Schedule Imports",
       href: "/students?view=schedule-imports",

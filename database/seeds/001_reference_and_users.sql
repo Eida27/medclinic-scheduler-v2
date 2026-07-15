@@ -7,7 +7,8 @@ ON CONFLICT (id) DO NOTHING;
 INSERT INTO users (id, full_name, email, password_hash, role, clinic_id)
 VALUES
   ('00000000-0000-4000-8000-000000000001', 'System Admin', 'admin@medclinic.local', crypt('Admin123!', gen_salt('bf', 12)), 'ADMIN', NULL),
-  ('00000000-0000-4000-8000-000000000002', 'Clinic Staff', 'staff@medclinic.local', crypt('Staff123!', gen_salt('bf', 12)), 'CLINIC_STAFF', '60000000-0000-4000-8000-000000000001')
+  ('00000000-0000-4000-8000-000000000002', 'Clinic Staff', 'staff@medclinic.local', crypt('Staff123!', gen_salt('bf', 12)), 'CLINIC_STAFF', '60000000-0000-4000-8000-000000000001'),
+  ('00000000-0000-4000-8000-000000000003', 'Schedule Coordinator', 'coordinator@medclinic.local', crypt('Coordinator123!', gen_salt('bf', 12)), 'COORDINATOR', NULL)
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO colleges (id, code, name)

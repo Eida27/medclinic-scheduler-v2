@@ -5,5 +5,5 @@ import { listUsers } from "@/server/services/users.service";
 
 export default async function UsersPage() {
   await requireUser(["ADMIN"]);
-  return <><PageHeader title="Clinic users" description="Manage administrator and clinic staff access." /><UsersManager users={await listUsers()} /></>;
+  return <><PageHeader title="Clinic users" description="Manage administrator, coordinator, and clinic staff access." /><UsersManager users={await listUsers()} /></>;
 }

@@ -15,6 +15,7 @@ import {
   type ScheduleImportResult,
 } from "@/server/repositories/schedule-imports.repository";
 import type { SessionUser } from "@/types/roles";
+import { isImportOperatorRole } from "@/types/roles";
 import { publishScheduleBatchWithClient } from "./appointments.service";
 import {
   generateBatchAppointmentsWithClient,
@@ -50,8 +51,8 @@ const overrideReasonSchema = z.string().trim().max(500).optional()
 
 type CsvContents = string | ArrayBuffer | Uint8Array;
 
-function assertAdmin(actor: SessionUser) {
-  if (actor.role !== "ADMIN") {
+function assertImportOperator(actor: SessionUser) {
+  if (!isImportOperatorRole(actor.role)) {
     throw new AppError(
       "FORBIDDEN",
       "You do not have permission to perform this action.",
@@ -121,7 +122,7 @@ export async function importStudentScheduleCsv(
   raw: unknown,
   actor: SessionUser,
 ): Promise<ScheduleImportResult> {
-  assertAdmin(actor);
+  assertImportOperator(actor);
   const file = validatedFile(raw);
   const metadata = importMetadataSchema.parse(raw);
   const result = await createScheduleImport({
@@ -143,7 +144,7 @@ export async function importStudentScheduleCsv(
 export async function listScheduleImports(
   actor: SessionUser,
 ): Promise<ScheduleImportListItem[]> {
-  assertAdmin(actor);
+  assertImportOperator(actor);
   return listScheduleImportGroups();
 }
 
@@ -151,7 +152,7 @@ export async function getScheduleImport(
   importId: string,
   actor: SessionUser,
 ): Promise<ScheduleImportDetail> {
-  assertAdmin(actor);
+  assertImportOperator(actor);
   const validImportId = z.string().uuid().parse(importId);
   const detail = await getScheduleImportGroup(validImportId);
   if (!detail) {
@@ -234,7 +235,7 @@ export async function validateScheduleImport(
   importId: string,
   actor: SessionUser,
 ): Promise<ScheduleImportValidationResult> {
-  assertAdmin(actor);
+  assertImportOperator(actor);
   const validImportId = importIdSchema.parse(importId);
   const result = await withLockedScheduleImport(validImportId, async (client, children) => {
     const status = synchronizedChildStatus(children);
@@ -284,7 +285,7 @@ export async function generateScheduleImport(
   actor: SessionUser,
   overrideReason?: string,
 ): Promise<ScheduleImportGenerationResult> {
-  assertAdmin(actor);
+  assertImportOperator(actor);
   const validImportId = importIdSchema.parse(importId);
   const validOverrideReason = overrideReasonSchema.parse(overrideReason);
   const result = await withLockedScheduleImport(validImportId, async (client, children) => {
@@ -331,7 +332,7 @@ export async function publishScheduleImport(
   importId: string,
   actor: SessionUser,
 ): Promise<ScheduleImportPublicationResult> {
-  assertAdmin(actor);
+  assertImportOperator(actor);
   const validImportId = importIdSchema.parse(importId);
   const result = await withLockedScheduleImport(validImportId, async (client, children) => {
     if (synchronizedChildStatus(children) !== "GENERATED") {
@@ -368,4 +369,127 @@ export async function publishScheduleImport(
   });
   if (!result) throw scheduleImportNotFound();
   return result;
+}
+
+export function importNameFromFileName(fileName: string): string {
+  const normalized = fileName
+    .trim()
+    .replace(/\.csv$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (Array.from(normalized).length < 3) return "Schedule import";
+  return Array.from(normalized).slice(0, 150).join("");
+}
+
+type AutomaticImportStage = "VALIDATE" | "GENERATE" | "PUBLISH";
+type AutomaticImportCheckpointStatus = "DRAFT" | "VALIDATED" | "GENERATED" | "NEEDS_REVIEW";
+
+export type AutomatedScheduleImportResult =
+  | {
+      outcome: "PUBLISHED";
+      importId: string;
+      status: "PUBLISHED";
+      totalRows: number;
+      createdStudentCount: number;
+      matchedStudentCount: number;
+      appointmentCount: number;
+      publishedAppointmentCount: number;
+    }
+  | {
+      outcome: "REVIEW_REQUIRED";
+      importId: string;
+      status: AutomaticImportCheckpointStatus;
+      stage: AutomaticImportStage;
+      issue: {
+        code: string;
+        message: string;
+        fields?: Record<string, string[]>;
+      };
+    };
+
+function checkpointStatus(status: string): AutomaticImportCheckpointStatus {
+  if (status === "DRAFT" || status === "VALIDATED" || status === "GENERATED" || status === "NEEDS_REVIEW") {
+    return status;
+  }
+  return "NEEDS_REVIEW";
+}
+
+async function reviewCheckpoint(
+  created: ScheduleImportResult,
+  stage: AutomaticImportStage,
+  error: unknown,
+  actor: SessionUser,
+): Promise<AutomatedScheduleImportResult> {
+  const detail = await getScheduleImport(created.importId, actor);
+  if (error instanceof AppError) {
+    return {
+      outcome: "REVIEW_REQUIRED",
+      importId: created.importId,
+      status: checkpointStatus(detail.status),
+      stage,
+      issue: {
+        code: error.code,
+        message: error.message,
+        fields: error.fields,
+      },
+    };
+  }
+  console.error(error);
+  return {
+    outcome: "REVIEW_REQUIRED",
+    importId: created.importId,
+    status: checkpointStatus(detail.status),
+    stage,
+    issue: {
+      code: "SCHEDULE_IMPORT_AUTOMATION_FAILED",
+      message: "Automatic processing stopped. Review the saved import before continuing.",
+    },
+  };
+}
+
+export async function importAndPublishStudentScheduleCsv(
+  raw: unknown,
+  actor: SessionUser,
+): Promise<AutomatedScheduleImportResult> {
+  assertImportOperator(actor);
+  const candidate = typeof raw === "object" && raw !== null
+    ? raw as Record<string, unknown>
+    : {};
+  const created = await importStudentScheduleCsv({
+    ...candidate,
+    importName: importNameFromFileName(typeof candidate.fileName === "string" ? candidate.fileName : ""),
+    submittedByName: null,
+    description: null,
+  }, actor);
+
+  try {
+    await validateScheduleImport(created.importId, actor);
+  } catch (error) {
+    return reviewCheckpoint(created, "VALIDATE", error, actor);
+  }
+
+  let generated: ScheduleImportGenerationResult;
+  try {
+    generated = await generateScheduleImport(created.importId, actor);
+  } catch (error) {
+    return reviewCheckpoint(created, "GENERATE", error, actor);
+  }
+
+  let published: ScheduleImportPublicationResult;
+  try {
+    published = await publishScheduleImport(created.importId, actor);
+  } catch (error) {
+    return reviewCheckpoint(created, "PUBLISH", error, actor);
+  }
+
+  return {
+    outcome: "PUBLISHED",
+    importId: created.importId,
+    status: "PUBLISHED",
+    totalRows: created.totalRows,
+    createdStudentCount: created.createdStudentCount,
+    matchedStudentCount: created.matchedStudentCount,
+    appointmentCount: generated.appointmentCount,
+    publishedAppointmentCount: published.publishedAppointmentCount,
+  };
 }

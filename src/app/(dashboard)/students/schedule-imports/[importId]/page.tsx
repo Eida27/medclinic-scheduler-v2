@@ -31,7 +31,7 @@ export default async function ScheduleImportDetailPage({
 }: {
   params: Promise<{ importId: string }>;
 }) {
-  const user = await requireUser(["ADMIN"]);
+  const user = await requireUser(["ADMIN", "COORDINATOR"]);
   const { importId } = await params;
   const detail = await getScheduleImport(importId, user);
 
@@ -105,7 +105,7 @@ export default async function ScheduleImportDetailPage({
         <p className="my-3 text-sm text-muted">
           Lifecycle actions apply atomically to every clinic section in this import.
         </p>
-        <ScheduleImportActions importId={detail.importId} status={detail.status} />
+        <ScheduleImportActions importId={detail.importId} status={detail.status} actorRole={user.role} />
       </Card>
 
       <div className="grid gap-6">

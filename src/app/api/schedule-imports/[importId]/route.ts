@@ -6,7 +6,7 @@ type Context = { params: Promise<{ importId: string }> };
 
 export async function GET(_: Request, context: Context) {
   try {
-    const user = await requireUser(["ADMIN"]);
+    const user = await requireUser(["ADMIN", "COORDINATOR"]);
     return dataResponse(await getScheduleImport((await context.params).importId, user));
   } catch (error) {
     return errorResponse(error);

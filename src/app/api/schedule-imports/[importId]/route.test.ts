@@ -43,12 +43,12 @@ describe("/api/schedule-imports/[importId]", () => {
     publishScheduleImport.mockResolvedValue({ importId, status: "PUBLISHED" });
   });
 
-  it("returns ADMIN-only import detail", async () => {
+  it("returns import detail to administrators and coordinators", async () => {
     const response = await GET(new Request(`http://localhost/api/schedule-imports/${importId}`), context);
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ data: { id: importId, status: "DRAFT" } });
-    expect(requireUser).toHaveBeenCalledWith(["ADMIN"]);
+    expect(requireUser).toHaveBeenCalledWith(["ADMIN", "COORDINATOR"]);
     expect(getScheduleImport).toHaveBeenCalledWith(importId, admin);
   });
 
@@ -140,7 +140,7 @@ describe("/api/schedule-imports/[importId]", () => {
     expect(publishScheduleImport).not.toHaveBeenCalled();
   });
 
-  it("requires ADMIN for detail and every lifecycle action", async () => {
+  it("keeps lifecycle actions administrator-only while detail allows coordinators", async () => {
     requireUser.mockRejectedValue(new AppError(
       "FORBIDDEN",
       "You do not have permission to perform this action.",
@@ -156,7 +156,7 @@ describe("/api/schedule-imports/[importId]", () => {
 
     expect(responses.map((response) => response.status)).toEqual([403, 403, 403, 403]);
     expect(requireUser.mock.calls).toEqual([
-      [["ADMIN"]],
+      [["ADMIN", "COORDINATOR"]],
       [["ADMIN"]],
       [["ADMIN"]],
       [["ADMIN"]],

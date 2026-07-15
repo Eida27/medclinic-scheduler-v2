@@ -15,6 +15,16 @@ describe("authenticate", () => {
     });
   });
 
+  it("round-trips the seeded global coordinator credentials", async () => {
+    await expect(authenticate("coordinator@medclinic.local", "Coordinator123!")).resolves.toMatchObject({
+      fullName: "Schedule Coordinator",
+      role: "COORDINATOR",
+      email: "coordinator@medclinic.local",
+      clinicId: null,
+      clinicCode: null,
+    });
+  });
+
   it("rejects an incorrect password without exposing account details", async () => {
     await expect(authenticate("admin@medclinic.local", "wrong-password")).rejects.toMatchObject({
       code: "INVALID_CREDENTIALS",

@@ -1,4 +1,8 @@
-export type UserRole = "ADMIN" | "CLINIC_STAFF";
+export type UserRole = "ADMIN" | "COORDINATOR" | "CLINIC_STAFF";
+
+export function isImportOperatorRole(role: UserRole): role is "ADMIN" | "COORDINATOR" {
+  return role === "ADMIN" || role === "COORDINATOR";
+}
 
 export type SessionUser = {
   userId: string;

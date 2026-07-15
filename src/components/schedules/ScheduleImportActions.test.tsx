@@ -23,7 +23,7 @@ describe("ScheduleImportActions", () => {
     const fetchMock = vi.fn().mockResolvedValue(successfulResponse());
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
-    render(<ScheduleImportActions importId="import-1" status="DRAFT" />);
+    render(<ScheduleImportActions importId="import-1" status="DRAFT" actorRole="ADMIN" />);
 
     await user.click(screen.getByRole("button", { name: "Validate import" }));
 
@@ -39,7 +39,7 @@ describe("ScheduleImportActions", () => {
     const fetchMock = vi.fn().mockResolvedValue(successfulResponse());
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
-    render(<ScheduleImportActions importId="import-2" status="VALIDATED" />);
+    render(<ScheduleImportActions importId="import-2" status="VALIDATED" actorRole="ADMIN" />);
 
     await user.type(
       screen.getByLabelText("Capacity override reason (optional)"),
@@ -64,7 +64,7 @@ describe("ScheduleImportActions", () => {
     const fetchMock = vi.fn().mockResolvedValue(successfulResponse());
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
-    render(<ScheduleImportActions importId="import-3" status="GENERATED" />);
+    render(<ScheduleImportActions importId="import-3" status="GENERATED" actorRole="ADMIN" />);
 
     await user.click(screen.getByRole("button", { name: "Publish schedules" }));
     expect(fetchMock).not.toHaveBeenCalled();
@@ -91,7 +91,7 @@ describe("ScheduleImportActions", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
-    render(<ScheduleImportActions importId="import-4" status="DRAFT" />);
+    render(<ScheduleImportActions importId="import-4" status="DRAFT" actorRole="ADMIN" />);
 
     await user.click(screen.getByRole("button", { name: "Validate import" }));
     expect(screen.getByRole("button", { name: "Validating..." })).toBeDisabled();
@@ -122,7 +122,7 @@ describe("ScheduleImportActions", () => {
       json: async () => ({ error: { message: "Publication was rolled back." } }),
     }));
     const user = userEvent.setup();
-    render(<ScheduleImportActions importId="import-4" status="GENERATED" />);
+    render(<ScheduleImportActions importId="import-4" status="GENERATED" actorRole="ADMIN" />);
 
     await user.click(screen.getByRole("button", { name: "Publish schedules" }));
     const dialog = screen.getByRole("dialog", { name: "Publish imported schedules?" });
@@ -134,7 +134,7 @@ describe("ScheduleImportActions", () => {
   });
 
   it("renders published links and safe non-action states without invalid mutations", () => {
-    const { rerender } = render(<ScheduleImportActions importId="import-5" status="PUBLISHED" />);
+    const { rerender } = render(<ScheduleImportActions importId="import-5" status="PUBLISHED" actorRole="ADMIN" />);
     expect(screen.getByRole("link", { name: "View Laboratory schedules" })).toHaveAttribute(
       "href",
       "/laboratory",
@@ -144,12 +144,29 @@ describe("ScheduleImportActions", () => {
       "/physical-exam",
     );
 
-    rerender(<ScheduleImportActions importId="import-5" status="NEEDS_REVIEW" />);
+    rerender(<ScheduleImportActions importId="import-5" status="NEEDS_REVIEW" actorRole="ADMIN" />);
     expect(screen.getByText(/child batches are not synchronized/i)).toBeVisible();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
 
-    rerender(<ScheduleImportActions importId="import-5" status="CANCELLED" />);
+    rerender(<ScheduleImportActions importId="import-5" status="CANCELLED" actorRole="ADMIN" />);
     expect(screen.getByText(/cancelled import cannot be changed/i)).toBeVisible();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("shows coordinators an administrator-review notice instead of lifecycle controls", () => {
+    const { rerender } = render(
+      <ScheduleImportActions importId="import-6" status="VALIDATED" actorRole="COORDINATOR" />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/administrator review is required/i);
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+
+    rerender(<ScheduleImportActions importId="import-6" status="PUBLISHED" actorRole="COORDINATOR" />);
+    expect(screen.getByRole("link", { name: "View students" })).toHaveAttribute("href", "/students");
+    expect(screen.getByRole("link", { name: "View import history" })).toHaveAttribute(
+      "href",
+      "/students?view=schedule-imports",
+    );
+    expect(screen.queryByRole("link", { name: /Laboratory schedules/i })).not.toBeInTheDocument();
   });
 });

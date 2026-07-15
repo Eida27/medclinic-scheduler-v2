@@ -5,15 +5,18 @@ import { AppError, isPostgresUniqueViolation } from "@/lib/errors";
 import { writeAudit } from "@/server/repositories/audit.repository";
 import { insertUser, listUsers, updateUserRecord } from "@/server/repositories/users.repository";
 
-const userSchema = z.object({
+export const userSchema = z.object({
   fullName: z.string().trim().min(2).max(150),
   email: z.string().trim().toLowerCase().email().max(150),
-  role: z.enum(["ADMIN", "CLINIC_STAFF"]),
+  role: z.enum(["ADMIN", "COORDINATOR", "CLINIC_STAFF"]),
   clinicCode: z.union([z.enum(["KABALAKA_CLINIC", "CPU_CLINIC"]), z.literal(""), z.null(), z.undefined()])
     .transform((value) => value || null),
 }).superRefine((input, context) => {
   if (input.role === "CLINIC_STAFF" && !input.clinicCode) {
     context.addIssue({ code: "custom", path: ["clinicCode"], message: "Clinic staff must be assigned to a clinic." });
+  }
+  if (input.role === "COORDINATOR" && input.clinicCode) {
+    context.addIssue({ code: "custom", path: ["clinicCode"], message: "Coordinator accounts must be global." });
   }
 });
 

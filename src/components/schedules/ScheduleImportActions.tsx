@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Field } from "@/components/ui/Field";
 import { Input } from "@/components/ui/Input";
+import type { UserRole } from "@/types/roles";
 
 type ScheduleImportStatus =
   | "DRAFT"
@@ -37,9 +38,11 @@ function errorDetails(fields: ApiError["fields"]): string[] {
 export function ScheduleImportActions({
   importId,
   status,
+  actorRole,
 }: {
   importId: string;
   status: ScheduleImportStatus;
+  actorRole: UserRole;
 }) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
@@ -88,6 +91,25 @@ export function ScheduleImportActions({
   }
 
   if (status === "PUBLISHED") {
+    if (actorRole === "COORDINATOR") {
+      return (
+        <div className="flex flex-wrap gap-3">
+          <Link
+            href="/students"
+            className="rounded-xl bg-cpu-navy px-4 py-2.5 text-sm font-bold text-white transition hover:bg-cpu-navy-light"
+          >
+            View students
+          </Link>
+          <Link
+            href="/students?view=schedule-imports"
+            className="rounded-xl border border-line bg-surface px-4 py-2.5 text-sm font-bold text-ink transition hover:bg-cpu-navy-soft"
+          >
+            View import history
+          </Link>
+        </div>
+      );
+    }
+
     return (
       <div className="flex flex-wrap gap-3">
         <Link
@@ -103,6 +125,14 @@ export function ScheduleImportActions({
           View Physical exam schedules
         </Link>
       </div>
+    );
+  }
+
+  if (actorRole === "COORDINATOR" && status !== "CANCELLED") {
+    return (
+      <Alert tone="warning">
+        Administrator review is required before this saved import can continue. You can inspect its details, but only an administrator can run recovery actions or approve a capacity override.
+      </Alert>
     );
   }
 

@@ -15,7 +15,17 @@ type Student = {
   collegeId: string; programId: string; yearLevel: number | null; section: string | null;
 };
 
-export function StudentForm({ colleges, programs, student }: { colleges: College[]; programs: Program[]; student?: Student }) {
+export function StudentForm({
+  colleges,
+  programs,
+  student,
+  readOnly = false,
+}: {
+  colleges: College[];
+  programs: Program[];
+  student?: Student;
+  readOnly?: boolean;
+}) {
   const router = useRouter();
   const [collegeId, setCollegeId] = useState(student?.collegeId ?? "");
   const [error, setError] = useState<string>();
@@ -24,6 +34,7 @@ export function StudentForm({ colleges, programs, student }: { colleges: College
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (readOnly) return;
     setPending(true);
     setError(undefined);
     const form = new FormData(event.currentTarget);
@@ -46,25 +57,25 @@ export function StudentForm({ colleges, programs, student }: { colleges: College
       <form onSubmit={submit} className="grid gap-5">
         {error ? <Alert tone="danger">{error}</Alert> : null}
         <div className="grid gap-4 md:grid-cols-2">
-          <Field label="Student number"><Input name="studentNumber" defaultValue={student?.studentNumber} disabled={Boolean(student)} required /></Field>
-          <Field label="First name"><Input name="firstName" defaultValue={student?.firstName} required /></Field>
-          <Field label="Middle name"><Input name="middleName" defaultValue={student?.middleName ?? ""} /></Field>
-          <Field label="Last name"><Input name="lastName" defaultValue={student?.lastName} required /></Field>
-          <Field label="Suffix"><Input name="suffix" defaultValue={student?.suffix ?? ""} /></Field>
+          <Field label="Student number"><Input name="studentNumber" defaultValue={student?.studentNumber} disabled={Boolean(student) || readOnly} required /></Field>
+          <Field label="First name"><Input name="firstName" defaultValue={student?.firstName} disabled={readOnly} required /></Field>
+          <Field label="Middle name"><Input name="middleName" defaultValue={student?.middleName ?? ""} disabled={readOnly} /></Field>
+          <Field label="Last name"><Input name="lastName" defaultValue={student?.lastName} disabled={readOnly} required /></Field>
+          <Field label="Suffix"><Input name="suffix" defaultValue={student?.suffix ?? ""} disabled={readOnly} /></Field>
           <Field label="College">
-            <Select name="collegeId" value={collegeId} onChange={(event) => setCollegeId(event.target.value)} required>
+            <Select name="collegeId" value={collegeId} onChange={(event) => setCollegeId(event.target.value)} disabled={readOnly} required>
               <option value="">Select college</option>{colleges.filter((college) => college.isActive).map((college) => <option key={college.id} value={college.id}>{college.name}</option>)}
             </Select>
           </Field>
           <Field label="Program">
-            <Select name="programId" defaultValue={student?.programId} key={collegeId} required>
+            <Select name="programId" defaultValue={student?.programId} key={collegeId} disabled={readOnly} required>
               <option value="">Select program</option>{availablePrograms.map((program) => <option key={program.id} value={program.id}>{program.name}</option>)}
             </Select>
           </Field>
-          <Field label="Year level"><Select name="yearLevel" defaultValue={student?.yearLevel ?? ""}><option value="">Not specified</option>{[1,2,3,4,5,6].map((year) => <option key={year} value={year}>{year}</option>)}</Select></Field>
-          <Field label="Section"><Input name="section" defaultValue={student?.section ?? ""} /></Field>
+          <Field label="Year level"><Select name="yearLevel" defaultValue={student?.yearLevel ?? ""} disabled={readOnly}><option value="">Not specified</option>{[1,2,3,4,5,6].map((year) => <option key={year} value={year}>{year}</option>)}</Select></Field>
+          <Field label="Section"><Input name="section" defaultValue={student?.section ?? ""} disabled={readOnly} /></Field>
         </div>
-        <div className="flex gap-3"><Button type="submit" disabled={pending}>{pending ? "Saving..." : student ? "Save changes" : "Add student"}</Button><Button variant="secondary" onClick={() => router.back()}>Cancel</Button></div>
+        {readOnly ? null : <div className="flex gap-3"><Button type="submit" disabled={pending}>{pending ? "Saving..." : student ? "Save changes" : "Add student"}</Button><Button variant="secondary" onClick={() => router.back()}>Cancel</Button></div>}
       </form>
     </Card>
   );

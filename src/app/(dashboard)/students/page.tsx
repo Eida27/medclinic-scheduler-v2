@@ -9,6 +9,7 @@ import { requireUser } from "@/server/auth/current-user";
 import { listColleges, listPrograms } from "@/server/repositories/reference-data.repository";
 import { listScheduleImports } from "@/server/services/schedule-imports.service";
 import { listStudents } from "@/server/services/students.service";
+import { isImportOperatorRole } from "@/types/roles";
 
 const pageSize = 20;
 
@@ -24,10 +25,16 @@ function studentPageHref(params: StudentsSearchParams, page: number) {
   return `/students?${query.toString()}`;
 }
 
-function HeaderActions({ isAdmin }: { isAdmin: boolean }) {
+function HeaderActions({
+  canManageImports,
+  canMutateStudents,
+}: {
+  canManageImports: boolean;
+  canMutateStudents: boolean;
+}) {
   return (
     <div className="flex flex-wrap gap-2">
-      {isAdmin ? (
+      {canManageImports ? (
         <>
           <Link
             href="/students/schedule-imports/new"
@@ -44,12 +51,14 @@ function HeaderActions({ isAdmin }: { isAdmin: boolean }) {
           </Link>
         </>
       ) : null}
-      <Link
-        href="/students/new"
-        className="rounded-xl border border-line bg-surface px-4 py-2.5 text-sm font-bold text-ink transition hover:border-cpu-navy/25 hover:bg-cpu-navy-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cpu-navy"
-      >
-        Add student
-      </Link>
+      {canMutateStudents ? (
+        <Link
+          href="/students/new"
+          className="rounded-xl border border-line bg-surface px-4 py-2.5 text-sm font-bold text-ink transition hover:border-cpu-navy/25 hover:bg-cpu-navy-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cpu-navy"
+        >
+          Add student
+        </Link>
+      ) : null}
     </div>
   );
 }
@@ -181,8 +190,9 @@ export default async function StudentsPage({
   searchParams: Promise<StudentsSearchParams>;
 }) {
   const [params, user] = await Promise.all([searchParams, requireUser()]);
-  const isAdmin = user.role === "ADMIN";
-  const activeView = isAdmin && params.view === "schedule-imports"
+  const canManageImports = isImportOperatorRole(user.role);
+  const canMutateStudents = user.role !== "COORDINATOR";
+  const activeView = canManageImports && params.view === "schedule-imports"
     ? "schedule-imports"
     : "students";
   let content;
@@ -218,9 +228,12 @@ export default async function StudentsPage({
       <PageHeader
         title="Students & Schedules"
         description="Manage student records and publish imported clinic schedules."
-        actions={<HeaderActions isAdmin={isAdmin} />}
+        actions={<HeaderActions
+          canManageImports={canManageImports}
+          canMutateStudents={canMutateStudents}
+        />}
       />
-      <StudentsSchedulesTabs activeView={activeView} isAdmin={isAdmin} />
+      <StudentsSchedulesTabs activeView={activeView} canManageImports={canManageImports} />
       {content}
     </>
   );

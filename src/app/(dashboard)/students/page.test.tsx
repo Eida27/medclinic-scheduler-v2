@@ -39,6 +39,13 @@ const clinicStaff = {
   role: "CLINIC_STAFF" as const,
 };
 
+const coordinator = {
+  userId: "coordinator-1",
+  fullName: "Schedule Coordinator",
+  email: "coordinator@example.com",
+  role: "COORDINATOR" as const,
+};
+
 const student = {
   studentNumber: "24-0001",
   firstName: "Ana",
@@ -150,6 +157,21 @@ describe("StudentsPage", () => {
     expect(screen.getByText("Ana Santos")).toBeVisible();
     expect(listScheduleImports).not.toHaveBeenCalled();
     expect(listStudents).toHaveBeenCalled();
+  });
+
+  it("gives coordinators the import workspace without student mutation controls", async () => {
+    requireUser.mockResolvedValue(coordinator);
+
+    render(await StudentsPage({
+      searchParams: Promise.resolve({ view: "schedule-imports" }),
+    }));
+
+    expect(screen.getByRole("link", { name: "Schedule Imports" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Import schedule CSV" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Download CSV template" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Add student" })).not.toBeInTheDocument();
+    expect(listScheduleImports).toHaveBeenCalledWith(coordinator);
+    expect(listStudents).not.toHaveBeenCalled();
   });
 
   it("filters students by year level and preserves all filters in pagination links", async () => {

@@ -15,7 +15,7 @@ export async function GET(_: Request, context: Context) {
 
 export async function PATCH(request: Request, context: Context) {
   try {
-    const user = await requireUser();
+    const user = await requireUser(["ADMIN", "CLINIC_STAFF"]);
     const studentNumber = decodeURIComponent((await context.params).studentNumber);
     return dataResponse(await updateStudent(studentNumber, await request.json(), user.userId));
   } catch (error) {
@@ -25,7 +25,7 @@ export async function PATCH(request: Request, context: Context) {
 
 export async function DELETE(_: Request, context: Context) {
   try {
-    const user = await requireUser();
+    const user = await requireUser(["ADMIN", "CLINIC_STAFF"]);
     const studentNumber = decodeURIComponent((await context.params).studentNumber);
     await deactivateStudent(studentNumber, user.userId);
     return dataResponse({ success: true });

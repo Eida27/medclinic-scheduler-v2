@@ -31,10 +31,10 @@ export default async function DashboardPage() {
         <ol className="mt-4 grid gap-3 text-sm text-muted-strong sm:grid-cols-3">
           {[
             "Open Students & Schedules",
-            "Import the official schedule CSV",
-            "Review and validate the grouped import",
-            "Generate laboratory and physical exam drafts",
-            "Publish the complete import as an administrator",
+            "Choose the CSV and required priority group",
+            "Review one confirmation and agree to import",
+            "The system validates, generates, and publishes automatically",
+            "Administrators resolve any saved review checkpoint",
             "Track published schedules, results, and compliance",
           ].map((step, index) => (
             <li key={step} className="rounded-xl border border-cpu-navy/8 bg-cpu-navy-soft/65 p-4"><span className="mr-2 font-black text-cpu-navy">{index + 1}.</span>{step}</li>

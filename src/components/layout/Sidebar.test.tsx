@@ -66,4 +66,23 @@ describe("Sidebar", () => {
     expect(screen.getByRole("link", { name: "Reference data" })).toBeVisible();
     expect(screen.getByRole("link", { name: "Capacity" })).toBeVisible();
   });
+
+  it("limits coordinators to Dashboard and Students & Schedules", () => {
+    render(
+      <Sidebar user={{
+        userId: "3",
+        fullName: "Schedule Coordinator",
+        email: "coordinator@example.com",
+        role: "COORDINATOR",
+      }} />,
+    );
+
+    expect(screen.getByRole("link", { name: "Dashboard" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Students & Schedules" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Laboratory" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Physical exam" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Appointments" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Results" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
+  });
 });
