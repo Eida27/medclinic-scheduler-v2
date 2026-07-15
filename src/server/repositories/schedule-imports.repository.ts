@@ -360,21 +360,31 @@ export async function createScheduleImport(
     );
     const importId = importGroup.rows[0].id;
 
-    for (const student of missingStudents) {
+    if (missingStudents.length) {
       await client.query(
         `INSERT INTO students (
            student_number, first_name, middle_name, last_name, suffix,
            college_id, program_id, year_level
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+         )
+         SELECT fixture.student_number, fixture.first_name, fixture.middle_name,
+                fixture.last_name, fixture.suffix, fixture.college_id,
+                fixture.program_id, fixture.year_level
+           FROM UNNEST(
+             $1::varchar[], $2::varchar[], $3::varchar[], $4::varchar[],
+             $5::varchar[], $6::uuid[], $7::uuid[], $8::integer[]
+           ) AS fixture(
+             student_number, first_name, middle_name, last_name, suffix,
+             college_id, program_id, year_level
+           )`,
         [
-          student.studentNumber,
-          student.firstName,
-          student.middleName,
-          student.lastName,
-          student.suffix,
-          student.collegeId,
-          student.programId,
-          student.yearLevel,
+          missingStudents.map((student) => student.studentNumber),
+          missingStudents.map((student) => student.firstName),
+          missingStudents.map((student) => student.middleName),
+          missingStudents.map((student) => student.lastName),
+          missingStudents.map((student) => student.suffix),
+          missingStudents.map((student) => student.collegeId),
+          missingStudents.map((student) => student.programId),
+          missingStudents.map((student) => student.yearLevel),
         ],
       );
     }

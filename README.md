@@ -90,7 +90,7 @@ Student ID,Name,College,Course,Year,Laboratory Schedule,Physical Examination Sch
 - `Name` must use `Last, First Middle` form and must be CSV-quoted because it contains a comma. The example is stored as first name `Aaron`, middle name `Miguel A.`, and last name `Abad`.
 - Both schedule columns use `MM-DD-YYYY`.
 - Either schedule date may be blank, but every row must contain at least one of them. A row with both dates creates one request for each clinic.
-- Files may contain up to 500 data rows and may not exceed 1 MB.
+- Files may contain up to 3,000 data rows and may not exceed 1 MB.
 - Student IDs must be unique within the file; repeated IDs are rejected case-insensitively after Unicode normalization.
 - An administrator or coordinator chooses one active priority group for the entire import.
 - College names and course codes must match active reference data. Matching is case-insensitive.

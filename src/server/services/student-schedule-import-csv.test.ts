@@ -315,21 +315,21 @@ describe("parseStudentScheduleCsv", () => {
     });
   });
 
-  it("accepts exactly 500 data rows", () => {
-    const dataRows = Array.from({ length: 500 }, (_, index) => (
+  it("accepts exactly 3,000 data rows", () => {
+    const dataRows = Array.from({ length: 3_000 }, (_, index) => (
       `ID-${String(index).padStart(4, "0")},"Student${index}, Given",College of Computing,BSIT,3,07-05-2026,`
     ));
 
-    expect(parseStudentScheduleCsv([header, ...dataRows].join("\n"))).toHaveLength(500);
+    expect(parseStudentScheduleCsv([header, ...dataRows].join("\n"))).toHaveLength(3_000);
   });
 
-  it("rejects 501 data rows", () => {
-    const dataRows = Array.from({ length: 501 }, (_, index) => (
+  it("rejects 3,001 data rows", () => {
+    const dataRows = Array.from({ length: 3_001 }, (_, index) => (
       `ID-${String(index).padStart(4, "0")},"Student${index}, Given",College of Computing,BSIT,3,07-05-2026,`
     ));
 
     expect(fieldsFrom([header, ...dataRows].join("\n"))).toEqual({
-      file: ["CSV files may contain at most 500 data rows."],
+      file: ["CSV files may contain at most 3,000 data rows."],
     });
   });
 

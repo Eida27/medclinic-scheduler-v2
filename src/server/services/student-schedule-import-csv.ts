@@ -27,6 +27,7 @@ const expectedHeaders = [
 ] as const;
 
 const headerError = `CSV headers must exactly match: ${expectedHeaders.join(", ")}.`;
+const maximumCsvDataRows = 3_000;
 
 function addError(fields: Record<string, string[]>, field: string, message: string) {
   fields[field] = [...(fields[field] ?? []), message];
@@ -126,7 +127,11 @@ export function parseStudentScheduleCsv(
     || header.some((value, index) => value !== expectedHeaders[index])
   ) fail({ file: [headerError] });
 
-  if (records.length - 1 > 500) fail({ file: ["CSV files may contain at most 500 data rows."] });
+  if (records.length - 1 > maximumCsvDataRows) {
+    fail({
+      file: [`CSV files may contain at most ${maximumCsvDataRows.toLocaleString("en-US")} data rows.`],
+    });
+  }
 
   const fields: Record<string, string[]> = {};
   const rows: StudentScheduleCsvRow[] = [];

@@ -617,6 +617,47 @@ describe("grouped student schedule imports", () => {
     ]);
   });
 
+  it("atomically creates one grouped import for 3,000 new students", async () => {
+    const importName = "TEST-GRP 3K students";
+    const dataRows = Array.from({ length: 3_000 }, (_, index) => csvRow({
+      studentNumber: `TEST-GRP-3K-${String(index).padStart(4, "0")}`,
+      name: `Bulk${index}, Student`,
+      laboratoryDate: "08-10-2026",
+      physicalDate: "08-11-2026",
+    }));
+    const contents = [header, ...dataRows].join("\n");
+
+    const created = await importStudentScheduleCsv(input(importName, contents), admin);
+
+    expect(created).toMatchObject({
+      status: "DRAFT",
+      totalRows: 3_000,
+      createdStudentCount: 3_000,
+      matchedStudentCount: 0,
+      laboratoryItemCount: 3_000,
+      physicalExaminationItemCount: 3_000,
+    });
+    expect(created.batchIds).toHaveLength(2);
+
+    const counts = await pool.query<{
+      groups: number;
+      batches: number;
+      students: number;
+      items: number;
+    }>(
+      `SELECT
+         (SELECT COUNT(*)::int FROM schedule_import_groups WHERE id=$1) AS groups,
+         (SELECT COUNT(*)::int FROM schedule_batches WHERE import_group_id=$1) AS batches,
+         (SELECT COUNT(*)::int FROM students WHERE student_number LIKE 'TEST-GRP-3K-%') AS students,
+         (SELECT COUNT(*)::int
+            FROM coordinator_schedule_items item
+            JOIN schedule_batches batch ON batch.id=item.batch_id
+           WHERE batch.import_group_id=$1) AS items`,
+      [created.importId],
+    );
+    expect(counts.rows[0]).toEqual({ groups: 1, batches: 2, students: 3_000, items: 6_000 });
+  });
+
   it("rejects a non-CSV extension before parsing and leaves no writes", async () => {
     const importName = "TEST-GRP invalid extension";
     const studentNumber = "TEST-GRP-FILE-EXT";

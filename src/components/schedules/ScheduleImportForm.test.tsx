@@ -57,6 +57,7 @@ describe("ScheduleImportForm", () => {
 
     expect(screen.getByText(headers)).toBeVisible();
     expect(screen.getByText(/UTF-8 CSV/i)).toBeVisible();
+    expect(screen.getByText("The file may be up to 1 MB and contain up to 3,000 data rows.")).toBeVisible();
     expect(screen.getByRole("link", { name: "Download CSV template" })).toHaveAttribute(
       "href",
       "/templates/student-schedule-import-template.csv",

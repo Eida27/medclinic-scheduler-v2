@@ -111,7 +111,7 @@ export function ScheduleImportForm({ priorities }: { priorities: PriorityGroup[]
             <ul className="list-disc space-y-1 pl-5">
               <li>Save and upload the file as a UTF-8 CSV.</li>
               <li>Enter schedule dates in MM-DD-YYYY format.</li>
-              <li>The file may be up to 1 MB and contain up to 500 data rows.</li>
+              <li>The file may be up to 1 MB and contain up to 3,000 data rows.</li>
               <li>Each row must include at least one service date.</li>
             </ul>
             <a

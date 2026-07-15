@@ -1074,7 +1074,7 @@ Test:
 - Invalid date format rejected
 - Impossible date rejected
 - Duplicate student row rejected
-- More than 500 rows rejected
+- More than 3,000 rows rejected
 
 ### 14.2 Service integration tests
 
