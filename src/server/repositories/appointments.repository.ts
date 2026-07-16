@@ -1,5 +1,7 @@
 import "server-only";
 import type { PoolClient } from "pg";
+import { AppError } from "@/lib/errors";
+import type { AutomaticNoShowLog } from "@/server/appointments/automatic-no-show";
 import { query, transaction } from "@/server/db/pool";
 import type { ClinicCode } from "@/server/clinics";
 
@@ -10,7 +12,15 @@ type AppointmentDetail = {
   appointmentDate: string; appointmentTime: string | null; status: AppointmentStatus; isPublished: boolean;
   notes: string | null; rescheduledFrom: string | null; collegeName: string; programName: string;
 };
-type StatusLog = { id: string; oldStatus: string | null; newStatus: string; notes: string | null; createdAt: Date; changedByName: string | null };
+type StatusLog = { id: string; oldStatus: string | null; newStatus: string; notes: string | null; createdAt: Date; changedById: string | null; changedByName: string | null };
+
+export type AppointmentMutationContext = {
+  id: string;
+  status: AppointmentStatus;
+  clinicId: string;
+  clinicCode: ClinicCode;
+  latestLog: AutomaticNoShowLog | null;
+};
 
 export async function listAppointments(filters: {
   clinicCode?: ClinicCode; appointmentDate?: string; scheduleType?: string; status?: string; collegeId?: string; programId?: string;
@@ -70,22 +80,98 @@ export async function getPublishedAppointment(id: string) {
   if (!result.rows[0]) return null;
   const logs = await query<StatusLog>(
     `SELECT l.id, l.old_status AS "oldStatus", l.new_status AS "newStatus", l.notes,
-            l.created_at AS "createdAt", u.full_name AS "changedByName"
+            l.created_at AS "createdAt", l.changed_by AS "changedById",
+            u.full_name AS "changedByName"
      FROM appointment_status_logs l LEFT JOIN users u ON u.id=l.changed_by
-     WHERE l.appointment_id=$1 ORDER BY l.created_at DESC`, [id]);
+     WHERE l.appointment_id=$1 ORDER BY l.created_at DESC, l.id DESC`, [id]);
   return { ...result.rows[0], statusLogs: logs.rows };
+}
+
+export async function getAppointmentMutationContext(id: string, client: PoolClient) {
+  const result = await client.query<{
+    id: string;
+    status: AppointmentStatus;
+    clinicId: string;
+    clinicCode: ClinicCode;
+    latestOldStatus: string | null;
+    latestNewStatus: string | null;
+    latestNotes: string | null;
+    latestChangedById: string | null;
+  }>(
+    `SELECT appointment.id, appointment.status,
+            appointment.clinic_id AS "clinicId", clinic.code AS "clinicCode",
+            latest.old_status AS "latestOldStatus",
+            latest.new_status AS "latestNewStatus",
+            latest.notes AS "latestNotes",
+            latest.changed_by AS "latestChangedById"
+       FROM appointments appointment
+       JOIN clinics clinic ON clinic.id=appointment.clinic_id
+       LEFT JOIN LATERAL (
+         SELECT old_status, new_status, notes, changed_by
+           FROM appointment_status_logs
+          WHERE appointment_id=appointment.id
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1
+       ) latest ON TRUE
+      WHERE appointment.id=$1 AND appointment.is_published=TRUE
+      FOR UPDATE OF appointment`,
+    [id],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    status: row.status,
+    clinicId: row.clinicId,
+    clinicCode: row.clinicCode,
+    latestLog: row.latestNewStatus ? {
+      oldStatus: row.latestOldStatus,
+      newStatus: row.latestNewStatus,
+      notes: row.latestNotes,
+      changedById: row.latestChangedById,
+    } : null,
+  } satisfies AppointmentMutationContext;
+}
+
+export async function changeAppointmentStatusWithClient(
+  client: PoolClient,
+  id: string,
+  expectedOldStatus: AppointmentStatus,
+  newStatus: AppointmentStatus,
+  notes: string | null,
+  actorUserId: string,
+) {
+  const changed = await client.query(
+    `UPDATE appointments
+        SET status=$3, notes=COALESCE($4, notes), updated_by=$5
+      WHERE id=$1 AND status=$2 AND is_published=TRUE
+      RETURNING id`,
+    [id, expectedOldStatus, newStatus, notes, actorUserId],
+  );
+  if (!changed.rowCount) {
+    throw new AppError("APPOINTMENT_STATUS_CONFLICT", "The appointment status changed. Refresh and try again.", 409);
+  }
+  await client.query(
+    `INSERT INTO appointment_status_logs (
+       appointment_id, old_status, new_status, notes, changed_by
+     ) VALUES ($1,$2,$3,$4,$5)`,
+    [id, expectedOldStatus, newStatus, notes, actorUserId],
+  );
 }
 
 export async function changeAppointmentStatus(id: string, status: AppointmentStatus, notes: string | null, actorUserId: string) {
   return transaction(async (client) => {
-    const current = await client.query<{ status: AppointmentStatus }>(
-      "SELECT status FROM appointments WHERE id=$1 AND is_published=TRUE FOR UPDATE",
-      [id],
+    const current = await getAppointmentMutationContext(id, client);
+    if (!current) return null;
+    await changeAppointmentStatusWithClient(
+      client,
+      id,
+      current.status,
+      status,
+      notes,
+      actorUserId,
     );
-    if (!current.rows[0]) return null;
-    await client.query("UPDATE appointments SET status=$2, notes=COALESCE($3, notes), updated_by=$4 WHERE id=$1", [id, status, notes, actorUserId]);
-    await client.query("INSERT INTO appointment_status_logs (appointment_id, old_status, new_status, notes, changed_by) VALUES ($1,$2,$3,$4,$5)", [id, current.rows[0].status, status, notes, actorUserId]);
-    return { oldStatus: current.rows[0].status };
+    return { oldStatus: current.status };
   });
 }
 

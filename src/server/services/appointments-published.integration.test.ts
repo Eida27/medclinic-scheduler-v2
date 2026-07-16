@@ -106,12 +106,12 @@ describe("published-only appointment access", () => {
     await expect(updateAppointment(
       draftId,
       {},
-      admin.userId,
+      admin,
     )).rejects.toMatchObject({ code: "APPOINTMENT_NOT_FOUND", status: 404 });
     await expect(updateAppointment(
       draftId,
       { status: "PENDING", notes: null },
-      admin.userId,
+      admin,
     )).rejects.toMatchObject({ code: "APPOINTMENT_NOT_FOUND", status: 404 });
     expect((await listAppointments({
       studentNumber: "Ada Lynne Santos Jr.",
@@ -173,7 +173,7 @@ describe("published-only appointment access", () => {
     const completed = await updateAppointment(
       draftId,
       { status: "COMPLETED", notes: "Completed after grouped publication" },
-      admin.userId,
+      admin,
     );
     expect(completed).toMatchObject({ id: draftId, status: "COMPLETED", isPublished: true });
   });

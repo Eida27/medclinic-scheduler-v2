@@ -6,4 +6,4 @@ import { updateAppointment } from "@/server/services/appointments.service";
 
 type Context = { params: Promise<{ appointmentId: string }> };
 export async function GET(_: Request, context: Context) { try { await requireUser(); const item = await getPublishedAppointment((await context.params).appointmentId); if (!item) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404); return dataResponse(item); } catch (error) { return errorResponse(error); } }
-export async function PATCH(request: Request, context: Context) { try { const user = await requireUser(); return dataResponse(await updateAppointment((await context.params).appointmentId, await request.json(), user.userId)); } catch (error) { return errorResponse(error); } }
+export async function PATCH(request: Request, context: Context) { try { const user = await requireUser(["ADMIN", "CLINIC_STAFF"]); return dataResponse(await updateAppointment((await context.params).appointmentId, await request.json(), user)); } catch (error) { return errorResponse(error); } }

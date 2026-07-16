@@ -3,6 +3,8 @@ import { AppointmentActions } from "@/components/appointments/AppointmentActions
 import { Badge } from "@/components/ui/Badge";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { isAutomaticNoShowLog } from "@/server/appointments/automatic-no-show";
+import { requireUser } from "@/server/auth/current-user";
 import { getPublishedAppointment } from "@/server/repositories/appointments.repository";
 
 type Log = {
@@ -10,6 +12,7 @@ type Log = {
   oldStatus: string | null;
   newStatus: string;
   notes: string | null;
+  changedById: string | null;
   changedByName: string | null;
   createdAt: Date;
 };
@@ -27,8 +30,13 @@ export default async function AppointmentPage({
 }: {
   params: Promise<{ appointmentId: string }>;
 }) {
+  const user = await requireUser(["ADMIN", "CLINIC_STAFF"]);
   const appointment = await getPublishedAppointment((await params).appointmentId);
   if (!appointment) notFound();
+  const statusLogs = appointment.statusLogs as Log[];
+  const canCorrectNoShow = appointment.status === "NO_SHOW"
+    && (user.role === "ADMIN" || user.clinicId === appointment.clinicId)
+    && isAutomaticNoShowLog(statusLogs[0]);
 
   return (
     <>
@@ -60,13 +68,17 @@ export default async function AppointmentPage({
       <Card>
         <CardTitle>Update appointment</CardTitle>
         <div className="mt-4">
-          <AppointmentActions id={String(appointment.id)} status={String(appointment.status)} />
+          <AppointmentActions
+            id={String(appointment.id)}
+            status={String(appointment.status)}
+            canCorrectNoShow={canCorrectNoShow}
+          />
         </div>
       </Card>
       <Card>
         <CardTitle>Status history</CardTitle>
         <div className="mt-4 grid gap-3">
-          {(appointment.statusLogs as Log[]).map((log) => (
+          {statusLogs.map((log) => (
             <div key={log.id} className="rounded-xl border border-cpu-navy/8 bg-cpu-navy-soft/55 p-4 text-sm">
               <p className="font-bold text-ink">{log.oldStatus ?? "Created"} → {log.newStatus}</p>
               <p className="text-muted">

@@ -15,11 +15,20 @@ import { GET, PATCH } from "./route";
 
 const appointmentId = "11111111-1111-4111-8111-111111111111";
 const context = { params: Promise.resolve({ appointmentId }) };
+const clinicStaff = {
+  userId: "staff-user",
+  fullName: "Clinic Staff",
+  email: "staff@medclinic.local",
+  role: "CLINIC_STAFF" as const,
+  clinicId: "60000000-0000-4000-8000-000000000001",
+  clinicCode: "KABALAKA_CLINIC",
+  clinicName: "KABALAKA Clinic",
+};
 
 describe("/api/appointments/[appointmentId]", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    requireUser.mockResolvedValue({ userId: "staff-user", role: "CLINIC_STAFF" });
+    requireUser.mockResolvedValue(clinicStaff);
     getPublishedAppointment.mockResolvedValue({ id: appointmentId, isPublished: true });
     updateAppointment.mockResolvedValue({ id: appointmentId, status: "COMPLETED" });
   });
@@ -51,7 +60,7 @@ describe("/api/appointments/[appointmentId]", () => {
     });
   });
 
-  it("keeps PATCH behind the published-only appointment service", async () => {
+  it("restricts PATCH to appointment operators and passes the full session to the service", async () => {
     const response = await PATCH(new Request(
       `http://localhost/api/appointments/${appointmentId}`,
       {
@@ -62,10 +71,11 @@ describe("/api/appointments/[appointmentId]", () => {
     ), context);
 
     expect(response.status).toBe(200);
+    expect(requireUser).toHaveBeenCalledWith(["ADMIN", "CLINIC_STAFF"]);
     expect(updateAppointment).toHaveBeenCalledWith(
       appointmentId,
       { status: "COMPLETED" },
-      "staff-user",
+      clinicStaff,
     );
   });
 });
