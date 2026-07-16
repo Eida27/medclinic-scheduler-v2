@@ -16,9 +16,13 @@ type StatusLog = { id: string; oldStatus: string | null; newStatus: string; note
 
 export type AppointmentMutationContext = {
   id: string;
+  batchId: string | null;
+  studentNumber: string;
+  scheduleType: string;
   status: AppointmentStatus;
   clinicId: string;
   clinicCode: ClinicCode;
+  isPublished: boolean;
   latestLog: AutomaticNoShowLog | null;
 };
 
@@ -90,16 +94,23 @@ export async function getPublishedAppointment(id: string) {
 export async function getAppointmentMutationContext(id: string, client: PoolClient) {
   const result = await client.query<{
     id: string;
+    batchId: string | null;
+    studentNumber: string;
+    scheduleType: string;
     status: AppointmentStatus;
     clinicId: string;
     clinicCode: ClinicCode;
+    isPublished: boolean;
     latestOldStatus: string | null;
     latestNewStatus: string | null;
     latestNotes: string | null;
     latestChangedById: string | null;
   }>(
-    `SELECT appointment.id, appointment.status,
+    `SELECT appointment.id, appointment.batch_id AS "batchId",
+            appointment.student_number AS "studentNumber",
+            appointment.schedule_type AS "scheduleType", appointment.status,
             appointment.clinic_id AS "clinicId", clinic.code AS "clinicCode",
+            appointment.is_published AS "isPublished",
             latest.old_status AS "latestOldStatus",
             latest.new_status AS "latestNewStatus",
             latest.notes AS "latestNotes",
@@ -121,9 +132,13 @@ export async function getAppointmentMutationContext(id: string, client: PoolClie
   if (!row) return null;
   return {
     id: row.id,
+    batchId: row.batchId,
+    studentNumber: row.studentNumber,
+    scheduleType: row.scheduleType,
     status: row.status,
     clinicId: row.clinicId,
     clinicCode: row.clinicCode,
+    isPublished: row.isPublished,
     latestLog: row.latestNewStatus ? {
       oldStatus: row.latestOldStatus,
       newStatus: row.latestNewStatus,
@@ -159,43 +174,55 @@ export async function changeAppointmentStatusWithClient(
   );
 }
 
-export async function changeAppointmentStatus(id: string, status: AppointmentStatus, notes: string | null, actorUserId: string) {
-  return transaction(async (client) => {
-    const current = await getAppointmentMutationContext(id, client);
-    if (!current) return null;
-    await changeAppointmentStatusWithClient(
-      client,
-      id,
-      current.status,
-      status,
+export async function rescheduleAppointmentWithClient(
+  client: PoolClient,
+  appointment: AppointmentMutationContext,
+  appointmentDate: string,
+  appointmentTime: string | null,
+  notes: string | null,
+  actorUserId: string,
+) {
+  const changed = await client.query(
+    `UPDATE appointments
+        SET status='RESCHEDULED', updated_by=$3
+      WHERE id=$1 AND status=$2 AND is_published=TRUE
+      RETURNING id`,
+    [appointment.id, appointment.status, actorUserId],
+  );
+  if (!changed.rowCount) {
+    throw new AppError("APPOINTMENT_STATUS_CONFLICT", "The appointment status changed. Refresh and try again.", 409);
+  }
+  await client.query(
+    `INSERT INTO appointment_status_logs (
+       appointment_id, old_status, new_status, notes, changed_by
+     ) VALUES ($1,$2,'RESCHEDULED',$3,$4)`,
+    [appointment.id, appointment.status, notes, actorUserId],
+  );
+  const replacement = await client.query<{ id: string }>(
+    `INSERT INTO appointments (
+      batch_id, clinic_id, student_number, schedule_type, appointment_date, appointment_time,
+      status, is_published, notes, rescheduled_from, created_by, updated_by
+    ) VALUES ($1,$2,$3,$4,$5,$6,'PENDING',$7,$8,$9,$10,$10) RETURNING id`,
+    [
+      appointment.batchId,
+      appointment.clinicId,
+      appointment.studentNumber,
+      appointment.scheduleType,
+      appointmentDate,
+      appointmentTime,
+      appointment.isPublished,
       notes,
+      appointment.id,
       actorUserId,
-    );
-    return { oldStatus: current.status };
-  });
-}
-
-export async function rescheduleAppointment(id: string, appointmentDate: string, appointmentTime: string | null, notes: string | null, actorUserId: string) {
-  return transaction(async (client) => {
-    const current = await client.query<{
-      id: string; batch_id: string | null; schedule_item_id: string | null; student_number: string;
-      clinic_id: string; schedule_type: string; status: AppointmentStatus; is_published: boolean;
-    }>(`SELECT id,batch_id,schedule_item_id,clinic_id,student_number,schedule_type,status,is_published
-         FROM appointments WHERE id=$1 AND is_published=TRUE FOR UPDATE`, [id]);
-    if (!current.rows[0]) return null;
-    const row = current.rows[0];
-    await client.query("UPDATE appointments SET status='RESCHEDULED', updated_by=$2 WHERE id=$1", [id, actorUserId]);
-    await client.query("INSERT INTO appointment_status_logs (appointment_id, old_status, new_status, notes, changed_by) VALUES ($1,$2,'RESCHEDULED',$3,$4)", [id, row.status, notes, actorUserId]);
-    const replacement = await client.query<{ id: string }>(
-      `INSERT INTO appointments (
-        batch_id, clinic_id, student_number, schedule_type, appointment_date, appointment_time,
-        status, is_published, notes, rescheduled_from, created_by, updated_by
-      ) VALUES ($1,$2,$3,$4,$5,$6,'PENDING',$7,$8,$9,$10,$10) RETURNING id`,
-      [row.batch_id, row.clinic_id, row.student_number, row.schedule_type, appointmentDate, appointmentTime, row.is_published, notes, id, actorUserId],
-    );
-    await client.query("INSERT INTO appointment_status_logs (appointment_id, old_status, new_status, notes, changed_by) VALUES ($1,NULL,'PENDING',$2,$3)", [replacement.rows[0].id, notes, actorUserId]);
-    return replacement.rows[0].id;
-  });
+    ],
+  );
+  await client.query(
+    `INSERT INTO appointment_status_logs (
+       appointment_id, old_status, new_status, notes, changed_by
+     ) VALUES ($1,NULL,'PENDING',$2,$3)`,
+    [replacement.rows[0].id, notes, actorUserId],
+  );
+  return replacement.rows[0].id;
 }
 
 export async function publishBatch(batchId: string, actorUserId: string, client?: PoolClient) {

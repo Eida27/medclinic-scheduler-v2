@@ -4,22 +4,20 @@ import { AUTOMATIC_NO_SHOW_NOTE } from "@/server/appointments/automatic-no-show"
 import type { SessionUser } from "@/types/roles";
 
 const {
-  changeAppointmentStatus,
   changeAppointmentStatusWithClient,
   getAppointmentMutationContext,
   getPublishedAppointment,
   publishBatch,
-  rescheduleAppointment,
+  rescheduleAppointmentWithClient,
   transaction,
   updateCapacitySetting,
   writeAudit,
 } = vi.hoisted(() => ({
-  changeAppointmentStatus: vi.fn(),
   changeAppointmentStatusWithClient: vi.fn(),
   getAppointmentMutationContext: vi.fn(),
   getPublishedAppointment: vi.fn(),
   publishBatch: vi.fn(),
-  rescheduleAppointment: vi.fn(),
+  rescheduleAppointmentWithClient: vi.fn(),
   transaction: vi.fn(),
   updateCapacitySetting: vi.fn(),
   writeAudit: vi.fn(),
@@ -28,12 +26,11 @@ const {
 vi.mock("@/server/db/pool", () => ({ transaction }));
 vi.mock("@/server/repositories/audit.repository", () => ({ writeAudit }));
 vi.mock("@/server/repositories/appointments.repository", () => ({
-  changeAppointmentStatus,
   changeAppointmentStatusWithClient,
   getAppointmentMutationContext,
   getPublishedAppointment,
   publishBatch,
-  rescheduleAppointment,
+  rescheduleAppointmentWithClient,
   updateCapacitySetting,
 }));
 vi.mock("@/server/repositories/coordinator-schedules.repository", () => ({
@@ -119,9 +116,13 @@ function mutationContext(
 ) {
   return {
     id: appointmentId,
+    batchId: null,
+    studentNumber: "2026-0001",
+    scheduleType: "LABORATORY",
     status,
     clinicId,
     clinicCode: clinicId === laboratoryClinicId ? "KABALAKA_CLINIC" : "CPU_CLINIC",
+    isPublished: true,
     latestLog,
   };
 }
@@ -154,6 +155,7 @@ describe("appointment mutation authorization and automatic no-show correction", 
     getPublishedAppointment.mockResolvedValue(publishedAppointment());
     getAppointmentMutationContext.mockResolvedValue(mutationContext());
     changeAppointmentStatusWithClient.mockResolvedValue(undefined);
+    rescheduleAppointmentWithClient.mockResolvedValue(replacementId);
     writeAudit.mockResolvedValue(undefined);
     transaction.mockImplementation(async (callback: (transactionClient: PoolClient) => Promise<unknown>) => (
       callback(client)
@@ -217,6 +219,41 @@ describe("appointment mutation authorization and automatic no-show correction", 
     expect(writeAudit).not.toHaveBeenCalled();
   });
 
+  it("rejects an ordinary status update when the locked appointment completed after preflight", async () => {
+    getPublishedAppointment.mockResolvedValue(publishedAppointment("PENDING"));
+    getAppointmentMutationContext.mockResolvedValue(mutationContext("COMPLETED"));
+
+    await expect(updateAppointment(appointmentId, {
+      status: "CANCELLED",
+      notes: "Stale cancellation request",
+    }, admin)).rejects.toMatchObject({
+      code: "INVALID_STATUS_TRANSITION",
+      status: 422,
+    });
+
+    expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
+    expect(writeAudit).not.toHaveBeenCalled();
+  });
+
+  it("rejects a mixed dated request when the locked appointment completed after preflight", async () => {
+    getPublishedAppointment.mockResolvedValue(publishedAppointment("PENDING"));
+    getAppointmentMutationContext.mockResolvedValue(mutationContext("COMPLETED"));
+
+    await expect(updateAppointment(appointmentId, {
+      status: "COMPLETED",
+      appointmentDate: "2026-08-19",
+      appointmentTime: "10:00",
+      notes: "Stale reschedule request",
+    }, admin)).rejects.toMatchObject({
+      code: "INVALID_RESCHEDULE",
+      status: 422,
+    });
+
+    expect(rescheduleAppointmentWithClient).not.toHaveBeenCalled();
+    expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
+    expect(writeAudit).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["pending", "PENDING" as const, null],
     ["manual no-show", "NO_SHOW" as const, {
@@ -245,8 +282,6 @@ describe("appointment mutation authorization and automatic no-show correction", 
       laboratoryClinicId,
       latestLog,
     ));
-    rescheduleAppointment.mockResolvedValue(replacementId);
-
     await expect(updateAppointment(appointmentId, {
       status: "COMPLETED",
       appointmentDate: "2026-08-19",
@@ -254,8 +289,9 @@ describe("appointment mutation authorization and automatic no-show correction", 
       notes: "Student requested a replacement",
     }, admin)).resolves.toEqual(replacement);
 
-    expect(rescheduleAppointment).toHaveBeenCalledWith(
-      appointmentId,
+    expect(rescheduleAppointmentWithClient).toHaveBeenCalledWith(
+      client,
+      mutationContext(status, laboratoryClinicId, latestLog),
       "2026-08-19",
       "10:00",
       "Student requested a replacement",
@@ -267,8 +303,9 @@ describe("appointment mutation authorization and automatic no-show correction", 
       "appointment",
       appointmentId,
       { replacementId, appointmentDate: "2026-08-19" },
+      client,
     );
-    expect(transaction).not.toHaveBeenCalled();
+    expect(transaction).toHaveBeenCalledOnce();
     expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
   });
 
@@ -395,8 +432,9 @@ describe("appointment mutation authorization and automatic no-show correction", 
       code: "FORBIDDEN",
       status: 403,
     });
-    expect(changeAppointmentStatus).not.toHaveBeenCalled();
-    expect(rescheduleAppointment).not.toHaveBeenCalled();
+    expect(transaction).not.toHaveBeenCalled();
+    expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
+    expect(rescheduleAppointmentWithClient).not.toHaveBeenCalled();
     expect(writeAudit).not.toHaveBeenCalled();
   });
 });

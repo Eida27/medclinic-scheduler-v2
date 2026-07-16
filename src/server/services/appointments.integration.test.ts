@@ -30,6 +30,15 @@ const laboratoryStaff = {
   clinicCode: "KABALAKA_CLINIC",
   clinicName: "KABALAKA Clinic",
 } satisfies SessionUser;
+const coordinator = {
+  userId: "00000000-0000-4000-8000-000000000003",
+  fullName: "Schedule Coordinator",
+  email: "coordinator@medclinic.local",
+  role: "COORDINATOR",
+  clinicId: null,
+  clinicCode: null,
+  clinicName: null,
+} satisfies SessionUser;
 const studentNumber = "TEST-APPT-0001";
 const correctionStudentNumbers = [
   "TEST-APPT-AUTO-ADMIN",
@@ -38,6 +47,8 @@ const correctionStudentNumbers = [
   "TEST-APPT-AUTO-CROSS",
   "TEST-APPT-MANUAL",
   "TEST-APPT-MIX-MANUAL",
+  "TEST-APPT-COORD",
+  "TEST-APPT-FINAL",
 ];
 
 async function insertNoShowAppointment({
@@ -78,6 +89,30 @@ async function insertNoShowAppointment({
     );
   }
   return appointmentId;
+}
+
+async function appointmentMutationSnapshot(appointmentId: string) {
+  const appointment = await pool.query(
+    `SELECT status, notes, updated_by AS "updatedBy"
+       FROM appointments
+      WHERE id=$1`,
+    [appointmentId],
+  );
+  const history = await pool.query(
+    `SELECT old_status AS "oldStatus", new_status AS "newStatus", notes, changed_by AS "changedBy"
+       FROM appointment_status_logs
+      WHERE appointment_id=$1
+      ORDER BY created_at, id`,
+    [appointmentId],
+  );
+  const audit = await pool.query(
+    `SELECT action, metadata
+       FROM audit_logs
+      WHERE entity_type='appointment' AND entity_id=$1
+      ORDER BY created_at, id`,
+    [appointmentId],
+  );
+  return { appointment: appointment.rows, history: history.rows, audit: audit.rows };
 }
 
 beforeAll(async () => {
@@ -158,6 +193,66 @@ describe("appointment lifecycle", () => {
       "SELECT status FROM appointments WHERE id=$1",
       [appointmentId],
     )).resolves.toMatchObject({ rows: [{ status: "RESCHEDULED" }] });
+  });
+
+  it("rejects coordinator updates without changing the appointment, history, or audit", async () => {
+    const inserted = await pool.query<{ id: string }>(
+      `INSERT INTO appointments (
+         clinic_id, student_number, schedule_type, appointment_date,
+         status, is_published, notes, created_by, updated_by
+       ) VALUES ($1,'TEST-APPT-COORD','LABORATORY','2045-01-20',
+                 'PENDING',TRUE,'Coordinator guard fixture',$2,$2)
+       RETURNING id`,
+      [TEST_REFERENCE_IDS.laboratoryClinic, TEST_REFERENCE_IDS.adminUser],
+    );
+    const appointmentId = inserted.rows[0].id;
+    await pool.query(
+      `INSERT INTO appointment_status_logs (
+         appointment_id, old_status, new_status, notes, changed_by
+       ) VALUES ($1,'DRAFT','PENDING','Published for coordinator guard',$2)`,
+      [appointmentId, TEST_REFERENCE_IDS.adminUser],
+    );
+    const before = await appointmentMutationSnapshot(appointmentId);
+
+    await expect(updateAppointment(appointmentId, {
+      status: "CANCELLED",
+      notes: "Coordinator must not mutate appointments",
+    }, coordinator)).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+
+    await expect(appointmentMutationSnapshot(appointmentId)).resolves.toEqual(before);
+  });
+
+  it("keeps a completed appointment final for ordinary and mixed dated updates", async () => {
+    const inserted = await pool.query<{ id: string }>(
+      `INSERT INTO appointments (
+         clinic_id, student_number, schedule_type, appointment_date,
+         status, is_published, notes, created_by, updated_by
+       ) VALUES ($1,'TEST-APPT-FINAL','LABORATORY','2045-01-21',
+                 'COMPLETED',TRUE,'Completed appointment fixture',$2,$2)
+       RETURNING id`,
+      [TEST_REFERENCE_IDS.laboratoryClinic, TEST_REFERENCE_IDS.adminUser],
+    );
+    const appointmentId = inserted.rows[0].id;
+    await pool.query(
+      `INSERT INTO appointment_status_logs (
+         appointment_id, old_status, new_status, notes, changed_by
+       ) VALUES ($1,'PENDING','COMPLETED','Visit completed',$2)`,
+      [appointmentId, TEST_REFERENCE_IDS.adminUser],
+    );
+    const before = await appointmentMutationSnapshot(appointmentId);
+
+    await expect(updateAppointment(appointmentId, {
+      status: "CANCELLED",
+      notes: "Must remain completed",
+    }, admin)).rejects.toMatchObject({ code: "INVALID_STATUS_TRANSITION", status: 422 });
+    await expect(updateAppointment(appointmentId, {
+      status: "CANCELLED",
+      appointmentDate: "2045-01-22",
+      appointmentTime: "10:00",
+      notes: "Must not be replaced",
+    }, admin)).rejects.toMatchObject({ code: "INVALID_RESCHEDULE", status: 422 });
+
+    await expect(appointmentMutationSnapshot(appointmentId)).resolves.toEqual(before);
   });
 
   it("atomically corrects an automatic no-show and records correction audit metadata", async () => {

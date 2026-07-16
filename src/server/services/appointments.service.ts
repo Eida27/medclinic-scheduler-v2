@@ -6,8 +6,8 @@ import { isAutomaticNoShowLog } from "@/server/appointments/automatic-no-show";
 import { transaction } from "@/server/db/pool";
 import { writeAudit } from "@/server/repositories/audit.repository";
 import {
-  changeAppointmentStatus, changeAppointmentStatusWithClient, getAppointmentMutationContext,
-  getPublishedAppointment, publishBatch, rescheduleAppointment, updateCapacitySetting,
+  changeAppointmentStatusWithClient, getAppointmentMutationContext, getPublishedAppointment,
+  publishBatch, rescheduleAppointmentWithClient, updateCapacitySetting,
   type AppointmentMutationContext, type AppointmentStatus,
 } from "@/server/repositories/appointments.repository";
 import { getScheduleBatch } from "@/server/repositories/coordinator-schedules.repository";
@@ -80,10 +80,33 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
   const input = appointmentUpdateSchema.parse(raw);
   assertAppointmentMutationAuthorized(actor, current);
   if (input.appointmentDate) {
-    if (!["PENDING", "NO_SHOW"].includes(String(current.status))) throw new AppError("INVALID_RESCHEDULE", "Only pending or no-show appointments can be rescheduled.", 422);
+    const appointmentDate = input.appointmentDate;
     try {
-      const replacementId = await rescheduleAppointment(id, input.appointmentDate, input.appointmentTime || null, input.notes?.trim() || null, actor.userId);
-      await writeAudit(actor.userId, "APPOINTMENT_RESCHEDULED", "appointment", id, { replacementId, appointmentDate: input.appointmentDate });
+      const replacementId = await transaction(async (client) => {
+        const appointment = await getAppointmentMutationContext(id, client);
+        if (!appointment) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
+        assertAppointmentMutationAuthorized(actor, appointment);
+        if (!["PENDING", "NO_SHOW"].includes(appointment.status)) {
+          throw new AppError("INVALID_RESCHEDULE", "Only pending or no-show appointments can be rescheduled.", 422);
+        }
+        const replacementAppointmentId = await rescheduleAppointmentWithClient(
+          client,
+          appointment,
+          appointmentDate,
+          input.appointmentTime || null,
+          input.notes?.trim() || null,
+          actor.userId,
+        );
+        await writeAudit(
+          actor.userId,
+          "APPOINTMENT_RESCHEDULED",
+          "appointment",
+          id,
+          { replacementId: replacementAppointmentId, appointmentDate },
+          client,
+        );
+        return replacementAppointmentId;
+      });
       return getPublishedAppointment(String(replacementId));
     } catch (error) {
       if (isPostgresUniqueViolation(error)) throw new AppError("ACTIVE_APPOINTMENT_EXISTS", "The student already has an active appointment for this service.", 409);
@@ -114,9 +137,29 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
     return getPublishedAppointment(id);
   }
   if (input.status) {
-    assertStatusTransition(current.status as AppointmentStatus, input.status);
-    await changeAppointmentStatus(id, input.status, input.notes?.trim() || null, actor.userId);
-    await writeAudit(actor.userId, "APPOINTMENT_STATUS_CHANGED", "appointment", id, { oldStatus: current.status, newStatus: input.status });
+    const requestedStatus = input.status;
+    await transaction(async (client) => {
+      const appointment = await getAppointmentMutationContext(id, client);
+      if (!appointment) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
+      assertAppointmentMutationAuthorized(actor, appointment);
+      assertStatusTransition(appointment.status, requestedStatus);
+      await changeAppointmentStatusWithClient(
+        client,
+        id,
+        appointment.status,
+        requestedStatus,
+        input.notes?.trim() || null,
+        actor.userId,
+      );
+      await writeAudit(
+        actor.userId,
+        "APPOINTMENT_STATUS_CHANGED",
+        "appointment",
+        id,
+        { oldStatus: appointment.status, newStatus: requestedStatus },
+        client,
+      );
+    });
   }
   return getPublishedAppointment(id);
 }
