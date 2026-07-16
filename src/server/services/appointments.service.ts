@@ -78,6 +78,17 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
   if (!current) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
   const input = appointmentUpdateSchema.parse(raw);
   assertAppointmentMutationAuthorized(actor, current);
+  if (input.appointmentDate) {
+    if (!["PENDING", "NO_SHOW"].includes(String(current.status))) throw new AppError("INVALID_RESCHEDULE", "Only pending or no-show appointments can be rescheduled.", 422);
+    try {
+      const replacementId = await rescheduleAppointment(id, input.appointmentDate, input.appointmentTime || null, input.notes?.trim() || null, actor.userId);
+      await writeAudit(actor.userId, "APPOINTMENT_RESCHEDULED", "appointment", id, { replacementId, appointmentDate: input.appointmentDate });
+      return getPublishedAppointment(String(replacementId));
+    } catch (error) {
+      if (isPostgresUniqueViolation(error)) throw new AppError("ACTIVE_APPOINTMENT_EXISTS", "The student already has an active appointment for this service.", 409);
+      throw error;
+    }
+  }
   if (input.status === "COMPLETED") {
     await transaction(async (client) => {
       const appointment = await completeAppointmentWithClient(id, actor, input.notes, client);
@@ -99,17 +110,6 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
       );
     });
     return getPublishedAppointment(id);
-  }
-  if (input.appointmentDate) {
-    if (!["PENDING", "NO_SHOW"].includes(String(current.status))) throw new AppError("INVALID_RESCHEDULE", "Only pending or no-show appointments can be rescheduled.", 422);
-    try {
-      const replacementId = await rescheduleAppointment(id, input.appointmentDate, input.appointmentTime || null, input.notes?.trim() || null, actor.userId);
-      await writeAudit(actor.userId, "APPOINTMENT_RESCHEDULED", "appointment", id, { replacementId, appointmentDate: input.appointmentDate });
-      return getPublishedAppointment(String(replacementId));
-    } catch (error) {
-      if (isPostgresUniqueViolation(error)) throw new AppError("ACTIVE_APPOINTMENT_EXISTS", "The student already has an active appointment for this service.", 409);
-      throw error;
-    }
   }
   if (input.status) {
     assertStatusTransition(current.status as AppointmentStatus, input.status);

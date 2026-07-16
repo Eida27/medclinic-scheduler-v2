@@ -37,6 +37,7 @@ const correctionStudentNumbers = [
   "TEST-APPT-AUTO-BLANK",
   "TEST-APPT-AUTO-CROSS",
   "TEST-APPT-MANUAL",
+  "TEST-APPT-MIX-MANUAL",
 ];
 
 async function insertNoShowAppointment({
@@ -125,12 +126,38 @@ describe("appointment lifecycle", () => {
 
     const current = await pool.query<{ id: string }>("SELECT id FROM appointments WHERE batch_id=$1", [batchId]);
     const replacement = await updateAppointment(current.rows[0].id, {
+      status: "COMPLETED",
       appointmentDate: "2026-08-06", appointmentTime: "09:00", notes: "Student conflict",
     }, admin);
     expect(replacement?.status).toBe("PENDING");
     expect(replacement?.rescheduledFrom).toBe(current.rows[0].id);
     const logs = await pool.query("SELECT new_status FROM appointment_status_logs WHERE appointment_id IN ($1,$2)", [current.rows[0].id, replacement?.id]);
     expect(logs.rows.map((row) => row.new_status)).toEqual(expect.arrayContaining(["PENDING", "RESCHEDULED"]));
+  });
+
+  it("reschedules a manual no-show when a mixed request also carries completed status", async () => {
+    const appointmentId = await insertNoShowAppointment({
+      studentNumber: "TEST-APPT-MIX-MANUAL",
+      manualLatest: true,
+    });
+
+    const replacement = await updateAppointment(appointmentId, {
+      status: "COMPLETED",
+      appointmentDate: "2045-01-15",
+      appointmentTime: "10:00",
+      notes: "Student requested a replacement",
+    }, admin);
+
+    expect(replacement).toMatchObject({
+      status: "PENDING",
+      rescheduledFrom: appointmentId,
+      appointmentDate: "2045-01-15",
+      appointmentTime: "10:00:00",
+    });
+    await expect(pool.query(
+      "SELECT status FROM appointments WHERE id=$1",
+      [appointmentId],
+    )).resolves.toMatchObject({ rows: [{ status: "RESCHEDULED" }] });
   });
 
   it("atomically corrects an automatic no-show and records correction audit metadata", async () => {

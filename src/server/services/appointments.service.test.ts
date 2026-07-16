@@ -43,6 +43,7 @@ vi.mock("@/server/repositories/coordinator-schedules.repository", () => ({
 import { assertStatusTransition, updateAppointment } from "./appointments.service";
 
 const appointmentId = "11111111-1111-4111-8111-111111111111";
+const replacementId = "22222222-2222-4222-8222-222222222222";
 const laboratoryClinicId = "60000000-0000-4000-8000-000000000001";
 const physicalExamClinicId = "60000000-0000-4000-8000-000000000002";
 const client = { query: vi.fn() } as unknown as PoolClient;
@@ -180,6 +181,61 @@ describe("appointment mutation authorization and automatic no-show correction", 
       },
       client,
     );
+  });
+
+  it.each([
+    ["pending", "PENDING" as const, null],
+    ["manual no-show", "NO_SHOW" as const, {
+      ...automaticNoShowLog,
+      notes: "Marked manually",
+      changedById: admin.userId,
+    }],
+  ])("keeps reschedule-first behavior for a mixed completed request on a %s appointment", async (
+    _,
+    status,
+    latestLog,
+  ) => {
+    const current = publishedAppointment(status);
+    const replacement = {
+      ...publishedAppointment("PENDING"),
+      id: replacementId,
+      appointmentDate: "2026-08-19",
+      appointmentTime: "10:00:00",
+      rescheduledFrom: appointmentId,
+    };
+    getPublishedAppointment
+      .mockResolvedValueOnce(current)
+      .mockResolvedValueOnce(replacement);
+    getAppointmentMutationContext.mockResolvedValue(mutationContext(
+      status,
+      laboratoryClinicId,
+      latestLog,
+    ));
+    rescheduleAppointment.mockResolvedValue(replacementId);
+
+    await expect(updateAppointment(appointmentId, {
+      status: "COMPLETED",
+      appointmentDate: "2026-08-19",
+      appointmentTime: "10:00",
+      notes: "Student requested a replacement",
+    }, admin)).resolves.toEqual(replacement);
+
+    expect(rescheduleAppointment).toHaveBeenCalledWith(
+      appointmentId,
+      "2026-08-19",
+      "10:00",
+      "Student requested a replacement",
+      admin.userId,
+    );
+    expect(writeAudit).toHaveBeenCalledWith(
+      admin.userId,
+      "APPOINTMENT_RESCHEDULED",
+      "appointment",
+      appointmentId,
+      { replacementId, appointmentDate: "2026-08-19" },
+    );
+    expect(transaction).not.toHaveBeenCalled();
+    expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
   });
 
   it("lets an administrator correct a canonical automatic no-show when a reason is supplied", async () => {
