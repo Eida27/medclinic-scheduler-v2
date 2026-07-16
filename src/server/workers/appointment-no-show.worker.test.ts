@@ -17,7 +17,7 @@ describe("startAppointmentNoShowWorker", () => {
     const sweep = vi.fn().mockResolvedValue(undefined);
     const unref = vi.fn();
     let intervalCallback: (() => void) | undefined;
-    const schedule = vi.fn((callback: () => void, _intervalMs: number) => {
+    const schedule = vi.fn((callback: () => void) => {
       intervalCallback = callback;
       return { unref };
     });
@@ -50,7 +50,7 @@ describe("startAppointmentNoShowWorker", () => {
       .mockResolvedValueOnce(undefined);
     const reportError = vi.fn();
     let intervalCallback: (() => void) | undefined;
-    const schedule = vi.fn((callback: () => void, _intervalMs: number) => {
+    const schedule = vi.fn((callback: () => void) => {
       intervalCallback = callback;
       return {};
     });

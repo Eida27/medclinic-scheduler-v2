@@ -166,6 +166,15 @@ The pure scheduling rules live under `src/server/rule-engine`. Route handlers do
 
 ## Local Network Deployment
 
+### Automatic no-show reconciliation
+
+- The application checks overdue published appointments when the server starts and every five minutes while it remains running.
+- Timed appointments become no-show 24 hours after their scheduled time in `APP_TIMEZONE`.
+- Date-only appointments receive the full scheduled day plus the following 24 hours; a July 10 appointment becomes eligible at July 12, 12:00 AM.
+- Completing a linked result also completes its appointment.
+- Administrators and assigned clinic staff can correct a system-generated no-show with a required reason; manual no-shows cannot be corrected to completed.
+- Downtime does not lose transitions: the startup sweep catches up when the server returns.
+
 Build and serve the production application:
 
 ```powershell
