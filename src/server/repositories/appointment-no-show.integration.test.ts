@@ -1,13 +1,30 @@
 // @vitest-environment node
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { PoolClient } from "pg";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const transactionSeam = vi.hoisted(() => ({
+  client: null as PoolClient | null,
+}));
+
+vi.mock("@/server/db/pool", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/db/pool")>();
+
+  return {
+    ...actual,
+    transaction: async <T>(callback: (client: PoolClient) => Promise<T>) => {
+      if (transactionSeam.client) return callback(transactionSeam.client);
+      return actual.transaction(callback);
+    },
+  };
+});
+
 import {
   AUTOMATIC_NO_SHOW_NOTE,
   isAutomaticNoShowLog,
 } from "@/server/appointments/automatic-no-show";
-import { pool } from "@/server/db/pool";
+import { pool, transaction } from "@/server/db/pool";
 import {
   cleanupTestFixtures,
-  insertTestStudent,
   TEST_REFERENCE_IDS,
 } from "@/test/integration-fixtures";
 import { markOverdueAppointmentsNoShow } from "./appointment-no-show.repository";
@@ -28,37 +45,33 @@ type FixtureAppointment = {
   notes?: string;
 };
 
-type SweepSnapshot = {
-  appointments: Array<{
-    id: string;
-    updatedBy: string | null;
-    updatedAt: Date;
-  }>;
-  existingAutomaticLogIds: string[];
-};
-
-let sweepSnapshot: SweepSnapshot | null = null;
-
-async function insertFixtureAppointment({
-  studentNumber,
-  scheduleType,
-  appointmentDate,
-  appointmentTime = null,
-  status = "PENDING",
-  isPublished = true,
-  notes = `Keep ${studentNumber}`,
-}: FixtureAppointment) {
-  await insertTestStudent({
+async function insertFixtureAppointment(
+  client: PoolClient,
+  {
     studentNumber,
-    firstName: "Automatic",
-    lastName: "NoShow",
-    yearLevel: 4,
-  });
+    scheduleType,
+    appointmentDate,
+    appointmentTime = null,
+    status = "PENDING",
+    isPublished = true,
+    notes = `Keep ${studentNumber}`,
+  }: FixtureAppointment,
+) {
+  await client.query(
+    `INSERT INTO students (
+       student_number, first_name, last_name, college_id, program_id, year_level
+     ) VALUES ($1,'Automatic','NoShow',$2,$3,4)`,
+    [
+      studentNumber,
+      TEST_REFERENCE_IDS.college,
+      TEST_REFERENCE_IDS.program,
+    ],
+  );
 
   const clinicId = scheduleType === "LABORATORY"
     ? TEST_REFERENCE_IDS.laboratoryClinic
     : TEST_REFERENCE_IDS.physicalExamClinic;
-  const result = await pool.query<{ id: string }>(
+  const result = await client.query<{ id: string }>(
     `INSERT INTO appointments (
        clinic_id, student_number, schedule_type, appointment_date, appointment_time,
        status, is_published, notes, created_by, updated_by
@@ -79,111 +92,43 @@ async function insertFixtureAppointment({
   return result.rows[0].id;
 }
 
-async function appointmentState(id: string) {
+async function appointmentState(client: PoolClient, id: string) {
+  return (await client.query<{ status: string; notes: string | null }>(
+    "SELECT status, notes FROM appointments WHERE id=$1",
+    [id],
+  )).rows[0];
+}
+
+async function persistedAppointmentState(id: string) {
   return (await pool.query<{ status: string; notes: string | null }>(
     "SELECT status, notes FROM appointments WHERE id=$1",
     [id],
   )).rows[0];
 }
 
-async function captureSweepState() {
-  const appointments = await pool.query<{
-    id: string;
-    updatedBy: string | null;
-    updatedAt: Date;
-  }>(
-    `SELECT id, updated_by AS "updatedBy", updated_at AS "updatedAt"
-       FROM appointments
-      WHERE is_published=TRUE
-        AND status='PENDING'
-        AND schedule_type IN ('LABORATORY','PHYSICAL_EXAM')`,
-  );
-  const appointmentIds = appointments.rows.map((appointment) => appointment.id);
-  const existingLogs = await pool.query<{ id: string }>(
-    `SELECT id
-       FROM appointment_status_logs
-      WHERE appointment_id = ANY($1::uuid[])
-        AND old_status='PENDING'
-        AND new_status='NO_SHOW'
-        AND notes=$2
-        AND changed_by IS NULL`,
-    [appointmentIds, AUTOMATIC_NO_SHOW_NOTE],
-  );
-
-  sweepSnapshot = {
-    appointments: appointments.rows,
-    existingAutomaticLogIds: existingLogs.rows.map((log) => log.id),
-  };
-}
-
-async function restoreSweepState() {
-  if (!sweepSnapshot) return;
-
+async function withRollbackTransaction<T>(
+  callback: (client: PoolClient) => Promise<T>,
+) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const appointmentIds = sweepSnapshot.appointments.map((appointment) => appointment.id);
-    const generatedLogs = await client.query<{ id: string; appointmentId: string }>(
-      `SELECT id, appointment_id AS "appointmentId"
-         FROM appointment_status_logs
-        WHERE appointment_id = ANY($1::uuid[])
-          AND old_status='PENDING'
-          AND new_status='NO_SHOW'
-          AND notes=$2
-          AND changed_by IS NULL
-          AND NOT (id = ANY($3::uuid[]))`,
-      [appointmentIds, AUTOMATIC_NO_SHOW_NOTE, sweepSnapshot.existingAutomaticLogIds],
-    );
-    const changedAppointmentIds = new Set(
-      generatedLogs.rows.map((log) => log.appointmentId),
-    );
-    const changedAppointments = sweepSnapshot.appointments.filter(
-      (appointment) => changedAppointmentIds.has(appointment.id),
-    );
-
-    if (changedAppointments.length > 0) {
-      await client.query("SET LOCAL session_replication_role = replica");
-      await client.query(
-        `UPDATE appointments appointment
-            SET status='PENDING',
-                updated_by=restore.updated_by,
-                updated_at=restore.updated_at
-           FROM UNNEST($1::uuid[], $2::uuid[], $3::timestamptz[])
-             AS restore(id, updated_by, updated_at)
-          WHERE appointment.id=restore.id`,
-        [
-          changedAppointments.map((appointment) => appointment.id),
-          changedAppointments.map((appointment) => appointment.updatedBy),
-          changedAppointments.map((appointment) => appointment.updatedAt),
-        ],
-      );
-      await client.query(
-        "DELETE FROM appointment_status_logs WHERE id = ANY($1::uuid[])",
-        [generatedLogs.rows.map((log) => log.id)],
-      );
-    }
-
-    await client.query("COMMIT");
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
+    transactionSeam.client = client;
+    return await callback(client);
   } finally {
+    transactionSeam.client = null;
+    await client.query("ROLLBACK");
     client.release();
-    sweepSnapshot = null;
   }
 }
 
 beforeEach(async () => {
-  sweepSnapshot = null;
+  transactionSeam.client = null;
   await cleanupTestFixtures(studentPattern, batchPattern);
 });
 
 afterEach(async () => {
-  try {
-    await restoreSweepState();
-  } finally {
-    await cleanupTestFixtures(studentPattern, batchPattern);
-  }
+  transactionSeam.client = null;
+  await cleanupTestFixtures(studentPattern, batchPattern);
 });
 
 afterAll(async () => {
@@ -219,124 +164,167 @@ describe("isAutomaticNoShowLog", () => {
 
 describe("markOverdueAppointmentsNoShow", () => {
   it("transitions only published pending appointments at the inclusive Manila boundary", async () => {
-    const dateOnlyId = await insertFixtureAppointment({
-      studentNumber: "TEST-AUTO-NS-DATE",
-      scheduleType: "LABORATORY",
-      appointmentDate: "2045-01-10",
-      notes: "Keep date-only note",
-    });
-    const timedId = await insertFixtureAppointment({
-      studentNumber: "TEST-AUTO-NS-TIMED",
-      scheduleType: "PHYSICAL_EXAM",
-      appointmentDate: "2045-01-10",
-      appointmentTime: "09:00:00",
-      notes: "Keep timed note",
-    });
-    const unchangedFixtures = [
-      { studentNumber: "TEST-AUTO-NS-DRAFT", status: "DRAFT", isPublished: false },
-      { studentNumber: "TEST-AUTO-NS-UNPUB", status: "PENDING", isPublished: false },
-      { studentNumber: "TEST-AUTO-NS-COMP", status: "COMPLETED", isPublished: true },
-      { studentNumber: "TEST-AUTO-NS-CANCEL", status: "CANCELLED", isPublished: true },
-      { studentNumber: "TEST-AUTO-NS-RESCHED", status: "RESCHEDULED", isPublished: true },
-      { studentNumber: "TEST-AUTO-NS-NOSHOW", status: "NO_SHOW", isPublished: true },
-    ] as const;
-    const unchangedIds = new Map<string, string>();
-    for (const fixture of unchangedFixtures) {
-      unchangedIds.set(fixture.studentNumber, await insertFixtureAppointment({
-        ...fixture,
+    const unrelated = await pool.query<{ id: string }>(
+      `SELECT id
+         FROM appointments
+        WHERE student_number NOT LIKE $1
+          AND is_published=TRUE
+          AND status='PENDING'
+          AND schedule_type IN ('LABORATORY','PHYSICAL_EXAM')
+          AND appointment_date < '2045-01-01'
+        ORDER BY appointment_date, id
+        LIMIT 1`,
+      [studentPattern],
+    );
+    expect(unrelated.rows).toHaveLength(1);
+
+    await withRollbackTransaction(async (client) => {
+      const dateOnlyId = await insertFixtureAppointment(client, {
+        studentNumber: "TEST-AUTO-NS-DATE",
         scheduleType: "LABORATORY",
-        appointmentDate: "2045-01-01",
-      }));
-    }
-
-    await captureSweepState();
-
-    const beforeTimed = await markOverdueAppointmentsNoShow(
-      new Date(timedBoundary.getTime() - 1),
-      timeZone,
-    );
-    expect(beforeTimed.appointmentIds).not.toContain(timedId);
-    expect(await appointmentState(timedId)).toMatchObject({ status: "PENDING" });
-
-    expect(await markOverdueAppointmentsNoShow(timedBoundary, timeZone)).toEqual({
-      count: 1,
-      appointmentIds: [timedId],
-    });
-    expect(await appointmentState(timedId)).toEqual({
-      status: "NO_SHOW",
-      notes: "Keep timed note",
-    });
-
-    const beforeDateOnly = await markOverdueAppointmentsNoShow(
-      new Date(dateOnlyBoundary.getTime() - 1),
-      timeZone,
-    );
-    expect(beforeDateOnly.appointmentIds).not.toContain(dateOnlyId);
-    expect(await appointmentState(dateOnlyId)).toMatchObject({ status: "PENDING" });
-
-    expect(await markOverdueAppointmentsNoShow(dateOnlyBoundary, timeZone)).toEqual({
-      count: 1,
-      appointmentIds: [dateOnlyId],
-    });
-    expect(await appointmentState(dateOnlyId)).toEqual({
-      status: "NO_SHOW",
-      notes: "Keep date-only note",
-    });
-
-    for (const fixture of unchangedFixtures) {
-      const state = await appointmentState(unchangedIds.get(fixture.studentNumber)!);
-      expect(state).toMatchObject({
-        status: fixture.status,
-        notes: `Keep ${fixture.studentNumber}`,
+        appointmentDate: "2045-01-10",
+        notes: "Keep date-only note",
       });
-    }
+      const timedId = await insertFixtureAppointment(client, {
+        studentNumber: "TEST-AUTO-NS-TIMED",
+        scheduleType: "PHYSICAL_EXAM",
+        appointmentDate: "2045-01-10",
+        appointmentTime: "09:00:00",
+        notes: "Keep timed note",
+      });
+      const unchangedFixtures = [
+        { studentNumber: "TEST-AUTO-NS-DRAFT", status: "DRAFT", isPublished: true },
+        { studentNumber: "TEST-AUTO-NS-UNPUB", status: "PENDING", isPublished: false },
+        { studentNumber: "TEST-AUTO-NS-COMP", status: "COMPLETED", isPublished: true },
+        { studentNumber: "TEST-AUTO-NS-CANCEL", status: "CANCELLED", isPublished: true },
+        { studentNumber: "TEST-AUTO-NS-RESCHED", status: "RESCHEDULED", isPublished: true },
+        { studentNumber: "TEST-AUTO-NS-NOSHOW", status: "NO_SHOW", isPublished: true },
+      ] as const;
+      const unchangedIds = new Map<string, string>();
+      for (const fixture of unchangedFixtures) {
+        unchangedIds.set(fixture.studentNumber, await insertFixtureAppointment(client, {
+          ...fixture,
+          scheduleType: "LABORATORY",
+          appointmentDate: "2045-01-01",
+        }));
+      }
 
-    const fixtureIds = [dateOnlyId, timedId, ...unchangedIds.values()];
+      const beforeTimed = await markOverdueAppointmentsNoShow(
+        new Date(timedBoundary.getTime() - 1),
+        timeZone,
+      );
+      expect(beforeTimed.appointmentIds).not.toContain(timedId);
+      expect(await appointmentState(client, timedId)).toMatchObject({ status: "PENDING" });
+      expect(await persistedAppointmentState(unrelated.rows[0].id)).toMatchObject({
+        status: "PENDING",
+      });
+
+      expect(await markOverdueAppointmentsNoShow(timedBoundary, timeZone)).toEqual({
+        count: 1,
+        appointmentIds: [timedId],
+      });
+      expect(await appointmentState(client, timedId)).toEqual({
+        status: "NO_SHOW",
+        notes: "Keep timed note",
+      });
+
+      const beforeDateOnly = await markOverdueAppointmentsNoShow(
+        new Date(dateOnlyBoundary.getTime() - 1),
+        timeZone,
+      );
+      expect(beforeDateOnly).toEqual({ count: 0, appointmentIds: [] });
+      expect(await appointmentState(client, dateOnlyId)).toMatchObject({ status: "PENDING" });
+
+      expect(await markOverdueAppointmentsNoShow(dateOnlyBoundary, timeZone)).toEqual({
+        count: 1,
+        appointmentIds: [dateOnlyId],
+      });
+      expect(await appointmentState(client, dateOnlyId)).toEqual({
+        status: "NO_SHOW",
+        notes: "Keep date-only note",
+      });
+
+      for (const fixture of unchangedFixtures) {
+        const state = await appointmentState(client, unchangedIds.get(fixture.studentNumber)!);
+        expect(state).toMatchObject({
+          status: fixture.status,
+          notes: `Keep ${fixture.studentNumber}`,
+        });
+      }
+
+      const fixtureIds = [dateOnlyId, timedId, ...unchangedIds.values()];
+      const logs = await client.query<{
+        appointmentId: string;
+        oldStatus: string | null;
+        newStatus: string;
+        notes: string | null;
+        changedById: string | null;
+      }>(
+        `SELECT appointment_id AS "appointmentId", old_status AS "oldStatus",
+                new_status AS "newStatus", notes, changed_by AS "changedById"
+           FROM appointment_status_logs
+          WHERE appointment_id = ANY($1::uuid[])
+          ORDER BY appointment_id`,
+        [fixtureIds],
+      );
+
+      expect(logs.rows).toHaveLength(2);
+      expect(logs.rows.map((log) => log.appointmentId).sort()).toEqual(
+        [dateOnlyId, timedId].sort(),
+      );
+      expect(logs.rows.every((log) => isAutomaticNoShowLog(log))).toBe(true);
+    });
+
+    expect(await persistedAppointmentState(unrelated.rows[0].id)).toMatchObject({
+      status: "PENDING",
+    });
+    const rolledBackFixtures = await pool.query<{ count: number }>(
+      "SELECT COUNT(*)::int AS count FROM students WHERE student_number LIKE $1",
+      [studentPattern],
+    );
+    expect(rolledBackFixtures.rows[0].count).toBe(0);
+  });
+
+  it("updates and logs one eligible appointment only once across concurrent sweeps", async () => {
+    const fixtureDate = await pool.query<{ appointmentDate: string | null }>(
+      `SELECT (MIN(appointment_date) - 2)::text AS "appointmentDate"
+         FROM appointments
+        WHERE student_number NOT LIKE $1`,
+      [studentPattern],
+    );
+    expect(fixtureDate.rows[0].appointmentDate).not.toBeNull();
+    const appointmentDate = fixtureDate.rows[0].appointmentDate!;
+    const appointmentId = await transaction((client) => insertFixtureAppointment(client, {
+      studentNumber: "TEST-AUTO-NS-RACE",
+      scheduleType: "PHYSICAL_EXAM",
+      appointmentDate,
+      appointmentTime: "09:00:00",
+      notes: "Keep race note",
+    }));
+    const boundary = await pool.query<{ boundary: Date }>(
+      `SELECT (($1::date + $2::time) AT TIME ZONE $3) + INTERVAL '24 hours' AS boundary`,
+      [appointmentDate, "09:00:00", timeZone],
+    );
+    const concurrencyBoundary = boundary.rows[0].boundary;
+
+    expect(await markOverdueAppointmentsNoShow(
+      new Date(concurrencyBoundary.getTime() - 1),
+      timeZone,
+    )).toEqual({ count: 0, appointmentIds: [] });
+    expect(await persistedAppointmentState(appointmentId)).toMatchObject({ status: "PENDING" });
+
+    const sweeps = await Promise.all([
+      markOverdueAppointmentsNoShow(concurrencyBoundary, timeZone),
+      markOverdueAppointmentsNoShow(concurrencyBoundary, timeZone),
+    ]);
     const logs = await pool.query<{
-      appointmentId: string;
       oldStatus: string | null;
       newStatus: string;
       notes: string | null;
       changedById: string | null;
     }>(
-      `SELECT appointment_id AS "appointmentId", old_status AS "oldStatus",
-              new_status AS "newStatus", notes, changed_by AS "changedById"
-         FROM appointment_status_logs
-        WHERE appointment_id = ANY($1::uuid[])
-        ORDER BY appointment_id`,
-      [fixtureIds],
-    );
-
-    expect(logs.rows).toHaveLength(2);
-    expect(logs.rows.map((log) => log.appointmentId).sort()).toEqual(
-      [dateOnlyId, timedId].sort(),
-    );
-    expect(logs.rows.every((log) => isAutomaticNoShowLog(log))).toBe(true);
-  });
-
-  it("updates and logs one eligible appointment only once across concurrent sweeps", async () => {
-    const appointmentId = await insertFixtureAppointment({
-      studentNumber: "TEST-AUTO-NS-RACE",
-      scheduleType: "PHYSICAL_EXAM",
-      appointmentDate: "2045-01-10",
-      appointmentTime: "09:00:00",
-      notes: "Keep race note",
-    });
-
-    await captureSweepState();
-    const beforeBoundary = await markOverdueAppointmentsNoShow(
-      new Date(timedBoundary.getTime() - 1),
-      timeZone,
-    );
-    expect(beforeBoundary.appointmentIds).not.toContain(appointmentId);
-    expect(await appointmentState(appointmentId)).toMatchObject({ status: "PENDING" });
-
-    const sweeps = await Promise.all([
-      markOverdueAppointmentsNoShow(timedBoundary, timeZone),
-      markOverdueAppointmentsNoShow(timedBoundary, timeZone),
-    ]);
-    const logCount = await pool.query<{ count: number }>(
-      `SELECT COUNT(*)::int AS count
+      `SELECT old_status AS "oldStatus", new_status AS "newStatus", notes,
+              changed_by AS "changedById"
          FROM appointment_status_logs
         WHERE appointment_id=$1`,
       [appointmentId],
@@ -344,8 +332,9 @@ describe("markOverdueAppointmentsNoShow", () => {
 
     expect(sweeps.reduce((sum, sweep) => sum + sweep.count, 0)).toBe(1);
     expect(sweeps.flatMap((sweep) => sweep.appointmentIds)).toEqual([appointmentId]);
-    expect(logCount.rows[0].count).toBe(1);
-    expect(await appointmentState(appointmentId)).toEqual({
+    expect(logs.rows).toHaveLength(1);
+    expect(isAutomaticNoShowLog(logs.rows[0])).toBe(true);
+    expect(await persistedAppointmentState(appointmentId)).toEqual({
       status: "NO_SHOW",
       notes: "Keep race note",
     });
