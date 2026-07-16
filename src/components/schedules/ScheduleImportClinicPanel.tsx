@@ -44,6 +44,7 @@ type GeneratedAppointment = {
   studentNumber: string;
   studentName: string;
   scheduleType: string;
+  priorityGroupName: string | null;
   appointmentDate: string;
   appointmentTime: string | null;
   status: string;
@@ -73,17 +74,14 @@ function serviceLabel(clinicCode: string) {
   return clinicCode === "KABALAKA_CLINIC" ? "Laboratory" : "Physical examination";
 }
 
-function targetLabel(item: ScheduleRequest) {
-  if (item.targetDate) return item.targetDate;
-  if (item.targetWeekStart && item.targetWeekEnd) {
-    return `${item.targetWeekStart} to ${item.targetWeekEnd}`;
-  }
-  return "No target date";
-}
-
 export function ScheduleImportClinicPanel({ batch }: { batch: ScheduleImportClinicBatchView }) {
   const service = serviceLabel(batch.clinicCode);
   const summary = batch.validationSummary;
+  const exceptionItems = batch.items.filter((item) => item.validationIssues?.length);
+  const exceptionCount = exceptionItems.reduce(
+    (count, item) => count + (item.validationIssues?.length ?? 0),
+    0,
+  );
 
   return (
     <Card role="region" aria-label={`${service} schedule review`} className="overflow-hidden p-0">
@@ -149,44 +147,35 @@ export function ScheduleImportClinicPanel({ batch }: { batch: ScheduleImportClin
           </section>
         ) : null}
 
-        <section aria-labelledby={`${batch.id}-requests-heading`}>
-          <h3 id={`${batch.id}-requests-heading`} className="font-bold text-ink">Schedule requests</h3>
-          <div className="mt-3 overflow-x-auto rounded-xl border border-line">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-cpu-navy-soft/70">
-                <tr>
-                  <th className="px-4 py-3">Student</th>
-                  <th className="px-4 py-3">Target</th>
-                  <th className="px-4 py-3">Priority</th>
-                  <th className="px-4 py-3">Review</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-line">
-                {batch.items.map((item) => (
-                  <tr key={item.id}>
-                    <td className="px-4 py-3">
+        {exceptionCount ? (
+          <details className="rounded-xl border border-line bg-canvas">
+            <summary className="cursor-pointer px-4 py-3 font-bold text-ink">
+              Review exceptions ({exceptionCount} {exceptionCount === 1 ? "issue" : "issues"})
+            </summary>
+            <div className="divide-y divide-line border-t border-line">
+              {exceptionItems.map((item) => (
+                <div key={item.id} className="p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
                       <p className="font-bold text-ink">{item.studentName}</p>
                       <p className="font-mono text-xs text-muted">{item.studentNumber}</p>
-                    </td>
-                    <td className="px-4 py-3">{targetLabel(item)}</td>
-                    <td className="px-4 py-3">{item.priorityGroupName}</td>
-                    <td className="px-4 py-3">
-                      <Badge tone={statusTone(item.status)}>{item.status}</Badge>
-                      {item.validationIssues?.map((issue, index) => (
-                        <p
-                          key={`${issue.message}-${index}`}
-                          className={`mt-1 text-xs ${issue.severity === "CONFLICT" ? "text-red-700" : "text-amber-700"}`}
-                        >
-                          {issue.message}
-                        </p>
-                      ))}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
+                      <p className="mt-1 text-xs text-muted-strong">Priority: {item.priorityGroupName}</p>
+                    </div>
+                    <Badge tone={statusTone(item.status)}>{item.status}</Badge>
+                  </div>
+                  {item.validationIssues?.map((issue, index) => (
+                    <p
+                      key={`${issue.message}-${index}`}
+                      className={`mt-2 text-sm ${issue.severity === "CONFLICT" ? "text-red-700" : "text-amber-700"}`}
+                    >
+                      {issue.message}
+                    </p>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </details>
+        ) : null}
 
         <section aria-labelledby={`${batch.id}-appointments-heading`}>
           <h3 id={`${batch.id}-appointments-heading`} className="font-bold text-ink">Generated appointments</h3>
@@ -196,6 +185,7 @@ export function ScheduleImportClinicPanel({ batch }: { batch: ScheduleImportClin
                 <thead className="bg-cpu-navy-soft/70">
                   <tr>
                     <th className="px-4 py-3">Student</th>
+                    <th className="px-4 py-3">Priority</th>
                     <th className="px-4 py-3">Date</th>
                     <th className="px-4 py-3">Time</th>
                     <th className="px-4 py-3">Publication</th>
@@ -208,6 +198,7 @@ export function ScheduleImportClinicPanel({ batch }: { batch: ScheduleImportClin
                         <p className="font-bold text-ink">{appointment.studentName}</p>
                         <p className="font-mono text-xs text-muted">{appointment.studentNumber}</p>
                       </td>
+                      <td className="px-4 py-3">{appointment.priorityGroupName ?? "Not available"}</td>
                       <td className="px-4 py-3">{appointment.appointmentDate}</td>
                       <td className="px-4 py-3">{appointment.appointmentTime ?? "Not assigned"}</td>
                       <td className="px-4 py-3">

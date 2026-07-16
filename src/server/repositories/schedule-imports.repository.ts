@@ -73,6 +73,7 @@ export type ScheduleImportAppointment = {
   studentNumber: string;
   studentName: string;
   scheduleType: AppointmentScheduleType;
+  priorityGroupName: string | null;
   appointmentDate: string;
   appointmentTime: string | null;
   status: string;
@@ -589,6 +590,7 @@ export async function getImportChildBatches(
                                     student.last_name, student.suffix
                                   ) AS "studentName",
                                   appointment.schedule_type AS "scheduleType",
+                                  priority_group.name AS "priorityGroupName",
                                   appointment.appointment_date::text AS "appointmentDate",
                                   appointment.appointment_time::text AS "appointmentTime",
                                   appointment.status,
@@ -597,6 +599,10 @@ export async function getImportChildBatches(
                              FROM appointments appointment
                              JOIN schedule_batches batch ON batch.id=appointment.batch_id
                              JOIN students student ON student.student_number=appointment.student_number
+                             LEFT JOIN coordinator_schedule_items schedule_item
+                               ON schedule_item.id=appointment.schedule_item_id
+                             LEFT JOIN priority_groups priority_group
+                               ON priority_group.id=schedule_item.priority_group_id
                             WHERE batch.import_group_id=$1
                             ORDER BY appointment.appointment_date,
                                      appointment.appointment_time NULLS LAST,

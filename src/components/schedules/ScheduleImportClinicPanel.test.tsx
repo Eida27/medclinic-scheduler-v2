@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { ScheduleImportClinicPanel } from "./ScheduleImportClinicPanel";
 
@@ -47,6 +47,7 @@ const laboratoryBatch = {
     studentNumber: "2026-0001",
     studentName: "Draft Reviewer",
     scheduleType: "LABORATORY",
+    priorityGroupName: "Graduating",
     appointmentDate: "2026-12-10",
     appointmentTime: null,
     status: "DRAFT",
@@ -56,7 +57,7 @@ const laboratoryBatch = {
 };
 
 describe("ScheduleImportClinicPanel", () => {
-  it("shows validation, capacity, issues, requests, and unpublished generated appointments", () => {
+  it("moves priority to generated appointments and keeps issues in a collapsed exception review", () => {
     render(<ScheduleImportClinicPanel batch={laboratoryBatch} />);
 
     const section = screen.getByRole("region", { name: "Laboratory schedule review" });
@@ -67,11 +68,25 @@ describe("ScheduleImportClinicPanel", () => {
     expect(within(section).getByText("1 conflict")).toBeVisible();
     expect(within(section).getByText("121 scheduled / 120 safe / 150 maximum")).toBeVisible();
     expect(within(section).getByText("This date is above the recommended daily capacity.")).toBeVisible();
-    expect(within(section).getByText("Daily safe capacity would be exceeded.")).toBeVisible();
-    expect(within(section).getByText("Student already has an active laboratory appointment.")).toBeVisible();
-    expect(within(section).getAllByText("Draft Reviewer")).toHaveLength(2);
+    expect(within(section).queryByRole("heading", { name: "Schedule requests" })).not.toBeInTheDocument();
+
+    const generatedHeading = within(section).getByRole("heading", { name: "Generated appointments" });
+    const generatedSection = generatedHeading.closest("section");
+    expect(generatedSection).not.toBeNull();
+    const appointmentsTable = within(generatedSection as HTMLElement).getByRole("table");
+    expect(within(appointmentsTable).getByRole("columnheader", { name: "Priority" })).toBeVisible();
+    expect(within(appointmentsTable).getByText("Graduating")).toBeVisible();
+
+    const exceptionSummary = within(section).getByText("Review exceptions (2 issues)");
+    const warning = within(section).getByText("Daily safe capacity would be exceeded.");
+    const conflict = within(section).getByText("Student already has an active laboratory appointment.");
+    expect(warning).not.toBeVisible();
+    expect(conflict).not.toBeVisible();
+    fireEvent.click(exceptionSummary);
+    expect(warning).toBeVisible();
+    expect(conflict).toBeVisible();
     expect(within(section).getByText("Draft — not published")).toBeVisible();
-    expect(within(section).getAllByText("2026-12-10")).toHaveLength(3);
+    expect(within(section).getAllByText("2026-12-10")).toHaveLength(2);
   });
 
   it("explains when generated drafts are not present yet", () => {
@@ -94,6 +109,7 @@ describe("ScheduleImportClinicPanel", () => {
 
     const section = screen.getByRole("region", { name: "Physical examination schedule review" });
     expect(within(section).getByText("Validate the import to see validation totals and capacity results.")).toBeVisible();
+    expect(within(section).queryByText(/Review exceptions/)).not.toBeInTheDocument();
     expect(within(section).getByText("Draft appointments will appear here after this import is generated.")).toBeVisible();
   });
 });
