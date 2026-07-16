@@ -40,7 +40,11 @@ vi.mock("@/server/repositories/coordinator-schedules.repository", () => ({
   getScheduleBatch: vi.fn(),
 }));
 
-import { assertStatusTransition, updateAppointment } from "./appointments.service";
+import {
+  assertStatusTransition,
+  completeAppointmentWithClient,
+  updateAppointment,
+} from "./appointments.service";
 
 const appointmentId = "11111111-1111-4111-8111-111111111111";
 const replacementId = "22222222-2222-4222-8222-222222222222";
@@ -78,7 +82,10 @@ const coordinator = {
   clinicName: null,
 } satisfies SessionUser;
 
-function publishedAppointment(status: "PENDING" | "NO_SHOW" = "PENDING", clinicId = laboratoryClinicId) {
+function publishedAppointment(
+  status: "PENDING" | "COMPLETED" | "NO_SHOW" = "PENDING",
+  clinicId = laboratoryClinicId,
+) {
   return {
     id: appointmentId,
     batchId: null,
@@ -101,7 +108,7 @@ function publishedAppointment(status: "PENDING" | "NO_SHOW" = "PENDING", clinicI
 }
 
 function mutationContext(
-  status: "PENDING" | "NO_SHOW" = "PENDING",
+  status: "PENDING" | "COMPLETED" | "NO_SHOW" = "PENDING",
   clinicId = laboratoryClinicId,
   latestLog: {
     oldStatus: string | null;
@@ -181,6 +188,33 @@ describe("appointment mutation authorization and automatic no-show correction", 
       },
       client,
     );
+  });
+
+  it("returns an already-completed appointment without writing another status transition", async () => {
+    const completed = mutationContext("COMPLETED");
+    getAppointmentMutationContext.mockResolvedValue(completed);
+
+    await expect(completeAppointmentWithClient(
+      appointmentId,
+      admin,
+      "Already recorded",
+      client,
+    )).resolves.toEqual(completed);
+
+    expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
+  });
+
+  it("does not audit an already-completed appointment update as a status change", async () => {
+    getPublishedAppointment.mockResolvedValue(publishedAppointment("COMPLETED"));
+    getAppointmentMutationContext.mockResolvedValue(mutationContext("COMPLETED"));
+
+    await updateAppointment(appointmentId, {
+      status: "COMPLETED",
+      notes: "Already recorded",
+    }, admin);
+
+    expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
+    expect(writeAudit).not.toHaveBeenCalled();
   });
 
   it.each([

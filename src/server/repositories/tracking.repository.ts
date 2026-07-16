@@ -1,4 +1,5 @@
 import "server-only";
+import type { PoolClient } from "pg";
 import {
   parseAppointmentSummarySort,
   type OverallStatus,
@@ -8,6 +9,23 @@ import type { ClinicCode } from "@/server/clinics";
 import { appointmentSummaryReport } from "./appointment-summary.repository";
 
 export type ResultType = "PHYSICAL_EXAM" | "LABORATORY";
+
+export async function getResultAppointmentForUpdate(
+  appointmentId: string,
+  client: PoolClient,
+): Promise<{ studentNumber: string; scheduleType: ResultType } | null> {
+  const result = await client.query<{
+    studentNumber: string;
+    scheduleType: ResultType;
+  }>(
+    `SELECT student_number AS "studentNumber", schedule_type AS "scheduleType"
+       FROM appointments
+      WHERE id=$1 AND is_published=TRUE
+      FOR UPDATE`,
+    [appointmentId],
+  );
+  return result.rows[0] ?? null;
+}
 
 export async function resultsForStudent(studentNumber: string) {
   const student = await query<{ studentNumber: string; studentName: string; collegeName: string; programName: string }>(
@@ -45,24 +63,16 @@ export async function resultsForStudent(studentNumber: string) {
 export async function upsertResult(input: {
   studentNumber: string; appointmentId: string | null; resultType: ResultType; resultStatus: string;
   completedAt: string | null; remarks: string | null; actorUserId: string;
-}) {
+}, client: PoolClient): Promise<{ id: string }> {
   const table = input.resultType === "PHYSICAL_EXAM" ? "exam_results" : "laboratory_results";
-  if (input.appointmentId) {
-    const appointment = await query<{ schedule_type: string; student_number: string }>(
-      "SELECT schedule_type, student_number FROM appointments WHERE id=$1 AND is_published=TRUE",
-      [input.appointmentId],
-    );
-    if (!appointment.rows[0]) return { error: "APPOINTMENT_NOT_FOUND" as const };
-    if (appointment.rows[0].student_number !== input.studentNumber || appointment.rows[0].schedule_type !== input.resultType) return { error: "APPOINTMENT_MISMATCH" as const };
-  }
   const result = input.appointmentId
-    ? await query(
+    ? await client.query<{ id: string }>(
         `INSERT INTO ${table} (student_number, appointment_id, result_status, completed_at, remarks, encoded_by)
          VALUES ($1,$2,$3,$4,$5,$6)
          ON CONFLICT (appointment_id) DO UPDATE SET result_status=EXCLUDED.result_status,
            completed_at=EXCLUDED.completed_at, remarks=EXCLUDED.remarks, encoded_by=EXCLUDED.encoded_by
          RETURNING id`, [input.studentNumber, input.appointmentId, input.resultStatus, input.completedAt, input.remarks, input.actorUserId])
-    : await query(
+    : await client.query<{ id: string }>(
         `INSERT INTO ${table} (student_number, result_status, completed_at, remarks, encoded_by)
          VALUES ($1,$2,$3,$4,$5) RETURNING id`, [input.studentNumber, input.resultStatus, input.completedAt, input.remarks, input.actorUserId]);
   return { id: result.rows[0].id };

@@ -52,6 +52,7 @@ export async function completeAppointmentWithClient(
   const appointment = await getAppointmentMutationContext(id, client);
   if (!appointment) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
   assertAppointmentMutationAuthorized(actor, appointment);
+  if (appointment.status === "COMPLETED") return appointment;
   if (appointment.status === "NO_SHOW") {
     if (!isAutomaticNoShowLog(appointment.latestLog)) {
       throw new AppError("NO_SHOW_CORRECTION_NOT_ALLOWED", "Only an automatic no-show can be corrected to completed.", 422);
@@ -92,6 +93,7 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
   if (input.status === "COMPLETED") {
     await transaction(async (client) => {
       const appointment = await completeAppointmentWithClient(id, actor, input.notes, client);
+      if (appointment.status === "COMPLETED") return;
       const reason = input.notes?.trim() || null;
       await writeAudit(
         actor.userId,
