@@ -1,5 +1,6 @@
 import "server-only";
 import { query } from "@/server/db/pool";
+import { studentDisplayNameSql } from "@/server/students/student-display-name";
 
 export type StudentInput = {
   studentNumber: string;
@@ -43,6 +44,7 @@ export type ResultHistory = {
 
 type StudentRow = {
   student_number: string;
+  display_name: string;
   first_name: string;
   middle_name: string | null;
   last_name: string;
@@ -65,7 +67,7 @@ function mapStudent(row: StudentRow) {
     middleName: row.middle_name,
     lastName: row.last_name,
     suffix: row.suffix,
-    fullName: [row.first_name, row.middle_name, row.last_name, row.suffix].filter(Boolean).join(" "),
+    fullName: row.display_name,
     collegeId: row.college_id,
     collegeName: row.college_name,
     programId: row.program_id,
@@ -79,7 +81,8 @@ function mapStudent(row: StudentRow) {
 }
 
 const studentSelect = `
-  SELECT s.student_number, s.first_name, s.middle_name, s.last_name, s.suffix,
+  SELECT s.student_number, ${studentDisplayNameSql("s")} AS display_name,
+         s.first_name, s.middle_name, s.last_name, s.suffix,
          s.college_id, c.name AS college_name, s.program_id, p.name AS program_name,
          s.year_level, s.section, s.is_active, s.created_at, s.updated_at
   FROM students s
@@ -92,7 +95,15 @@ export async function listStudents(filters: StudentListFilters) {
   const values: unknown[] = [];
   if (filters.search) {
     values.push(`%${filters.search}%`);
-    clauses.push(`(s.student_number ILIKE $${values.length} OR CONCAT_WS(' ', s.first_name, s.middle_name, s.last_name) ILIKE $${values.length})`);
+    clauses.push(`(
+      s.student_number ILIKE $${values.length}
+      OR ${studentDisplayNameSql("s")} ILIKE $${values.length}
+      OR CONCAT_WS(' ', BTRIM(s.first_name), BTRIM(s.last_name)) ILIKE $${values.length}
+      OR CONCAT_WS(
+        ' ', BTRIM(s.first_name), NULLIF(BTRIM(s.middle_name), ''),
+        BTRIM(s.last_name), NULLIF(BTRIM(s.suffix), '')
+      ) ILIKE $${values.length}
+    )`);
   }
   if (filters.collegeId) {
     values.push(filters.collegeId);

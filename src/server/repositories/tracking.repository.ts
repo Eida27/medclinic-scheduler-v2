@@ -6,6 +6,7 @@ import {
 } from "@/components/appointments/appointment-summary";
 import { query } from "@/server/db/pool";
 import type { ClinicCode } from "@/server/clinics";
+import { studentDisplayNameSql } from "@/server/students/student-display-name";
 import { appointmentSummaryReport } from "./appointment-summary.repository";
 
 export type ResultType = "PHYSICAL_EXAM" | "LABORATORY";
@@ -29,7 +30,7 @@ export async function getResultAppointmentForUpdate(
 
 export async function resultsForStudent(studentNumber: string) {
   const student = await query<{ studentNumber: string; studentName: string; collegeName: string; programName: string }>(
-    `SELECT s.student_number AS "studentNumber", CONCAT_WS(' ', s.first_name, s.last_name) AS "studentName",
+    `SELECT s.student_number AS "studentNumber", ${studentDisplayNameSql("s")} AS "studentName",
             c.name AS "collegeName", p.name AS "programName"
      FROM students s JOIN colleges c ON c.id=s.college_id JOIN programs p ON p.id=s.program_id
      WHERE s.student_number=$1`, [studentNumber]);

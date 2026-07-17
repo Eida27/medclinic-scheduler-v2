@@ -36,6 +36,11 @@ beforeAll(async () => {
   for (const [studentNumber, firstName, lastName] of orderStudents) {
     await insertTestStudent({ studentNumber, firstName, lastName, yearLevel: 4 });
   }
+  await pool.query(
+    `UPDATE students
+        SET middle_name='Maria Angela', suffix='Jr.'
+      WHERE student_number='TEST-ORDER-0001'`,
+  );
   await pool.query("UPDATE students SET is_active=FALSE WHERE student_number='TEST-ORDER-0006'");
   await insertNumberedTestStudents("TEST-PAGE-", 151);
 
@@ -102,7 +107,24 @@ describe("appointment summary ordering and pagination", () => {
   ] as const)("returns the real %s order with nulls and stable ties", async (sort, expected) => {
     const result = await report(sort);
     expect(result.items.map((item) => item.studentNumber)).toEqual(expected);
+    expect(result.items.find((item) => item.studentNumber === "TEST-ORDER-0001")?.studentName)
+      .toBe("Alpha, Aaron M. (Jr.)");
   });
+
+  it.each(["Alpha, Aaron", "Aaron Alpha"])(
+    "finds a student using the %s search order",
+    async (search) => {
+      const result = await appointmentSummaryReport({
+        search,
+        sort: "name_asc",
+        page: 1,
+        limit: 20,
+        offset: 0,
+      });
+
+      expect(result.items.map((item) => item.studentNumber)).toContain("TEST-ORDER-0001");
+    },
+  );
 
   it("uses the newest eligible results and excludes cancelled-linked results", async () => {
     const result = await report("name_asc");

@@ -5,6 +5,7 @@ import type {
 } from "@/components/appointments/appointment-summary";
 import type { ClinicCode } from "@/server/clinics";
 import { query } from "@/server/db/pool";
+import { studentDisplayNameSql } from "@/server/students/student-display-name";
 
 export type AppointmentSummaryItem = {
   studentNumber: string;
@@ -46,7 +47,12 @@ const summaryRowsCte = `
   WITH summary_rows AS (
     SELECT
       s.student_number AS "studentNumber",
-      CONCAT_WS(' ', s.first_name, s.last_name) AS "studentName",
+      ${studentDisplayNameSql("s")} AS "studentName",
+      CONCAT_WS(' ', BTRIM(s.first_name), BTRIM(s.last_name)) AS "legacyStudentName",
+      CONCAT_WS(
+        ' ', BTRIM(s.first_name), NULLIF(BTRIM(s.middle_name), ''),
+        BTRIM(s.last_name), NULLIF(BTRIM(s.suffix), '')
+      ) AS "legacyStudentFullName",
       s.first_name AS "firstName",
       s.last_name AS "lastName",
       s.college_id AS "collegeId",
@@ -220,7 +226,10 @@ export async function appointmentSummaryReport(filters: AppointmentSummaryFilter
 
   if (filters.search) {
     add(
-      `(summary_rows."studentNumber" ILIKE ? OR summary_rows."studentName" ILIKE ?)`,
+      `(summary_rows."studentNumber" ILIKE ?
+        OR summary_rows."studentName" ILIKE ?
+        OR summary_rows."legacyStudentName" ILIKE ?
+        OR summary_rows."legacyStudentFullName" ILIKE ?)`,
       `%${filters.search}%`,
     );
   }

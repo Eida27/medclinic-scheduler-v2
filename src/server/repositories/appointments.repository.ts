@@ -4,6 +4,7 @@ import { AppError } from "@/lib/errors";
 import type { AutomaticNoShowLog } from "@/server/appointments/automatic-no-show";
 import { query, transaction } from "@/server/db/pool";
 import type { ClinicCode } from "@/server/clinics";
+import { studentDisplayNameSql } from "@/server/students/student-display-name";
 
 export type AppointmentStatus = "DRAFT" | "PENDING" | "COMPLETED" | "NO_SHOW" | "RESCHEDULED" | "CANCELLED";
 type AppointmentDetail = {
@@ -41,7 +42,12 @@ export async function listAppointments(filters: {
   if (filters.studentNumber) {
     add(
       `(a.student_number ILIKE ?
-        OR CONCAT_WS(' ', s.first_name, s.middle_name, s.last_name, s.suffix) ILIKE ?)`,
+        OR ${studentDisplayNameSql("s")} ILIKE ?
+        OR CONCAT_WS(' ', BTRIM(s.first_name), BTRIM(s.last_name)) ILIKE ?
+        OR CONCAT_WS(
+          ' ', BTRIM(s.first_name), NULLIF(BTRIM(s.middle_name), ''),
+          BTRIM(s.last_name), NULLIF(BTRIM(s.suffix), '')
+        ) ILIKE ?)`,
       `%${filters.studentNumber}%`,
     );
   }
@@ -55,7 +61,7 @@ export async function listAppointments(filters: {
   values.push(filters.limit, filters.offset);
   const result = await query<AppointmentDetail>(
     `SELECT a.id, a.batch_id AS "batchId", a.student_number AS "studentNumber",
-            CONCAT_WS(' ', s.first_name, s.last_name) AS "studentName", a.schedule_type AS "scheduleType",
+            ${studentDisplayNameSql("s")} AS "studentName", a.schedule_type AS "scheduleType",
             a.clinic_id AS "clinicId", cl.code AS "clinicCode", cl.name AS "clinicName",
             a.appointment_date::text AS "appointmentDate", a.appointment_time::text AS "appointmentTime",
             a.status, a.is_published AS "isPublished", c.name AS "collegeName", p.name AS "programName"
@@ -72,7 +78,7 @@ export async function listAppointments(filters: {
 export async function getPublishedAppointment(id: string) {
   const result = await query<AppointmentDetail>(
     `SELECT a.id, a.batch_id AS "batchId", a.student_number AS "studentNumber",
-            CONCAT_WS(' ', s.first_name, s.middle_name, s.last_name, s.suffix) AS "studentName",
+            ${studentDisplayNameSql("s")} AS "studentName",
             a.schedule_type AS "scheduleType", a.appointment_date::text AS "appointmentDate",
             a.clinic_id AS "clinicId", cl.code AS "clinicCode", cl.name AS "clinicName",
             a.appointment_time::text AS "appointmentTime", a.status, a.is_published AS "isPublished",
@@ -243,8 +249,8 @@ export async function publishBatch(batchId: string, actorUserId: string, client?
 
 export async function publicStudentSchedule(studentNumber: string) {
   const student = await query<{ student_number: string; student_name: string }>(
-    `SELECT student_number, CONCAT_WS(' ', first_name, last_name) AS student_name
-     FROM students WHERE student_number=$1 AND is_active=TRUE`, [studentNumber]);
+    `SELECT s.student_number, ${studentDisplayNameSql("s")} AS student_name
+     FROM students s WHERE s.student_number=$1 AND s.is_active=TRUE`, [studentNumber]);
   if (!student.rows[0]) return null;
   const appointments = await query(
     `SELECT schedule_type AS "scheduleType", appointment_date::text AS "appointmentDate",

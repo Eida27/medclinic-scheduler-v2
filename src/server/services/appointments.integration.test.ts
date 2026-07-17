@@ -2,7 +2,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AUTOMATIC_NO_SHOW_NOTE } from "@/server/appointments/automatic-no-show";
 import { pool } from "@/server/db/pool";
-import { publicStudentSchedule } from "@/server/repositories/appointments.repository";
+import {
+  getPublishedAppointment,
+  listAppointments,
+  publicStudentSchedule,
+} from "@/server/repositories/appointments.repository";
 import {
   cleanupTestFixtures,
   insertTestStudent,
@@ -120,7 +124,9 @@ beforeAll(async () => {
   await insertTestStudent({
     studentNumber,
     firstName: "Appointment",
+    middleName: "Maria Angela",
     lastName: "Fixture",
+    suffix: "Jr.",
     yearLevel: 3,
   });
   for (const fixtureStudentNumber of correctionStudentNumbers) {
@@ -157,9 +163,29 @@ describe("appointment lifecycle", () => {
     await generateBatchAppointments(batchId, admin);
     expect((await publicStudentSchedule(studentNumber))?.appointments).toHaveLength(0);
     await publishScheduleBatch(batchId, admin.userId);
-    expect((await publicStudentSchedule(studentNumber))?.appointments).toHaveLength(1);
+    expect(await publicStudentSchedule(studentNumber)).toMatchObject({
+      studentName: "Fixture, Appointment M. (Jr.)",
+      appointments: [expect.any(Object)],
+    });
 
     const current = await pool.query<{ id: string }>("SELECT id FROM appointments WHERE batch_id=$1", [batchId]);
+    await expect(getPublishedAppointment(current.rows[0].id)).resolves.toMatchObject({
+      studentName: "Fixture, Appointment M. (Jr.)",
+    });
+    for (const search of ["Fixture, Appointment", "Appointment Fixture"]) {
+      const listed = await listAppointments({
+        studentNumber: search,
+        page: 1,
+        limit: 20,
+        offset: 0,
+      });
+      expect(listed.items).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: current.rows[0].id,
+          studentName: "Fixture, Appointment M. (Jr.)",
+        }),
+      ]));
+    }
     const replacement = await updateAppointment(current.rows[0].id, {
       status: "COMPLETED",
       appointmentDate: "2026-08-06", appointmentTime: "09:00", notes: "Student conflict",

@@ -13,24 +13,31 @@ export const TEST_REFERENCE_IDS = {
 type TestStudent = {
   studentNumber: string;
   firstName: string;
+  middleName?: string | null;
   lastName: string;
+  suffix?: string | null;
   yearLevel: number | null;
 };
 
 export async function insertTestStudent({
   studentNumber,
   firstName,
+  middleName = null,
   lastName,
+  suffix = null,
   yearLevel,
 }: TestStudent) {
   await pool.query(
     `INSERT INTO students (
-       student_number, first_name, last_name, college_id, program_id, year_level
-     ) VALUES ($1,$2,$3,$4,$5,$6)`,
+       student_number, first_name, middle_name, last_name, suffix,
+       college_id, program_id, year_level
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
     [
       studentNumber,
       firstName,
+      middleName,
       lastName,
+      suffix,
       TEST_REFERENCE_IDS.college,
       TEST_REFERENCE_IDS.program,
       yearLevel,

@@ -61,9 +61,13 @@ describe("grouped schedule import detail", () => {
     expect(detail.childBatches).toEqual(expect.arrayContaining([
       expect.objectContaining({
         clinicCode: "KABALAKA_CLINIC",
+        items: [expect.objectContaining({
+          studentNumber: "TEST-DETAIL-001",
+          studentName: "Reviewer, Draft",
+        })],
         appointments: [expect.objectContaining({
           studentNumber: "TEST-DETAIL-001",
-          studentName: "Draft Reviewer",
+          studentName: "Reviewer, Draft",
           scheduleType: "LABORATORY",
           priorityGroupName: "Regular",
           appointmentDate: "2026-12-10",
@@ -73,9 +77,13 @@ describe("grouped schedule import detail", () => {
       }),
       expect.objectContaining({
         clinicCode: "CPU_CLINIC",
+        items: [expect.objectContaining({
+          studentNumber: "TEST-DETAIL-001",
+          studentName: "Reviewer, Draft",
+        })],
         appointments: [expect.objectContaining({
           studentNumber: "TEST-DETAIL-001",
-          studentName: "Draft Reviewer",
+          studentName: "Reviewer, Draft",
           scheduleType: "PHYSICAL_EXAM",
           priorityGroupName: "Regular",
           appointmentDate: "2026-12-11",

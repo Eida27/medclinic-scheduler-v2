@@ -5,6 +5,7 @@ import { query, transaction } from "@/server/db/pool";
 import { writeAudit } from "@/server/repositories/audit.repository";
 import { getScheduleBatch } from "@/server/repositories/coordinator-schedules.repository";
 import type { StudentScheduleCsvRow } from "@/server/services/student-schedule-import-csv";
+import { studentDisplayNameSql } from "@/server/students/student-display-name";
 
 export type ScheduleImportStatus =
   | "DRAFT"
@@ -585,10 +586,7 @@ export async function getImportChildBatches(
   const appointmentsSql = `SELECT appointment.id,
                                   appointment.batch_id AS "batchId",
                                   appointment.student_number AS "studentNumber",
-                                  CONCAT_WS(
-                                    ' ', student.first_name, student.middle_name,
-                                    student.last_name, student.suffix
-                                  ) AS "studentName",
+                                  ${studentDisplayNameSql("student")} AS "studentName",
                                   appointment.schedule_type AS "scheduleType",
                                   priority_group.name AS "priorityGroupName",
                                   appointment.appointment_date::text AS "appointmentDate",

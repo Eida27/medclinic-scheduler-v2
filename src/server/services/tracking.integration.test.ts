@@ -188,7 +188,9 @@ beforeAll(async () => {
   await insertTestStudent({
     studentNumber,
     firstName: "Tracking",
+    middleName: "maria angela",
     lastName: "Fixture",
+    suffix: "III",
     yearLevel: 2,
   });
   await insertTestStudent({
@@ -248,6 +250,7 @@ describe("results and compliance", () => {
     }, admin);
     try {
       const history = await resultsForStudent(studentNumber);
+      expect(history?.studentName).toBe("Fixture, Tracking M. (III)");
       expect(history?.examResults[0]).toMatchObject({ resultStatus: "COMPLETED", completedAt: "2026-07-01" });
       const compliance = await complianceReport({ search: studentNumber, page: 1, limit: 20, offset: 0 });
       expect(compliance.items[0]).toMatchObject({ physicalExamStatus: "COMPLETED" });

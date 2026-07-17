@@ -2,6 +2,7 @@ import "server-only";
 import type { PoolClient } from "pg";
 import { query, transaction } from "@/server/db/pool";
 import type { DraftAppointment } from "@/server/rule-engine/types";
+import { studentDisplayNameSql } from "@/server/students/student-display-name";
 import {
   clinicCodeByScheduleType,
   clinicConfigForCode,
@@ -191,7 +192,7 @@ export async function getScheduleBatch(batchId: string, client?: PoolClient) {
   const items = client
     ? await client.query(
         `SELECT i.id, i.clinic_id AS "clinicId", cl.code AS "clinicCode", cl.name AS "clinicName",
-                i.student_number AS "studentNumber", CONCAT_WS(' ', s.first_name, s.last_name) AS "studentName",
+                i.student_number AS "studentNumber", ${studentDisplayNameSql("s")} AS "studentName",
                 i.schedule_type AS "scheduleType", i.priority_group_id AS "priorityGroupId", pg.name AS "priorityGroupName",
                 i.target_date::text AS "targetDate", i.target_week_start::text AS "targetWeekStart", i.target_week_end::text AS "targetWeekEnd",
                 i.remarks, i.status, i.validation_issues AS "validationIssues"
@@ -200,7 +201,7 @@ export async function getScheduleBatch(batchId: string, client?: PoolClient) {
          ORDER BY pg.rank_order, i.student_number`, [batchId])
     : await query(
         `SELECT i.id, i.clinic_id AS "clinicId", cl.code AS "clinicCode", cl.name AS "clinicName",
-                i.student_number AS "studentNumber", CONCAT_WS(' ', s.first_name, s.last_name) AS "studentName",
+                i.student_number AS "studentNumber", ${studentDisplayNameSql("s")} AS "studentName",
                 i.schedule_type AS "scheduleType", i.priority_group_id AS "priorityGroupId", pg.name AS "priorityGroupName",
                 i.target_date::text AS "targetDate", i.target_week_start::text AS "targetWeekStart", i.target_week_end::text AS "targetWeekEnd",
                 i.remarks, i.status, i.validation_issues AS "validationIssues"
