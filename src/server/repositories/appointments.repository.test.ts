@@ -19,12 +19,29 @@ describe("listAppointments", () => {
       .mockResolvedValueOnce({ rows: [] });
   });
 
-  it("uses deterministic tie-breakers for paginated appointment rows", async () => {
-    await listAppointments({ page: 1, limit: 150, offset: 0, isPublished: true });
+  it.each([
+    ["soonest", "ORDER BY a.appointment_date ASC, s.last_name ASC, s.first_name ASC, a.student_number ASC, a.id ASC"],
+    ["latest", "ORDER BY a.appointment_date DESC, s.last_name ASC, s.first_name ASC, a.student_number ASC, a.id ASC"],
+    ["surname_asc", "ORDER BY s.last_name ASC, s.first_name ASC, a.appointment_date ASC, a.student_number ASC, a.id ASC"],
+    ["surname_desc", "ORDER BY s.last_name DESC, s.first_name ASC, a.appointment_date ASC, a.student_number ASC, a.id ASC"],
+  ] as const)("uses deterministic %s ordering for paginated appointment rows", async (sort, expectedOrder) => {
+    await listAppointments({
+      page: 1,
+      limit: 150,
+      offset: 0,
+      isPublished: true,
+      sort,
+    });
 
     expect(query).toHaveBeenCalledTimes(2);
+    expect(query.mock.calls[1][0]).toContain(expectedOrder);
+  });
+
+  it("defaults to soonest ordering when no sort is provided", async () => {
+    await listAppointments({ page: 1, limit: 150, offset: 0, isPublished: true });
+
     expect(query.mock.calls[1][0]).toContain(
-      "ORDER BY a.appointment_date, s.last_name, s.first_name, a.student_number, a.id",
+      "ORDER BY a.appointment_date ASC, s.last_name ASC, s.first_name ASC, a.student_number ASC, a.id ASC",
     );
   });
 });

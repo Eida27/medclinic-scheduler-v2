@@ -42,6 +42,7 @@ describe("PhysicalExamPage", () => {
         studentNumber: "Ben Reyes",
         appointmentDate: "2026-08-19",
         status: "NO_SHOW",
+        sort: "surname_desc",
         isPublished: "false",
       }),
     }));
@@ -54,6 +55,7 @@ describe("PhysicalExamPage", () => {
       scheduleType: "PHYSICAL_EXAM",
       status: "NO_SHOW",
       studentNumber: "Ben Reyes",
+      sort: "surname_desc",
       isPublished: true,
       page: 1,
       limit: 150,
@@ -84,6 +86,7 @@ describe("PhysicalExamPage", () => {
         studentNumber: "Ben Reyes",
         appointmentDate: "2026-08-19",
         status: "NO_SHOW",
+        sort: "latest",
         page: "2",
       }),
     }));
@@ -94,6 +97,7 @@ describe("PhysicalExamPage", () => {
       scheduleType: "PHYSICAL_EXAM",
       status: "NO_SHOW",
       studentNumber: "Ben Reyes",
+      sort: "latest",
       isPublished: true,
       page: 2,
       limit: 150,
@@ -102,7 +106,7 @@ describe("PhysicalExamPage", () => {
     expect(screen.getByText("Page 2 of 2")).toBeVisible();
     expect(screen.getByRole("link", { name: "Previous page" })).toHaveAttribute(
       "href",
-      "/physical-exam?studentNumber=Ben+Reyes&appointmentDate=2026-08-19&status=NO_SHOW&page=1",
+      "/physical-exam?studentNumber=Ben+Reyes&sort=latest&appointmentDate=2026-08-19&status=NO_SHOW&page=1",
     );
     expect(screen.queryByRole("link", { name: "Next page" })).not.toBeInTheDocument();
   });

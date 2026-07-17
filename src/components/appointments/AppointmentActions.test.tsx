@@ -26,6 +26,16 @@ describe("AppointmentActions automatic no-show correction", () => {
     vi.unstubAllGlobals();
   });
 
+  it("does not offer manual no-show for a pending appointment", () => {
+    render(<AppointmentActions id="appointment-1" status="PENDING" />);
+
+    const status = screen.getByRole("combobox");
+    expect(status).toHaveValue("COMPLETED");
+    expect(screen.getByRole("option", { name: "Completed" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Cancelled" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "No-show" })).not.toBeInTheDocument();
+  });
+
   it("shows a required correction form only for an eligible no-show", () => {
     render(
       <AppointmentActions

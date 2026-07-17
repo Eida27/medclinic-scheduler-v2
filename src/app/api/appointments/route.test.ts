@@ -20,12 +20,13 @@ describe("GET /api/appointments", () => {
 
   it("always requests published appointments even when the URL asks for drafts", async () => {
     const response = await GET(new Request(
-      "http://localhost/api/appointments?isPublished=false&studentNumber=Ada&page=2&limit=10",
+      "http://localhost/api/appointments?isPublished=false&studentNumber=Ada&sort=surname_desc&page=2&limit=10",
     ));
 
     expect(response.status).toBe(200);
     expect(listAppointments).toHaveBeenCalledWith(expect.objectContaining({
       studentNumber: "Ada",
+      sort: "surname_desc",
       isPublished: true,
       page: 2,
       limit: 10,
@@ -34,5 +35,14 @@ describe("GET /api/appointments", () => {
     await expect(response.json()).resolves.toEqual({
       data: { items: [], total: 0, page: 2, limit: 10 },
     });
+  });
+
+  it("falls back to soonest for an unsupported sort", async () => {
+    const response = await GET(new Request(
+      "http://localhost/api/appointments?sort=date_desc",
+    ));
+
+    expect(response.status).toBe(200);
+    expect(listAppointments).toHaveBeenCalledWith(expect.objectContaining({ sort: "soonest" }));
   });
 });

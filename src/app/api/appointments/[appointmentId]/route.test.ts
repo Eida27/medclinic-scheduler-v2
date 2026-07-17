@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AppError } from "@/lib/errors";
 
 const { requireUser, getPublishedAppointment, updateAppointment } = vi.hoisted(() => ({
   requireUser: vi.fn(),
@@ -77,5 +78,30 @@ describe("/api/appointments/[appointmentId]", () => {
       { status: "COMPLETED" },
       clinicStaff,
     );
+  });
+
+  it("returns the manual no-show domain error from PATCH", async () => {
+    updateAppointment.mockRejectedValue(new AppError(
+      "MANUAL_NO_SHOW_NOT_ALLOWED",
+      "No-show is assigned automatically at midnight and cannot be set manually.",
+      422,
+    ));
+
+    const response = await PATCH(new Request(
+      `http://localhost/api/appointments/${appointmentId}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ status: "NO_SHOW" }),
+      },
+    ), context);
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "MANUAL_NO_SHOW_NOT_ALLOWED",
+        message: "No-show is assigned automatically at midnight and cannot be set manually.",
+      },
+    });
   });
 });

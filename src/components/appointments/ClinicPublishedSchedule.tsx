@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { AppointmentPagination } from "@/components/appointments/AppointmentPagination";
+import type { AppointmentListSort } from "@/components/appointments/appointment-list-sort";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
@@ -27,11 +28,18 @@ type ClinicPublishedScheduleProps = {
     studentNumber?: string;
     appointmentDate?: string;
     status?: string;
+    sort?: AppointmentListSort;
   };
   appointments: ClinicAppointment[];
 };
 
 const operationalStatuses = ["PENDING", "COMPLETED", "NO_SHOW", "RESCHEDULED", "CANCELLED"];
+const sortOptions: Array<[AppointmentListSort, string]> = [
+  ["surname_asc", "Surname A-Z"],
+  ["surname_desc", "Surname Z-A"],
+  ["soonest", "Soonest"],
+  ["latest", "Latest"],
+];
 
 function statusTone(status: string) {
   if (status === "COMPLETED") return "success" as const;
@@ -53,7 +61,7 @@ export function ClinicPublishedSchedule({
     <>
       <PageHeader title={title} description={description} />
       <Card>
-        <form className="grid gap-3 md:grid-cols-4">
+        <form className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
           <label className="grid gap-1.5 text-sm font-bold text-ink">
             <span>Student name or number</span>
             <Input
@@ -71,6 +79,14 @@ export function ClinicPublishedSchedule({
             <Select name="status" defaultValue={filters.status}>
               <option value="">All operational statuses</option>
               {operationalStatuses.map((status) => <option key={status}>{status}</option>)}
+            </Select>
+          </label>
+          <label className="grid gap-1.5 text-sm font-bold text-ink">
+            <span>Sort</span>
+            <Select name="sort" defaultValue={filters.sort ?? "soonest"}>
+              {sortOptions.map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
             </Select>
           </label>
           <button

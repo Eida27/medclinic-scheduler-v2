@@ -53,7 +53,13 @@ const correctionStudentNumbers = [
   "TEST-APPT-MIX-MANUAL",
   "TEST-APPT-COORD",
   "TEST-APPT-FINAL",
+  "TEST-APPT-DIRECT-NOS",
 ];
+const orderingFixtures = [
+  { studentNumber: "TEST-APPT-SORT-ALPHA", firstName: "Zoe", lastName: "Alpha", appointmentDate: "2044-01-03" },
+  { studentNumber: "TEST-APPT-SORT-BETA", firstName: "Amy", lastName: "Beta", appointmentDate: "2044-01-01" },
+  { studentNumber: "TEST-APPT-SORT-ZULU", firstName: "Ben", lastName: "Zulu", appointmentDate: "2044-01-02" },
+] as const;
 
 async function insertNoShowAppointment({
   studentNumber: fixtureStudentNumber,
@@ -137,6 +143,26 @@ beforeAll(async () => {
       yearLevel: 3,
     });
   }
+  for (const fixture of orderingFixtures) {
+    await insertTestStudent({
+      studentNumber: fixture.studentNumber,
+      firstName: fixture.firstName,
+      lastName: fixture.lastName,
+      yearLevel: 3,
+    });
+    await pool.query(
+      `INSERT INTO appointments (
+         clinic_id, student_number, schedule_type, appointment_date,
+         status, is_published, created_by, updated_by
+       ) VALUES ($1,$2,'LABORATORY',$3,'PENDING',TRUE,$4,$4)`,
+      [
+        TEST_REFERENCE_IDS.laboratoryClinic,
+        fixture.studentNumber,
+        fixture.appointmentDate,
+        TEST_REFERENCE_IDS.adminUser,
+      ],
+    );
+  }
 });
 
 afterAll(async () => {
@@ -145,6 +171,35 @@ afterAll(async () => {
 });
 
 describe("appointment lifecycle", () => {
+  it.each([
+    ["soonest", ["TEST-APPT-SORT-BETA", "TEST-APPT-SORT-ZULU", "TEST-APPT-SORT-ALPHA"]],
+    ["latest", ["TEST-APPT-SORT-ALPHA", "TEST-APPT-SORT-ZULU", "TEST-APPT-SORT-BETA"]],
+    ["surname_asc", ["TEST-APPT-SORT-ALPHA", "TEST-APPT-SORT-BETA", "TEST-APPT-SORT-ZULU"]],
+    ["surname_desc", ["TEST-APPT-SORT-ZULU", "TEST-APPT-SORT-BETA", "TEST-APPT-SORT-ALPHA"]],
+  ] as const)("orders the complete result set by %s before pagination", async (sort, expected) => {
+    const firstPage = await listAppointments({
+      clinicCode: "KABALAKA_CLINIC",
+      scheduleType: "LABORATORY",
+      studentNumber: "TEST-APPT-SORT-",
+      sort,
+      page: 1,
+      limit: 2,
+      offset: 0,
+    });
+    const secondPage = await listAppointments({
+      clinicCode: "KABALAKA_CLINIC",
+      scheduleType: "LABORATORY",
+      studentNumber: "TEST-APPT-SORT-",
+      sort,
+      page: 2,
+      limit: 2,
+      offset: 2,
+    });
+
+    expect(firstPage.total).toBe(3);
+    expect([...firstPage.items, ...secondPage.items].map((item) => item.studentNumber)).toEqual(expected);
+  });
+
   it("hides drafts, publishes them, and creates a logged replacement on reschedule", async () => {
     const batch = await addScheduleBatch({
       batchName: "TEST appointment lifecycle fixture",
@@ -244,6 +299,30 @@ describe("appointment lifecycle", () => {
       status: "CANCELLED",
       notes: "Coordinator must not mutate appointments",
     }, coordinator)).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+
+    await expect(appointmentMutationSnapshot(appointmentId)).resolves.toEqual(before);
+  });
+
+  it("rejects a direct manual no-show without changing appointment, history, or audit", async () => {
+    const inserted = await pool.query<{ id: string }>(
+      `INSERT INTO appointments (
+         clinic_id, student_number, schedule_type, appointment_date,
+         status, is_published, notes, created_by, updated_by
+       ) VALUES ($1,'TEST-APPT-DIRECT-NOS','LABORATORY','2045-01-20',
+                 'PENDING',TRUE,'Manual no-show guard fixture',$2,$2)
+       RETURNING id`,
+      [TEST_REFERENCE_IDS.laboratoryClinic, TEST_REFERENCE_IDS.adminUser],
+    );
+    const appointmentId = inserted.rows[0].id;
+    const before = await appointmentMutationSnapshot(appointmentId);
+
+    await expect(updateAppointment(appointmentId, {
+      status: "NO_SHOW",
+      notes: "Marked manually",
+    }, admin)).rejects.toMatchObject({
+      code: "MANUAL_NO_SHOW_NOT_ALLOWED",
+      status: 422,
+    });
 
     await expect(appointmentMutationSnapshot(appointmentId)).resolves.toEqual(before);
   });

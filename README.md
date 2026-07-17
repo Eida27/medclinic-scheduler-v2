@@ -172,7 +172,8 @@ The pure scheduling rules live under `src/server/rule-engine`. Route handlers do
 - Date-only and timed appointments both become no-show at the start of the next local day; a July 10 appointment becomes eligible at July 11, 12:00 AM regardless of its optional time.
 - If a sweep or midnight calculation fails, the application logs the error and retries after five minutes.
 - Completing a linked result also completes its appointment.
-- Administrators and assigned clinic staff can correct a system-generated no-show with a required reason; manual no-shows cannot be corrected to completed.
+- No-show status is automation-only; users cannot mark appointments no-show manually.
+- Administrators and assigned clinic staff can correct a system-generated no-show with a required reason. Historical manual no-shows remain readable and reschedulable but cannot be corrected to completed.
 - Downtime does not lose transitions: the startup sweep catches up when the server returns.
 
 Build and serve the production application:

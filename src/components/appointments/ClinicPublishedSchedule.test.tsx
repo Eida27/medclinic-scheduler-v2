@@ -26,6 +26,7 @@ describe("ClinicPublishedSchedule", () => {
           studentNumber: "Ana Santos",
           appointmentDate: "2026-08-18",
           status: "PENDING",
+          sort: "surname_desc",
         }}
         appointments={[appointment]}
       />,
@@ -38,7 +39,17 @@ describe("ClinicPublishedSchedule", () => {
     const status = screen.getByRole("combobox", { name: "Status" });
     expect(status).toHaveValue("PENDING");
     expect(within(status).queryByRole("option", { name: "DRAFT" })).not.toBeInTheDocument();
+    expect(within(status).getByRole("option", { name: "NO_SHOW" })).toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: /visibility/i })).not.toBeInTheDocument();
+
+    const sort = screen.getByRole("combobox", { name: "Sort" });
+    expect(sort).toHaveValue("surname_desc");
+    expect(within(sort).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Surname A-Z",
+      "Surname Z-A",
+      "Soonest",
+      "Latest",
+    ]);
 
     const row = screen.getByRole("row", { name: /Ana Maria Santos Jr\./ });
     expect(within(row).getByText("2026-0001")).toBeVisible();
@@ -88,6 +99,7 @@ describe("ClinicPublishedSchedule", () => {
           studentNumber: "Ana Santos",
           appointmentDate: "2026-08-18",
           status: "PENDING",
+          sort: "latest",
         }}
         appointments={[{ ...appointment, scheduleType: "PHYSICAL_EXAM" }]}
       />,
@@ -97,7 +109,7 @@ describe("ClinicPublishedSchedule", () => {
     expect(screen.queryByRole("link", { name: "Previous page" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Next page" })).toHaveAttribute(
       "href",
-      "/physical-exam?studentNumber=Ana+Santos&appointmentDate=2026-08-18&status=PENDING&page=2",
+      "/physical-exam?studentNumber=Ana+Santos&sort=latest&appointmentDate=2026-08-18&status=PENDING&page=2",
     );
   });
 });

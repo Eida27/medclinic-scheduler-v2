@@ -1,5 +1,6 @@
 import "server-only";
 import type { PoolClient } from "pg";
+import type { AppointmentListSort } from "@/components/appointments/appointment-list-sort";
 import { AppError } from "@/lib/errors";
 import type { AutomaticNoShowLog } from "@/server/appointments/automatic-no-show";
 import { query, transaction } from "@/server/db/pool";
@@ -27,9 +28,16 @@ export type AppointmentMutationContext = {
   latestLog: AutomaticNoShowLog | null;
 };
 
+const appointmentListOrderBy: Record<AppointmentListSort, string> = {
+  soonest: "a.appointment_date ASC, s.last_name ASC, s.first_name ASC, a.student_number ASC, a.id ASC",
+  latest: "a.appointment_date DESC, s.last_name ASC, s.first_name ASC, a.student_number ASC, a.id ASC",
+  surname_asc: "s.last_name ASC, s.first_name ASC, a.appointment_date ASC, a.student_number ASC, a.id ASC",
+  surname_desc: "s.last_name DESC, s.first_name ASC, a.appointment_date ASC, a.student_number ASC, a.id ASC",
+};
+
 export async function listAppointments(filters: {
   clinicCode?: ClinicCode; appointmentDate?: string; scheduleType?: string; status?: string; collegeId?: string; programId?: string;
-  studentNumber?: string; isPublished?: true; page: number; limit: number; offset: number;
+  studentNumber?: string; isPublished?: true; sort?: AppointmentListSort; page: number; limit: number; offset: number;
 }) {
   const clauses = ["a.is_published=TRUE"]; const values: unknown[] = [];
   const add = (sql: string, value: unknown) => { values.push(value); clauses.push(sql.replaceAll("?", `$${values.length}`)); };
@@ -52,6 +60,7 @@ export async function listAppointments(filters: {
     );
   }
   const where = clauses.join(" AND ");
+  const orderBy = appointmentListOrderBy[filters.sort ?? "soonest"];
   const count = await query<{ count: string }>(
     `SELECT COUNT(*)::text AS count FROM appointments a
       JOIN clinics cl ON cl.id=a.clinic_id
@@ -68,7 +77,7 @@ export async function listAppointments(filters: {
      FROM appointments a JOIN students s ON s.student_number=a.student_number
      JOIN clinics cl ON cl.id=a.clinic_id
      JOIN colleges c ON c.id=s.college_id JOIN programs p ON p.id=s.program_id
-     WHERE ${where} ORDER BY a.appointment_date, s.last_name, s.first_name, a.student_number, a.id
+     WHERE ${where} ORDER BY ${orderBy}
      LIMIT $${values.length - 1} OFFSET $${values.length}`,
     values,
   );

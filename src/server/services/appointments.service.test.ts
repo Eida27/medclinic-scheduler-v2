@@ -138,7 +138,6 @@ describe("appointment status transitions", () => {
   it.each([
     ["DRAFT", "PENDING"],
     ["PENDING", "COMPLETED"],
-    ["PENDING", "NO_SHOW"],
     ["PENDING", "CANCELLED"],
   ] as const)("allows %s to become %s", (from, to) => {
     expect(() => assertStatusTransition(from, to)).not.toThrow();
@@ -146,6 +145,10 @@ describe("appointment status transitions", () => {
 
   it("rejects reopening a completed appointment", () => {
     expect(() => assertStatusTransition("COMPLETED", "PENDING")).toThrow();
+  });
+
+  it("rejects manually changing a pending appointment to no-show", () => {
+    expect(() => assertStatusTransition("PENDING", "NO_SHOW")).toThrow();
   });
 });
 
@@ -190,6 +193,40 @@ describe("appointment mutation authorization and automatic no-show correction", 
       },
       client,
     );
+  });
+
+  it("rejects a manual no-show after locking the current appointment without writing changes", async () => {
+    await expect(updateAppointment(appointmentId, {
+      status: "NO_SHOW",
+      notes: "Marked manually",
+    }, admin)).rejects.toMatchObject({
+      code: "MANUAL_NO_SHOW_NOT_ALLOWED",
+      message: "No-show is assigned automatically at midnight and cannot be set manually.",
+      status: 422,
+    });
+
+    expect(transaction).toHaveBeenCalledOnce();
+    expect(getAppointmentMutationContext).toHaveBeenCalledWith(appointmentId, client);
+    expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
+    expect(writeAudit).not.toHaveBeenCalled();
+  });
+
+  it("rejects a manual no-show request that also includes a replacement date", async () => {
+    await expect(updateAppointment(appointmentId, {
+      status: "NO_SHOW",
+      appointmentDate: "2026-08-19",
+      appointmentTime: "10:00",
+      notes: "Attempted mixed manual no-show",
+    }, admin)).rejects.toMatchObject({
+      code: "MANUAL_NO_SHOW_NOT_ALLOWED",
+      status: 422,
+    });
+
+    expect(transaction).toHaveBeenCalledOnce();
+    expect(getAppointmentMutationContext).toHaveBeenCalledWith(appointmentId, client);
+    expect(rescheduleAppointmentWithClient).not.toHaveBeenCalled();
+    expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
+    expect(writeAudit).not.toHaveBeenCalled();
   });
 
   it("returns an already-completed appointment without writing another status transition", async () => {

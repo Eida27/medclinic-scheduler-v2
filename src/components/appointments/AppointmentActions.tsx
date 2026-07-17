@@ -68,7 +68,6 @@ export function AppointmentActions({
             ) : (
               <>
                 <option value="COMPLETED">Completed</option>
-                <option value="NO_SHOW">No-show</option>
                 <option value="CANCELLED">Cancelled</option>
               </>
             )}

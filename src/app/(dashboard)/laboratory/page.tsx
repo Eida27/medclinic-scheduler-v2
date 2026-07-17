@@ -3,6 +3,7 @@ import {
   APPOINTMENT_PAGE_SIZE,
   parseAppointmentPage,
 } from "@/components/appointments/appointment-pagination";
+import { parseAppointmentListSort } from "@/components/appointments/appointment-list-sort";
 import { requireUser } from "@/server/auth/current-user";
 import { assertClinicAccess } from "@/server/clinic-access";
 import { clinicConfigs } from "@/server/clinics";
@@ -19,12 +20,14 @@ export default async function LaboratoryPage({
   assertClinicAccess(user, clinic.code);
   const params = await searchParams;
   const page = parseAppointmentPage(params.page);
+  const sort = parseAppointmentListSort(params.sort);
   const result = await listAppointments({
     clinicCode: "KABALAKA_CLINIC",
     appointmentDate: params.appointmentDate,
     scheduleType: "LABORATORY",
     status: params.status,
     studentNumber: params.studentNumber,
+    sort,
     isPublished: true,
     page,
     limit: APPOINTMENT_PAGE_SIZE,
@@ -40,7 +43,7 @@ export default async function LaboratoryPage({
       emptyMessage="No published laboratory appointments match these filters."
       page={page}
       total={result.total}
-      filters={params}
+      filters={{ ...params, sort }}
       appointments={result.items}
     />
   );

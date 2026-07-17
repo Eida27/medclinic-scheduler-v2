@@ -42,6 +42,7 @@ describe("LaboratoryPage", () => {
         studentNumber: "Ana Santos",
         appointmentDate: "2026-08-18",
         status: "COMPLETED",
+        sort: "surname_asc",
         isPublished: "false",
       }),
     }));
@@ -54,6 +55,7 @@ describe("LaboratoryPage", () => {
       scheduleType: "LABORATORY",
       status: "COMPLETED",
       studentNumber: "Ana Santos",
+      sort: "surname_asc",
       isPublished: true,
       page: 1,
       limit: 150,
@@ -84,6 +86,7 @@ describe("LaboratoryPage", () => {
         studentNumber: "Ana Santos",
         appointmentDate: "2026-08-18",
         status: "COMPLETED",
+        sort: "latest",
         page: "2",
       }),
     }));
@@ -94,6 +97,7 @@ describe("LaboratoryPage", () => {
       scheduleType: "LABORATORY",
       status: "COMPLETED",
       studentNumber: "Ana Santos",
+      sort: "latest",
       isPublished: true,
       page: 2,
       limit: 150,
@@ -102,8 +106,17 @@ describe("LaboratoryPage", () => {
     expect(screen.getByText("Page 2 of 2")).toBeVisible();
     expect(screen.getByRole("link", { name: "Previous page" })).toHaveAttribute(
       "href",
-      "/laboratory?studentNumber=Ana+Santos&appointmentDate=2026-08-18&status=COMPLETED&page=1",
+      "/laboratory?studentNumber=Ana+Santos&sort=latest&appointmentDate=2026-08-18&status=COMPLETED&page=1",
     );
     expect(screen.queryByRole("link", { name: "Next page" })).not.toBeInTheDocument();
+  });
+
+  it("falls back to soonest for an unsupported sort", async () => {
+    render(await LaboratoryPage({
+      searchParams: Promise.resolve({ sort: "date_desc" }),
+    }));
+
+    expect(listAppointments).toHaveBeenCalledWith(expect.objectContaining({ sort: "soonest" }));
+    expect(screen.getByRole("combobox", { name: "Sort" })).toHaveValue("soonest");
   });
 });

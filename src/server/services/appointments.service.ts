@@ -15,7 +15,7 @@ import type { SessionUser } from "@/types/roles";
 
 const transitions: Record<AppointmentStatus, AppointmentStatus[]> = {
   DRAFT: ["PENDING", "CANCELLED"],
-  PENDING: ["COMPLETED", "NO_SHOW", "RESCHEDULED", "CANCELLED"],
+  PENDING: ["COMPLETED", "RESCHEDULED", "CANCELLED"],
   COMPLETED: [], NO_SHOW: ["RESCHEDULED"], RESCHEDULED: [], CANCELLED: [],
 };
 
@@ -40,6 +40,16 @@ function assertAppointmentMutationAuthorized(
   }
   if (actor.role === "CLINIC_STAFF" && actor.clinicId !== appointment.clinicId) {
     throw new AppError("CLINIC_ACCESS_DENIED", "You can only manage your assigned clinic.", 403);
+  }
+}
+
+function assertManualNoShowNotRequested(status?: AppointmentStatus) {
+  if (status === "NO_SHOW") {
+    throw new AppError(
+      "MANUAL_NO_SHOW_NOT_ALLOWED",
+      "No-show is assigned automatically at midnight and cannot be set manually.",
+      422,
+    );
   }
 }
 
@@ -86,6 +96,7 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
         const appointment = await getAppointmentMutationContext(id, client);
         if (!appointment) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
         assertAppointmentMutationAuthorized(actor, appointment);
+        assertManualNoShowNotRequested(input.status);
         if (!["PENDING", "NO_SHOW"].includes(appointment.status)) {
           throw new AppError("INVALID_RESCHEDULE", "Only pending or no-show appointments can be rescheduled.", 422);
         }
@@ -142,6 +153,7 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
       const appointment = await getAppointmentMutationContext(id, client);
       if (!appointment) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
       assertAppointmentMutationAuthorized(actor, appointment);
+      assertManualNoShowNotRequested(requestedStatus);
       assertStatusTransition(appointment.status, requestedStatus);
       await changeAppointmentStatusWithClient(
         client,
