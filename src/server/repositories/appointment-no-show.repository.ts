@@ -1,6 +1,15 @@
 import "server-only";
 import { AUTOMATIC_NO_SHOW_NOTE } from "@/server/appointments/automatic-no-show";
-import { transaction } from "@/server/db/pool";
+import { query, transaction } from "@/server/db/pool";
+
+export async function getNextNoShowSweepAt(now: Date, timeZone: string) {
+  const result = await query<{ nextSweepAt: Date }>(
+    `SELECT (((($1::timestamptz AT TIME ZONE $2)::date + 1)::timestamp
+              AT TIME ZONE $2)) AS "nextSweepAt"`,
+    [now, timeZone],
+  );
+  return result.rows[0].nextSweepAt;
+}
 
 export async function markOverdueAppointmentsNoShow(now: Date, timeZone: string) {
   return transaction(async (client) => {
@@ -11,13 +20,8 @@ export async function markOverdueAppointmentsNoShow(now: Date, timeZone: string)
           WHERE appointment.is_published=TRUE
             AND appointment.status='PENDING'
             AND appointment.schedule_type IN ('LABORATORY','PHYSICAL_EXAM')
-            AND CASE
-                  WHEN appointment.appointment_time IS NULL THEN
-                    ((appointment.appointment_date + 2)::timestamp AT TIME ZONE $2)
-                  ELSE
-                    ((appointment.appointment_date + appointment.appointment_time)
-                      AT TIME ZONE $2) + INTERVAL '24 hours'
-                END <= $1::timestamptz
+            AND ((appointment.appointment_date + 1)::timestamp AT TIME ZONE $2)
+                <= $1::timestamptz
           FOR UPDATE SKIP LOCKED
        ), changed AS (
          UPDATE appointments appointment

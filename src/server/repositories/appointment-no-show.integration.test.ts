@@ -20,6 +20,7 @@ vi.mock("@/server/db/pool", async (importOriginal) => {
 
 import {
   AUTOMATIC_NO_SHOW_NOTE,
+  LEGACY_AUTOMATIC_NO_SHOW_NOTE,
   isAutomaticNoShowLog,
 } from "@/server/appointments/automatic-no-show";
 import { pool, transaction } from "@/server/db/pool";
@@ -27,13 +28,15 @@ import {
   cleanupTestFixtures,
   TEST_REFERENCE_IDS,
 } from "@/test/integration-fixtures";
-import { markOverdueAppointmentsNoShow } from "./appointment-no-show.repository";
+import {
+  getNextNoShowSweepAt,
+  markOverdueAppointmentsNoShow,
+} from "./appointment-no-show.repository";
 
 const studentPattern = "TEST-AUTO-NS-%";
 const batchPattern = "TEST automatic no-show fixture%";
 const timeZone = "Asia/Manila";
-const dateOnlyBoundary = new Date("2045-01-11T16:00:00.000Z"); // Jan 12 00:00 Manila
-const timedBoundary = new Date("2045-01-11T01:00:00.000Z"); // Jan 11 09:00 Manila
+const nextDayBoundary = new Date("2045-01-10T16:00:00.000Z"); // Jan 11 00:00 Manila
 
 type FixtureAppointment = {
   studentNumber: string;
@@ -159,6 +162,10 @@ describe("isAutomaticNoShowLog", () => {
     expect(isAutomaticNoShowLog({ ...canonicalLog, newStatus: "PENDING" })).toBe(false);
     expect(isAutomaticNoShowLog({ ...canonicalLog, notes: "Manual no-show" })).toBe(false);
     expect(isAutomaticNoShowLog({ ...canonicalLog, changedById: "user-id" })).toBe(false);
+    expect(isAutomaticNoShowLog({
+      ...canonicalLog,
+      notes: LEGACY_AUTOMATIC_NO_SHOW_NOTE,
+    })).toBe(true);
   });
 });
 
@@ -179,19 +186,41 @@ describe("markOverdueAppointmentsNoShow", () => {
     expect(unrelated.rows).toHaveLength(1);
 
     await withRollbackTransaction(async (client) => {
-      const dateOnlyId = await insertFixtureAppointment(client, {
-        studentNumber: "TEST-AUTO-NS-DATE",
-        scheduleType: "LABORATORY",
-        appointmentDate: "2045-01-10",
-        notes: "Keep date-only note",
-      });
-      const timedId = await insertFixtureAppointment(client, {
-        studentNumber: "TEST-AUTO-NS-TIMED",
-        scheduleType: "PHYSICAL_EXAM",
-        appointmentDate: "2045-01-10",
-        appointmentTime: "09:00:00",
-        notes: "Keep timed note",
-      });
+      const eligibleFixtures = [
+        {
+          studentNumber: "TEST-AUTO-NS-LD",
+          scheduleType: "LABORATORY",
+          appointmentDate: "2045-01-10",
+          notes: "Keep laboratory date-only note",
+        },
+        {
+          studentNumber: "TEST-AUTO-NS-LT",
+          scheduleType: "LABORATORY",
+          appointmentDate: "2045-01-10",
+          appointmentTime: "09:00:00",
+          notes: "Keep laboratory timed note",
+        },
+        {
+          studentNumber: "TEST-AUTO-NS-PD",
+          scheduleType: "PHYSICAL_EXAM",
+          appointmentDate: "2045-01-10",
+          notes: "Keep physical date-only note",
+        },
+        {
+          studentNumber: "TEST-AUTO-NS-PT",
+          scheduleType: "PHYSICAL_EXAM",
+          appointmentDate: "2045-01-10",
+          appointmentTime: "14:30:00",
+          notes: "Keep physical timed note",
+        },
+      ] satisfies FixtureAppointment[];
+      const eligibleIds = new Map<string, string>();
+      for (const fixture of eligibleFixtures) {
+        eligibleIds.set(
+          fixture.studentNumber,
+          await insertFixtureAppointment(client, fixture),
+        );
+      }
       const unchangedFixtures = [
         { studentNumber: "TEST-AUTO-NS-DRAFT", status: "DRAFT", isPublished: true },
         { studentNumber: "TEST-AUTO-NS-UNPUB", status: "PENDING", isPublished: false },
@@ -209,40 +238,36 @@ describe("markOverdueAppointmentsNoShow", () => {
         }));
       }
 
-      const beforeTimed = await markOverdueAppointmentsNoShow(
-        new Date(timedBoundary.getTime() - 1),
+      const beforeBoundary = await markOverdueAppointmentsNoShow(
+        new Date(nextDayBoundary.getTime() - 1),
         timeZone,
       );
-      expect(beforeTimed.appointmentIds).not.toContain(timedId);
-      expect(await appointmentState(client, timedId)).toMatchObject({ status: "PENDING" });
+      for (const appointmentId of eligibleIds.values()) {
+        expect(beforeBoundary.appointmentIds).not.toContain(appointmentId);
+      }
+      for (const appointmentId of eligibleIds.values()) {
+        expect(await appointmentState(client, appointmentId)).toMatchObject({
+          status: "PENDING",
+        });
+      }
       expect(await persistedAppointmentState(unrelated.rows[0].id)).toMatchObject({
         status: "PENDING",
       });
 
-      expect(await markOverdueAppointmentsNoShow(timedBoundary, timeZone)).toEqual({
-        count: 1,
-        appointmentIds: [timedId],
-      });
-      expect(await appointmentState(client, timedId)).toEqual({
-        status: "NO_SHOW",
-        notes: "Keep timed note",
-      });
-
-      const beforeDateOnly = await markOverdueAppointmentsNoShow(
-        new Date(dateOnlyBoundary.getTime() - 1),
-        timeZone,
+      const atBoundary = await markOverdueAppointmentsNoShow(nextDayBoundary, timeZone);
+      expect(atBoundary.count).toBe(eligibleFixtures.length);
+      expect(atBoundary.appointmentIds.sort()).toEqual(
+        [...eligibleIds.values()].sort(),
       );
-      expect(beforeDateOnly).toEqual({ count: 0, appointmentIds: [] });
-      expect(await appointmentState(client, dateOnlyId)).toMatchObject({ status: "PENDING" });
-
-      expect(await markOverdueAppointmentsNoShow(dateOnlyBoundary, timeZone)).toEqual({
-        count: 1,
-        appointmentIds: [dateOnlyId],
-      });
-      expect(await appointmentState(client, dateOnlyId)).toEqual({
-        status: "NO_SHOW",
-        notes: "Keep date-only note",
-      });
+      for (const fixture of eligibleFixtures) {
+        expect(await appointmentState(
+          client,
+          eligibleIds.get(fixture.studentNumber)!,
+        )).toEqual({
+          status: "NO_SHOW",
+          notes: fixture.notes,
+        });
+      }
 
       for (const fixture of unchangedFixtures) {
         const state = await appointmentState(client, unchangedIds.get(fixture.studentNumber)!);
@@ -252,7 +277,7 @@ describe("markOverdueAppointmentsNoShow", () => {
         });
       }
 
-      const fixtureIds = [dateOnlyId, timedId, ...unchangedIds.values()];
+      const fixtureIds = [...eligibleIds.values(), ...unchangedIds.values()];
       const logs = await client.query<{
         appointmentId: string;
         oldStatus: string | null;
@@ -268,9 +293,9 @@ describe("markOverdueAppointmentsNoShow", () => {
         [fixtureIds],
       );
 
-      expect(logs.rows).toHaveLength(2);
+      expect(logs.rows).toHaveLength(eligibleFixtures.length);
       expect(logs.rows.map((log) => log.appointmentId).sort()).toEqual(
-        [dateOnlyId, timedId].sort(),
+        [...eligibleIds.values()].sort(),
       );
       expect(logs.rows.every((log) => isAutomaticNoShowLog(log))).toBe(true);
     });
@@ -302,8 +327,8 @@ describe("markOverdueAppointmentsNoShow", () => {
       notes: "Keep race note",
     }));
     const boundary = await pool.query<{ boundary: Date }>(
-      `SELECT (($1::date + $2::time) AT TIME ZONE $3) + INTERVAL '24 hours' AS boundary`,
-      [appointmentDate, "09:00:00", timeZone],
+      `SELECT (($1::date + 1)::timestamp AT TIME ZONE $2) AS boundary`,
+      [appointmentDate, timeZone],
     );
     const concurrencyBoundary = boundary.rows[0].boundary;
 
@@ -338,5 +363,19 @@ describe("markOverdueAppointmentsNoShow", () => {
       status: "NO_SHOW",
       notes: "Keep race note",
     });
+  });
+});
+
+describe("getNextNoShowSweepAt", () => {
+  it("returns the next midnight in the configured timezone", async () => {
+    await expect(getNextNoShowSweepAt(
+      new Date("2026-07-10T07:59:59.000Z"),
+      timeZone,
+    )).resolves.toEqual(new Date("2026-07-10T16:00:00.000Z"));
+
+    await expect(getNextNoShowSweepAt(
+      new Date("2026-07-10T16:00:00.000Z"),
+      timeZone,
+    )).resolves.toEqual(new Date("2026-07-11T16:00:00.000Z"));
   });
 });

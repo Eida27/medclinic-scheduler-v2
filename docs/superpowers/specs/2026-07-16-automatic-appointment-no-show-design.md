@@ -8,19 +8,19 @@ Reduce repetitive clinic work by automatically changing overdue published appoin
 
 - Only published `PENDING` appointments are eligible. Draft, completed, cancelled, rescheduled, and already no-show appointments never change during a sweep.
 - All deadline calculations use `APP_TIMEZONE`, whose deployment default is `Asia/Manila`.
-- An appointment with a time becomes overdue exactly 24 hours after its scheduled local date and time.
-- An appointment without a time is treated as lasting through the end of its scheduled local date, followed by a 24-hour staff grace period. In boundary terms, a July 10 date-only appointment becomes eligible at July 12, 12:00 AM local time.
+- Appointments with and without a time share one deadline: midnight at the start of the local day after `appointment_date`. In boundary terms, every July 10 appointment becomes eligible at July 11, 12:00 AM local time.
+- `appointment_time` remains available for scheduling and display but never extends the automatic no-show deadline.
 - The comparison is inclusive: an appointment is eligible when the current instant is equal to or later than its deadline.
 - The policy applies to existing appointments as well as newly published appointments. On first deployment, the current dataset has no appointment already beyond the deadline.
 
 ## Automation Architecture
 
 - A Node-runtime startup hook starts one application-local worker when the Next.js server boots.
-- The worker runs one sweep immediately, then runs every five minutes. This provides restart catch-up without a separate Windows Task Scheduler deployment step.
+- The worker runs one sweep immediately, then schedules a one-shot timer for the next local midnight. After each successful sweep it calculates and schedules the following midnight, providing exact-midnight execution and restart catch-up without a separate Windows Task Scheduler deployment step.
 - Each sweep performs one set-based PostgreSQL transaction. It locks and updates only rows that are still published and `PENDING`, then inserts one matching `appointment_status_logs` row per changed appointment.
-- Automatic history entries have no user actor, so the existing appointment history displays `System`. The note must clearly identify the automatic 24-hour no-show rule.
+- Automatic history entries have no user actor, so the existing appointment history displays `System`. New entries state that the appointment day ended; the former completion-window note remains recognized only so historical automatic no-shows stay correctable.
 - The update is idempotent and concurrency-safe. Multiple server processes may attempt a sweep, but row locking and rechecking status allow each appointment to transition and log only once.
-- The worker logs sweep failures to the server console and continues scheduling future attempts. A failed transaction changes no appointment or history row.
+- The worker logs sweep or midnight-calculation failures to the server console and retries after five minutes. A failed transaction changes no appointment or history row.
 - The interval is unreferenced so it does not prevent normal process shutdown. Development hot reload must not register duplicate timers within one process.
 
 ## Completion and Correction Behavior
@@ -51,7 +51,7 @@ Reduce repetitive clinic work by automatically changing overdue published appoin
 
 ## Verification
 
-- Unit tests cover transition validation, mandatory correction reasons, and worker lifecycle behavior.
+- Unit tests cover transition validation, mandatory correction reasons, exact-midnight scheduling, late callbacks, failure retries, and worker lifecycle behavior.
 - Database-backed tests cover both schedule types; timed and date-only boundary instants; exclusion of unpublished and non-pending rows; one log per transition; repeat and concurrent sweeps; and immediate restart catch-up behavior through an explicit sweep invocation.
 - Integration tests cover atomic linked-result completion, rollback behavior, automatic no-show correction, manual no-show rejection, administrator access, same-clinic staff access, cross-clinic staff rejection, and coordinator rejection.
 - Existing full tests, lint, and production build must pass.
@@ -62,5 +62,5 @@ Reduce repetitive clinic work by automatically changing overdue published appoin
 
 - Add no external scheduler or dependency.
 - Document that automatic reconciliation runs only while the application server is running and catches up immediately on the next startup.
-- Document the five-minute maximum steady-state delay after a deadline and the date-only deadline rule.
+- Document the shared next-day-midnight rule, exact-midnight timer, and five-minute failure retry.
 - Keep `APP_TIMEZONE=Asia/Manila` as the deployment default; the worker must use the configured value rather than a second hard-coded timezone.

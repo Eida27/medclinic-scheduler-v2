@@ -4,7 +4,7 @@
 
 **Goal:** Automatically mark overdue published Laboratory and Physical Examination appointments as `NO_SHOW`, synchronize linked completed results, and allow audited corrections of system-generated no-shows.
 
-**Architecture:** Add a set-based, concurrency-safe PostgreSQL sweep behind a five-minute application worker started by Next.js instrumentation. Centralize completion authorization and automatic-no-show recognition in the appointment service so both appointment PATCH requests and linked result writes share the same transaction-safe rules.
+**Architecture:** Add a set-based, concurrency-safe PostgreSQL sweep behind an application worker that runs at startup and each configured-timezone midnight. Centralize completion authorization and automatic-no-show recognition in the appointment service so both appointment PATCH requests and linked result writes share the same transaction-safe rules.
 
 **Tech Stack:** Next.js 16 App Router, React 19, TypeScript, PostgreSQL with `pg`, Vitest, Testing Library, in-app Browser
 
@@ -12,10 +12,9 @@
 
 - Apply the sweep only to published `PENDING` `LABORATORY` and `PHYSICAL_EXAM` appointments.
 - Calculate deadlines in `APP_TIMEZONE` (`Asia/Manila` by default).
-- Timed deadline: scheduled local timestamp plus 24 hours.
-- Date-only deadline: midnight at the start of the second local day after the appointment date.
-- Run once at Node server startup and every 300,000 ms thereafter; failed sweeps roll back, log to the server console, and do not stop future sweeps.
-- Use the canonical note `Automatically marked no-show after the 24-hour appointment completion window.` for automatic status-history entries.
+- Timed and date-only deadline: midnight at the start of the local day after `appointment_date`; `appointment_time` does not extend it.
+- Run once at Node server startup and at each `APP_TIMEZONE` midnight thereafter; failures roll back, log to the server console, and retry after 300,000 ms.
+- Use the canonical note `Automatically marked no-show after the scheduled appointment day ended.` for new automatic status-history entries, while recognizing the former note for historical corrections.
 - Permit `NO_SHOW` to `COMPLETED` only when the latest history row is the canonical system transition, the actor is an administrator or same-clinic staff member, and a correction reason is present.
 - Treat linked-result remarks as the correction reason when a completed result corrects an automatic no-show.
 - Add no dependency, public route, schema migration, or standalone scheduler.
@@ -30,7 +29,7 @@
 - Create: `src/server/repositories/appointment-no-show.integration.test.ts`
 
 **Interfaces:**
-- Produces: `AUTOMATIC_NO_SHOW_NOTE`, `isAutomaticNoShowLog(log)`, and `markOverdueAppointmentsNoShow(now, timeZone): Promise<{ count: number; appointmentIds: string[] }>`.
+- Produces: `AUTOMATIC_NO_SHOW_NOTE`, `LEGACY_AUTOMATIC_NO_SHOW_NOTE`, `isAutomaticNoShowLog(log)`, `getNextNoShowSweepAt(now, timeZone): Promise<Date>`, and `markOverdueAppointmentsNoShow(now, timeZone): Promise<{ count: number; appointmentIds: string[] }>`.
 - Consumes: the existing `appointments`, `appointment_status_logs`, and transaction helper.
 
 - [ ] **Step 1: Write the pure policy and failing database-backed tests**
@@ -39,6 +38,9 @@ Create the shared policy contract:
 
 ```ts
 export const AUTOMATIC_NO_SHOW_NOTE =
+  "Automatically marked no-show after the scheduled appointment day ended.";
+
+export const LEGACY_AUTOMATIC_NO_SHOW_NOTE =
   "Automatically marked no-show after the 24-hour appointment completion window.";
 
 export type AutomaticNoShowLog = {
@@ -53,7 +55,8 @@ export function isAutomaticNoShowLog(log: AutomaticNoShowLog | null | undefined)
     log
       && log.oldStatus === "PENDING"
       && log.newStatus === "NO_SHOW"
-      && log.notes === AUTOMATIC_NO_SHOW_NOTE
+      && (log.notes === AUTOMATIC_NO_SHOW_NOTE
+        || log.notes === LEGACY_AUTOMATIC_NO_SHOW_NOTE)
       && log.changedById === null,
   );
 }
@@ -62,11 +65,10 @@ export function isAutomaticNoShowLog(log: AutomaticNoShowLog | null | undefined)
 In the new integration test, create disposable `TEST-AUTO-NS-%` students and published appointments covering:
 
 ```ts
-const dateOnlyBoundary = new Date("2045-01-11T16:00:00.000Z"); // Jan 12 00:00 Manila
-const timedBoundary = new Date("2045-01-11T01:00:00.000Z"); // Jan 11 09:00 Manila
+const nextDayBoundary = new Date("2045-01-10T16:00:00.000Z"); // Jan 11 00:00 Manila
 ```
 
-Assert both schedule types transition at the exact inclusive boundary, one millisecond before each boundary remains pending, and draft/completed/cancelled/rescheduled/no-show rows remain unchanged. Assert each changed row has exactly one canonical log with `changed_by IS NULL`. Run two sweeps concurrently for one eligible appointment and assert the summed count and log count are both one.
+Assert both schedule types with and without appointment times transition at the exact inclusive boundary, one millisecond before the boundary remains pending, and draft/completed/cancelled/rescheduled/no-show rows remain unchanged. Assert each changed row has exactly one canonical log with `changed_by IS NULL`. Run two sweeps concurrently for one eligible appointment and assert the summed count and log count are both one.
 
 - [ ] **Step 2: Run the focused tests and verify RED**
 
@@ -88,13 +90,8 @@ const result = await client.query<{ appointmentId: string }>(
       WHERE appointment.is_published=TRUE
         AND appointment.status='PENDING'
         AND appointment.schedule_type IN ('LABORATORY','PHYSICAL_EXAM')
-        AND CASE
-              WHEN appointment.appointment_time IS NULL THEN
-                ((appointment.appointment_date + 2)::timestamp AT TIME ZONE $2)
-              ELSE
-                ((appointment.appointment_date + appointment.appointment_time)
-                  AT TIME ZONE $2) + INTERVAL '24 hours'
-            END <= $1::timestamptz
+        AND ((appointment.appointment_date + 1)::timestamp AT TIME ZONE $2)
+            <= $1::timestamptz
       FOR UPDATE SKIP LOCKED
    ), changed AS (
      UPDATE appointments appointment
@@ -134,7 +131,7 @@ git commit -m "feat: reconcile overdue appointments"
 
 ---
 
-### Task 2: Start the five-minute worker with the application
+### Task 2: Start the exact-midnight worker with the application
 
 **Files:**
 - Create: `src/server/services/appointment-no-show.service.ts`
@@ -144,8 +141,8 @@ git commit -m "feat: reconcile overdue appointments"
 - Create: `src/instrumentation.test.ts`
 
 **Interfaces:**
-- Consumes: `markOverdueAppointmentsNoShow(now, serverEnv().APP_TIMEZONE)`.
-- Produces: `sweepOverdueAppointments(now?)` and `startAppointmentNoShowWorker(dependencies?)`.
+- Consumes: `markOverdueAppointmentsNoShow(now, serverEnv().APP_TIMEZONE)` and `getNextNoShowSweepAt(now, serverEnv().APP_TIMEZONE)`.
+- Produces: `sweepOverdueAppointments(now?)`, `nextNoShowSweepAt(now?)`, and `startAppointmentNoShowWorker(dependencies?)`.
 
 - [ ] **Step 1: Write failing worker lifecycle tests**
 
@@ -153,13 +150,15 @@ Use injected dependencies rather than real timers or PostgreSQL:
 
 ```ts
 type WorkerDependencies = {
-  sweep?: () => Promise<unknown>;
-  schedule?: (callback: () => void, intervalMs: number) => { unref?: () => void };
+  sweep?: (now?: Date) => Promise<unknown>;
+  nextRunAt?: (now?: Date) => Promise<Date>;
+  now?: () => Date;
+  schedule?: (callback: () => void, delayMs: number) => { unref?: () => void };
   reportError?: (message: string, error: unknown) => void;
 };
 ```
 
-Test that the first start calls `sweep` immediately, schedules exactly `300_000`, calls `unref`, and a second start in the same process does nothing. Invoke the captured interval callback and assert it performs another sweep. Reject one sweep and assert the canonical error message is reported while the callback remains usable.
+Test that the first start calls `sweep` immediately with a fresh clock value, looks up the next local midnight, schedules exactly that delay, calls `unref`, and a second start in the same process does nothing. Invoke the captured timeout callback at and after midnight and assert it performs another sweep before scheduling the following midnight. Reject a sweep and a midnight lookup separately; assert the canonical error message and a `300_000` ms retry.
 
 For instrumentation, mock `startAppointmentNoShowWorker`, set `NEXT_RUNTIME=nodejs`, call `register()`, and expect one start. Set a non-Node runtime and expect none.
 
@@ -179,12 +178,16 @@ Service:
 export function sweepOverdueAppointments(now = new Date()) {
   return markOverdueAppointmentsNoShow(now, serverEnv().APP_TIMEZONE);
 }
+
+export function nextNoShowSweepAt(now = new Date()) {
+  return getNextNoShowSweepAt(now, serverEnv().APP_TIMEZONE);
+}
 ```
 
 Worker behavior:
 
 ```ts
-export const APPOINTMENT_NO_SHOW_INTERVAL_MS = 5 * 60 * 1000;
+export const APPOINTMENT_NO_SHOW_RETRY_MS = 5 * 60 * 1000;
 
 declare global {
   var __medclinicAppointmentNoShowWorkerStarted: boolean | undefined;
@@ -195,14 +198,26 @@ export function startAppointmentNoShowWorker(dependencies: WorkerDependencies = 
   globalThis.__medclinicAppointmentNoShowWorkerStarted = true;
 
   const sweep = dependencies.sweep ?? sweepOverdueAppointments;
+  const nextRunAt = dependencies.nextRunAt ?? nextNoShowSweepAt;
+  const now = dependencies.now ?? (() => new Date());
+  const schedule = dependencies.schedule ?? setTimeout;
   const reportError = dependencies.reportError ?? console.error;
-  const run = () => void sweep().catch((error) => {
-    reportError("Automatic appointment no-show sweep failed.", error);
-  });
+  const scheduleRun = (delayMs: number) => {
+    const timer = schedule(() => void run(), Math.max(0, delayMs));
+    timer.unref?.();
+  };
+  const run = async () => {
+    try {
+      await sweep(now());
+      const boundary = await nextRunAt(now());
+      scheduleRun(boundary.getTime() - now().getTime());
+    } catch (error) {
+      reportError("Automatic appointment no-show sweep failed.", error);
+      scheduleRun(APPOINTMENT_NO_SHOW_RETRY_MS);
+    }
+  };
 
-  run();
-  const timer = (dependencies.schedule ?? setInterval)(run, APPOINTMENT_NO_SHOW_INTERVAL_MS);
-  timer.unref?.();
+  void run();
   return true;
 }
 ```
@@ -554,16 +569,16 @@ git commit -m "feat: sync completed results with appointments"
 - Modify: `README.md`
 
 **Interfaces:**
-- Documents: startup catch-up, five-minute sweep cadence, `APP_TIMEZONE`, date-only rule, linked completion, and correction permissions.
+- Documents: startup catch-up, exact-midnight scheduling, five-minute failure retries, `APP_TIMEZONE`, shared timed/date-only rule, linked completion, and correction permissions.
 
 - [ ] **Step 1: Update operational documentation**
 
 Add an `Automatic no-show reconciliation` subsection to the local deployment guidance stating:
 
 ```markdown
-- The application checks overdue published appointments when the server starts and every five minutes while it remains running.
-- Timed appointments become no-show 24 hours after their scheduled time in `APP_TIMEZONE`.
-- Date-only appointments receive the full scheduled day plus the following 24 hours; a July 10 appointment becomes eligible at July 12, 12:00 AM.
+- The application checks overdue published appointments when the server starts, then schedules one sweep for each midnight in `APP_TIMEZONE`.
+- Date-only and timed appointments both become no-show at the start of the next local day; a July 10 appointment becomes eligible at July 11, 12:00 AM regardless of its optional time.
+- If a sweep or midnight calculation fails, the application logs the error and retries after five minutes.
 - Completing a linked result also completes its appointment.
 - Administrators and assigned clinic staff can correct a system-generated no-show with a required reason; manual no-shows cannot be corrected to completed.
 - Downtime does not lose transitions: the startup sweep catches up when the server returns.
