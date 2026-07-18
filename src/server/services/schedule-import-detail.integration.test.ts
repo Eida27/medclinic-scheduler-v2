@@ -1,34 +1,21 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { pool } from "@/server/db/pool";
-import {
-  cleanupTestFixtures,
-  TEST_REFERENCE_IDS,
-} from "@/test/integration-fixtures";
+import { cleanupTestFixtures, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import type { SessionUser } from "@/types/roles";
-import {
-  generateScheduleImport,
-  getScheduleImport,
-  importStudentScheduleCsv,
-  validateScheduleImport,
-} from "./schedule-imports.service";
+import { acceptAndScheduleImport, getScheduleImport } from "./schedule-imports.service";
 
-const admin = {
+const studentPattern = "99-93%";
+const importPattern = "REGULAR 2026-2027 - TEST-DETAIL%";
+const admin: SessionUser = {
   userId: TEST_REFERENCE_IDS.adminUser,
   fullName: "System Admin",
   email: "admin@medclinic.local",
   role: "ADMIN",
-  clinicId: null,
-  clinicCode: null,
-  clinicName: null,
-} satisfies SessionUser;
-
-const studentPattern = "TEST-DETAIL-%";
-const batchPattern = "TEST Detail%";
-const importPattern = "TEST Detail%";
+};
 
 async function cleanup() {
-  await cleanupTestFixtures(studentPattern, batchPattern, importPattern);
+  await cleanupTestFixtures(studentPattern, importPattern, importPattern);
 }
 
 beforeAll(cleanup);
@@ -38,58 +25,46 @@ afterAll(async () => {
   await pool.end();
 });
 
-describe("grouped schedule import detail", () => {
-  it("returns unpublished draft appointments inside their grouped child batches", async () => {
+describe("published schedule import detail", () => {
+  it("returns compact published children with nullable category-driven priority", async () => {
     const contents = [
-      "Student ID,Name,College,Course,Year,Laboratory Schedule,Physical Examination Schedule",
-      'TEST-DETAIL-001,"Reviewer, Draft",College of Computer Studies,BSIT,3,12-10-2026,12-11-2026',
+      "Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth",
+      "99-9301-01,Reviewer,Draft,M.,,College of Computer Studies,BSIT,3,05-06-2003",
     ].join("\n");
-    const created = await importStudentScheduleCsv({
-      fileName: "TEST-DETAIL-schedule.csv",
+    const created = await acceptAndScheduleImport({
+      fileName: "TEST-DETAIL-students.csv",
       fileSize: Buffer.byteLength(contents),
       contents,
-      importName: "TEST Detail appointments",
-      priorityGroupId: TEST_REFERENCE_IDS.regularPriority,
-      submittedByName: "Test Registrar",
-      description: "Disposable grouped detail fixture",
+      studentCategory: "REGULAR",
+      academicYearStart: 2026,
+      preferredMonth: null,
     }, admin);
 
-    await validateScheduleImport(created.importId, admin);
-    await generateScheduleImport(created.importId, admin);
-
     const detail = await getScheduleImport(created.importId, admin);
+    expect(detail.status).toBe("PUBLISHED");
     expect(detail.childBatches).toEqual(expect.arrayContaining([
       expect.objectContaining({
         clinicCode: "KABALAKA_CLINIC",
+        status: "PUBLISHED",
         items: [expect.objectContaining({
-          studentNumber: "TEST-DETAIL-001",
-          studentName: "Reviewer, Draft",
+          studentNumber: "99-9301-01",
+          studentName: "Reviewer, Draft M.",
+          priorityGroupId: null,
+          priorityGroupName: null,
         })],
         appointments: [expect.objectContaining({
-          studentNumber: "TEST-DETAIL-001",
-          studentName: "Reviewer, Draft",
+          studentNumber: "99-9301-01",
+          studentName: "Reviewer, Draft M.",
           scheduleType: "LABORATORY",
-          priorityGroupName: "Regular",
-          appointmentDate: "2026-12-10",
-          status: "DRAFT",
-          isPublished: false,
+          priorityGroupName: null,
+          status: "PENDING",
+          isPublished: true,
         })],
       }),
       expect.objectContaining({
         clinicCode: "CPU_CLINIC",
-        items: [expect.objectContaining({
-          studentNumber: "TEST-DETAIL-001",
-          studentName: "Reviewer, Draft",
-        })],
-        appointments: [expect.objectContaining({
-          studentNumber: "TEST-DETAIL-001",
-          studentName: "Reviewer, Draft",
-          scheduleType: "PHYSICAL_EXAM",
-          priorityGroupName: "Regular",
-          appointmentDate: "2026-12-11",
-          status: "DRAFT",
-          isPublished: false,
-        })],
+        status: "PUBLISHED",
+        items: [expect.objectContaining({ scheduleType: "PHYSICAL_EXAM" })],
       }),
     ]));
   });

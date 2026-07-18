@@ -197,8 +197,8 @@ export async function getScheduleBatch(batchId: string, client?: PoolClient) {
                 i.target_date::text AS "targetDate", i.target_week_start::text AS "targetWeekStart", i.target_week_end::text AS "targetWeekEnd",
                 i.remarks, i.status, i.validation_issues AS "validationIssues"
          FROM coordinator_schedule_items i JOIN students s ON s.student_number=i.student_number
-         JOIN priority_groups pg ON pg.id=i.priority_group_id JOIN clinics cl ON cl.id=i.clinic_id WHERE i.batch_id=$1
-         ORDER BY pg.rank_order, i.student_number`, [batchId])
+         LEFT JOIN priority_groups pg ON pg.id=i.priority_group_id JOIN clinics cl ON cl.id=i.clinic_id WHERE i.batch_id=$1
+         ORDER BY pg.rank_order NULLS LAST, i.student_number`, [batchId])
     : await query(
         `SELECT i.id, i.clinic_id AS "clinicId", cl.code AS "clinicCode", cl.name AS "clinicName",
                 i.student_number AS "studentNumber", ${studentDisplayNameSql("s")} AS "studentName",
@@ -206,8 +206,8 @@ export async function getScheduleBatch(batchId: string, client?: PoolClient) {
                 i.target_date::text AS "targetDate", i.target_week_start::text AS "targetWeekStart", i.target_week_end::text AS "targetWeekEnd",
                 i.remarks, i.status, i.validation_issues AS "validationIssues"
          FROM coordinator_schedule_items i JOIN students s ON s.student_number=i.student_number
-         JOIN priority_groups pg ON pg.id=i.priority_group_id JOIN clinics cl ON cl.id=i.clinic_id WHERE i.batch_id=$1
-         ORDER BY pg.rank_order, i.student_number`, [batchId]);
+         LEFT JOIN priority_groups pg ON pg.id=i.priority_group_id JOIN clinics cl ON cl.id=i.clinic_id WHERE i.batch_id=$1
+         ORDER BY pg.rank_order NULLS LAST, i.student_number`, [batchId]);
   return { ...result.rows[0], items: items.rows };
 }
 

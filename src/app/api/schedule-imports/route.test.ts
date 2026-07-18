@@ -2,143 +2,103 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppError } from "@/lib/errors";
 
-const { requireUser, importAndPublishStudentScheduleCsv, listScheduleImports } = vi.hoisted(() => ({
+const { requireUser, acceptAndScheduleImport, listScheduleImports } = vi.hoisted(() => ({
   requireUser: vi.fn(),
-  importAndPublishStudentScheduleCsv: vi.fn(),
+  acceptAndScheduleImport: vi.fn(),
   listScheduleImports: vi.fn(),
 }));
 
 vi.mock("@/server/auth/current-user", () => ({ requireUser }));
 vi.mock("@/server/services/schedule-imports.service", () => ({
-  importAndPublishStudentScheduleCsv,
+  acceptAndScheduleImport,
   listScheduleImports,
 }));
 
 import { GET, POST } from "./route";
 
 const admin = { userId: "admin-user", role: "ADMIN" as const };
-const coordinator = { userId: "coordinator-user", role: "COORDINATOR" as const };
 
 describe("/api/schedule-imports", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     requireUser.mockResolvedValue(admin);
-    listScheduleImports.mockResolvedValue([{ id: "import-id", status: "DRAFT" }]);
-    importAndPublishStudentScheduleCsv.mockResolvedValue({
+    listScheduleImports.mockResolvedValue([{ importId: "import-id", status: "PUBLISHED" }]);
+    acceptAndScheduleImport.mockResolvedValue({
       outcome: "PUBLISHED",
       importId: "import-id",
       status: "PUBLISHED",
       totalRows: 1,
-      createdStudentCount: 1,
-      matchedStudentCount: 0,
-      appointmentCount: 2,
+      insertedStudentCount: 1,
+      updatedStudentCount: 0,
+      skippedStudentCount: 0,
+      laboratoryItemCount: 1,
+      physicalExaminationItemCount: 1,
       publishedAppointmentCount: 2,
+      generatedRange: { startDate: "2026-08-03", endDate: "2026-08-04" },
+      overflow: { pairCountBeyondPreferredWindow: 0, unscheduledStudentCount: 0 },
+      displacementTotal: 0,
+      batchIds: ["lab-batch", "pe-batch"],
     });
   });
 
-  it("lists grouped imports for import operators", async () => {
+  it("lists imports for administrators and coordinators", async () => {
     const response = await GET();
-
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
-      data: [{ id: "import-id", status: "DRAFT" }],
+      data: [{ importId: "import-id", status: "PUBLISHED" }],
     });
     expect(requireUser).toHaveBeenCalledWith(["ADMIN", "COORDINATOR"]);
-    expect(listScheduleImports).toHaveBeenCalledWith(admin);
   });
 
-  it("passes only multipart file bytes and priority to automatic publishing", async () => {
+  it("passes the academic-year metadata and CSV bytes to atomic scheduling", async () => {
     const contents = [
-      "Student ID,Name,College,Course,Year,Laboratory Schedule,Physical Examination Schedule",
-      '23-0001-01,"Santos, Maria",College of Computer Studies,BSIT,3,06-19-2026,06-20-2026',
+      "Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth",
+      "23-0001-01,Santos,Maria,,,College of Computer Studies,BSIT,3,05-06-2003",
     ].join("\n");
     const form = new FormData();
-    form.set("file", new File([contents], "appointments.csv", { type: "text/csv" }));
-    form.set("priorityGroupId", "30000000-0000-4000-8000-000000000004");
+    form.set("file", new File([contents], "students.csv", { type: "text/csv" }));
+    form.set("studentCategory", "OJT");
+    form.set("academicYearStart", "2026");
+    form.set("preferredMonth", "9");
 
     const response = await POST(new Request("http://localhost/api/schedule-imports", {
       method: "POST",
       body: form,
     }));
-
     expect(response.status).toBe(201);
-    await expect(response.json()).resolves.toEqual({
+    await expect(response.json()).resolves.toMatchObject({
       data: {
         outcome: "PUBLISHED",
-        importId: "import-id",
-        status: "PUBLISHED",
-        totalRows: 1,
-        createdStudentCount: 1,
-        matchedStudentCount: 0,
-        appointmentCount: 2,
+        insertedStudentCount: 1,
         publishedAppointmentCount: 2,
+        generatedRange: { startDate: "2026-08-03", endDate: "2026-08-04" },
       },
     });
-    expect(requireUser).toHaveBeenCalledWith(["ADMIN", "COORDINATOR"]);
-    expect(importAndPublishStudentScheduleCsv).toHaveBeenCalledTimes(1);
-    const [input, actor] = importAndPublishStudentScheduleCsv.mock.calls[0];
+    const [input, actor] = acceptAndScheduleImport.mock.calls[0];
     expect({ ...input, contents: Array.from(input.contents) }).toEqual({
-      fileName: "appointments.csv",
-      fileSize: contents.length,
+      fileName: "students.csv",
+      fileSize: Buffer.byteLength(contents),
       contents: Array.from(new TextEncoder().encode(contents)),
-      priorityGroupId: "30000000-0000-4000-8000-000000000004",
+      studentCategory: "OJT",
+      academicYearStart: "2026",
+      preferredMonth: "9",
     });
     expect(actor).toEqual(admin);
   });
 
-  it("returns a created review checkpoint without converting it to an API error", async () => {
-    requireUser.mockResolvedValue(coordinator);
-    importAndPublishStudentScheduleCsv.mockResolvedValue({
-      outcome: "REVIEW_REQUIRED",
-      importId: "import-id",
-      status: "VALIDATED",
-      stage: "GENERATE",
-      issue: {
-        code: "ADMIN_OVERRIDE_REQUIRED",
-        message: "An administrator must approve capacity conflicts.",
-      },
-    });
-    const form = new FormData();
-    form.set("file", new File(["csv"], "appointments.csv", { type: "text/csv" }));
-    form.set("priorityGroupId", "30000000-0000-4000-8000-000000000004");
-
+  it("rejects a missing file without calling the service", async () => {
     const response = await POST(new Request("http://localhost/api/schedule-imports", {
-      method: "POST",
-      body: form,
-    }));
-
-    expect(response.status).toBe(201);
-    await expect(response.json()).resolves.toMatchObject({
-      data: {
-        outcome: "REVIEW_REQUIRED",
-        importId: "import-id",
-        status: "VALIDATED",
-        stage: "GENERATE",
-      },
-    });
-    expect(importAndPublishStudentScheduleCsv).toHaveBeenCalledWith(expect.any(Object), coordinator);
-  });
-
-  it("requires an import operator for both collection operations", async () => {
-    requireUser.mockRejectedValue(new AppError(
-      "FORBIDDEN",
-      "You do not have permission to perform this action.",
-      403,
-    ));
-
-    const getResponse = await GET();
-    const postResponse = await POST(new Request("http://localhost/api/schedule-imports", {
       method: "POST",
       body: new FormData(),
     }));
+    expect(response.status).toBe(422);
+    expect(acceptAndScheduleImport).not.toHaveBeenCalled();
+  });
 
-    expect(getResponse.status).toBe(403);
-    expect(postResponse.status).toBe(403);
-    expect(requireUser.mock.calls).toEqual([
-      [["ADMIN", "COORDINATOR"]],
-      [["ADMIN", "COORDINATOR"]],
-    ]);
+  it("requires an import operator", async () => {
+    requireUser.mockRejectedValue(new AppError("FORBIDDEN", "Forbidden", 403));
+    const response = await GET();
+    expect(response.status).toBe(403);
     expect(listScheduleImports).not.toHaveBeenCalled();
-    expect(importAndPublishStudentScheduleCsv).not.toHaveBeenCalled();
   });
 });

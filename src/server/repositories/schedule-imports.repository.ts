@@ -1,10 +1,13 @@
 import "server-only";
 import type { PoolClient } from "pg";
+import { AppError } from "@/lib/errors";
 import type { AppointmentScheduleType, ClinicCode } from "@/server/clinics";
 import { query, transaction } from "@/server/db/pool";
 import { writeAudit } from "@/server/repositories/audit.repository";
 import { getScheduleBatch } from "@/server/repositories/coordinator-schedules.repository";
 import type { ImportedStudentRow } from "@/server/services/student-import-csv";
+import { resolveSchedulingWindow } from "@/server/services/scheduling-window";
+import { generatePairedSchedule } from "@/server/rule-engine/generate-paired-schedule";
 import { studentDisplayNameSql } from "@/server/students/student-display-name";
 
 export type ScheduleImportStatus =
@@ -39,13 +42,18 @@ export type CreateScheduleImportInput = {
 
 export type ScheduleImportResult = {
   importId: string;
-  status: "DRAFT";
+  outcome: "PUBLISHED";
+  status: "PUBLISHED";
   totalRows: number;
   insertedStudentCount: number;
   updatedStudentCount: number;
   skippedStudentCount: number;
   laboratoryItemCount: number;
   physicalExaminationItemCount: number;
+  publishedAppointmentCount: number;
+  generatedRange: { startDate: string; endDate: string } | null;
+  overflow: { pairCountBeyondPreferredWindow: number; unscheduledStudentCount: number };
+  displacementTotal: number;
   batchIds: string[];
 };
 
@@ -159,20 +167,6 @@ export async function createScheduleImport(
     const programs = await client.query<ProgramReference>(
       "SELECT id, college_id, code FROM programs WHERE is_active=TRUE",
     );
-    const existingStudents = await client.query<ExistingStudent>(
-      `SELECT student_number FROM students
-        WHERE student_number = ANY($1::varchar[])`,
-      [[...new Set(input.rows.map((row) => row.studentNumber))]],
-    );
-    const scheduledStudents = await client.query<{ student_number: string }>(
-      `SELECT DISTINCT student_number
-         FROM appointments
-        WHERE student_number = ANY($1::varchar[])
-          AND schedule_cycle_start=$2
-          AND status <> 'CANCELLED'`,
-      [[...new Set(input.rows.map((row) => row.studentNumber))], input.academicYearStart],
-    );
-
     const collegeByName = uniqueReferenceMap(
       colleges.rows,
       (college) => normalizeComparable(college.name),
@@ -181,14 +175,7 @@ export async function createScheduleImport(
       programs.rows,
       (program) => `${program.college_id}:${normalizeComparable(program.code)}`,
     );
-    const existingStudentNumbers = new Set(
-      existingStudents.rows.map((student) => student.student_number),
-    );
-    const scheduledStudentNumbers = new Set(
-      scheduledStudents.rows.map((student) => student.student_number),
-    );
-
-    const resolvedRows: ResolvedRow[] = input.rows.map((row) => {
+    const validatedRows = input.rows.map((row) => {
       const college = collegeByName.get(normalizeComparable(row.collegeName));
       if (!college) {
         addFieldError(
@@ -212,12 +199,42 @@ export async function createScheduleImport(
         ...row,
         collegeId: college?.id ?? null,
         programId: program?.id ?? null,
-        existedBeforeImport: existingStudentNumbers.has(row.studentNumber),
-        alreadyScheduledForCycle: scheduledStudentNumbers.has(row.studentNumber),
+        existedBeforeImport: false,
+        alreadyScheduledForCycle: false,
       };
     });
 
     if (Object.keys(fields).length) return { fields };
+
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('medclinic:schedule-import-queue'))");
+    const accepted = await client.query<{ acceptedAt: Date }>(
+      `SELECT clock_timestamp() AS "acceptedAt"`,
+    );
+    const studentNumbers = [...new Set(input.rows.map((row) => row.studentNumber))];
+    const existingStudents = await client.query<ExistingStudent>(
+      `SELECT student_number FROM students
+        WHERE student_number = ANY($1::varchar[])`,
+      [studentNumbers],
+    );
+    const scheduledStudents = await client.query<{ student_number: string }>(
+      `SELECT DISTINCT student_number
+         FROM appointments
+        WHERE student_number = ANY($1::varchar[])
+          AND schedule_cycle_start=$2
+          AND status <> 'CANCELLED'`,
+      [studentNumbers, input.academicYearStart],
+    );
+    const existingStudentNumbers = new Set(
+      existingStudents.rows.map((student) => student.student_number),
+    );
+    const scheduledStudentNumbers = new Set(
+      scheduledStudents.rows.map((student) => student.student_number),
+    );
+    const resolvedRows: ResolvedRow[] = validatedRows.map((row) => ({
+      ...row,
+      existedBeforeImport: existingStudentNumbers.has(row.studentNumber),
+      alreadyScheduledForCycle: scheduledStudentNumbers.has(row.studentNumber),
+    }));
 
     const insertedStudentCount = resolvedRows.filter((row) => !row.existedBeforeImport).length;
     const updatedStudentCount = resolvedRows.length - insertedStudentCount;
@@ -232,7 +249,7 @@ export async function createScheduleImport(
          import_name, source_filename, total_rows, created_student_count,
          matched_student_count, created_by, student_category, academic_year_start,
          preferred_month, accepted_at
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,clock_timestamp())
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
        RETURNING id`,
       [
         importName,
@@ -244,6 +261,7 @@ export async function createScheduleImport(
         input.studentCategory,
         input.academicYearStart,
         input.preferredMonth,
+        accepted.rows[0].acceptedAt,
       ],
     );
     const importId = importGroup.rows[0].id;
@@ -298,9 +316,267 @@ export async function createScheduleImport(
       );
     }
 
+    const schedulableRows = resolvedRows.filter((row) => !row.alreadyScheduledForCycle);
+    const windowStart = resolveSchedulingWindow({
+      category: input.studentCategory,
+      academicYearStart: input.academicYearStart,
+      preferredMonth: input.preferredMonth,
+      acceptedAt: accepted.rows[0].acceptedAt.toISOString(),
+      timeZone: "Asia/Manila",
+    });
+    const searchEndDate = `${input.academicYearStart + 5}-07-31`;
+    const capacityRows = await client.query<{
+      clinic_id: string;
+      clinic_code: ClinicCode;
+      schedule_type: AppointmentScheduleType;
+      safe_daily_capacity: number;
+      max_daily_capacity: number;
+    }>(
+      `SELECT setting.clinic_id, clinic.code AS clinic_code, setting.schedule_type,
+              setting.safe_daily_capacity, setting.max_daily_capacity
+         FROM clinic_capacity_settings setting
+         JOIN clinics clinic ON clinic.id=setting.clinic_id
+        WHERE (clinic.code='KABALAKA_CLINIC' AND setting.schedule_type='LABORATORY')
+           OR (clinic.code='CPU_CLINIC' AND setting.schedule_type='PHYSICAL_EXAM')`,
+    );
+    const capacityByType = new Map(
+      capacityRows.rows.map((row) => [row.schedule_type, row]),
+    );
+    const laboratoryCapacity = capacityByType.get("LABORATORY");
+    const physicalExamCapacity = capacityByType.get("PHYSICAL_EXAM");
+    if (!laboratoryCapacity || !physicalExamCapacity) {
+      throw new AppError(
+        "SCHEDULE_CAPACITY_NOT_CONFIGURED",
+        "Both clinic capacity settings are required before importing schedules.",
+        409,
+      );
+    }
+
+    const existingLoad = await client.query<{
+      clinic_code: ClinicCode;
+      appointment_date: string;
+      appointment_count: number;
+    }>(
+      `SELECT clinic.code AS clinic_code, appointment.appointment_date::text,
+              COUNT(*)::int AS appointment_count
+         FROM appointments appointment
+         JOIN clinics clinic ON clinic.id=appointment.clinic_id
+        WHERE appointment.appointment_date BETWEEN $1 AND $2
+          AND appointment.status IN ('DRAFT','PENDING','COMPLETED','NO_SHOW')
+        GROUP BY clinic.code, appointment.appointment_date`,
+      [windowStart, searchEndDate],
+    );
+    const loadFor = (clinicCode: ClinicCode) => Object.fromEntries(
+      existingLoad.rows
+        .filter((row) => row.clinic_code === clinicCode)
+        .map((row) => [row.appointment_date, row.appointment_count]),
+    );
+    const blockedDates = await client.query<{ clinic_code: ClinicCode; date: string }>(
+      `SELECT clinic.code AS clinic_code, blocked.date::date::text AS date
+         FROM clinic_unavailable_dates unavailable
+         JOIN clinics clinic ON clinic.id=unavailable.clinic_id
+         CROSS JOIN LATERAL generate_series(
+           GREATEST(unavailable.start_date, $1::date),
+           LEAST(unavailable.end_date, $2::date),
+           INTERVAL '1 day'
+         ) AS blocked(date)
+        WHERE unavailable.end_date >= $1::date
+          AND unavailable.start_date <= $2::date`,
+      [windowStart, searchEndDate],
+    );
+    const assignments = generatePairedSchedule({
+      requests: schedulableRows.map((row) => ({
+        requestId: `${importId}:${row.rowNumber}`,
+        studentNumber: row.studentNumber,
+        category: input.studentCategory,
+        acceptedAt: accepted.rows[0].acceptedAt.toISOString(),
+        sourceRowOrder: row.rowNumber - 1,
+        windowStart,
+      })),
+      laboratoryCapacity: {
+        safeDailyCapacity: laboratoryCapacity.safe_daily_capacity,
+        maxDailyCapacity: laboratoryCapacity.max_daily_capacity,
+      },
+      physicalExamCapacity: {
+        safeDailyCapacity: physicalExamCapacity.safe_daily_capacity,
+        maxDailyCapacity: physicalExamCapacity.max_daily_capacity,
+      },
+      existingLaboratoryLoad: loadFor("KABALAKA_CLINIC"),
+      existingPhysicalExamLoad: loadFor("CPU_CLINIC"),
+      blockedLaboratoryDates: blockedDates.rows
+        .filter((row) => row.clinic_code === "KABALAKA_CLINIC")
+        .map((row) => row.date),
+      blockedPhysicalExamDates: blockedDates.rows
+        .filter((row) => row.clinic_code === "CPU_CLINIC")
+        .map((row) => row.date),
+      searchEndDate,
+    });
+    if (assignments.unscheduledRequestIds.length) {
+      throw new AppError(
+        "SCHEDULE_CAPACITY_EXHAUSTED",
+        "The complete import could not be assigned within the scheduling horizon.",
+        409,
+        { students: assignments.unscheduledRequestIds },
+      );
+    }
+
+    const collegeIds = new Set(schedulableRows.map((row) => row.collegeId));
+    const programIds = new Set(schedulableRows.map((row) => row.programId));
+    const commonCollegeId = collegeIds.size === 1 ? [...collegeIds][0] : null;
+    const commonProgramId = programIds.size === 1 ? [...programIds][0] : null;
     const batchIds: string[] = [];
-    const laboratoryItemCount = 0;
-    const physicalExaminationItemCount = 0;
+    const insertBatch = async (
+      clinicCode: ClinicCode,
+      clinicLabel: string,
+      itemCount: number,
+    ) => {
+      const result = await client.query<{ id: string }>(
+        `INSERT INTO schedule_batches (
+           clinic_id, batch_name, college_id, program_id, status, validation_summary,
+           validated_by, validated_at, created_by, published_by, published_at, import_group_id
+         ) SELECT clinic.id, $2, $3, $4, 'PUBLISHED', $5::jsonb,
+                  $6, $7, $6, $6, $7, $8
+             FROM clinics clinic WHERE clinic.code=$1
+         RETURNING id`,
+        [
+          clinicCode,
+          Array.from(`${importName} - ${clinicLabel}`).slice(0, 150).join(""),
+          commonCollegeId,
+          commonProgramId,
+          JSON.stringify({ totalItems: itemCount, validCount: itemCount, warningCount: 0, conflictCount: 0 }),
+          actorUserId,
+          accepted.rows[0].acceptedAt,
+          importId,
+        ],
+      );
+      batchIds.push(result.rows[0].id);
+      return result.rows[0].id;
+    };
+    const laboratoryBatchId = await insertBatch(
+      "KABALAKA_CLINIC",
+      "KABALAKA Clinic",
+      assignments.assignments.length,
+    );
+    const physicalExamBatchId = await insertBatch(
+      "CPU_CLINIC",
+      "CPU Clinic",
+      assignments.assignments.length,
+    );
+
+    const rowOrderByStudent = new Map(
+      schedulableRows.map((row) => [row.studentNumber, row.rowNumber - 1]),
+    );
+    const insertItems = async (
+      batchId: string,
+      clinicId: string,
+      scheduleType: AppointmentScheduleType,
+      dates: string[],
+    ) => {
+      await client.query(
+        `INSERT INTO coordinator_schedule_items (
+           batch_id, clinic_id, student_number, schedule_type, priority_group_id,
+           target_date, status, source_row_order, schedule_cycle_start
+         )
+         SELECT $1, $2, fixture.student_number, $3, NULL,
+                fixture.target_date, 'SCHEDULED', fixture.source_row_order, $4
+           FROM UNNEST($5::varchar[], $6::date[], $7::integer[])
+             AS fixture(student_number, target_date, source_row_order)`,
+        [
+          batchId,
+          clinicId,
+          scheduleType,
+          input.academicYearStart,
+          assignments.assignments.map((assignment) => assignment.studentNumber),
+          dates,
+          assignments.assignments.map((assignment) => rowOrderByStudent.get(assignment.studentNumber)),
+        ],
+      );
+    };
+    await insertItems(
+      laboratoryBatchId,
+      laboratoryCapacity.clinic_id,
+      "LABORATORY",
+      assignments.assignments.map((assignment) => assignment.laboratoryDate),
+    );
+    await insertItems(
+      physicalExamBatchId,
+      physicalExamCapacity.clinic_id,
+      "PHYSICAL_EXAM",
+      assignments.assignments.map((assignment) => assignment.physicalExamDate),
+    );
+
+    const appointmentIds: string[] = [];
+    const insertAppointments = async (
+      batchId: string,
+      clinicId: string,
+      scheduleType: AppointmentScheduleType,
+      dates: string[],
+    ) => {
+      const inserted = await client.query<{ id: string }>(
+        `INSERT INTO appointments (
+           batch_id, schedule_item_id, clinic_id, student_number, schedule_type,
+           appointment_date, status, is_published, created_by, updated_by,
+           schedule_pair_id, schedule_cycle_start
+         )
+         SELECT $1, item.id, $2, fixture.student_number, $3, fixture.appointment_date,
+                'PENDING', TRUE, $4, $4, fixture.schedule_pair_id, $5
+           FROM UNNEST($6::varchar[], $7::date[], $8::uuid[])
+             AS fixture(student_number, appointment_date, schedule_pair_id)
+           JOIN coordinator_schedule_items item
+             ON item.batch_id=$1 AND item.student_number=fixture.student_number
+            AND item.schedule_type=$3
+         RETURNING id`,
+        [
+          batchId,
+          clinicId,
+          scheduleType,
+          actorUserId,
+          input.academicYearStart,
+          assignments.assignments.map((assignment) => assignment.studentNumber),
+          dates,
+          assignments.assignments.map((assignment) => assignment.schedulePairId),
+        ],
+      );
+      appointmentIds.push(...inserted.rows.map((row) => row.id));
+    };
+    await insertAppointments(
+      laboratoryBatchId,
+      laboratoryCapacity.clinic_id,
+      "LABORATORY",
+      assignments.assignments.map((assignment) => assignment.laboratoryDate),
+    );
+    await insertAppointments(
+      physicalExamBatchId,
+      physicalExamCapacity.clinic_id,
+      "PHYSICAL_EXAM",
+      assignments.assignments.map((assignment) => assignment.physicalExamDate),
+    );
+    if (appointmentIds.length) {
+      await client.query(
+        `INSERT INTO appointment_status_logs (appointment_id, old_status, new_status, changed_by)
+         SELECT id, NULL, 'PENDING', $1 FROM UNNEST($2::uuid[]) AS fixture(id)`,
+        [actorUserId, appointmentIds],
+      );
+    }
+
+    const laboratoryItemCount = assignments.assignments.length;
+    const physicalExaminationItemCount = assignments.assignments.length;
+    const allDates = assignments.assignments.flatMap(
+      (assignment) => [assignment.laboratoryDate, assignment.physicalExamDate],
+    ).sort();
+    const generatedRange = allDates.length
+      ? { startDate: allDates[0], endDate: allDates.at(-1)! }
+      : null;
+    const preferredWindowEnd = input.studentCategory === "REGULAR"
+      ? `${input.academicYearStart + 1}-03-31`
+      : new Date(Date.UTC(
+          (input.preferredMonth ?? 8) >= 8 ? input.academicYearStart : input.academicYearStart + 1,
+          input.preferredMonth ?? 8,
+          0,
+        )).toISOString().slice(0, 10);
+    const pairCountBeyondPreferredWindow = assignments.assignments.filter(
+      (assignment) => assignment.laboratoryDate > preferredWindowEnd,
+    ).length;
     const metadata = {
       sourceFilename: input.sourceFilename,
       batchIds,
@@ -312,10 +588,13 @@ export async function createScheduleImport(
       skippedStudentCount,
       studentCategory: input.studentCategory,
       academicYearStart: input.academicYearStart,
+      publishedAppointmentCount: appointmentIds.length,
+      generatedRange,
+      pairCountBeyondPreferredWindow,
     };
     await writeAudit(
       actorUserId,
-      "SCHEDULE_IMPORT_CREATED",
+      "SCHEDULE_IMPORT_PUBLISHED",
       "schedule_import_group",
       importId,
       metadata,
@@ -324,13 +603,21 @@ export async function createScheduleImport(
 
     return {
       importId,
-      status: "DRAFT",
+      outcome: "PUBLISHED",
+      status: "PUBLISHED",
       totalRows: input.rows.length,
       insertedStudentCount,
       updatedStudentCount,
       skippedStudentCount,
       laboratoryItemCount,
       physicalExaminationItemCount,
+      publishedAppointmentCount: appointmentIds.length,
+      generatedRange,
+      overflow: {
+        pairCountBeyondPreferredWindow,
+        unscheduledStudentCount: 0,
+      },
+      displacementTotal: 0,
       batchIds,
     };
   });

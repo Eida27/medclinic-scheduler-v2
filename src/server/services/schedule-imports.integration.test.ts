@@ -95,14 +95,19 @@ describe("student scheduling imports", () => {
 
     expect(created).toEqual({
       importId: expect.any(String),
-      status: "DRAFT",
+      outcome: "PUBLISHED",
+      status: "PUBLISHED",
       totalRows: 2,
       insertedStudentCount: 1,
       updatedStudentCount: 1,
       skippedStudentCount: 1,
-      laboratoryItemCount: 0,
-      physicalExaminationItemCount: 0,
-      batchIds: [],
+      laboratoryItemCount: 1,
+      physicalExaminationItemCount: 1,
+      publishedAppointmentCount: 2,
+      generatedRange: { startDate: expect.any(String), endDate: expect.any(String) },
+      overflow: { pairCountBeyondPreferredWindow: 0, unscheduledStudentCount: 0 },
+      displacementTotal: 0,
+      batchIds: [expect.any(String), expect.any(String)],
     });
     const students = await pool.query(
       `SELECT student_number, first_name, middle_name, last_name, suffix,

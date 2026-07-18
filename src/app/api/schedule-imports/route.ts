@@ -2,7 +2,7 @@ import { dataResponse, errorResponse } from "@/lib/api-response";
 import { AppError } from "@/lib/errors";
 import { requireUser } from "@/server/auth/current-user";
 import {
-  importAndPublishStudentScheduleCsv,
+  acceptAndScheduleImport,
   listScheduleImports,
 } from "@/server/services/schedule-imports.service";
 
@@ -29,11 +29,13 @@ export async function POST(request: Request) {
       );
     }
 
-    const result = await importAndPublishStudentScheduleCsv({
+    const result = await acceptAndScheduleImport({
       fileName: file.name,
       fileSize: file.size,
       contents: new Uint8Array(await file.arrayBuffer()),
-      priorityGroupId: form.get("priorityGroupId"),
+      studentCategory: form.get("studentCategory"),
+      academicYearStart: form.get("academicYearStart"),
+      preferredMonth: form.get("preferredMonth"),
     }, user);
     return dataResponse(result, { status: 201 });
   } catch (error) {

@@ -1,798 +1,166 @@
 // @vitest-environment node
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { pool } from "@/server/db/pool";
-import { publishScheduleBatch } from "@/server/services/appointments.service";
-import {
-  addScheduleBatch,
-  editBatch,
-  generateBatchAppointments,
-  validateBatch,
-} from "@/server/services/coordinator-schedules.service";
-import {
-  generateScheduleImport,
-  getScheduleImport,
-  importAndPublishStudentScheduleCsv,
-  importStudentScheduleCsv,
-  publishScheduleImport,
-  validateScheduleImport,
-} from "@/server/services/schedule-imports.service";
-import {
-  cleanupTestFixtures,
-  insertTestStudent,
-  TEST_REFERENCE_IDS,
-} from "@/test/integration-fixtures";
+import { cleanupTestFixtures, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import type { SessionUser } from "@/types/roles";
+import { acceptAndScheduleImport } from "./schedule-imports.service";
 
-const header = [
-  "Student ID",
-  "Name",
-  "College",
-  "Course",
-  "Year",
-  "Laboratory Schedule",
-  "Physical Examination Schedule",
-].join(",");
+const header = "Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth";
+const studentPattern = "99-92%";
+const importPattern = "REGULAR 20%-20% - TEST-FCFS%";
+let originalCapacities: Array<{ id: string; safe_daily_capacity: number; max_daily_capacity: number }> = [];
 
-const admin = {
+const admin: SessionUser = {
   userId: TEST_REFERENCE_IDS.adminUser,
   fullName: "System Admin",
   email: "admin@medclinic.local",
   role: "ADMIN",
-  clinicId: null,
-  clinicCode: null,
-  clinicName: null,
-} satisfies SessionUser;
+};
 
-const clinicStaff = {
-  userId: TEST_REFERENCE_IDS.clinicStaffUser,
-  fullName: "Clinic Staff",
-  email: "staff@medclinic.local",
-  role: "CLINIC_STAFF",
-  clinicId: TEST_REFERENCE_IDS.laboratoryClinic,
-  clinicCode: "KABALAKA_CLINIC",
-  clinicName: "KABALAKA Clinic",
-} satisfies SessionUser;
-
-const coordinator = {
-  userId: TEST_REFERENCE_IDS.adminUser,
-  fullName: "Schedule Coordinator",
-  email: "coordinator@medclinic.local",
-  role: "COORDINATOR",
-  clinicId: null,
-  clinicCode: null,
-  clinicName: null,
-} satisfies SessionUser;
-
-const studentPattern = "TEST-LIFE-%";
-const batchPattern = "TEST Lifecycle%";
-const importPattern = "TEST Lifecycle%";
-
-function csv(...rows: string[]) {
-  return [header, ...rows].join("\n");
-}
-
-function importInput(importName: string, rows: string[]) {
-  const contents = csv(...rows);
+function input(fileName: string, studentNumber: string, academicYearStart = 2026) {
+  const contents = [
+    header,
+    `${studentNumber},Student,${studentNumber.slice(-2)},,,College of Computer Studies,BSIT,3,05-06-2003`,
+  ].join("\n");
   return {
-    fileName: `${importName.replaceAll(" ", "-")}.csv`,
+    fileName,
     fileSize: Buffer.byteLength(contents),
     contents,
-    importName,
-    priorityGroupId: TEST_REFERENCE_IDS.regularPriority,
-    submittedByName: "Lifecycle Test",
-    description: "Disposable grouped lifecycle fixture",
+    studentCategory: "REGULAR",
+    academicYearStart,
+    preferredMonth: null,
   };
 }
 
 async function cleanup() {
-  await pool.query("DROP TRIGGER IF EXISTS test_schedule_import_batch_failure ON schedule_batches");
-  await pool.query("DROP TRIGGER IF EXISTS test_schedule_import_appointment_failure ON appointments");
-  await pool.query("DROP FUNCTION IF EXISTS test_schedule_import_batch_failure()");
-  await pool.query("DROP FUNCTION IF EXISTS test_schedule_import_appointment_failure()");
-  await cleanupTestFixtures(studentPattern, batchPattern, importPattern);
+  await cleanupTestFixtures(studentPattern, importPattern, importPattern);
 }
 
-async function cleanupAndAssertNoResidue() {
-  const fixtureIds = await pool.query<{
-    group_ids: string[];
-    batch_ids: string[];
-    appointment_ids: string[];
-  }>(
-    `SELECT
-       COALESCE((SELECT ARRAY_AGG(id::text) FROM schedule_import_groups WHERE import_name LIKE $1), ARRAY[]::text[]) AS group_ids,
-       COALESCE((SELECT ARRAY_AGG(id::text) FROM schedule_batches WHERE batch_name LIKE $2), ARRAY[]::text[]) AS batch_ids,
-       COALESCE((SELECT ARRAY_AGG(id::text) FROM appointments WHERE student_number LIKE $3), ARRAY[]::text[]) AS appointment_ids`,
-    [importPattern, batchPattern, studentPattern],
-  );
+beforeAll(async () => {
   await cleanup();
-  const ids = fixtureIds.rows[0];
-  const residue = await pool.query<{
-    group_count: number;
-    batch_count: number;
-    student_count: number;
-    item_count: number;
-    appointment_count: number;
-    log_count: number;
-    audit_count: number;
+  const capacities = await pool.query<{
+    id: string;
+    safe_daily_capacity: number;
+    max_daily_capacity: number;
   }>(
-    `SELECT
-       (SELECT COUNT(*)::int FROM schedule_import_groups WHERE import_name LIKE $1) AS group_count,
-       (SELECT COUNT(*)::int FROM schedule_batches WHERE batch_name LIKE $2) AS batch_count,
-       (SELECT COUNT(*)::int FROM students WHERE student_number LIKE $3) AS student_count,
-       (SELECT COUNT(*)::int FROM coordinator_schedule_items WHERE student_number LIKE $3) AS item_count,
-       (SELECT COUNT(*)::int FROM appointments WHERE student_number LIKE $3) AS appointment_count,
-       (SELECT COUNT(*)::int FROM appointment_status_logs WHERE appointment_id::text = ANY($6::text[])) AS log_count,
-       (SELECT COUNT(*)::int FROM audit_logs audit
-         WHERE audit.entity_id = ANY($4::text[] || $5::text[] || $6::text[])
-            OR audit.entity_id LIKE $3
-            OR audit.metadata->>'studentNumber' LIKE $3
-            OR audit.metadata->>'batchId' = ANY($5::text[])
-            OR EXISTS (
-              SELECT 1 FROM jsonb_array_elements_text(
-                CASE WHEN jsonb_typeof(audit.metadata->'batchIds')='array'
-                  THEN audit.metadata->'batchIds' ELSE '[]'::jsonb END
-              ) AS metadata_batch(id)
-              WHERE metadata_batch.id = ANY($5::text[])
-            )) AS audit_count`,
+    `SELECT id, safe_daily_capacity, max_daily_capacity
+       FROM clinic_capacity_settings
+      WHERE id IN ($1,$2) ORDER BY id`,
     [
-      importPattern,
-      batchPattern,
-      studentPattern,
-      ids.group_ids,
-      ids.batch_ids,
-      ids.appointment_ids,
+      "40000000-0000-4000-8000-000000000001",
+      "40000000-0000-4000-8000-000000000002",
     ],
   );
-  expect(residue.rows[0]).toEqual({
-    group_count: 0,
-    batch_count: 0,
-    student_count: 0,
-    item_count: 0,
-    appointment_count: 0,
-    log_count: 0,
-    audit_count: 0,
-  });
-}
+  originalCapacities = capacities.rows;
+});
 
-async function childIdsByClinic(importId: string) {
-  const children = await pool.query<{ id: string; clinic_code: string }>(
-    `SELECT batch.id, clinic.code AS clinic_code
-       FROM schedule_batches batch
-       JOIN clinics clinic ON clinic.id=batch.clinic_id
-      WHERE batch.import_group_id=$1`,
-    [importId],
-  );
-  return new Map(children.rows.map((child) => [child.clinic_code, child.id]));
-}
-
-async function failBatchStatus(batchId: string, status: string) {
-  await pool.query(`
-    CREATE FUNCTION test_schedule_import_batch_failure() RETURNS trigger AS $$
-    BEGIN
-      IF NEW.id = '${batchId}'::uuid AND NEW.status = '${status}' THEN
-        RAISE EXCEPTION 'forced grouped batch failure';
-      END IF;
-      RETURN NEW;
-    END;
-    $$ LANGUAGE plpgsql
-  `);
-  await pool.query(`
-    CREATE TRIGGER test_schedule_import_batch_failure
-    BEFORE UPDATE OF status ON schedule_batches
-    FOR EACH ROW EXECUTE FUNCTION test_schedule_import_batch_failure()
-  `);
-}
-
-async function failAppointmentInsert(batchId: string) {
-  await pool.query(`
-    CREATE FUNCTION test_schedule_import_appointment_failure() RETURNS trigger AS $$
-    BEGIN
-      IF NEW.batch_id = '${batchId}'::uuid THEN
-        RAISE EXCEPTION 'forced grouped appointment failure';
-      END IF;
-      RETURN NEW;
-    END;
-    $$ LANGUAGE plpgsql
-  `);
-  await pool.query(`
-    CREATE TRIGGER test_schedule_import_appointment_failure
-    BEFORE INSERT ON appointments
-    FOR EACH ROW EXECUTE FUNCTION test_schedule_import_appointment_failure()
-  `);
-}
-
-beforeEach(cleanup);
-afterEach(cleanupAndAssertNoResidue);
-
+afterEach(cleanup);
 afterAll(async () => {
   await cleanup();
+  for (const capacity of originalCapacities) {
+    await pool.query(
+      `UPDATE clinic_capacity_settings
+          SET safe_daily_capacity=$2, max_daily_capacity=$3
+        WHERE id=$1`,
+      [capacity.id, capacity.safe_daily_capacity, capacity.max_daily_capacity],
+    );
+  }
   await pool.end();
 });
 
-describe("grouped schedule import lifecycle", () => {
-  it("denies clinic staff before validating an import ID", async () => {
-    await expect(validateScheduleImport("not-a-uuid", clinicStaff)).rejects.toMatchObject({
-      code: "FORBIDDEN",
-      status: 403,
-    });
-    await expect(generateScheduleImport("not-a-uuid", clinicStaff)).rejects.toMatchObject({
-      code: "FORBIDDEN",
-      status: 403,
-    });
-    await expect(publishScheduleImport("not-a-uuid", clinicStaff)).rejects.toMatchObject({
-      code: "FORBIDDEN",
-      status: 403,
-    });
-  });
-
-  it("automatically imports, validates, generates, and publishes for a coordinator", async () => {
-    const contents = csv(
-      'TEST-LIFE-AUTO-001,"Tester, Automatic",College of Computer Studies,BSIT,3,02-02-2027,02-03-2027',
+describe("atomic academic-year import lifecycle", () => {
+  it("publishes one date-only Lab/PE pair with a shared pair ID", async () => {
+    const result = await acceptAndScheduleImport(
+      input("TEST-FCFS-pair.csv", "99-9201-01"),
+      admin,
     );
-
-    const result = await importAndPublishStudentScheduleCsv({
-      fileName: "  TEST   Lifecycle automatic.csv ",
-      fileSize: Buffer.byteLength(contents),
-      contents,
-      priorityGroupId: TEST_REFERENCE_IDS.regularPriority,
-    }, coordinator);
 
     expect(result).toMatchObject({
       outcome: "PUBLISHED",
       status: "PUBLISHED",
-      totalRows: 1,
-      createdStudentCount: 1,
-      matchedStudentCount: 0,
-      appointmentCount: 2,
+      insertedStudentCount: 1,
+      updatedStudentCount: 0,
+      skippedStudentCount: 0,
       publishedAppointmentCount: 2,
+      displacementTotal: 0,
+      generatedRange: { startDate: expect.any(String), endDate: expect.any(String) },
     });
-    const detail = await getScheduleImport(result.importId, coordinator);
-    expect(detail).toMatchObject({
-      importName: "TEST Lifecycle automatic",
-      status: "PUBLISHED",
-      submittedByName: null,
-      description: null,
-    });
-    expect(detail.childBatches.flatMap((batch) => batch.appointments)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ status: "PENDING", isPublished: true }),
-        expect.objectContaining({ status: "PENDING", isPublished: true }),
-      ]),
+    const appointments = await pool.query(
+      `SELECT schedule_type, appointment_date::text, status, is_published,
+              schedule_pair_id::text, schedule_cycle_start
+         FROM appointments WHERE student_number='99-9201-01'
+        ORDER BY appointment_date`,
     );
+    expect(appointments.rows).toHaveLength(2);
+    expect(appointments.rows[0]).toMatchObject({
+      schedule_type: "LABORATORY",
+      status: "PENDING",
+      is_published: true,
+      schedule_cycle_start: 2026,
+    });
+    expect(appointments.rows[1]).toMatchObject({ schedule_type: "PHYSICAL_EXAM" });
+    expect(appointments.rows[0].appointment_date < appointments.rows[1].appointment_date).toBe(true);
+    expect(appointments.rows[0].schedule_pair_id).toBe(appointments.rows[1].schedule_pair_id);
   });
 
-  it("keeps a validated checkpoint when a coordinator needs an administrator capacity override", async () => {
-    const original = await pool.query<{
-      safe_daily_capacity: number;
-      max_daily_capacity: number;
+  it("serializes simultaneous imports by immutable accepted_at FCFS order", async () => {
+    await pool.query(
+      `UPDATE clinic_capacity_settings SET safe_daily_capacity=1
+        WHERE id IN ($1,$2)`,
+      [
+        "40000000-0000-4000-8000-000000000001",
+        "40000000-0000-4000-8000-000000000002",
+      ],
+    );
+
+    const results = await Promise.all([
+      acceptAndScheduleImport(input("TEST-FCFS-A.csv", "99-9202-02"), admin),
+      acceptAndScheduleImport(input("TEST-FCFS-B.csv", "99-9203-03"), admin),
+    ]);
+    const rows = await pool.query<{
+      student_number: string;
+      appointment_date: string;
+      accepted_at: Date;
     }>(
-      `SELECT safe_daily_capacity, max_daily_capacity
-         FROM clinic_capacity_settings
-        WHERE clinic_id=$1 AND schedule_type='LABORATORY'`,
-      [TEST_REFERENCE_IDS.laboratoryClinic],
+      `SELECT appointment.student_number, appointment.appointment_date::text,
+              import_group.accepted_at
+         FROM appointments appointment
+         JOIN schedule_batches batch ON batch.id=appointment.batch_id
+         JOIN schedule_import_groups import_group ON import_group.id=batch.import_group_id
+        WHERE appointment.student_number IN ('99-9202-02','99-9203-03')
+          AND appointment.schedule_type='LABORATORY'
+        ORDER BY import_group.accepted_at`,
     );
-    await pool.query(
-      `UPDATE clinic_capacity_settings
-          SET safe_daily_capacity=1, max_daily_capacity=1
-        WHERE clinic_id=$1 AND schedule_type='LABORATORY'`,
-      [TEST_REFERENCE_IDS.laboratoryClinic],
-    );
-    try {
-      const contents = csv(
-        'TEST-LIFE-AUTO-002,"Tester, Capacity One",College of Computer Studies,BSIT,3,02-04-2027,',
-        'TEST-LIFE-AUTO-003,"Tester, Capacity Two",College of Computer Studies,BSIT,3,02-04-2027,',
-      );
-
-      const result = await importAndPublishStudentScheduleCsv({
-        fileName: "TEST Lifecycle capacity.csv",
-        fileSize: Buffer.byteLength(contents),
-        contents,
-        priorityGroupId: TEST_REFERENCE_IDS.regularPriority,
-      }, coordinator);
-
-      expect(result).toMatchObject({
-        outcome: "REVIEW_REQUIRED",
-        status: "VALIDATED",
-        stage: "GENERATE",
-        issue: {
-          code: "ADMIN_OVERRIDE_REQUIRED",
-          message: "An administrator must approve capacity conflicts.",
-        },
-      });
-      expect((await getScheduleImport(result.importId, coordinator)).status).toBe("VALIDATED");
-      expect((await pool.query(
-        `SELECT 1 FROM appointments appointment
-          JOIN schedule_batches batch ON batch.id=appointment.batch_id
-         WHERE batch.import_group_id=$1`,
-        [result.importId],
-      )).rowCount).toBe(0);
-
-      await expect(generateScheduleImport(
-        result.importId,
-        coordinator,
-        "Coordinator attempted capacity override",
-      )).rejects.toMatchObject({ code: "ADMIN_OVERRIDE_REQUIRED", status: 403 });
-
-      await generateScheduleImport(result.importId, admin, "Approved capacity exception");
-      await publishScheduleImport(result.importId, admin);
-      expect((await getScheduleImport(result.importId, admin)).status).toBe("PUBLISHED");
-    } finally {
-      await pool.query(
-        `UPDATE clinic_capacity_settings
-            SET safe_daily_capacity=$2, max_daily_capacity=$3
-          WHERE clinic_id=$1 AND schedule_type='LABORATORY'`,
-        [
-          TEST_REFERENCE_IDS.laboratoryClinic,
-          original.rows[0].safe_daily_capacity,
-          original.rows[0].max_daily_capacity,
-        ],
-      );
-    }
+    expect(results).toHaveLength(2);
+    expect(rows.rows).toHaveLength(2);
+    expect(rows.rows[0].accepted_at.getTime()).toBeLessThan(rows.rows[1].accepted_at.getTime());
+    expect(rows.rows[0].appointment_date < rows.rows[1].appointment_date).toBe(true);
+    await expect(
+      pool.query("UPDATE schedule_import_groups SET accepted_at=NOW() WHERE id=$1", [results[0].importId]),
+    ).rejects.toMatchObject({ code: "23514" });
   });
 
-  it("validates, generates, and publishes both child batches as one lifecycle", async () => {
-    const created = await importStudentScheduleCsv(importInput("TEST Lifecycle both", [
-      'TEST-LIFE-0001,"Tester, Alice M.",College of Computer Studies,BSIT,3,12-10-2026,12-11-2026',
-    ]), admin);
-
-    const validation = await validateScheduleImport(created.importId, admin);
-    expect(validation).toMatchObject({
-      importId: created.importId,
-      status: "VALIDATED",
-      totals: { items: 2, valid: 2, warnings: 0, conflicts: 0 },
+  it("updates demographics but skips same-cycle duplicates and permits a later cycle", async () => {
+    await acceptAndScheduleImport(input("TEST-FCFS-first.csv", "99-9204-04"), admin);
+    const sameCycle = await acceptAndScheduleImport(
+      input("TEST-FCFS-same.csv", "99-9204-04"),
+      admin,
+    );
+    expect(sameCycle).toMatchObject({
+      insertedStudentCount: 0,
+      updatedStudentCount: 1,
+      skippedStudentCount: 1,
+      publishedAppointmentCount: 0,
     });
-    expect(validation.clinics.laboratory?.batchId).toBeTruthy();
-    expect(validation.clinics.physicalExamination?.batchId).toBeTruthy();
-    expect((await getScheduleImport(created.importId, admin)).status).toBe("VALIDATED");
-
-    const generated = await generateScheduleImport(created.importId, admin);
-    expect(generated).toEqual({
-      importId: created.importId,
-      status: "GENERATED",
-      batchIds: created.batchIds,
-      appointmentCount: 2,
-    });
-    const drafts = await pool.query(
-      `SELECT schedule_type, status, is_published
-         FROM appointments
-        WHERE batch_id = ANY($1::uuid[])
-        ORDER BY schedule_type`,
-      [created.batchIds],
+    const laterCycle = await acceptAndScheduleImport(
+      input("TEST-FCFS-later.csv", "99-9204-04", 2027),
+      admin,
     );
-    expect(drafts.rows).toEqual([
-      { schedule_type: "LABORATORY", status: "DRAFT", is_published: false },
-      { schedule_type: "PHYSICAL_EXAM", status: "DRAFT", is_published: false },
-    ]);
-    const generatedItems = await pool.query<{ status: string }>(
-      `SELECT item.status FROM coordinator_schedule_items item
-        WHERE item.batch_id = ANY($1::uuid[]) ORDER BY item.schedule_type`,
-      [created.batchIds],
+    expect(laterCycle).toMatchObject({ skippedStudentCount: 0, publishedAppointmentCount: 2 });
+    const pairs = await pool.query(
+      `SELECT DISTINCT schedule_cycle_start FROM appointments
+        WHERE student_number='99-9204-04' ORDER BY schedule_cycle_start`,
     );
-    expect(generatedItems.rows.map((row) => row.status)).toEqual(["SCHEDULED", "SCHEDULED"]);
-
-    const published = await publishScheduleImport(created.importId, admin);
-    expect(published).toEqual({
-      importId: created.importId,
-      status: "PUBLISHED",
-      batchIds: created.batchIds,
-      publishedAppointmentCount: 2,
-    });
-    const visible = await pool.query(
-      `SELECT schedule_type, status, is_published
-         FROM appointments
-        WHERE batch_id = ANY($1::uuid[])
-        ORDER BY schedule_type`,
-      [created.batchIds],
-    );
-    expect(visible.rows).toEqual([
-      { schedule_type: "LABORATORY", status: "PENDING", is_published: true },
-      { schedule_type: "PHYSICAL_EXAM", status: "PENDING", is_published: true },
-    ]);
-
-    const statusLogs = await pool.query(
-      `SELECT COUNT(*)::int AS count
-         FROM appointment_status_logs log
-         JOIN appointments appointment ON appointment.id=log.appointment_id
-        WHERE appointment.batch_id = ANY($1::uuid[])
-          AND log.old_status='DRAFT' AND log.new_status='PENDING'`,
-      [created.batchIds],
-    );
-    expect(statusLogs.rows[0].count).toBe(2);
-
-    const groupAudits = await pool.query<{ action: string }>(
-      `SELECT action FROM audit_logs
-        WHERE entity_type='schedule_import_group' AND entity_id=$1
-        ORDER BY created_at`,
-      [created.importId],
-    );
-    expect(groupAudits.rows.map((row) => row.action)).toEqual([
-      "SCHEDULE_IMPORT_CREATED",
-      "SCHEDULE_IMPORT_VALIDATED",
-      "SCHEDULE_IMPORT_GENERATED",
-      "SCHEDULE_IMPORT_PUBLISHED",
-    ]);
-    const childAudits = await pool.query<{ action: string; count: number }>(
-      `SELECT action, COUNT(*)::int AS count FROM audit_logs
-        WHERE entity_type='schedule_batch' AND entity_id = ANY($1::text[])
-          AND action IN (
-            'SCHEDULE_BATCH_VALIDATED',
-            'APPOINTMENTS_GENERATED',
-            'SCHEDULE_BATCH_PUBLISHED'
-          )
-        GROUP BY action ORDER BY action`,
-      [created.batchIds],
-    );
-    expect(childAudits.rows).toEqual([
-      { action: "APPOINTMENTS_GENERATED", count: 2 },
-      { action: "SCHEDULE_BATCH_PUBLISHED", count: 2 },
-      { action: "SCHEDULE_BATCH_VALIDATED", count: 4 },
-    ]);
-  });
-
-  it("enforces grouped lifecycle status transitions without partial mutation", async () => {
-    const created = await importStudentScheduleCsv(importInput("TEST Lifecycle transitions", [
-      'TEST-LIFE-0002,"Tester, Bruno",College of Computer Studies,BSIT,3,12-14-2026,12-15-2026',
-    ]), admin);
-
-    await expect(generateScheduleImport(created.importId, admin)).rejects.toMatchObject({
-      code: "SCHEDULE_IMPORT_INVALID_STATUS",
-      status: 409,
-    });
-    await expect(publishScheduleImport(created.importId, admin)).rejects.toMatchObject({
-      code: "SCHEDULE_IMPORT_INVALID_STATUS",
-      status: 409,
-    });
-    expect((await getScheduleImport(created.importId, admin)).status).toBe("DRAFT");
-    expect((await pool.query("SELECT 1 FROM appointments WHERE batch_id = ANY($1::uuid[])", [created.batchIds])).rowCount).toBe(0);
-
-    await validateScheduleImport(created.importId, admin);
-    await generateScheduleImport(created.importId, admin, "Unused override reason");
-    const generatedAudit = await pool.query<{ metadata: { overrideReason: string | null } }>(
-      `SELECT metadata FROM audit_logs
-        WHERE entity_type='schedule_import_group' AND entity_id=$1
-          AND action='SCHEDULE_IMPORT_GENERATED'`,
-      [created.importId],
-    );
-    expect(generatedAudit.rows[0].metadata.overrideReason).toBeNull();
-    await publishScheduleImport(created.importId, admin);
-    await expect(publishScheduleImport(created.importId, admin)).rejects.toMatchObject({
-      code: "SCHEDULE_IMPORT_INVALID_STATUS",
-      status: 409,
-    });
-  });
-
-  it.each([
-    {
-      label: "laboratory",
-      studentNumber: "TEST-LIFE-0003",
-      dates: "12-16-2026,",
-    },
-    {
-      label: "physical examination",
-      studentNumber: "TEST-LIFE-0013",
-      dates: ",12-17-2026",
-    },
-  ])("supports a complete $label-only lifecycle", async ({ label, studentNumber, dates }) => {
-    const created = await importStudentScheduleCsv(importInput(`TEST Lifecycle ${label}`, [
-      `${studentNumber},"Tester, Cara",College of Computer Studies,BSIT,3,${dates}`,
-    ]), admin);
-    expect(created.batchIds).toHaveLength(1);
-
-    await validateScheduleImport(created.importId, admin);
-    const generated = await generateScheduleImport(created.importId, admin);
-    expect(generated.appointmentCount).toBe(1);
-    const published = await publishScheduleImport(created.importId, admin);
-    expect(published.publishedAppointmentCount).toBe(1);
-    expect((await getScheduleImport(created.importId, admin)).status).toBe("PUBLISHED");
-  });
-
-  it("rejects every direct legacy mutation of a grouped child", async () => {
-    const created = await importStudentScheduleCsv(importInput("TEST Lifecycle guards", [
-      'TEST-LIFE-0004,"Tester, Diego",College of Computer Studies,BSIT,3,12-17-2026,12-18-2026',
-    ]), admin);
-    const childId = created.batchIds[0];
-    const groupedError = {
-      code: "GROUPED_BATCH_ACTION_REQUIRED",
-      status: 409,
-      message: "This batch belongs to a grouped schedule import. Use the grouped import action instead.",
-    };
-
-    await expect(editBatch(childId, undefined, admin.userId)).rejects.toMatchObject(groupedError);
-    await expect(validateBatch(childId, admin.userId)).rejects.toMatchObject(groupedError);
-    await expect(generateBatchAppointments(childId, admin)).rejects.toMatchObject(groupedError);
-    await expect(publishScheduleBatch(childId, admin.userId)).rejects.toMatchObject(groupedError);
-
-    const children = await pool.query<{ status: string }>(
-      "SELECT status FROM schedule_batches WHERE import_group_id=$1 ORDER BY id",
-      [created.importId],
-    );
-    expect(children.rows.map((row) => row.status)).toEqual(["DRAFT", "DRAFT"]);
-    expect((await pool.query("SELECT 1 FROM appointments WHERE batch_id = ANY($1::uuid[])", [created.batchIds])).rowCount).toBe(0);
-  });
-
-  it("requires review when child statuses are mixed or a group has no children", async () => {
-    const created = await importStudentScheduleCsv(importInput("TEST Lifecycle mixed", [
-      'TEST-LIFE-0005,"Tester, Elena",College of Computer Studies,BSIT,3,12-21-2026,12-22-2026',
-    ]), admin);
-    await pool.query("UPDATE schedule_batches SET status='VALIDATED' WHERE id=$1", [created.batchIds[0]]);
-
-    await expect(validateScheduleImport(created.importId, admin)).rejects.toMatchObject({
-      code: "SCHEDULE_IMPORT_NEEDS_REVIEW",
-      status: 409,
-      message: "Schedule import child batches are not synchronized.",
-    });
-
-    const empty = await pool.query<{ id: string }>(
-      `INSERT INTO schedule_import_groups (
-         import_name, source_filename, total_rows, created_by
-       ) VALUES ('TEST Lifecycle empty','empty.csv',1,$1)
-       RETURNING id`,
-      [admin.userId],
-    );
-    await expect(validateScheduleImport(empty.rows[0].id, admin)).rejects.toMatchObject({
-      code: "SCHEDULE_IMPORT_NEEDS_REVIEW",
-      status: 409,
-    });
-  });
-
-  it("requires an administrator reason for a capacity conflict and then generates every child", async () => {
-    const original = await pool.query<{
-      safe_daily_capacity: number;
-      max_daily_capacity: number;
-    }>(
-      `SELECT safe_daily_capacity, max_daily_capacity
-         FROM clinic_capacity_settings
-        WHERE clinic_id=$1 AND schedule_type='LABORATORY'`,
-      [TEST_REFERENCE_IDS.laboratoryClinic],
-    );
-    await pool.query(
-      `UPDATE clinic_capacity_settings
-          SET safe_daily_capacity=1, max_daily_capacity=1
-        WHERE clinic_id=$1 AND schedule_type='LABORATORY'`,
-      [TEST_REFERENCE_IDS.laboratoryClinic],
-    );
-    try {
-      const created = await importStudentScheduleCsv(importInput("TEST Lifecycle capacity", [
-        'TEST-LIFE-0006,"Tester, Farah",College of Computer Studies,BSIT,3,12-23-2026,12-23-2026',
-        'TEST-LIFE-0007,"Tester, Gabe",College of Computer Studies,BSIT,3,12-23-2026,12-23-2026',
-      ]), admin);
-      const validation = await validateScheduleImport(created.importId, admin);
-      expect(validation.totals.conflicts).toBe(2);
-
-      await expect(generateScheduleImport(created.importId, admin)).rejects.toMatchObject({
-        code: "OVERRIDE_REASON_REQUIRED",
-        status: 422,
-      });
-      expect((await pool.query(
-        "SELECT 1 FROM appointments WHERE batch_id = ANY($1::uuid[])",
-        [created.batchIds],
-      )).rowCount).toBe(0);
-
-      const generated = await generateScheduleImport(
-        created.importId,
-        admin,
-        "  Approved test capacity exception  ",
-      );
-      expect(generated.appointmentCount).toBe(4);
-      const override = await pool.query<{ override_reason: string | null }>(
-        `SELECT override_reason
-           FROM schedule_batches
-          WHERE import_group_id=$1
-          ORDER BY override_reason NULLS LAST`,
-        [created.importId],
-      );
-      expect(override.rows.map((row) => row.override_reason)).toContain("Approved test capacity exception");
-      const groupAudit = await pool.query<{ metadata: { overrideReason?: string } }>(
-        `SELECT metadata FROM audit_logs
-          WHERE entity_type='schedule_import_group' AND entity_id=$1
-            AND action='SCHEDULE_IMPORT_GENERATED'`,
-        [created.importId],
-      );
-      expect(groupAudit.rows[0].metadata.overrideReason).toBe("Approved test capacity exception");
-    } finally {
-      await pool.query(
-        `UPDATE clinic_capacity_settings
-            SET safe_daily_capacity=$2, max_daily_capacity=$3
-          WHERE clinic_id=$1 AND schedule_type='LABORATORY'`,
-        [
-          TEST_REFERENCE_IDS.laboratoryClinic,
-          original.rows[0].safe_daily_capacity,
-          original.rows[0].max_daily_capacity,
-        ],
-      );
-    }
-  });
-
-  it("rolls back an earlier child when a later child has a non-capacity conflict", async () => {
-    const created = await importStudentScheduleCsv(importInput("TEST Lifecycle conflict", [
-      'TEST-LIFE-0008,"Tester, Hana",College of Computer Studies,BSIT,3,12-28-2026,12-29-2026',
-    ]), admin);
-    await validateScheduleImport(created.importId, admin);
-    await pool.query(
-      `INSERT INTO appointments (
-         clinic_id, student_number, schedule_type, appointment_date,
-         status, is_published, created_by, updated_by
-       ) VALUES ($1,'TEST-LIFE-0008','PHYSICAL_EXAM','2027-01-04','PENDING',TRUE,$2,$2)`,
-      [TEST_REFERENCE_IDS.physicalExamClinic, admin.userId],
-    );
-
-    await expect(generateScheduleImport(created.importId, admin)).rejects.toMatchObject({
-      code: "BATCH_CONFLICTS",
-      status: 409,
-    });
-    const state = await pool.query<{ status: string }>(
-      "SELECT status FROM schedule_batches WHERE import_group_id=$1 ORDER BY id",
-      [created.importId],
-    );
-    expect(state.rows.map((row) => row.status)).toEqual(["VALIDATED", "VALIDATED"]);
-    expect((await pool.query(
-      "SELECT 1 FROM appointments WHERE batch_id = ANY($1::uuid[])",
-      [created.batchIds],
-    )).rowCount).toBe(0);
-  });
-
-  it("rolls back every validation write when the second child fails", async () => {
-    const created = await importStudentScheduleCsv(importInput("TEST Lifecycle validate rollback", [
-      'TEST-LIFE-0009,"Tester, Inez",College of Computer Studies,BSIT,3,12-30-2026,12-31-2026',
-    ]), admin);
-    const ids = await childIdsByClinic(created.importId);
-    await failBatchStatus(String(ids.get("CPU_CLINIC")), "VALIDATED");
-    try {
-      await expect(validateScheduleImport(created.importId, admin)).rejects.toThrow(
-        "forced grouped batch failure",
-      );
-    } finally {
-      await pool.query("DROP TRIGGER IF EXISTS test_schedule_import_batch_failure ON schedule_batches");
-      await pool.query("DROP FUNCTION IF EXISTS test_schedule_import_batch_failure()");
-    }
-
-    const batches = await pool.query<{ status: string }>(
-      "SELECT status FROM schedule_batches WHERE import_group_id=$1 ORDER BY id",
-      [created.importId],
-    );
-    expect(batches.rows.map((row) => row.status)).toEqual(["DRAFT", "DRAFT"]);
-    const items = await pool.query<{ status: string }>(
-      `SELECT item.status FROM coordinator_schedule_items item
-        JOIN schedule_batches batch ON batch.id=item.batch_id
-       WHERE batch.import_group_id=$1`,
-      [created.importId],
-    );
-    expect(items.rows.map((row) => row.status)).toEqual(["PENDING", "PENDING"]);
-    expect((await pool.query(
-      `SELECT 1 FROM audit_logs WHERE entity_type='schedule_import_group'
-        AND entity_id=$1 AND action='SCHEDULE_IMPORT_VALIDATED'`,
-      [created.importId],
-    )).rowCount).toBe(0);
-    expect((await pool.query(
-      `SELECT 1 FROM audit_logs WHERE entity_type='schedule_batch'
-        AND entity_id = ANY($1::text[]) AND action='SCHEDULE_BATCH_VALIDATED'`,
-      [created.batchIds],
-    )).rowCount).toBe(0);
-  });
-
-  it("rolls back every generated appointment and audit when the second child fails", async () => {
-    const created = await importStudentScheduleCsv(importInput("TEST Lifecycle generate rollback", [
-      'TEST-LIFE-0010,"Tester, Jules",College of Computer Studies,BSIT,3,01-04-2027,01-05-2027',
-    ]), admin);
-    await validateScheduleImport(created.importId, admin);
-    const ids = await childIdsByClinic(created.importId);
-    await failAppointmentInsert(String(ids.get("CPU_CLINIC")));
-    try {
-      await expect(generateScheduleImport(created.importId, admin)).rejects.toThrow(
-        "forced grouped appointment failure",
-      );
-    } finally {
-      await pool.query("DROP TRIGGER IF EXISTS test_schedule_import_appointment_failure ON appointments");
-      await pool.query("DROP FUNCTION IF EXISTS test_schedule_import_appointment_failure()");
-    }
-
-    const batches = await pool.query<{ status: string }>(
-      "SELECT status FROM schedule_batches WHERE import_group_id=$1 ORDER BY id",
-      [created.importId],
-    );
-    expect(batches.rows.map((row) => row.status)).toEqual(["VALIDATED", "VALIDATED"]);
-    expect((await pool.query(
-      "SELECT 1 FROM appointments WHERE batch_id = ANY($1::uuid[])",
-      [created.batchIds],
-    )).rowCount).toBe(0);
-    expect((await pool.query(
-      `SELECT 1 FROM audit_logs WHERE entity_type='schedule_import_group'
-        AND entity_id=$1 AND action='SCHEDULE_IMPORT_GENERATED'`,
-      [created.importId],
-    )).rowCount).toBe(0);
-    const childAudits = await pool.query<{ action: string; count: number }>(
-      `SELECT action, COUNT(*)::int AS count FROM audit_logs
-        WHERE entity_type='schedule_batch' AND entity_id = ANY($1::text[])
-          AND action IN ('SCHEDULE_BATCH_VALIDATED','APPOINTMENTS_GENERATED')
-        GROUP BY action ORDER BY action`,
-      [created.batchIds],
-    );
-    expect(childAudits.rows).toEqual([
-      { action: "SCHEDULE_BATCH_VALIDATED", count: 2 },
-    ]);
-  });
-
-  it("rolls back appointments, logs, batch statuses, and audits when the second publish fails", async () => {
-    const created = await importStudentScheduleCsv(importInput("TEST Lifecycle publish rollback", [
-      'TEST-LIFE-0011,"Tester, Kira",College of Computer Studies,BSIT,3,01-06-2027,01-07-2027',
-    ]), admin);
-    await validateScheduleImport(created.importId, admin);
-    await generateScheduleImport(created.importId, admin);
-    const ids = await childIdsByClinic(created.importId);
-    await failBatchStatus(String(ids.get("CPU_CLINIC")), "PUBLISHED");
-    try {
-      await expect(publishScheduleImport(created.importId, admin)).rejects.toThrow(
-        "forced grouped batch failure",
-      );
-    } finally {
-      await pool.query("DROP TRIGGER IF EXISTS test_schedule_import_batch_failure ON schedule_batches");
-      await pool.query("DROP FUNCTION IF EXISTS test_schedule_import_batch_failure()");
-    }
-
-    const batches = await pool.query<{ status: string }>(
-      "SELECT status FROM schedule_batches WHERE import_group_id=$1 ORDER BY id",
-      [created.importId],
-    );
-    expect(batches.rows.map((row) => row.status)).toEqual(["GENERATED", "GENERATED"]);
-    const appointments = await pool.query<{ status: string; is_published: boolean }>(
-      `SELECT status, is_published FROM appointments
-        WHERE batch_id = ANY($1::uuid[]) ORDER BY batch_id`,
-      [created.batchIds],
-    );
-    expect(appointments.rows).toEqual([
-      { status: "DRAFT", is_published: false },
-      { status: "DRAFT", is_published: false },
-    ]);
-    expect((await pool.query(
-      `SELECT 1 FROM appointment_status_logs log
-        JOIN appointments appointment ON appointment.id=log.appointment_id
-       WHERE appointment.batch_id = ANY($1::uuid[])`,
-      [created.batchIds],
-    )).rowCount).toBe(0);
-    expect((await pool.query(
-      `SELECT 1 FROM audit_logs WHERE entity_type='schedule_import_group'
-        AND entity_id=$1 AND action='SCHEDULE_IMPORT_PUBLISHED'`,
-      [created.importId],
-    )).rowCount).toBe(0);
-    expect((await pool.query(
-      `SELECT 1 FROM audit_logs WHERE entity_type='schedule_batch'
-        AND entity_id = ANY($1::text[]) AND action='SCHEDULE_BATCH_PUBLISHED'`,
-      [created.batchIds],
-    )).rowCount).toBe(0);
-  });
-
-  it("preserves the complete legacy lifecycle for an ungrouped batch", async () => {
-    await insertTestStudent({
-      studentNumber: "TEST-LIFE-0012",
-      firstName: "Legacy",
-      lastName: "Tester",
-      yearLevel: 3,
-    });
-    const batch = await addScheduleBatch({
-      clinicCode: "KABALAKA_CLINIC",
-      batchName: "TEST Lifecycle legacy ungrouped",
-      collegeId: TEST_REFERENCE_IDS.college,
-      programId: TEST_REFERENCE_IDS.program,
-      submittedByName: "Lifecycle Test",
-      description: null,
-      items: [{
-        studentNumber: "TEST-LIFE-0012",
-        scheduleType: "LABORATORY",
-        priorityGroupId: TEST_REFERENCE_IDS.regularPriority,
-        targetDate: "2027-01-08",
-        targetWeekStart: null,
-        targetWeekEnd: null,
-        remarks: null,
-      }],
-    }, admin);
-    expect(batch?.importGroupId).toBeNull();
-    await validateBatch(String(batch?.id), admin.userId);
-    await generateBatchAppointments(String(batch?.id), admin);
-    await publishScheduleBatch(String(batch?.id), admin.userId);
-    const state = await pool.query<{ status: string }>(
-      "SELECT status FROM schedule_batches WHERE id=$1",
-      [batch?.id],
-    );
-    expect(state.rows[0].status).toBe("PUBLISHED");
+    expect(pairs.rows).toEqual([{ schedule_cycle_start: 2026 }, { schedule_cycle_start: 2027 }]);
   });
 });
