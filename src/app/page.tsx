@@ -38,6 +38,12 @@ export default function HomePage() {
               >
                 Open staff dashboard
               </Link>
+              <Link
+                href="/student/login"
+                className="inline-flex min-h-12 items-center justify-center rounded-lg border border-cpu-navy/30 bg-white/45 px-6 py-3 text-sm font-bold text-cpu-navy transition duration-200 hover:border-cpu-navy/60 hover:bg-white/80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cpu-navy"
+              >
+                Student sign in
+              </Link>
             </div>
           </div>
 
