@@ -27,6 +27,10 @@ export const studentInputSchema = z.object({
   programId: z.string().uuid(),
   yearLevel: z.union([z.coerce.number().int().min(1).max(6), z.null()]).default(null),
   section: optionalText,
+  dateOfBirth: z.iso.date().refine(
+    (value) => value <= new Date().toISOString().slice(0, 10),
+    "Date of birth cannot be in the future.",
+  ),
 });
 
 async function validateProgram(programId: string, collegeId: string) {

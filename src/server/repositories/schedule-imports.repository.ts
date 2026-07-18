@@ -1,10 +1,10 @@
 import "server-only";
 import type { PoolClient } from "pg";
-import { clinicConfigForCode, type AppointmentScheduleType, type ClinicCode } from "@/server/clinics";
+import type { AppointmentScheduleType, ClinicCode } from "@/server/clinics";
 import { query, transaction } from "@/server/db/pool";
 import { writeAudit } from "@/server/repositories/audit.repository";
 import { getScheduleBatch } from "@/server/repositories/coordinator-schedules.repository";
-import type { StudentScheduleCsvRow } from "@/server/services/student-schedule-import-csv";
+import type { ImportedStudentRow } from "@/server/services/student-import-csv";
 import { studentDisplayNameSql } from "@/server/students/student-display-name";
 
 export type ScheduleImportStatus =
@@ -30,20 +30,20 @@ export function deriveScheduleImportStatus(statuses: string[]): ScheduleImportSt
 }
 
 export type CreateScheduleImportInput = {
-  importName: string;
   sourceFilename: string;
-  priorityGroupId: string;
-  submittedByName: string | null;
-  description: string | null;
-  rows: StudentScheduleCsvRow[];
+  studentCategory: "REGULAR" | "OJT" | "TOUR" | "SPECIALIZED";
+  academicYearStart: number;
+  preferredMonth: number | null;
+  rows: ImportedStudentRow[];
 };
 
 export type ScheduleImportResult = {
   importId: string;
   status: "DRAFT";
   totalRows: number;
-  createdStudentCount: number;
-  matchedStudentCount: number;
+  insertedStudentCount: number;
+  updatedStudentCount: number;
+  skippedStudentCount: number;
   laboratoryItemCount: number;
   physicalExaminationItemCount: number;
   batchIds: string[];
@@ -109,41 +109,14 @@ type ProgramReference = {
 
 type ExistingStudent = {
   student_number: string;
-  first_name: string;
-  middle_name: string | null;
-  last_name: string;
-  suffix: string | null;
-  college_id: string;
-  program_id: string;
-  year_level: number | null;
 };
 
-type ResolvedRow = StudentScheduleCsvRow & {
+type ResolvedRow = ImportedStudentRow & {
   collegeId: string | null;
   programId: string | null;
-  existingStudent: ExistingStudent | null;
+  existedBeforeImport: boolean;
+  alreadyScheduledForCycle: boolean;
 };
-
-type ChildService = {
-  scheduleType: AppointmentScheduleType;
-  clinicCode: ClinicCode;
-  dateField: "laboratoryDate" | "physicalExaminationDate";
-};
-
-const childServices: ChildService[] = [
-  {
-    scheduleType: "LABORATORY",
-    clinicCode: "KABALAKA_CLINIC",
-    dateField: "laboratoryDate",
-  },
-  {
-    scheduleType: "PHYSICAL_EXAM",
-    clinicCode: "CPU_CLINIC",
-    dateField: "physicalExaminationDate",
-  },
-];
-
-const maximumBatchNameCharacters = 150;
 
 function normalizeComparable(value: string | null | undefined): string {
   return (value ?? "")
@@ -173,71 +146,6 @@ function uniqueReferenceMap<T>(
   return result;
 }
 
-function nameMatches(row: StudentScheduleCsvRow, student: ExistingStudent): boolean {
-  return normalizeComparable(row.firstName) === normalizeComparable(student.first_name)
-    && normalizeComparable(row.middleName) === normalizeComparable(student.middle_name)
-    && normalizeComparable(row.lastName) === normalizeComparable(student.last_name)
-    && normalizeComparable(row.suffix) === normalizeComparable(student.suffix);
-}
-
-function childBatchName(importName: string, clinicName: string, childCount: number): string {
-  if (childCount === 1) return importName;
-  const suffix = ` - ${clinicName}`;
-  const availableBaseCharacters = maximumBatchNameCharacters - Array.from(suffix).length;
-  return `${Array.from(importName).slice(0, availableBaseCharacters).join("")}${suffix}`;
-}
-
-async function insertChildBatch(
-  client: PoolClient,
-  input: CreateScheduleImportInput,
-  importId: string,
-  actorUserId: string,
-  service: ChildService,
-  rows: ResolvedRow[],
-  childCount: number,
-  commonCollegeId: string | null,
-  commonProgramId: string | null,
-) {
-  const clinic = clinicConfigForCode(service.clinicCode);
-  const batchName = childBatchName(input.importName, clinic.name, childCount);
-  const batch = await client.query<{ id: string }>(
-    `INSERT INTO schedule_batches (
-       clinic_id, batch_name, college_id, program_id, submitted_by_name,
-       description, created_by, import_group_id
-     ) VALUES (
-       (SELECT id FROM clinics WHERE code=$1),$2,$3,$4,$5,$6,$7,$8
-     ) RETURNING id`,
-    [
-      service.clinicCode,
-      batchName,
-      commonCollegeId,
-      commonProgramId,
-      input.submittedByName,
-      input.description,
-      actorUserId,
-      importId,
-    ],
-  );
-  const batchId = batch.rows[0].id;
-  await client.query(
-    `INSERT INTO coordinator_schedule_items (
-       batch_id, clinic_id, student_number, schedule_type, priority_group_id, target_date
-     )
-     SELECT $1, clinic.id, fixture.student_number, $3, $4, fixture.target_date
-       FROM clinics clinic
-       CROSS JOIN UNNEST($5::varchar[], $6::date[]) AS fixture(student_number, target_date)
-      WHERE clinic.code=$2`,
-    [
-      batchId,
-      service.clinicCode,
-      service.scheduleType,
-      input.priorityGroupId,
-      rows.map((row) => row.studentNumber),
-      rows.map((row) => row[service.dateField]),
-    ],
-  );
-  return batchId;
-}
 
 export async function createScheduleImport(
   input: CreateScheduleImportInput,
@@ -245,14 +153,6 @@ export async function createScheduleImport(
 ): Promise<ScheduleImportResult | { fields: Record<string, string[]> }> {
   return transaction(async (client) => {
     const fields: Record<string, string[]> = {};
-    const priority = await client.query(
-      "SELECT id FROM priority_groups WHERE id=$1 AND is_active=TRUE",
-      [input.priorityGroupId],
-    );
-    if (!priority.rowCount) {
-      addFieldError(fields, "priorityGroupId", "Select an active priority group.");
-    }
-
     const colleges = await client.query<CollegeReference>(
       "SELECT id, name FROM colleges WHERE is_active=TRUE",
     );
@@ -260,11 +160,17 @@ export async function createScheduleImport(
       "SELECT id, college_id, code FROM programs WHERE is_active=TRUE",
     );
     const existingStudents = await client.query<ExistingStudent>(
-      `SELECT student_number, first_name, middle_name, last_name, suffix,
-              college_id, program_id, year_level
-         FROM students
+      `SELECT student_number FROM students
         WHERE student_number = ANY($1::varchar[])`,
       [[...new Set(input.rows.map((row) => row.studentNumber))]],
+    );
+    const scheduledStudents = await client.query<{ student_number: string }>(
+      `SELECT DISTINCT student_number
+         FROM appointments
+        WHERE student_number = ANY($1::varchar[])
+          AND schedule_cycle_start=$2
+          AND status <> 'CANCELLED'`,
+      [[...new Set(input.rows.map((row) => row.studentNumber))], input.academicYearStart],
     );
 
     const collegeByName = uniqueReferenceMap(
@@ -275,8 +181,11 @@ export async function createScheduleImport(
       programs.rows,
       (program) => `${program.college_id}:${normalizeComparable(program.code)}`,
     );
-    const studentByNumber = new Map(
-      existingStudents.rows.map((student) => [student.student_number, student]),
+    const existingStudentNumbers = new Set(
+      existingStudents.rows.map((student) => student.student_number),
+    );
+    const scheduledStudentNumbers = new Set(
+      scheduledStudents.rows.map((student) => student.student_number),
     );
 
     const resolvedRows: ResolvedRow[] = input.rows.map((row) => {
@@ -299,134 +208,110 @@ export async function createScheduleImport(
         );
       }
 
-      const existingStudent = studentByNumber.get(row.studentNumber) ?? null;
-      if (existingStudent) {
-        if (!nameMatches(row, existingStudent)) {
-          addFieldError(
-            fields,
-            `rows.${row.rowNumber}.Name`,
-            "Name does not match the existing student data in this import.",
-          );
-        }
-        if (college && existingStudent.college_id !== college.id) {
-          addFieldError(
-            fields,
-            `rows.${row.rowNumber}.College`,
-            "College does not match the existing student data in this import.",
-          );
-        }
-        if (program && existingStudent.program_id !== program.id) {
-          addFieldError(
-            fields,
-            `rows.${row.rowNumber}.Course`,
-            "Course does not match the existing student data in this import.",
-          );
-        }
-        if (existingStudent.year_level !== row.yearLevel) {
-          addFieldError(
-            fields,
-            `rows.${row.rowNumber}.Year`,
-            "Year does not match the existing student data in this import.",
-          );
-        }
-      }
-
       return {
         ...row,
         collegeId: college?.id ?? null,
         programId: program?.id ?? null,
-        existingStudent,
+        existedBeforeImport: existingStudentNumbers.has(row.studentNumber),
+        alreadyScheduledForCycle: scheduledStudentNumbers.has(row.studentNumber),
       };
     });
 
     if (Object.keys(fields).length) return { fields };
 
-    const missingStudents = resolvedRows.filter((row) => !row.existingStudent);
-    const matchedStudentCount = resolvedRows.length - missingStudents.length;
+    const insertedStudentCount = resolvedRows.filter((row) => !row.existedBeforeImport).length;
+    const updatedStudentCount = resolvedRows.length - insertedStudentCount;
+    const skippedStudentCount = resolvedRows.filter(
+      (row) => row.alreadyScheduledForCycle,
+    ).length;
+    const importName = Array.from(
+      `${input.studentCategory} ${input.academicYearStart}-${input.academicYearStart + 1} - ${input.sourceFilename}`,
+    ).slice(0, 150).join("");
     const importGroup = await client.query<{ id: string }>(
       `INSERT INTO schedule_import_groups (
          import_name, source_filename, total_rows, created_student_count,
-         matched_student_count, submitted_by_name, description, created_by
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         matched_student_count, created_by, student_category, academic_year_start,
+         preferred_month, accepted_at
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,clock_timestamp())
        RETURNING id`,
       [
-        input.importName,
+        importName,
         input.sourceFilename,
         input.rows.length,
-        missingStudents.length,
-        matchedStudentCount,
-        input.submittedByName,
-        input.description,
+        insertedStudentCount,
+        updatedStudentCount,
         actorUserId,
+        input.studentCategory,
+        input.academicYearStart,
+        input.preferredMonth,
       ],
     );
     const importId = importGroup.rows[0].id;
 
-    if (missingStudents.length) {
-      await client.query(
-        `INSERT INTO students (
+    await client.query(
+      `INSERT INTO students (
+         student_number, first_name, middle_name, last_name, suffix,
+         college_id, program_id, year_level, date_of_birth
+       )
+       SELECT fixture.student_number, fixture.first_name, fixture.middle_name,
+              fixture.last_name, fixture.suffix, fixture.college_id,
+              fixture.program_id, fixture.year_level, fixture.date_of_birth
+         FROM UNNEST(
+           $1::varchar[], $2::varchar[], $3::varchar[], $4::varchar[],
+           $5::varchar[], $6::uuid[], $7::uuid[], $8::integer[], $9::date[]
+         ) AS fixture(
            student_number, first_name, middle_name, last_name, suffix,
-           college_id, program_id, year_level
+           college_id, program_id, year_level, date_of_birth
          )
-         SELECT fixture.student_number, fixture.first_name, fixture.middle_name,
-                fixture.last_name, fixture.suffix, fixture.college_id,
-                fixture.program_id, fixture.year_level
-           FROM UNNEST(
-             $1::varchar[], $2::varchar[], $3::varchar[], $4::varchar[],
-             $5::varchar[], $6::uuid[], $7::uuid[], $8::integer[]
-           ) AS fixture(
-             student_number, first_name, middle_name, last_name, suffix,
-             college_id, program_id, year_level
-           )`,
-        [
-          missingStudents.map((student) => student.studentNumber),
-          missingStudents.map((student) => student.firstName),
-          missingStudents.map((student) => student.middleName),
-          missingStudents.map((student) => student.lastName),
-          missingStudents.map((student) => student.suffix),
-          missingStudents.map((student) => student.collegeId),
-          missingStudents.map((student) => student.programId),
-          missingStudents.map((student) => student.yearLevel),
-        ],
+       ON CONFLICT (student_number) DO UPDATE SET
+         first_name=EXCLUDED.first_name,
+         middle_name=EXCLUDED.middle_name,
+         last_name=EXCLUDED.last_name,
+         suffix=EXCLUDED.suffix,
+         college_id=EXCLUDED.college_id,
+         program_id=EXCLUDED.program_id,
+         year_level=EXCLUDED.year_level,
+         date_of_birth=EXCLUDED.date_of_birth,
+         updated_at=NOW()`,
+      [
+        resolvedRows.map((student) => student.studentNumber),
+        resolvedRows.map((student) => student.firstName),
+        resolvedRows.map((student) => student.middleInitial),
+        resolvedRows.map((student) => student.surname),
+        resolvedRows.map((student) => student.suffix),
+        resolvedRows.map((student) => student.collegeId),
+        resolvedRows.map((student) => student.programId),
+        resolvedRows.map((student) => student.yearLevel),
+        resolvedRows.map((student) => student.dateOfBirth),
+      ],
+    );
+    const updatedStudentNumbers = resolvedRows
+      .filter((student) => student.existedBeforeImport)
+      .map((student) => student.studentNumber);
+    if (updatedStudentNumbers.length) {
+      await client.query(
+        `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
+         SELECT $1, 'STUDENT_PROFILE_UPDATED_BY_IMPORT', 'student', student_number,
+                jsonb_build_object('importId', $2::text)
+           FROM UNNEST($3::varchar[]) AS fixture(student_number)`,
+        [actorUserId, importId, updatedStudentNumbers],
       );
     }
 
-    const collegeIds = new Set(resolvedRows.map((row) => row.collegeId));
-    const programIds = new Set(resolvedRows.map((row) => row.programId));
-    const commonCollegeId = collegeIds.size === 1 ? [...collegeIds][0] : null;
-    const commonProgramId = programIds.size === 1 ? [...programIds][0] : null;
-    const populatedServices = childServices.map((service) => ({
-      service,
-      rows: resolvedRows.filter((row) => Boolean(row[service.dateField])),
-    })).filter(({ rows }) => rows.length > 0);
-
     const batchIds: string[] = [];
-    for (const { service, rows } of populatedServices) {
-      batchIds.push(await insertChildBatch(
-        client,
-        input,
-        importId,
-        actorUserId,
-        service,
-        rows,
-        populatedServices.length,
-        commonCollegeId,
-        commonProgramId,
-      ));
-    }
-
-    const laboratoryItemCount = resolvedRows.filter((row) => Boolean(row.laboratoryDate)).length;
-    const physicalExaminationItemCount = resolvedRows.filter(
-      (row) => Boolean(row.physicalExaminationDate),
-    ).length;
+    const laboratoryItemCount = 0;
+    const physicalExaminationItemCount = 0;
     const metadata = {
       sourceFilename: input.sourceFilename,
       batchIds,
       totalRows: input.rows.length,
       laboratoryItemCount,
       physicalExaminationItemCount,
-      createdStudentCount: missingStudents.length,
-      matchedStudentCount,
+      insertedStudentCount,
+      updatedStudentCount,
+      skippedStudentCount,
+      studentCategory: input.studentCategory,
+      academicYearStart: input.academicYearStart,
     };
     await writeAudit(
       actorUserId,
@@ -441,8 +326,9 @@ export async function createScheduleImport(
       importId,
       status: "DRAFT",
       totalRows: input.rows.length,
-      createdStudentCount: missingStudents.length,
-      matchedStudentCount,
+      insertedStudentCount,
+      updatedStudentCount,
+      skippedStudentCount,
       laboratoryItemCount,
       physicalExaminationItemCount,
       batchIds,

@@ -11,6 +11,7 @@ const validStudent = {
   programId: "20000000-0000-4000-8000-000000000003",
   yearLevel: 2,
   section: " B ",
+  dateOfBirth: "2004-08-04",
 };
 
 describe("studentInputSchema", () => {
@@ -22,10 +23,15 @@ describe("studentInputSchema", () => {
       lastName: "Santos",
       suffix: null,
       section: "B",
+      dateOfBirth: "2004-08-04",
     });
   });
 
   it("rejects a year level outside the supported range", () => {
     expect(() => studentInputSchema.parse({ ...validStudent, yearLevel: 7 })).toThrow();
+  });
+
+  it("rejects a future date of birth", () => {
+    expect(() => studentInputSchema.parse({ ...validStudent, dateOfBirth: "9999-12-31" })).toThrow();
   });
 });

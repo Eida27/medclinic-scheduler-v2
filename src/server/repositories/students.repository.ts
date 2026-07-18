@@ -12,6 +12,7 @@ export type StudentInput = {
   programId: string;
   yearLevel: number | null;
   section: string | null;
+  dateOfBirth: string;
 };
 
 export type StudentListFilters = {
@@ -55,6 +56,7 @@ type StudentRow = {
   program_name: string;
   year_level: number | null;
   section: string | null;
+  date_of_birth: string | null;
   is_active: boolean;
   created_at: Date;
   updated_at: Date;
@@ -74,6 +76,7 @@ function mapStudent(row: StudentRow) {
     programName: row.program_name,
     yearLevel: row.year_level,
     section: row.section,
+    dateOfBirth: row.date_of_birth,
     isActive: row.is_active,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
@@ -84,7 +87,7 @@ const studentSelect = `
   SELECT s.student_number, ${studentDisplayNameSql("s")} AS display_name,
          s.first_name, s.middle_name, s.last_name, s.suffix,
          s.college_id, c.name AS college_name, s.program_id, p.name AS program_name,
-         s.year_level, s.section, s.is_active, s.created_at, s.updated_at
+         s.year_level, s.section, s.date_of_birth::text, s.is_active, s.created_at, s.updated_at
   FROM students s
   JOIN colleges c ON c.id = s.college_id
   JOIN programs p ON p.id = s.program_id
@@ -153,9 +156,9 @@ export async function insertStudent(input: StudentInput) {
   await query(
     `INSERT INTO students (
       student_number, first_name, middle_name, last_name, suffix,
-      college_id, program_id, year_level, section
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-    [input.studentNumber, input.firstName, input.middleName, input.lastName, input.suffix, input.collegeId, input.programId, input.yearLevel, input.section],
+      college_id, program_id, year_level, section, date_of_birth
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    [input.studentNumber, input.firstName, input.middleName, input.lastName, input.suffix, input.collegeId, input.programId, input.yearLevel, input.section, input.dateOfBirth],
   );
   return getStudent(input.studentNumber);
 }
@@ -163,9 +166,9 @@ export async function insertStudent(input: StudentInput) {
 export async function updateStudentRecord(studentNumber: string, input: Omit<StudentInput, "studentNumber">) {
   await query(
     `UPDATE students SET first_name=$2, middle_name=$3, last_name=$4, suffix=$5,
-      college_id=$6, program_id=$7, year_level=$8, section=$9
+      college_id=$6, program_id=$7, year_level=$8, section=$9, date_of_birth=$10
      WHERE student_number=$1`,
-    [studentNumber, input.firstName, input.middleName, input.lastName, input.suffix, input.collegeId, input.programId, input.yearLevel, input.section],
+    [studentNumber, input.firstName, input.middleName, input.lastName, input.suffix, input.collegeId, input.programId, input.yearLevel, input.section, input.dateOfBirth],
   );
   return getStudent(studentNumber);
 }

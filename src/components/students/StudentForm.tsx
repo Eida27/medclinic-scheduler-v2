@@ -13,6 +13,7 @@ import type { College, Program } from "@/server/repositories/reference-data.repo
 type Student = {
   studentNumber: string; firstName: string; middleName: string | null; lastName: string; suffix: string | null;
   collegeId: string; programId: string; yearLevel: number | null; section: string | null;
+  dateOfBirth: string | null;
 };
 
 export function StudentForm({
@@ -42,6 +43,7 @@ export function StudentForm({
       studentNumber: form.get("studentNumber"), firstName: form.get("firstName"), middleName: form.get("middleName"),
       lastName: form.get("lastName"), suffix: form.get("suffix"), collegeId: form.get("collegeId"),
       programId: form.get("programId"), yearLevel: Number(form.get("yearLevel")) || null, section: form.get("section"),
+      dateOfBirth: form.get("dateOfBirth"),
     };
     const response = await fetch(student ? `/api/students/${encodeURIComponent(student.studentNumber)}` : "/api/students", {
       method: student ? "PATCH" : "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
@@ -62,6 +64,7 @@ export function StudentForm({
           <Field label="Middle name"><Input name="middleName" defaultValue={student?.middleName ?? ""} disabled={readOnly} /></Field>
           <Field label="Last name"><Input name="lastName" defaultValue={student?.lastName} disabled={readOnly} required /></Field>
           <Field label="Suffix"><Input name="suffix" defaultValue={student?.suffix ?? ""} disabled={readOnly} /></Field>
+          <Field label="Date of birth"><Input name="dateOfBirth" type="date" defaultValue={student?.dateOfBirth ?? ""} disabled={readOnly} required /></Field>
           <Field label="College">
             <Select name="collegeId" value={collegeId} onChange={(event) => setCollegeId(event.target.value)} disabled={readOnly} required>
               <option value="">Select college</option>{colleges.filter((college) => college.isActive).map((college) => <option key={college.id} value={college.id}>{college.name}</option>)}

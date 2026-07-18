@@ -21,29 +21,33 @@ import {
   generateBatchAppointmentsWithClient,
   validateBatchWithClient,
 } from "./coordinator-schedules.service";
-import { parseStudentScheduleCsv } from "./student-schedule-import-csv";
-
-const maximumCsvBytes = 1024 * 1024;
-const characterCount = (value: string) => Array.from(value).length;
-const blankToNull = z.union([z.string(), z.null(), z.undefined()])
-  .transform((value) => value?.trim() || null);
-const importNameSchema = z.string().trim()
-  .refine((value) => characterCount(value) >= 3, {
-    message: "Import name must contain at least 3 characters.",
-  })
-  .refine((value) => characterCount(value) <= 150, {
-    message: "Import name must contain at most 150 characters.",
-  });
-const submittedByNameSchema = blankToNull.refine(
-  (value) => value === null || characterCount(value) <= 150,
-  { message: "Submitted by name must contain at most 150 characters." },
-);
+import {
+  parseStudentImportCsv,
+  STUDENT_IMPORT_MAXIMUM_BYTES,
+} from "./student-import-csv";
 
 const importMetadataSchema = z.object({
-  importName: importNameSchema,
-  priorityGroupId: z.string().uuid(),
-  submittedByName: submittedByNameSchema,
-  description: blankToNull,
+  studentCategory: z.enum(["REGULAR", "OJT", "TOUR", "SPECIALIZED"]),
+  academicYearStart: z.coerce.number().int().min(2020).max(2100),
+  preferredMonth: z.preprocess(
+    (value) => value === "" || value === null || value === undefined ? null : value,
+    z.union([z.coerce.number().int().min(1).max(12), z.null()]),
+  ),
+}).superRefine((value, context) => {
+  if (value.studentCategory === "REGULAR" && value.preferredMonth !== null) {
+    context.addIssue({
+      code: "custom",
+      path: ["preferredMonth"],
+      message: "Regular imports do not use a preferred month.",
+    });
+  }
+  if (value.studentCategory !== "REGULAR" && value.preferredMonth === null) {
+    context.addIssue({
+      code: "custom",
+      path: ["preferredMonth"],
+      message: "Choose a preferred month for this student category.",
+    });
+  }
 });
 const importIdSchema = z.string().uuid();
 const overrideReasonSchema = z.string().trim().max(500).optional()
@@ -94,7 +98,7 @@ function validatedFile(raw: unknown) {
     addError("File size must be a non-negative whole number.");
   } else if (declaredSize === 0) {
     addError("CSV files must not be empty.");
-  } else if (declaredSize > maximumCsvBytes) {
+  } else if (declaredSize > STUDENT_IMPORT_MAXIMUM_BYTES) {
     addError("CSV files may not exceed 1 MB.");
   }
 
@@ -104,7 +108,7 @@ function validatedFile(raw: unknown) {
   } else {
     const bytes = actualByteLength(contents);
     if (bytes === 0) addError("CSV files must not be empty.");
-    if (bytes > maximumCsvBytes) addError("CSV files may not exceed 1 MB.");
+    if (bytes > STUDENT_IMPORT_MAXIMUM_BYTES) addError("CSV files may not exceed 1 MB.");
   }
 
   if (errors.length || !isCsvContents(contents)) {
@@ -128,7 +132,7 @@ export async function importStudentScheduleCsv(
   const result = await createScheduleImport({
     ...metadata,
     sourceFilename: file.fileName,
-    rows: parseStudentScheduleCsv(file.contents),
+    rows: parseStudentImportCsv(file.contents),
   }, actor.userId);
   if ("fields" in result) {
     throw new AppError(
@@ -487,8 +491,8 @@ export async function importAndPublishStudentScheduleCsv(
     importId: created.importId,
     status: "PUBLISHED",
     totalRows: created.totalRows,
-    createdStudentCount: created.createdStudentCount,
-    matchedStudentCount: created.matchedStudentCount,
+    createdStudentCount: created.insertedStudentCount,
+    matchedStudentCount: created.updatedStudentCount,
     appointmentCount: generated.appointmentCount,
     publishedAppointmentCount: published.publishedAppointmentCount,
   };
