@@ -32,11 +32,11 @@ export async function cleanupExpiredResultDrafts(
     let deletionFailureCount = 0;
     const pendingDeletion = await client.query<{ id: string; storageKey: string }>(
       `SELECT file.id, file.storage_key AS "storageKey"
-         FROM student_result_files file
+        FROM student_result_files file
          JOIN student_result_submissions submission ON submission.id=file.submission_id
         WHERE file.storage_delete_pending=TRUE AND file.deleted_at IS NULL
-          AND submission.status='INVALIDATED'
-        ORDER BY submission.invalidated_at, file.uploaded_at, file.id
+        ORDER BY COALESCE(submission.invalidated_at, submission.last_activity_at),
+                 file.uploaded_at, file.id
         LIMIT 100
         FOR UPDATE OF file SKIP LOCKED`,
     );

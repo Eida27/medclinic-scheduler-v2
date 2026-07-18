@@ -13,9 +13,9 @@ const admin = {
   role: "ADMIN",
 } satisfies SessionUser;
 
-const studentPattern = "TEST-LEGACY-%";
+const studentPattern = "99-89%";
 const batchPattern = "TEST Legacy%";
-const importPattern = "TEST Legacy%";
+const importPattern = "% 2026-2027 - TEST-LEGACY%";
 
 async function cleanup() {
   await cleanupTestFixtures(studentPattern, batchPattern, importPattern);
@@ -30,17 +30,16 @@ afterAll(async () => {
 describe("legacy coordinator schedule reads", () => {
   it("lists historical ungrouped batches without exposing grouped import children", async () => {
     const contents = [
-      "Student ID,Name,College,Course,Year,Laboratory Schedule,Physical Examination Schedule",
-      'TEST-LEGACY-001,"Reader, Grouped",College of Computer Studies,BSIT,3,12-14-2026,12-15-2026',
+      "Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth",
+      "99-8901-01,Reader,Grouped,,,College of Computer Studies,BSIT,3,05-06-2003",
     ].join("\n");
     const grouped = await importStudentScheduleCsv({
       fileName: "TEST-LEGACY-grouped.csv",
       fileSize: Buffer.byteLength(contents),
       contents,
-      importName: "TEST Legacy grouped import",
-      priorityGroupId: TEST_REFERENCE_IDS.regularPriority,
-      submittedByName: "Legacy Test",
-      description: null,
+      studentCategory: "REGULAR",
+      academicYearStart: 2026,
+      preferredMonth: null,
     }, admin);
     const ungrouped = await pool.query<{ id: string }>(
       `INSERT INTO schedule_batches (clinic_id, batch_name, created_by)

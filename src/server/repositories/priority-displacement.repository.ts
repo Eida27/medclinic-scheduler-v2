@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 
 export type DisplacementCandidate = {
+  displacementType: "PAIR" | "PHYSICAL_EXAM_ONLY";
   studentNumber: string;
   schedulePairId: string;
   laboratoryAppointmentId: string;
@@ -83,6 +84,7 @@ export async function lockEligibleRegularPairs(
     [input.scheduleCycleStart, input.windowStart, input.windowEnd, input.limit],
   );
   return result.rows.map((row) => ({
+    displacementType: "PAIR",
     studentNumber: row.student_number,
     schedulePairId: row.schedule_pair_id,
     laboratoryAppointmentId: row.laboratory_appointment_id,
@@ -95,15 +97,92 @@ export async function lockEligibleRegularPairs(
   }));
 }
 
-export async function markPairsRescheduled(
+export async function lockEligibleRegularPhysicalExams(
+  client: PoolClient,
+  input: {
+    scheduleCycleStart: number;
+    windowStart: string;
+    windowEnd: string;
+    limit: number;
+  },
+): Promise<DisplacementCandidate[]> {
+  if (input.limit <= 0) return [];
+  const result = await client.query<{
+    student_number: string;
+    schedule_pair_id: string;
+    laboratory_appointment_id: string;
+    laboratory_date: string;
+    physical_exam_appointment_id: string;
+    physical_exam_date: string;
+    accepted_at: Date;
+    source_row_order: number;
+    schedule_cycle_start: number;
+  }>(
+    `SELECT physical.student_number,
+            physical.schedule_pair_id::text,
+            laboratory.id AS laboratory_appointment_id,
+            laboratory.appointment_date::text AS laboratory_date,
+            physical.id AS physical_exam_appointment_id,
+            physical.appointment_date::text AS physical_exam_date,
+            import_group.accepted_at,
+            COALESCE(physical_item.source_row_order, 2147483647) AS source_row_order,
+            physical.schedule_cycle_start
+       FROM appointments physical
+       JOIN appointments laboratory
+         ON laboratory.schedule_pair_id=physical.schedule_pair_id
+        AND laboratory.schedule_type='LABORATORY'
+        AND laboratory.status NOT IN ('RESCHEDULED','CANCELLED')
+       JOIN schedule_batches batch ON batch.id=physical.batch_id
+       JOIN schedule_import_groups import_group ON import_group.id=batch.import_group_id
+       LEFT JOIN coordinator_schedule_items physical_item
+         ON physical_item.id=physical.schedule_item_id
+      WHERE physical.schedule_type='PHYSICAL_EXAM'
+        AND import_group.student_category='REGULAR'
+        AND physical.schedule_cycle_start=$1
+        AND physical.appointment_date BETWEEN $2::date AND $3::date
+        AND physical.appointment_date > (NOW() AT TIME ZONE 'Asia/Manila')::date
+        AND physical.status='PENDING'
+        AND physical.is_published=TRUE
+        AND physical.is_manually_locked=FALSE
+        AND NOT EXISTS (
+          SELECT 1 FROM student_result_submissions submission
+           WHERE submission.appointment_id=physical.id
+             AND submission.status='FINALIZED'
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM exam_results result
+           WHERE result.appointment_id=physical.id
+             AND result.result_status <> 'PENDING_UPLOAD'
+        )
+      ORDER BY import_group.accepted_at DESC,
+               COALESCE(physical_item.source_row_order, 2147483647) DESC,
+               physical.student_number DESC
+      LIMIT $4
+      FOR UPDATE OF physical SKIP LOCKED`,
+    [input.scheduleCycleStart, input.windowStart, input.windowEnd, input.limit],
+  );
+  return result.rows.map((row) => ({
+    displacementType: "PHYSICAL_EXAM_ONLY",
+    studentNumber: row.student_number,
+    schedulePairId: row.schedule_pair_id,
+    laboratoryAppointmentId: row.laboratory_appointment_id,
+    laboratoryDate: row.laboratory_date,
+    physicalExamAppointmentId: row.physical_exam_appointment_id,
+    physicalExamDate: row.physical_exam_date,
+    acceptedAt: row.accepted_at,
+    sourceRowOrder: row.source_row_order,
+    scheduleCycleStart: row.schedule_cycle_start,
+  }));
+}
+
+export async function markDisplacedAppointmentsRescheduled(
   client: PoolClient,
   candidates: DisplacementCandidate[],
   actorUserId: string,
 ) {
-  const appointmentIds = candidates.flatMap((candidate) => [
-    candidate.laboratoryAppointmentId,
-    candidate.physicalExamAppointmentId,
-  ]);
+  const appointmentIds = candidates.flatMap((candidate) => candidate.displacementType === "PAIR"
+    ? [candidate.laboratoryAppointmentId, candidate.physicalExamAppointmentId]
+    : [candidate.physicalExamAppointmentId]);
   if (!appointmentIds.length) return;
   await client.query(
     `UPDATE appointments

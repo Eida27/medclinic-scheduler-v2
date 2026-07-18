@@ -5,6 +5,7 @@ import { useState, type FormEvent } from "react";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Input } from "@/components/ui/Input";
 
 type Draft = {
@@ -22,12 +23,14 @@ export function ResultDraftManager({ draft }: { draft: Draft }) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string>();
+  const [finalizeOpen, setFinalizeOpen] = useState(false);
 
   async function upload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const formElement = event.currentTarget;
     setPending(true);
     setError(undefined);
-    const form = new FormData(event.currentTarget);
+    const form = new FormData(formElement);
     const response = await fetch(`/api/student/result-submissions/${draft.appointmentId}/files`, {
       method: "POST",
       body: form,
@@ -36,7 +39,21 @@ export function ResultDraftManager({ draft }: { draft: Draft }) {
     setPending(false);
     if (!response.ok) setError(payload.error?.message ?? "Unable to upload this file.");
     else {
-      event.currentTarget.reset();
+      formElement.reset();
+      router.refresh();
+    }
+  }
+
+  async function finalize() {
+    setPending(true);
+    const response = await fetch(`/api/student/result-submissions/${draft.appointmentId}/finalize`, {
+      method: "POST",
+    });
+    const payload = await response.json();
+    setPending(false);
+    if (!response.ok) setError(payload.error?.message ?? "Unable to finalize this submission.");
+    else {
+      setFinalizeOpen(false);
       router.refresh();
     }
   }
@@ -91,21 +108,21 @@ export function ResultDraftManager({ draft }: { draft: Draft }) {
         <Button
           variant="accent"
           disabled={pending}
-          onClick={async () => {
-            if (!window.confirm("Final submission locks this draft. Continue?")) return;
-            setPending(true);
-            const response = await fetch(`/api/student/result-submissions/${draft.appointmentId}/finalize`, {
-              method: "POST",
-            });
-            const payload = await response.json();
-            setPending(false);
-            if (!response.ok) setError(payload.error?.message ?? "Unable to finalize this submission.");
-            else router.refresh();
-          }}
+          onClick={() => setFinalizeOpen(true)}
         >
           Final submit
         </Button>
       ) : null}
+      <ConfirmDialog
+        open={finalizeOpen}
+        title="Finalize this submission?"
+        description="Final submission locks this draft and its uploaded files."
+        confirmLabel="Finalize submission"
+        pending={pending}
+        pendingLabel="Finalizing..."
+        onCancel={() => setFinalizeOpen(false)}
+        onConfirm={finalize}
+      />
     </div>
   );
 }

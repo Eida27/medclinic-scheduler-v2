@@ -62,8 +62,8 @@ const summaryRowsCte = `
       latest_item.priority_group_id AS "priorityGroupId",
       COALESCE(latest_appointment.status, 'UNSCHEDULED') AS "appointmentStatus",
       latest_appointment.clinic_code AS "latestAppointmentClinicCode",
-      COALESCE(exam.result_status, 'PENDING') AS "physicalExamStatus",
-      COALESCE(lab.result_status, 'PENDING') AS "laboratoryStatus",
+      COALESCE(exam.result_status, 'PENDING_UPLOAD') AS "physicalExamStatus",
+      COALESCE(lab.result_status, 'PENDING_UPLOAD') AS "laboratoryStatus",
       physical_appointment.id AS "physicalExamAppointmentId",
       physical_appointment.appointment_date AS "physicalExamAppointmentDate",
       physical_appointment.status AS "physicalExamAppointmentStatus",
@@ -85,11 +85,11 @@ const summaryRowsCte = `
         END
       ) AS "nextSchedule",
       CASE
-        WHEN COALESCE(exam.result_status, 'PENDING')='REQUIRES_FOLLOW_UP'
-          OR COALESCE(lab.result_status, 'PENDING')='REQUIRES_FOLLOW_UP'
+        WHEN COALESCE(exam.result_status, 'PENDING_UPLOAD')='REQUIRES_FOLLOW_UP'
+          OR COALESCE(lab.result_status, 'PENDING_UPLOAD')='REQUIRES_FOLLOW_UP'
         THEN 'FOLLOW_UP'
-        WHEN COALESCE(exam.result_status, 'PENDING')='COMPLETED'
-          AND COALESCE(lab.result_status, 'PENDING')='COMPLETED'
+        WHEN COALESCE(exam.result_status, 'PENDING_UPLOAD')='COMPLETED'
+          AND COALESCE(lab.result_status, 'PENDING_UPLOAD')='COMPLETED'
         THEN 'COMPLETE'
         ELSE 'INCOMPLETE'
       END AS "overallStatus"

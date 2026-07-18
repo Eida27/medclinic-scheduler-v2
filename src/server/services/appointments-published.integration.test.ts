@@ -126,7 +126,7 @@ describe("published-only appointment access", () => {
     });
     expect(await publicStudentSchedule(studentNumber)).toMatchObject({
       appointments: [],
-      compliance: { laboratory: "PENDING" },
+      compliance: { laboratory: "PENDING_UPLOAD" },
     });
 
     await publishScheduleBatch(batch.rows[0].id, admin.userId);

@@ -29,14 +29,14 @@ describe("NewScheduleImportPage", () => {
     listPriorityGroups.mockResolvedValue(priorities);
   });
 
-  it("allows administrators and coordinators, loads priorities, and renders only the grouped master importer", async () => {
+  it("allows administrators and coordinators and renders the academic-year importer", async () => {
     render(await NewScheduleImportPage());
 
     expect(requireUser).toHaveBeenCalledWith(["ADMIN", "COORDINATOR"]);
-    expect(listPriorityGroups).toHaveBeenCalledOnce();
+    expect(listPriorityGroups).not.toHaveBeenCalled();
     expect(screen.getByRole("heading", { name: "Import schedule CSV" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Master student and schedule CSV" })).toBeVisible();
-    expect(screen.getByRole("option", { name: "Regular" })).toHaveValue(priorities[0].id);
+    expect(screen.getByRole("heading", { name: "Academic-year student CSV" })).toBeVisible();
+    expect(screen.getByRole("option", { name: "Regular" })).toHaveValue("REGULAR");
     expect(screen.queryByText(/manual schedule encoder/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/legacy coordinator importer/i)).not.toBeInTheDocument();
   });
@@ -60,8 +60,8 @@ describe("NewScheduleImportPage", () => {
     if (!existsSync(templatePath)) return;
 
     expect(readFileSync(templatePath, "utf8").replaceAll("\r\n", "\n")).toBe([
-      "Student ID,Name,College,Course,Year,Laboratory Schedule,Physical Examination Schedule",
-      '00-0000-00,"Sample, Student",College of Computer Studies,BSIT,1,07-29-2026,07-30-2026',
+      "Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth",
+      "23-1212-97,Abad,Aaron Miguel,A.,,College of Computer Studies,BSIT,3,08-04-2004",
       "",
     ].join("\n"));
   });

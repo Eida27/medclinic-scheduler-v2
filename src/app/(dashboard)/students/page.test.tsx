@@ -77,6 +77,14 @@ const scheduleImport = {
   laboratoryItemCount: 25,
   physicalExaminationItemCount: 30,
   status: "VALIDATED" as const,
+  studentCategory: "REGULAR" as const,
+  academicYearStart: 2026,
+  preferredMonth: null,
+  acceptedAt: "2026-07-10T08:30:00.000Z",
+  skippedStudentCount: 0,
+  generatedRange: { startDate: "2026-08-03", endDate: "2026-08-07" },
+  overflow: { pairCountBeyondPreferredWindow: 0, unscheduledStudentCount: 0 },
+  displacementTotal: 0,
   createdAt: "2026-07-10T08:30:00.000Z",
   updatedAt: "2026-07-10T09:00:00.000Z",
 };
@@ -130,9 +138,8 @@ describe("StudentsPage", () => {
     expect(within(row).getByText("first-semester.csv")).toBeVisible();
     expect(within(row).getByText("System Admin")).toBeVisible();
     expect(within(row).getByText("40")).toBeVisible();
-    expect(within(row).getByText("32 matched · 8 created")).toBeVisible();
+    expect(within(row).getByText("8 inserted · 32 updated · 0 skipped")).toBeVisible();
     expect(within(row).getByRole("cell", { name: "25" })).toBeVisible();
-    expect(within(row).getByRole("cell", { name: "30" })).toBeVisible();
     expect(within(row).getByText("VALIDATED")).toBeVisible();
     expect(within(row).getByRole("link", { name: "View details" })).toHaveAttribute(
       "href",

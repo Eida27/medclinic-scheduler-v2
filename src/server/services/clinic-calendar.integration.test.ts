@@ -31,6 +31,12 @@ function importInput(fileName: string, studentNumber: string) {
   };
 }
 
+function addCalendarDays(date: string, amount: number) {
+  const value = new Date(`${date}T00:00:00.000Z`);
+  value.setUTCDate(value.getUTCDate() + amount);
+  return value.toISOString().slice(0, 10);
+}
+
 async function cleanup() {
   await cleanupTestFixtures(studentPattern, importPattern, importPattern);
   await pool.query("DELETE FROM clinic_unavailable_dates WHERE reason LIKE 'TEST-CALENDAR%'");
@@ -72,6 +78,109 @@ describe("clinic calendar closures", () => {
         expect.objectContaining({ status: "RESCHEDULED" }),
         expect.objectContaining({ status: "PENDING", rescheduled_from: expect.any(String) }),
       ]);
+  });
+
+  it("does not move PE into an earlier existing CPU Clinic block", async () => {
+    await acceptAndScheduleImport(importInput("TEST-CALENDAR-existing-block.csv", "99-9504-04"), admin);
+    const pair = await pool.query<{ id: string; schedule_type: string; appointment_date: string }>(
+      `SELECT id, schedule_type, appointment_date::text
+         FROM appointments WHERE student_number='99-9504-04'`,
+    );
+    const laboratoryDate = pair.rows.find((row) => row.schedule_type === "LABORATORY")!.appointment_date;
+    const physical = pair.rows.find((row) => row.schedule_type === "PHYSICAL_EXAM")!;
+    const blockedStart = addCalendarDays(laboratoryDate, 1);
+    const blockedEnd = addCalendarDays(laboratoryDate, 29);
+    const physicalDate = addCalendarDays(laboratoryDate, 30);
+    await pool.query("UPDATE appointments SET appointment_date=$2 WHERE id=$1", [physical.id, physicalDate]);
+    await pool.query(
+      `INSERT INTO clinic_unavailable_dates (
+         clinic_id, start_date, end_date, category, reason, created_by
+       ) VALUES ($1,$2,$3,'CLOSURE','TEST-CALENDAR earlier existing range',$4)`,
+      [TEST_REFERENCE_IDS.physicalExamClinic, blockedStart, blockedEnd, TEST_REFERENCE_IDS.adminUser],
+    );
+
+    await createClinicUnavailableDate({
+      clinicId: TEST_REFERENCE_IDS.physicalExamClinic,
+      startDate: physicalDate,
+      endDate: physicalDate,
+      category: "CLOSURE",
+      reason: "TEST-CALENDAR later CPU closure",
+    }, admin);
+
+    const replacement = await pool.query<{ appointment_date: string }>(
+      `SELECT appointment_date::text FROM appointments
+        WHERE student_number='99-9504-04'
+          AND schedule_type='PHYSICAL_EXAM'
+          AND status='PENDING'
+          AND rescheduled_from IS NOT NULL`,
+    );
+    expect(replacement.rows[0].appointment_date > blockedEnd).toBe(true);
+  });
+
+  it("does not move PE into the past when the paired Laboratory date has passed", async () => {
+    await acceptAndScheduleImport(importInput("TEST-CALENDAR-past-lab.csv", "99-9505-05"), admin);
+    const pair = await pool.query<{ id: string; schedule_type: string }>(
+      `SELECT id, schedule_type FROM appointments WHERE student_number='99-9505-05'`,
+    );
+    const today = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Manila",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+    const laboratory = pair.rows.find((row) => row.schedule_type === "LABORATORY")!;
+    const physical = pair.rows.find((row) => row.schedule_type === "PHYSICAL_EXAM")!;
+    const blockedPhysicalDate = addCalendarDays(today, 10);
+    await pool.query("UPDATE appointments SET appointment_date=$2 WHERE id=$1", [
+      laboratory.id,
+      addCalendarDays(today, -10),
+    ]);
+    await pool.query("UPDATE appointments SET appointment_date=$2 WHERE id=$1", [
+      physical.id,
+      blockedPhysicalDate,
+    ]);
+
+    await createClinicUnavailableDate({
+      clinicId: TEST_REFERENCE_IDS.physicalExamClinic,
+      startDate: blockedPhysicalDate,
+      endDate: blockedPhysicalDate,
+      category: "CLOSURE",
+      reason: "TEST-CALENDAR future PE with past lab",
+    }, admin);
+
+    const replacement = await pool.query<{ appointment_date: string }>(
+      `SELECT appointment_date::text FROM appointments
+        WHERE student_number='99-9505-05'
+          AND schedule_type='PHYSICAL_EXAM'
+          AND status='PENDING'
+          AND rescheduled_from IS NOT NULL`,
+    );
+    expect(replacement.rows[0].appointment_date > today).toBe(true);
+  });
+
+  it("waits for the shared scheduling allocation lock before creating a block", async () => {
+    const blocker = await pool.connect();
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT pg_advisory_xact_lock(hashtext('medclinic:schedule-import-queue'))");
+      const pending = createClinicUnavailableDate({
+        clinicId: TEST_REFERENCE_IDS.physicalExamClinic,
+        startDate: "2027-06-01",
+        endDate: "2027-06-01",
+        category: "CLOSURE",
+        reason: "TEST-CALENDAR serialized closure",
+      }, admin);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const beforeRelease = await pool.query(
+        "SELECT 1 FROM clinic_unavailable_dates WHERE reason='TEST-CALENDAR serialized closure'",
+      );
+      expect(beforeRelease.rowCount).toBe(0);
+      await blocker.query("COMMIT");
+      await pending;
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      blocker.release();
+    }
   });
 
   it("replaces the full pair when a future KABALAKA date is blocked", async () => {

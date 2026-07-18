@@ -57,6 +57,10 @@ describe("rescheduleAppointmentWithClient", () => {
       clinicId: "60000000-0000-4000-8000-000000000001",
       clinicCode: "KABALAKA_CLINIC",
       isPublished: true,
+      schedulePairId: "44444444-4444-4444-8444-444444444444",
+      scheduleCycleStart: 2026,
+      isManuallyLocked: false,
+      lockReason: null,
       latestLog: null,
     } satisfies AppointmentMutationContext;
     const replacementId = "22222222-2222-4222-8222-222222222222";
@@ -73,7 +77,6 @@ describe("rescheduleAppointmentWithClient", () => {
       client,
       appointment,
       "2026-08-19",
-      "10:00",
       "Student requested a replacement",
       actorUserId,
     )).resolves.toBe(replacementId);

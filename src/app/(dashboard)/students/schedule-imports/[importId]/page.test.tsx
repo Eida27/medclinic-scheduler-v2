@@ -107,6 +107,14 @@ describe("ScheduleImportDetailPage", () => {
       laboratoryItemCount: 2,
       physicalExaminationItemCount: 1,
       status: "GENERATED",
+      studentCategory: "SPECIALIZED",
+      academicYearStart: 2026,
+      preferredMonth: 12,
+      acceptedAt: "2026-07-11T06:30:00.000Z",
+      skippedStudentCount: 0,
+      generatedRange: { startDate: "2026-12-01", endDate: "2026-12-11" },
+      overflow: { pairCountBeyondPreferredWindow: 0, unscheduledStudentCount: 0 },
+      displacementTotal: 0,
       createdAt: "2026-07-11T06:30:00.000Z",
       updatedAt: "2026-07-11T06:35:00.000Z",
       childBatches: [
@@ -135,15 +143,13 @@ describe("ScheduleImportDetailPage", () => {
     expect(getScheduleImport).toHaveBeenCalledWith("import-1", admin);
     expect(screen.getByRole("heading", { name: "December graduation schedules", level: 1 })).toBeVisible();
     expect(screen.getByText("graduation-schedules.csv")).toBeVisible();
-    expect(screen.getByText("Imported by System Admin")).toBeVisible();
-    expect(screen.getByText("Submitted by Registrar Office")).toBeVisible();
-    expect(screen.getByText("Graduating student clinic schedule")).toBeVisible();
-    expect(screen.getByText("Total students")).toBeVisible();
+    expect(screen.getByText("System Admin")).toBeVisible();
+    expect(screen.getByText("SPECIALIZED")).toBeVisible();
+    expect(screen.getByText("2026–2027")).toBeVisible();
+    expect(screen.getByText("Students")).toBeVisible();
     expect(screen.getByText("3", { selector: "dd" })).toBeVisible();
-    expect(screen.getByText("2 matched", { exact: false })).toBeVisible();
-    expect(screen.getByText("1 created", { exact: false })).toBeVisible();
-    expect(screen.getByText("2 Laboratory requests")).toBeVisible();
-    expect(screen.getByText("1 Physical examination request")).toBeVisible();
+    expect(screen.getByText("1 inserted · 2 updated · 0 skipped")).toBeVisible();
+    expect(screen.getByText("Published pairs")).toBeVisible();
     expect(screen.getByText("Grouped actions for import-1 in GENERATED as ADMIN")).toBeVisible();
     expect(screen.getByRole("region", { name: "Laboratory schedule review" })).toBeVisible();
     expect(screen.getByRole("region", { name: "Physical examination schedule review" })).toBeVisible();

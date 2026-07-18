@@ -26,7 +26,7 @@ import {
 type AppointmentsSearchParams = Record<string, string | undefined>;
 
 const appointmentStatuses = ["PENDING", "COMPLETED", "NO_SHOW"];
-const resultStatuses = ["PENDING", "COMPLETED", "REQUIRES_FOLLOW_UP", "NOT_APPLICABLE"];
+const resultStatuses = ["PENDING_UPLOAD", "COMPLETED", "REQUIRES_FOLLOW_UP", "NOT_APPLICABLE"];
 const overallStatuses: OverallStatus[] = ["FOLLOW_UP", "INCOMPLETE", "COMPLETE"];
 const sortOptions = [
   ["upcoming_asc", "Upcoming schedule: soonest first"],

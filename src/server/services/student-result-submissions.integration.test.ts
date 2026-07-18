@@ -11,6 +11,7 @@ import { updateAppointment } from "./appointments.service";
 import {
   addStudentResultFile,
   createAdminSubmissionZip,
+  createAdminSubmissionZipStream,
   finalizeStudentResultSubmission,
   getAdminStudentResultFile,
   getStudentResultFile,
@@ -156,12 +157,50 @@ describe("student result drafts", () => {
     }]);
   });
 
+  it("refuses finalization when stored bytes no longer match validated metadata", async () => {
+    await insertTestStudent({ studentNumber: "99-9413-13", firstName: "Integrity", lastName: "Student", yearLevel: 3 });
+    const appointmentId = await appointment("99-9413-13");
+    const added = await addStudentResultFile("99-9413-13", appointmentId, file("integrity.pdf"), storage);
+    await storage.write(added.storageKey, Buffer.from("%PDF-1.7\ncorrupted after upload"));
+
+    await expect(finalizeStudentResultSubmission("99-9413-13", appointmentId, storage))
+      .rejects.toMatchObject({ code: "RESULT_FILE_INTEGRITY_ERROR", status: 500 });
+    await expect(getStudentResultSubmission("99-9413-13", appointmentId))
+      .resolves.toMatchObject({ status: "DRAFT", fileCount: 1 });
+  });
+
+  it("revokes a removed draft file before retryable physical deletion", async () => {
+    await insertTestStudent({ studentNumber: "99-9414-14", firstName: "Delete", lastName: "Student", yearLevel: 3 });
+    const appointmentId = await appointment("99-9414-14");
+    const added = await addStudentResultFile("99-9414-14", appointmentId, file("delete.pdf"), storage);
+    const failingStorage = {
+      write: storage.write.bind(storage),
+      read: storage.read.bind(storage),
+      delete: async () => { throw new Error("synthetic draft delete failure"); },
+    };
+
+    await expect(removeStudentResultFile("99-9414-14", appointmentId, added.id, failingStorage))
+      .resolves.toEqual({ success: true });
+    await expect(getStudentResultSubmission("99-9414-14", appointmentId))
+      .resolves.toMatchObject({ status: "DRAFT", fileCount: 0 });
+    const state = await pool.query(
+      `SELECT storage_delete_pending, deleted_at, delete_error
+         FROM student_result_files WHERE id=$1`,
+      [added.id],
+    );
+    expect(state.rows).toEqual([{
+      storage_delete_pending: true,
+      deleted_at: null,
+      delete_error: "synthetic draft delete failure",
+    }]);
+  });
+
   it("finalizes atomically, completes the matching result, and locks student mutation", async () => {
     await insertTestStudent({ studentNumber: "99-9408-08", firstName: "Finalize", lastName: "Student", yearLevel: 3 });
     const appointmentId = await appointment("99-9408-08");
     const first = await addStudentResultFile("99-9408-08", appointmentId, file("lab.pdf"), storage);
     await addStudentResultFile("99-9408-08", appointmentId, file("lab-copy.pdf", "%PDF-1.7\nsecond"), storage);
-    const finalized = await finalizeStudentResultSubmission("99-9408-08", appointmentId);
+    const finalized = await finalizeStudentResultSubmission("99-9408-08", appointmentId, storage);
     expect(finalized).toMatchObject({ status: "FINALIZED", fileCount: 2 });
     const result = await pool.query(
       `SELECT result_status, completed_at::text, encoded_by FROM laboratory_results WHERE appointment_id=$1`,
@@ -192,7 +231,7 @@ describe("student result drafts", () => {
     }
     const appointmentId = await appointment("99-9409-09");
     const added = await addStudentResultFile("99-9409-09", appointmentId, file("shared-name.pdf"), storage);
-    const finalized = await finalizeStudentResultSubmission("99-9409-09", appointmentId);
+    const finalized = await finalizeStudentResultSubmission("99-9409-09", appointmentId, storage);
     await expect(getStudentResultFile("99-9409-09", added.id, storage))
       .resolves.toMatchObject({ filename: "shared-name.pdf", bytes: file().bytes });
     await expect(getStudentResultFile("99-9410-10", added.id, storage))
@@ -206,13 +245,19 @@ describe("student result drafts", () => {
     const zip = await createAdminSubmissionZip(finalized.id, admin, storage);
     expect(zip.subarray(0, 2).toString("ascii")).toBe("PK");
     expect(zip.toString("latin1")).toContain("01-shared-name.pdf");
+    const zipStream = await createAdminSubmissionZipStream(finalized.id, admin, storage);
+    const streamedChunks: Buffer[] = [];
+    for await (const chunk of zipStream) streamedChunks.push(Buffer.from(chunk));
+    const streamedZip = Buffer.concat(streamedChunks);
+    expect(streamedZip.subarray(0, 2).toString("ascii")).toBe("PK");
+    expect(streamedZip.toString("latin1")).toContain("01-shared-name.pdf");
   });
 
   it("invalidates metadata first, resets the result, notifies, and opens a replacement draft", async () => {
     await insertTestStudent({ studentNumber: "99-9411-11", firstName: "Replace", lastName: "Student", yearLevel: 3 });
     const appointmentId = await appointment("99-9411-11");
     const added = await addStudentResultFile("99-9411-11", appointmentId, file("invalid.pdf"), storage);
-    const finalized = await finalizeStudentResultSubmission("99-9411-11", appointmentId);
+    const finalized = await finalizeStudentResultSubmission("99-9411-11", appointmentId, storage);
     await expect(invalidateStudentResultSubmission(finalized.id, " ", admin, storage)).rejects.toThrow();
     await expect(invalidateStudentResultSubmission(finalized.id, "Wrong student document", coordinator, storage))
       .rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
@@ -247,7 +292,7 @@ describe("student result drafts", () => {
     await insertTestStudent({ studentNumber: "99-9412-12", firstName: "Retry", lastName: "Student", yearLevel: 3 });
     const appointmentId = await appointment("99-9412-12");
     await addStudentResultFile("99-9412-12", appointmentId, file("retry.pdf"), storage);
-    const finalized = await finalizeStudentResultSubmission("99-9412-12", appointmentId);
+    const finalized = await finalizeStudentResultSubmission("99-9412-12", appointmentId, storage);
     const failingStorage = {
       write: storage.write.bind(storage),
       read: storage.read.bind(storage),

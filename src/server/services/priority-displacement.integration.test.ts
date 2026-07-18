@@ -173,4 +173,120 @@ describe("priority displacement", () => {
     );
     expect(protectedAppointments.rows).toEqual([{ status: "PENDING" }]);
   });
+
+  it("moves only Regular PE when Laboratory fits but PE exceeds the priority window", async () => {
+    await pool.query(
+      `UPDATE clinic_capacity_settings
+          SET safe_daily_capacity=CASE
+            WHEN schedule_type='LABORATORY' THEN 2
+            ELSE 1
+          END
+        WHERE id IN ($1,$2)`,
+      [
+        "40000000-0000-4000-8000-000000000001",
+        "40000000-0000-4000-8000-000000000002",
+      ],
+    );
+    await pool.query(
+      `INSERT INTO clinic_unavailable_dates (
+         clinic_id, start_date, end_date, category, reason, created_by
+       ) VALUES ($1,'2026-08-05','2026-08-31','CLOSURE','TEST-DISPLACE physical-only',$2)`,
+      [TEST_REFERENCE_IDS.physicalExamClinic, TEST_REFERENCE_IDS.adminUser],
+    );
+    await acceptAndScheduleImport(
+      input("TEST-DISPLACE-regular-pe.csv", "REGULAR", ["99-9407-07"]),
+      admin,
+    );
+
+    const priority = await acceptAndScheduleImport(
+      input("TEST-DISPLACE-priority-pe.csv", "OJT", ["99-9408-08"]),
+      admin,
+    );
+    expect(priority.displacementTotal).toBe(1);
+    const regular = await pool.query<{
+      schedule_type: string;
+      status: string;
+      rescheduled_from: string | null;
+      schedule_pair_id: string;
+    }>(
+      `SELECT schedule_type, status, rescheduled_from::text, schedule_pair_id::text
+         FROM appointments WHERE student_number='99-9407-07'
+        ORDER BY schedule_type, created_at`,
+    );
+    expect(regular.rows.filter((row) => row.schedule_type === "LABORATORY"))
+      .toEqual([expect.objectContaining({ status: "PENDING", rescheduled_from: null })]);
+    const physical = regular.rows.filter((row) => row.schedule_type === "PHYSICAL_EXAM");
+    expect(physical).toEqual([
+      expect.objectContaining({ status: "RESCHEDULED", rescheduled_from: null }),
+      expect.objectContaining({ status: "PENDING", rescheduled_from: expect.any(String) }),
+    ]);
+    expect(new Set(regular.rows.map((row) => row.schedule_pair_id)).size).toBe(1);
+  });
+
+  it("moves only PE slots usable after each priority Laboratory date", async () => {
+    await pool.query(
+      `UPDATE clinic_capacity_settings
+          SET safe_daily_capacity=CASE
+            WHEN schedule_type='LABORATORY' THEN 2
+            ELSE 1
+          END
+        WHERE id IN ($1,$2)`,
+      [
+        "40000000-0000-4000-8000-000000000001",
+        "40000000-0000-4000-8000-000000000002",
+      ],
+    );
+    await acceptAndScheduleImport(
+      input("TEST-DISPLACE-regular-matched-pe.csv", "REGULAR", ["99-9409-09", "99-9410-10"]),
+      admin,
+    );
+    await pool.query(
+      `UPDATE appointments SET appointment_date='2026-07-31'
+        WHERE student_number IN ('99-9409-09','99-9410-10')
+          AND schedule_type='LABORATORY'`,
+    );
+    await pool.query(
+      `UPDATE clinic_capacity_settings SET safe_daily_capacity=1
+        WHERE schedule_type='LABORATORY'`,
+    );
+    await pool.query(
+      `INSERT INTO clinic_unavailable_dates (
+         clinic_id, start_date, end_date, category, reason, created_by
+       ) VALUES
+         ($1,'2026-08-04','2026-08-14','CLOSURE','TEST-DISPLACE laboratory gap',$3),
+         ($2,'2026-08-06','2026-08-31','CLOSURE','TEST-DISPLACE physical gap',$3)`,
+      [
+        TEST_REFERENCE_IDS.laboratoryClinic,
+        TEST_REFERENCE_IDS.physicalExamClinic,
+        TEST_REFERENCE_IDS.adminUser,
+      ],
+    );
+
+    const priority = await acceptAndScheduleImport(
+      input("TEST-DISPLACE-priority-matched-pe.csv", "OJT", ["99-9411-11", "99-9412-12"]),
+      admin,
+    );
+    expect(priority.displacementTotal).toBe(1);
+    const regularPhysical = await pool.query(
+      `SELECT student_number, status
+         FROM appointments
+        WHERE student_number IN ('99-9409-09','99-9410-10')
+          AND schedule_type='PHYSICAL_EXAM'
+        ORDER BY student_number, created_at`,
+    );
+    expect(regularPhysical.rows.filter((row) => row.status === "RESCHEDULED")).toHaveLength(1);
+    const priorityDates = await pool.query<{ student_number: string; laboratory_date: string; physical_date: string }>(
+      `SELECT laboratory.student_number,
+              laboratory.appointment_date::text AS laboratory_date,
+              physical.appointment_date::text AS physical_date
+         FROM appointments laboratory
+         JOIN appointments physical ON physical.schedule_pair_id=laboratory.schedule_pair_id
+          AND physical.schedule_type='PHYSICAL_EXAM' AND physical.status='PENDING'
+        WHERE laboratory.student_number IN ('99-9411-11','99-9412-12')
+          AND laboratory.schedule_type='LABORATORY' AND laboratory.status='PENDING'
+        ORDER BY laboratory.appointment_date`,
+    );
+    expect(priorityDates.rows.filter((row) => row.physical_date <= "2026-08-31")).toHaveLength(1);
+    expect(priorityDates.rows.every((row) => row.physical_date > row.laboratory_date)).toBe(true);
+  });
 });

@@ -11,8 +11,8 @@ const complianceQuerySchema = z.object({
   priorityGroupId: z.string().uuid().optional(),
   appointmentDate: z.iso.date().optional(),
   appointmentStatus: z.enum(["PENDING", "COMPLETED", "NO_SHOW"]).optional(),
-  physicalExamStatus: z.enum(["PENDING", "COMPLETED", "REQUIRES_FOLLOW_UP", "NOT_APPLICABLE"]).optional(),
-  laboratoryStatus: z.enum(["PENDING", "COMPLETED", "REQUIRES_FOLLOW_UP", "NOT_APPLICABLE"]).optional(),
+  physicalExamStatus: z.enum(["PENDING_UPLOAD", "COMPLETED", "REQUIRES_FOLLOW_UP", "NOT_APPLICABLE"]).optional(),
+  laboratoryStatus: z.enum(["PENDING_UPLOAD", "COMPLETED", "REQUIRES_FOLLOW_UP", "NOT_APPLICABLE"]).optional(),
   overallStatus: z.enum(["FOLLOW_UP", "INCOMPLETE", "COMPLETE"]).optional(),
   search: z.string().trim().max(100).optional(),
 });

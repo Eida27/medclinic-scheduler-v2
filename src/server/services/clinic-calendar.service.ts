@@ -123,6 +123,7 @@ async function lockAppointments(
       WHERE appointment.clinic_id=$1
         AND appointment.appointment_date BETWEEN $2::date AND $3::date
         AND appointment.is_published=TRUE
+        AND appointment.status NOT IN ('RESCHEDULED','CANCELLED')
       ORDER BY appointment.appointment_date, appointment.student_number
       FOR UPDATE OF appointment`,
     [clinicId, startDate, endDate],
@@ -174,8 +175,9 @@ async function lockAppointmentsByPair(
               OR EXISTS (SELECT 1 FROM exam_results result
                          WHERE result.appointment_id=appointment.id AND result.result_status <> 'PENDING_UPLOAD')
             ) AS has_protected_result
-       FROM appointments appointment
+      FROM appointments appointment
       WHERE appointment.schedule_pair_id = ANY($1::uuid[])
+        AND appointment.status NOT IN ('RESCHEDULED','CANCELLED')
       ORDER BY appointment.student_number, appointment.schedule_type
       FOR UPDATE OF appointment`,
     [pairIds],
@@ -214,6 +216,7 @@ export async function createClinicUnavailableDate(raw: unknown, actor: SessionUs
   }
 
   return transaction(async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('medclinic:schedule-import-queue'))");
     const clinic = await client.query<{ code: "KABALAKA_CLINIC" | "CPU_CLINIC" }>(
       "SELECT code FROM clinics WHERE id=$1",
       [input.clinicId],
@@ -276,6 +279,13 @@ export async function createClinicUnavailableDate(raw: unknown, actor: SessionUs
     const capacityByType = new Map(capacityRows.rows.map((row) => [row.schedule_type, row]));
     const laboratoryCapacity = capacityByType.get("LABORATORY")!;
     const physicalCapacity = capacityByType.get("PHYSICAL_EXAM")!;
+    const earliestReplacementDate = addDays(manilaToday(), 1);
+    const searchStartDate = [
+      input.startDate,
+      ...pairIds.flatMap((pairId) => (
+        (pairMembers.get(pairId) ?? []).map((appointment) => appointment.appointmentDate)
+      )),
+    ].sort()[0];
     const searchEndDate = addDays(input.endDate, 366 * 5);
     const loadRows = await client.query<{ clinic_code: string; date: string; count: number }>(
       `SELECT clinic.code AS clinic_code, appointment.appointment_date::text AS date,
@@ -285,7 +295,7 @@ export async function createClinicUnavailableDate(raw: unknown, actor: SessionUs
         WHERE appointment.appointment_date BETWEEN $1 AND $2
           AND appointment.status IN ('DRAFT','PENDING','COMPLETED','NO_SHOW')
         GROUP BY clinic.code, appointment.appointment_date`,
-      [input.startDate, searchEndDate],
+      [searchStartDate, searchEndDate],
     );
     const laboratoryLoad = Object.fromEntries(loadRows.rows
       .filter((row) => row.clinic_code === "KABALAKA_CLINIC").map((row) => [row.date, row.count]));
@@ -300,7 +310,7 @@ export async function createClinicUnavailableDate(raw: unknown, actor: SessionUs
          FROM clinic_unavailable_dates unavailable
          JOIN clinics clinic ON clinic.id=unavailable.clinic_id
         WHERE unavailable.end_date >= $1::date AND unavailable.start_date <= $2::date`,
-      [input.startDate, searchEndDate],
+      [searchStartDate, searchEndDate],
     );
     const blockedLaboratory = new Set(existingBlocked.rows
       .filter((row) => row.clinic_code === "KABALAKA_CLINIC")
@@ -382,8 +392,11 @@ export async function createClinicUnavailableDate(raw: unknown, actor: SessionUs
         if (!laboratory || !oldPhysical.schedulePairId) {
           throw new AppError("CLINIC_BLOCK_PAIR_NOT_FOUND", "The paired Laboratory appointment could not be found.", 409);
         }
+        const pairedPhysicalStart = addDays(laboratory.appointmentDate, 1);
         const physicalDate = firstAvailable(
-          addDays(laboratory.appointmentDate, 1),
+          pairedPhysicalStart > earliestReplacementDate
+            ? pairedPhysicalStart
+            : earliestReplacementDate,
           blockedPhysical,
           physicalLoad,
           physicalCapacity.safe_daily_capacity,

@@ -3,7 +3,10 @@ import { SESSION_COOKIE, verifySessionToken } from "@/server/auth/session";
 import { STUDENT_SESSION_COOKIE, verifyStudentSessionToken } from "@/server/auth/student-session";
 
 export async function proxy(request: NextRequest) {
-  if (request.nextUrl.pathname.startsWith("/student")) {
+  const isStudentPortal =
+    request.nextUrl.pathname === "/student" || request.nextUrl.pathname.startsWith("/student/");
+
+  if (isStudentPortal) {
     if (request.nextUrl.pathname === "/student/login") return NextResponse.next();
     const studentToken = request.cookies.get(STUDENT_SESSION_COOKIE)?.value;
     if (!studentToken) return NextResponse.redirect(new URL("/student/login", request.url));

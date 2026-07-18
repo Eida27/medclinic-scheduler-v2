@@ -37,7 +37,7 @@ describe("CompliancePage", () => {
         search: "Aaron Abad",
         appointmentStatus: "PENDING",
         physicalExamStatus: "COMPLETED",
-        laboratoryStatus: "PENDING",
+        laboratoryStatus: "PENDING_UPLOAD",
         overallStatus: "INCOMPLETE",
         priorityGroupId: "priority-1",
         sort: "name_asc",
@@ -47,7 +47,7 @@ describe("CompliancePage", () => {
     });
 
     expect(redirect).toHaveBeenCalledWith(
-      "/appointments?studentNumber=Aaron+Abad&appointmentStatus=PENDING&priorityGroupId=priority-1&physicalExamStatus=COMPLETED&laboratoryStatus=PENDING&overallStatus=INCOMPLETE&sort=name_asc&page=2",
+      "/appointments?studentNumber=Aaron+Abad&appointmentStatus=PENDING&priorityGroupId=priority-1&physicalExamStatus=COMPLETED&laboratoryStatus=PENDING_UPLOAD&overallStatus=INCOMPLETE&sort=name_asc&page=2",
     );
     expect(complianceReport).not.toHaveBeenCalled();
   });

@@ -152,6 +152,20 @@ describe("atomic academic-year import lifecycle", () => {
       skippedStudentCount: 1,
       publishedAppointmentCount: 0,
     });
+    await pool.query(
+      `UPDATE appointments SET status='CANCELLED'
+        WHERE student_number='99-9204-04' AND schedule_cycle_start=2026`,
+    );
+    const cancelledSameCycle = await acceptAndScheduleImport(
+      input("TEST-FCFS-cancelled-same.csv", "99-9204-04"),
+      admin,
+    );
+    expect(cancelledSameCycle).toMatchObject({
+      insertedStudentCount: 0,
+      updatedStudentCount: 1,
+      skippedStudentCount: 1,
+      publishedAppointmentCount: 0,
+    });
     const laterCycle = await acceptAndScheduleImport(
       input("TEST-FCFS-later.csv", "99-9204-04", 2027),
       admin,

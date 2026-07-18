@@ -315,7 +315,7 @@ export async function publicStudentSchedule(studentNumber: string) {
          WHERE result.student_number=$1
            AND (result.appointment_id IS NULL OR appointment.is_published=TRUE)
          ORDER BY result.completed_at DESC NULLS LAST, result.created_at DESC LIMIT 1
-      ), 'PENDING') AS physical_exam,
+      ), 'PENDING_UPLOAD') AS physical_exam,
       COALESCE((
         SELECT result.result_status
           FROM laboratory_results result
@@ -323,7 +323,7 @@ export async function publicStudentSchedule(studentNumber: string) {
          WHERE result.student_number=$1
            AND (result.appointment_id IS NULL OR appointment.is_published=TRUE)
          ORDER BY result.completed_at DESC NULLS LAST, result.created_at DESC LIMIT 1
-      ), 'PENDING') AS laboratory`,
+      ), 'PENDING_UPLOAD') AS laboratory`,
     [studentNumber],
   );
   return {

@@ -81,13 +81,13 @@ describe("GET /api/compliance", () => {
 
   it("forwards supported filters and sort values", async () => {
     await GET(new Request(
-      "http://localhost/api/compliance?appointmentDate=2026-07-30&appointmentStatus=PENDING&physicalExamStatus=COMPLETED&laboratoryStatus=REQUIRES_FOLLOW_UP&overallStatus=FOLLOW_UP&sort=name_desc&page=1&limit=20",
+      "http://localhost/api/compliance?appointmentDate=2026-07-30&appointmentStatus=PENDING&physicalExamStatus=PENDING_UPLOAD&laboratoryStatus=REQUIRES_FOLLOW_UP&overallStatus=FOLLOW_UP&sort=name_desc&page=1&limit=20",
     ));
 
     expect(complianceReport).toHaveBeenCalledWith(expect.objectContaining({
       appointmentDate: "2026-07-30",
       appointmentStatus: "PENDING",
-      physicalExamStatus: "COMPLETED",
+      physicalExamStatus: "PENDING_UPLOAD",
       laboratoryStatus: "REQUIRES_FOLLOW_UP",
       overallStatus: "FOLLOW_UP",
       sort: "name_desc",

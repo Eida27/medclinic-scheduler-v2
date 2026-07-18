@@ -32,10 +32,10 @@ describe("DashboardPage", () => {
     render(await DashboardPage());
 
     expect(screen.getByText("Open Students & Schedules")).toBeVisible();
-    expect(screen.getByText("Choose the CSV and required priority group")).toBeVisible();
+    expect(screen.getByText("Choose the CSV, academic year, and student category")).toBeVisible();
     expect(screen.getByText("Review one confirmation and agree to import")).toBeVisible();
     expect(screen.getByText("The system validates, generates, and publishes automatically")).toBeVisible();
-    expect(screen.getByText("Administrators resolve any saved review checkpoint")).toBeVisible();
+    expect(screen.getByText("Review displacement and the generated date range")).toBeVisible();
     expect(screen.queryByText("Review and validate the grouped import")).not.toBeInTheDocument();
     expect(screen.queryByText("Encode a coordinator schedule batch")).not.toBeInTheDocument();
   });

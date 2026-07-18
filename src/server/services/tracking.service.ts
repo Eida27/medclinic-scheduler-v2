@@ -13,7 +13,7 @@ import { completeAppointmentWithClient } from "./appointments.service";
 
 export const resultSchema = z.object({
   studentNumber: z.string().trim().min(3).max(20), appointmentId: z.union([z.string().uuid(), z.literal(""), z.null(), z.undefined()]).transform((value) => value || null),
-  resultType: z.enum(["PHYSICAL_EXAM","LABORATORY"]), resultStatus: z.enum(["PENDING","COMPLETED","REQUIRES_FOLLOW_UP","NOT_APPLICABLE"]),
+  resultType: z.enum(["PHYSICAL_EXAM","LABORATORY"]), resultStatus: z.enum(["PENDING_UPLOAD","COMPLETED","REQUIRES_FOLLOW_UP","NOT_APPLICABLE"]),
   completedAt: z.union([z.iso.date(), z.literal(""), z.null(), z.undefined()]).transform((value) => value || null),
   remarks: z.union([z.string().max(2000),z.null(),z.undefined()]).transform((value) => value?.trim() || null),
 }).superRefine((input, context) => { if (input.resultStatus === "COMPLETED" && !input.completedAt) context.addIssue({ code: "custom", path: ["completedAt"], message: "Completion date is required." }); });

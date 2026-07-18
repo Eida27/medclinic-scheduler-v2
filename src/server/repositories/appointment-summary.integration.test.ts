@@ -109,6 +109,8 @@ describe("appointment summary ordering and pagination", () => {
     expect(result.items.map((item) => item.studentNumber)).toEqual(expected);
     expect(result.items.find((item) => item.studentNumber === "TEST-ORDER-0001")?.studentName)
       .toBe("Alpha, Aaron M. (Jr.)");
+    expect(result.items.find((item) => item.studentNumber === "TEST-ORDER-0001"))
+      .toMatchObject({ physicalExamStatus: "PENDING_UPLOAD", laboratoryStatus: "PENDING_UPLOAD" });
   });
 
   it.each(["Alpha, Aaron", "Aaron Alpha"])(

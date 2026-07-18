@@ -110,6 +110,8 @@ describe("student authentication", () => {
       );
     }
     const portal = await getStudentPortalSchedule("99-9605-05");
+    expect(portal).not.toBeNull();
+    if (!portal) throw new Error("Expected a portal schedule for the fixture student");
     expect(portal.studentNumber).toBe("99-9605-05");
     expect(portal.appointments).toEqual([
       expect.objectContaining({ studentNumber: "99-9605-05", appointmentDate: "2027-08-02" }),

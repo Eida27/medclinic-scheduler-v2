@@ -6,8 +6,8 @@ vi.mock("@/server/db/pool", () => ({ query }));
 
 import {
   appointmentSummaryReport,
-  type AppointmentSummarySort,
 } from "./appointment-summary.repository";
+import type { AppointmentSummarySort } from "@/components/appointments/appointment-summary";
 
 function mockReportQueries() {
   query
@@ -37,7 +37,7 @@ describe("appointmentSummaryReport", () => {
       programId: "22222222-2222-2222-2222-222222222222",
       priorityGroupId: "33333333-3333-3333-3333-333333333333",
       physicalExamStatus: "COMPLETED",
-      laboratoryStatus: "PENDING",
+      laboratoryStatus: "PENDING_UPLOAD",
       overallStatus: "INCOMPLETE",
       sort: "name_desc",
       page: 2,
@@ -73,7 +73,7 @@ describe("appointmentSummaryReport", () => {
       "22222222-2222-2222-2222-222222222222",
       "33333333-3333-3333-3333-333333333333",
       "COMPLETED",
-      "PENDING",
+      "PENDING_UPLOAD",
       "INCOMPLETE",
       150,
       150,

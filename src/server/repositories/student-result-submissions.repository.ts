@@ -106,11 +106,17 @@ export async function listDraftFilesForUpdate(client: PoolClient, submissionId: 
   const result = await client.query<{
     id: string;
     storageKey: string;
+    originalFilename: string;
+    detectedMimeType: string;
+    extension: string;
     byteSize: string;
+    checksumSha256: string;
   }>(
-    `SELECT id, storage_key AS "storageKey", byte_size::text AS "byteSize"
+    `SELECT id, storage_key AS "storageKey", original_filename AS "originalFilename",
+            detected_mime_type AS "detectedMimeType", extension,
+            byte_size::text AS "byteSize", checksum_sha256 AS "checksumSha256"
        FROM student_result_files
-      WHERE submission_id=$1 AND deleted_at IS NULL
+      WHERE submission_id=$1 AND deleted_at IS NULL AND storage_delete_pending=FALSE
       ORDER BY uploaded_at, id
       FOR UPDATE`,
     [submissionId],
@@ -202,7 +208,7 @@ export async function getStudentResultSubmissionRow(studentNumber: string, appoi
             extension, byte_size::text AS "byteSize", checksum_sha256 AS "checksumSha256",
             uploaded_at AS "uploadedAt"
        FROM student_result_files
-      WHERE submission_id=$1 AND deleted_at IS NULL
+      WHERE submission_id=$1 AND deleted_at IS NULL AND storage_delete_pending=FALSE
       ORDER BY uploaded_at, id`,
     [submission.rows[0].id],
   );
@@ -227,19 +233,24 @@ export async function lockOwnedDraftFile(
        JOIN student_result_submissions submission ON submission.id=file.submission_id
       WHERE file.id=$1 AND submission.appointment_id=$2
         AND submission.student_number=$3 AND submission.status='DRAFT'
-        AND file.deleted_at IS NULL
+        AND file.deleted_at IS NULL AND file.storage_delete_pending=FALSE
       FOR UPDATE OF submission, file`,
     [fileId, appointmentId, studentNumber],
   );
   return result.rows[0] ?? null;
 }
 
-export async function deleteStudentResultFileRow(
+export async function markStudentResultFileForDeletion(
   client: PoolClient,
   fileId: string,
   submissionId: string,
 ) {
-  await client.query("DELETE FROM student_result_files WHERE id=$1", [fileId]);
+  await client.query(
+    `UPDATE student_result_files
+        SET storage_delete_pending=TRUE, delete_error=NULL
+      WHERE id=$1 AND deleted_at IS NULL`,
+    [fileId],
+  );
   await client.query(
     "UPDATE student_result_submissions SET last_activity_at=NOW() WHERE id=$1",
     [submissionId],

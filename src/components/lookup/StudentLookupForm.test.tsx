@@ -6,7 +6,7 @@ describe("StudentLookupForm", () => {
   it("explains when a known student has no published appointment", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ data: { studentNumber: "DEMO-0001", studentName: "Student 0001", appointments: [], compliance: { physicalExam: "PENDING", laboratory: "PENDING" } } }),
+      json: async () => ({ data: { studentNumber: "DEMO-0001", studentName: "Student 0001", appointments: [], compliance: { physicalExam: "PENDING_UPLOAD", laboratory: "PENDING_UPLOAD" } } }),
     }));
     render(<StudentLookupForm />);
     fireEvent.change(screen.getByPlaceholderText("e.g. 23-1212-97"), { target: { value: "DEMO-0001" } });

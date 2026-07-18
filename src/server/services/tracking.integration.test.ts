@@ -484,7 +484,7 @@ describe("results and compliance", () => {
     await pool.query(
       `INSERT INTO exam_results (
          student_number, appointment_id, result_status, encoded_by
-       ) VALUES ($1,$2,'PENDING',$3)`,
+       ) VALUES ($1,$2,'PENDING_UPLOAD',$3)`,
       [fixtureStudentNumber, appointmentId, admin.userId],
     );
 
@@ -725,7 +725,7 @@ describe("results and compliance", () => {
     expect(beforePublication.items[0]).toMatchObject({
       studentNumber,
       appointmentStatus: "UNSCHEDULED",
-      laboratoryStatus: "PENDING",
+      laboratoryStatus: "PENDING_UPLOAD",
     });
 
     const draftFilter = await complianceReport({
@@ -767,7 +767,7 @@ describe("results and compliance", () => {
     await pool.query(
       `INSERT INTO laboratory_results (
          student_number, appointment_id, result_status, remarks, encoded_by
-       ) VALUES ($1,$2,'PENDING','Must remain private while draft',$3)`,
+       ) VALUES ($1,$2,'PENDING_UPLOAD','Must remain private while draft',$3)`,
       [draftHistoryStudentNumber, appointment.rows[0].id, actorUserId],
     );
 
@@ -803,7 +803,7 @@ describe("results and compliance", () => {
       studentNumber: draftResultStudentNumber,
       appointmentId: appointment.rows[0].id,
       resultType: "PHYSICAL_EXAM",
-      resultStatus: "PENDING",
+      resultStatus: "PENDING_UPLOAD",
       completedAt: "",
       remarks: "Should not be written",
     }, admin)).rejects.toMatchObject({

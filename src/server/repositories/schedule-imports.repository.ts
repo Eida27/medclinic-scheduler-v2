@@ -10,6 +10,7 @@ import { resolveSchedulingWindow } from "@/server/services/scheduling-window";
 import { generatePairedSchedule } from "@/server/rule-engine/generate-paired-schedule";
 import {
   makeCapacityForPriorityBatch,
+  makePhysicalExamCapacityForPriorityBatch,
   nextDateAfter,
   publishDisplacedRegularReplacements,
 } from "@/server/services/priority-displacement.service";
@@ -230,10 +231,9 @@ export async function createScheduleImport(
     );
     const scheduledStudents = await client.query<{ student_number: string }>(
       `SELECT DISTINCT student_number
-         FROM appointments
+       FROM appointments
         WHERE student_number = ANY($1::varchar[])
-          AND schedule_cycle_start=$2
-          AND status <> 'CANCELLED'`,
+          AND schedule_cycle_start=$2`,
       [studentNumbers, input.academicYearStart],
     );
     const existingStudentNumbers = new Set(
@@ -436,7 +436,7 @@ export async function createScheduleImport(
     const initialOverflowCount = assignments.assignments.filter(
       (assignment) => assignment.laboratoryDate > preferredWindowEnd,
     ).length;
-    const displacedCandidates = input.studentCategory === "REGULAR"
+    const displacedPairCandidates = input.studentCategory === "REGULAR"
       ? []
       : await makeCapacityForPriorityBatch({
           scheduleCycleStart: input.academicYearStart,
@@ -445,7 +445,7 @@ export async function createScheduleImport(
           neededPairCount: initialOverflowCount,
           actorUserId,
         }, client);
-    for (const candidate of displacedCandidates) {
+    for (const candidate of displacedPairCandidates) {
       laboratoryLoad[candidate.laboratoryDate] = Math.max(
         0,
         (laboratoryLoad[candidate.laboratoryDate] ?? 0) - 1,
@@ -455,7 +455,52 @@ export async function createScheduleImport(
         (physicalExamLoad[candidate.physicalExamDate] ?? 0) - 1,
       );
     }
-    if (displacedCandidates.length) assignments = generatePairedSchedule(allocationInput());
+    if (displacedPairCandidates.length) assignments = generatePairedSchedule(allocationInput());
+    const physicalExamOnlyOverflow = assignments.assignments.filter(
+      (assignment) => (
+        assignment.laboratoryDate <= preferredWindowEnd
+        && assignment.physicalExamDate > preferredWindowEnd
+      ),
+    );
+    const displacedPhysicalExamCandidates = input.studentCategory === "REGULAR"
+      ? []
+      : await makePhysicalExamCapacityForPriorityBatch({
+          scheduleCycleStart: input.academicYearStart,
+          windowEnd: preferredWindowEnd,
+          physicalExamNotBeforeDates: physicalExamOnlyOverflow.map(
+            (assignment) => nextDateAfter(assignment.laboratoryDate),
+          ),
+          actorUserId,
+        }, client);
+    for (const candidate of displacedPhysicalExamCandidates) {
+      physicalExamLoad[candidate.physicalExamDate] = Math.max(
+        0,
+        (physicalExamLoad[candidate.physicalExamDate] ?? 0) - 1,
+      );
+    }
+    if (displacedPhysicalExamCandidates.length) {
+      assignments = generatePairedSchedule(allocationInput());
+      const remainingPhysicalExamOnlyOverflowCount = assignments.assignments.filter(
+        (assignment) => (
+          assignment.laboratoryDate <= preferredWindowEnd
+          && assignment.physicalExamDate > preferredWindowEnd
+        ),
+      ).length;
+      if (
+        remainingPhysicalExamOnlyOverflowCount
+        > physicalExamOnlyOverflow.length - displacedPhysicalExamCandidates.length
+      ) {
+        throw new AppError(
+          "PRIORITY_DISPLACEMENT_UNRESOLVED",
+          "Regular appointments could not be moved without preserving the priority scheduling window.",
+          409,
+        );
+      }
+    }
+    const displacedCandidates = [
+      ...displacedPairCandidates,
+      ...displacedPhysicalExamCandidates,
+    ];
     if (assignments.unscheduledRequestIds.length) {
       throw new AppError(
         "SCHEDULE_CAPACITY_EXHAUSTED",

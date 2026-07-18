@@ -1,25 +1,22 @@
 # MedClinic Scheduler
 
-Student master-data and grouped physical examination/laboratory scheduling for Central Philippine University Health Services.
+Academic-year Laboratory and Physical Examination scheduling, clinic operations, and private student result submission for Central Philippine University Health Services.
 
-## MVP Capabilities
+## Capabilities
 
-- JWT login for administrators, global coordinators, and clinic staff
-- Student, college, program, priority group, user, and capacity management
-- Unified Students & Schedules workspace with manual student management for administrators and clinic staff, plus read-only coordinator access
-- Administrator and coordinator master CSV imports with missing-student creation and row/column validation
-- One-confirmation import, validation, appointment generation, and publication for laboratory and physical examination schedules
-- Missing-data, enrollment, active-appointment, and daily-capacity validation
-- Deterministic weekday distribution ordered by priority and student number
-- Atomic grouped validation, generation, and publication with safe administrator-review checkpoints
-- Draft review only inside the protected import detail
-- Published-only clinic/global schedules, status history, and replacement-based rescheduling
-- Public lookup and result views that expose published appointment data only
-- Physical examination and laboratory result history
-- Combined appointment/completion filters, student summaries, and live dashboard metrics
-- Raw PostgreSQL migrations, reference-data seeds, narrow demo cleanup, and audit logs
+- Separate JWT sessions for administrators, coordinators, clinic staff, and students
+- Atomic academic-year student imports with deterministic, date-only Laboratory/PE pairs
+- Regular FCFS scheduling plus OJT, Tour, and Specialized priority windows
+- Safe daily capacity as the normal ceiling and maximum capacity as the hard guard
+- Minimum Regular displacement for priority capacity, with linked history and student notifications
+- Future clinic unavailable dates: CPU Clinic moves PE only; KABALAKA Clinic replaces the pair
+- Administrator appointment locks that automatic moves cannot override
+- Published clinic schedules, next-midnight automatic no-shows, corrections, filters, and server-side sorting
+- Student schedules, notifications, optional verified email alerts, and private result uploads
+- Administrator-only cross-student document/ZIP access and invalidation
+- Raw PostgreSQL migrations, reference seeds, targeted test cleanup, and privacy-conscious audits
 
-Doctor scheduling, notifications, holidays, QR check-in, and student self-rescheduling are intentionally outside this MVP.
+Doctor scheduling, QR check-in, student self-rescheduling, and cloud document storage are outside the current scope.
 
 ## Requirements
 
@@ -41,13 +38,14 @@ Doctor scheduling, notifications, holidays, QR check-in, and student self-resche
    createdb -U postgres medclinic_scheduler
    ```
 
-3. Create `.env.local` from `.env.example` and replace the database password and JWT secret:
+3. Create `.env.local` from `.env.example`. At minimum, set:
 
    ```env
    DATABASE_URL=postgresql://postgres:your-password@localhost:5432/medclinic_scheduler
    APP_URL=http://localhost:3000
    JWT_SECRET=replace-with-at-least-32-random-characters
    APP_TIMEZONE=Asia/Manila
+   RESULT_UPLOAD_ROOT=.data/private-result-uploads
    ```
 
 4. Apply schema and reference data:
@@ -57,50 +55,97 @@ Doctor scheduling, notifications, holidays, QR check-in, and student self-resche
    npm run db:seed
    ```
 
-5. Start the application:
+5. Start the application and open `http://localhost:3000`:
 
    ```powershell
    npm run dev
    ```
 
-Open `http://localhost:3000`.
-
-## Demo Accounts
+## Demo Staff Accounts
 
 | Role | Email | Password |
 | --- | --- | --- |
 | Administrator | `admin@medclinic.local` | `Admin123!` |
 | Coordinator | `coordinator@medclinic.local` | `Coordinator123!` |
-| Clinic staff | `staff@medclinic.local` | `Staff123!` |
+| KABALAKA clinic staff | `staff@medclinic.local` | `Staff123!` |
 
-Change these passwords before any real deployment.
+Change seeded passwords before real deployment. Students sign in separately with Student Number and Date of Birth; imported students receive the DOB from the CSV. Existing students whose DOB is null remain readable but cannot sign in until updated.
 
-The seed creates clinics, users, colleges, programs, priority groups, and capacity settings. It does not create students, appointments, imports, or coordinator batches.
+## Academic-Year Student CSV
 
-## Master Schedule CSV Format
+The supplied workbook is a reference source. Export it as UTF-8 CSV before upload; the application does not accept XLSX. The original workbook is never modified.
 
-Use UTF-8 CSV files with these headers in this exact order:
+Use these headers in this exact order:
 
 ```csv
-Student ID,Name,College,Course,Year,Laboratory Schedule,Physical Examination Schedule
-23-1212-97,"Abad, Aaron Miguel A.",College of Computer Studies,BSIT,3,07-29-2026,07-30-2026
+Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth
+23-1212-97,Abad,Aaron Miguel,A.,,College of Computer Studies,BSIT,3,08-04-2004
 ```
 
-- Download the safe sample at [`public/templates/student-schedule-import-template.csv`](public/templates/student-schedule-import-template.csv).
-- `Name` must use `Last, First Middle` form and must be CSV-quoted because it contains a comma. The example is stored as first name `Aaron`, middle name `Miguel A.`, and last name `Abad`.
-- Both schedule columns use `MM-DD-YYYY`.
-- Either schedule date may be blank, but every row must contain at least one of them. A row with both dates creates one request for each clinic.
+- Download the matching sample at [`public/templates/student-schedule-import-template.csv`](public/templates/student-schedule-import-template.csv).
+- Date of Birth is required and uses strict `MM-DD-YYYY`.
+- MI and Suffix may be blank. Names are displayed surname-first with only the first middle initial.
+- College names and course codes must match active reference data case-insensitively.
 - Files may contain up to 3,000 data rows and may not exceed 1 MB.
-- Student IDs must be unique within the file; repeated IDs are rejected case-insensitively after Unicode normalization.
-- An administrator or coordinator chooses one active priority group for the entire import.
-- College names and course codes must match active reference data. Matching is case-insensitive.
-- Missing students are created from the parsed CSV name, college, course, and year.
-- Existing students are never overwritten. A name, college, course, or year mismatch rejects the entire file with row-specific errors.
-- The import is atomic: a failed row leaves no partial students, import group, or clinic batches.
-- Selecting **Review import** opens one confirmation with the filename, priority, and publication impact. **Agree and import** sends one request that imports, validates, generates, and publishes atomically across every child stage.
-- Invalid CSV or metadata creates nothing. A later processing failure saves a review checkpoint without exposing draft or generated appointments.
-- Capacity conflicts stop at `VALIDATED`; only an administrator can enter an override reason and resume. Other recovery actions also remain administrator-only.
-- Generated appointments remain private in the protected import detail until the entire group is published.
+- Student IDs must be valid and unique within the file after normalization.
+- Choose the student category and academic-year start. OJT, Tour, and Specialized imports also require a preferred month; Regular does not.
+- One POST validates references, acquires the scheduling lock, assigns acceptance order, upserts students, skips same-cycle duplicates, displaces only eligible Regular pairs when needed, creates both clinic batches, and publishes atomically.
+- A failed row or protected/capacity conflict rolls back the complete import. New uploads do not create manual review checkpoints.
+- Historical manually saved imports keep their protected lifecycle actions for backward compatibility.
+
+Scheduling is Monday–Friday in Manila. Laboratory always precedes PE. Regular scheduling begins at the later of the first weekday in August or the seven-Manila-calendar-day preparation boundary. Priority scheduling uses the selected academic-year month and the same preparation boundary.
+
+## Clinic Calendar and Date-Only Appointments
+
+Administrators manage future holidays, closures, maintenance, and staff-unavailable ranges under **Administration → Clinic calendar**.
+
+- CPU Clinic blocks move only active PE appointments; the paired Laboratory date stays unchanged.
+- KABALAKA Clinic blocks replace both active appointments as a new pair.
+- Completed, manually locked, or result-protected appointments stop the operation with HTTP 409 and unresolved details. The block is not saved.
+- Historical `RESCHEDULED` and `CANCELLED` rows remain visible but do not block later closure calculations.
+- Appointments expose only a date. No time-slot field is accepted or displayed.
+
+Automatic no-shows run at the next local midnight after the appointment date. The Node worker performs startup catch-up, schedules the next Manila midnight, and retries a failed sweep after five minutes. Manual no-show assignment is rejected.
+
+## Student Portal and Notifications
+
+Use **Student sign in** from the public landing page. Authentication uses a separate HTTP-only `medclinic_student_session` cookie. Five failed attempts for the same normalized Student Number/IP pair cause a 15-minute lock. Login errors do not reveal whether a student exists, is inactive, or lacks DOB.
+
+Every student query is constrained to the session Student Number and revalidates the active student. The portal includes:
+
+- Published date-only schedule and reschedule history
+- Portal notifications with read state
+- Optional email verification
+- Laboratory and PE result drafts/downloads
+- Logout
+
+Schedule changes and result invalidations always create a portal notification in the business transaction. A verified email also creates an outbox item. Email configuration is optional; missing or failing SMTP never blocks schedules, portal notices, or uploads.
+
+To enable delivery, set:
+
+```env
+SMTP_HOST=smtp.example.edu
+SMTP_PORT=587
+SMTP_USER=optional-user
+SMTP_PASS=optional-password
+SMTP_FROM=clinic@example.edu
+```
+
+Verification links use 32 random bytes, store only a SHA-256 token hash in the verification table, and expire after 30 minutes. A previous verified address remains active until its replacement is verified. The email worker polls every minute, uses `FOR UPDATE SKIP LOCKED`, retries up to ten attempts, and caps exponential delay at one hour.
+
+## Private Result Documents
+
+Completing an appointment creates the matching `PENDING_UPLOAD` result if none exists. Existing manually recorded result statuses are preserved. Only the completed service becomes uploadable.
+
+- Allowed: PDF, JPG/JPEG, and PNG with matching extension, declared MIME, and file signature
+- Maximum 20 MB per file, 10 files per submission, and 50 MB combined
+- Drafts support add, remove, and resume; inactive drafts expire after seven days
+- Final submission locks student mutation and completes the result using the Manila date with no staff encoder
+- Students can download only their own finalized files
+- Only administrators can list other students' submissions, download individual documents/ZIPs, or invalidate a submission
+- Invalidation keeps the appointment completed, resets the result to `PENDING_UPLOAD`, revokes prior metadata access, notifies the student, and opens a replacement draft
+
+Files are stored beneath `RESULT_UPLOAD_ROOT` using generated submission/file IDs, never original names. Temporary files are atomically promoted, SHA-256 checksums are verified on download, and deletion failures remain retryable. `.data/private-result-uploads` is ignored by Git. Restrict this directory to the operating-system account that runs the application; do not place it under a public/static directory or shared network folder. The current adapter is local storage only.
 
 ## Database Commands
 
@@ -109,9 +154,9 @@ npm run db:migrate
 npm run db:seed
 ```
 
-Migration `006_unified_student_schedule_imports.sql` adds grouped imports and removes only known development fixtures: students whose number begins `DEMO-`, five fixed demo batch IDs, and their dependent appointments/results/audits. Migration `007_coordinator_import_automation.sql` adds the global coordinator role used by the automatic importer. The reference-data seed is idempotent and does not recreate demo students or batches.
+Migrations 008 and 009 add academic-year ordering/cycles, displacement/closure metadata, student identity/notifications, private submission metadata, `PENDING_UPLOAD`, and the date-only appointment schema. Migrations are forward-only and safe for a non-empty database.
 
-Reset is deliberately guarded and destroys all data in the configured database:
+Reset is destructive and deliberately guarded:
 
 ```powershell
 $env:ALLOW_DB_RESET="true"
@@ -123,64 +168,49 @@ The reset command refuses to operate on `postgres`, `template0`, or `template1`.
 ## Verification
 
 ```powershell
-npm test
+npm test -- --maxWorkers=1 --no-file-parallelism --testTimeout=15000 --hookTimeout=30000
 npm run lint
 npm run build
 ```
 
-Tests cover CSV/name parsing, grouped transaction rollback, atomic lifecycle actions, authorization, draft privacy across every normal reader, published clinic schedules, legacy redirects, rescheduling, result history, compliance, and critical client interactions.
+Tests cover schema/backfills, the exact nine-column CSV, 3,000-row atomic imports, scheduling windows/capacity/concurrency, displacement, closure rollback, manual locks, date-only no-shows, separate sessions/throttling, strict ownership, file signatures/limits, finalization, ZIP access, invalidation, cleanup, outbox retry, and the full cross-feature scenario.
 
 ## Demonstration Flow
 
-1. Sign in as administrator or coordinator and open **Students & Schedules** → **Schedule Imports**.
-2. Upload the official seven-column CSV, choose a priority, and select **Review import**.
-3. Check the filename, priority, and publication impact in **Import and publish this CSV?**, then select **Agree and import**.
-4. Confirm a conflict-free file opens as `PUBLISHED` with the expected student and appointment counts.
-5. For a capacity conflict, confirm the import stops at `VALIDATED` and the coordinator sees an administrator-review notice. Sign in as administrator to enter an override reason and resume.
-6. Search several student numbers and compare both published dates with the source CSV.
-7. Sign in as coordinator. Confirm student records and import history are readable, while student editing, clinic operations, settings, and lifecycle controls are unavailable.
-8. Sign in as clinic staff. Confirm the import tab is unavailable while permitted student, appointment, and result work remains available.
-9. Update a published appointment or create a linked replacement, encode results, and review **Appointments & Completion** and the dashboard.
+1. Sign in as coordinator and open **Students & Schedules → New academic-year import**.
+2. Upload an exported nine-column UTF-8 CSV, choose category/year (and preferred month when required), and submit once.
+3. Confirm the import is `PUBLISHED`, dates are date-only, Laboratory precedes PE, and overflow/displacement totals are visible.
+4. Import a priority category against constrained capacity and review the Regular student's linked replacement history and notification.
+5. As administrator, add CPU and KABALAKA unavailable dates and confirm their PE-only/pair rules.
+6. As KABALAKA clinic staff, complete a Laboratory appointment.
+7. Use **Student sign in** with that Student Number/DOB, upload multiple synthetic PDF/PNG files, finalize, and download them.
+8. As administrator, open **Student result submissions**, download the file/ZIP, invalidate with a reason, and confirm the student sees a notification and reopened draft.
+9. Confirm the Browser console is free of warnings/errors, then remove only the targeted synthetic fixtures and restore capacity settings.
 
-## Architecture
+## Architecture and Security
 
 ```text
 App Router pages and client components
   -> Next.js route handlers
   -> services and validation
-  -> repositories and transactions
-  -> PostgreSQL
+  -> repositories and explicit transactions
+  -> PostgreSQL and private storage adapter
 ```
 
-The pure scheduling rules live under `src/server/rule-engine`. Route handlers do not contain SQL, and UI components do not access PostgreSQL directly.
+- Staff and student sessions use separate HTTP-only, same-site cookies with eight-hour JWT lifetimes.
+- The secure flag is enabled when the production `APP_URL` uses HTTPS.
+- Protected identities are re-authorized against active database records.
+- SQL is parameterized; multi-table business changes use one checked-out client and explicit transactions.
+- Coordinators can operate imports but cannot access medical documents or clinic/admin operations.
+- Clinic staff are limited to their assigned clinic.
+- Audit metadata records aggregate file counts/bytes and operational reasons, never file contents or DOB.
+- Public lookup remains available but exposes only published schedule/compliance data.
 
-## Security Notes
-
-- Session cookies are HTTP-only and same-site, with an eight-hour JWT lifetime.
-- The secure cookie flag is enabled when the production `APP_URL` uses HTTPS.
-- Protected pages pass through `src/proxy.ts` and are re-authorized against the active database user in the dashboard layout and service layer.
-- SQL queries use parameters. Multi-table writes use one checked-out PostgreSQL client and explicit transactions.
-- Administrators and global coordinators can list, inspect, and start automatic grouped imports. Only administrators can call manual validate, generate, and publish actions or approve capacity overrides.
-- Coordinators have no clinic assignment and receive read-only student access; they cannot manage users, reference data, capacity, individual students, or clinic operations.
-- Students do not authenticate. The public lookup omits notes, audit logs, unpublished appointments, and results linked to unpublished appointments.
-
-## Local Network Deployment
-
-### Automatic no-show reconciliation
-
-- The application checks overdue published appointments when the server starts, then schedules one sweep for each midnight in `APP_TIMEZONE`.
-- Date-only and timed appointments both become no-show at the start of the next local day; a July 10 appointment becomes eligible at July 11, 12:00 AM regardless of its optional time.
-- If a sweep or midnight calculation fails, the application logs the error and retries after five minutes.
-- Completing a linked result also completes its appointment.
-- No-show status is automation-only; users cannot mark appointments no-show manually.
-- Administrators and assigned clinic staff can correct a system-generated no-show with a required reason. Historical manual no-shows remain readable and reschedulable but cannot be corrected to completed.
-- Downtime does not lose transitions: the startup sweep catches up when the server returns.
-
-Build and serve the production application:
+For production:
 
 ```powershell
 npm run build
 npm start -- --hostname 0.0.0.0
 ```
 
-Set `APP_URL` to the server's HTTPS URL when TLS is available. Restrict PostgreSQL access to the application host and do not expose port 5432 publicly.
+Use HTTPS, set `APP_URL` accordingly, restrict PostgreSQL to the application host, and back up both PostgreSQL and the private upload root together.

@@ -12,7 +12,6 @@ import {
 } from "@/server/files/result-file-validation";
 import { transaction } from "@/server/db/pool";
 import {
-  deleteStudentResultFileRow,
   finalizeStudentResultDraft,
   getAccessibleStudentResultFileRow,
   getAdminStudentResultSubmissionRow,
@@ -26,6 +25,7 @@ import {
   lockOrCreateStudentResultDraft,
   lockOwnedDraftForFinalization,
   lockOwnedDraftFile,
+  markStudentResultFileForDeletion,
   recordResultFileDeletion,
 } from "@/server/repositories/student-result-submissions.repository";
 import { localResultStorage } from "@/server/storage/local-result-storage";
@@ -102,18 +102,28 @@ export async function removeStudentResultFile(
   fileId: string,
   storage: ResultStorage = localResultStorage,
 ) {
-  return transaction(async (client) => {
+  const file = await transaction(async (client) => {
     const file = await lockOwnedDraftFile(client, studentNumber, appointmentId, fileId);
     if (!file) throw new AppError("RESULT_FILE_NOT_FOUND", "Result file not found.", 404);
-    await storage.delete(file.storageKey);
-    await deleteStudentResultFileRow(client, file.id, file.submissionId);
-    return { success: true };
+    await markStudentResultFileForDeletion(client, file.id, file.submissionId);
+    return file;
   });
+  try {
+    await storage.delete(file.storageKey);
+    await recordResultFileDeletion(file.id, { success: true });
+  } catch (error) {
+    await recordResultFileDeletion(file.id, {
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown file deletion error",
+    });
+  }
+  return { success: true };
 }
 
 export async function finalizeStudentResultSubmission(
   studentNumber: string,
   appointmentId: string,
+  storage: ResultStorage = localResultStorage,
 ) {
   await transaction(async (client) => {
     const draft = await lockOwnedDraftForFinalization(client, studentNumber, appointmentId);
@@ -129,6 +139,30 @@ export async function finalizeStudentResultSubmission(
     const totalBytes = files.reduce((sum, file) => sum + file.byteSize, 0);
     if (files.length > RESULT_SUBMISSION_MAX_FILES || totalBytes > RESULT_SUBMISSION_MAX_BYTES) {
       throw new AppError("RESULT_DRAFT_LIMIT_INVALID", "This draft exceeds the result upload limits.", 422);
+    }
+    for (const file of files) {
+      try {
+        const bytes = await storage.read(file.storageKey);
+        const validated = validateResultFile({
+          filename: file.originalFilename,
+          declaredMimeType: file.detectedMimeType,
+          bytes,
+        });
+        if (
+          validated.detectedMimeType !== file.detectedMimeType
+          || validated.extension !== file.extension
+          || validated.byteSize !== file.byteSize
+          || validated.checksumSha256 !== file.checksumSha256
+        ) {
+          throw new Error("Stored file metadata changed after upload.");
+        }
+      } catch {
+        throw new AppError(
+          "RESULT_FILE_INTEGRITY_ERROR",
+          "A stored result file failed validation. Remove it and upload the file again.",
+          500,
+        );
+      }
     }
     await finalizeStudentResultDraft(client, draft, files.length, totalBytes);
   });
@@ -240,6 +274,54 @@ export async function createAdminSubmissionZip(
     totalBytes: files.reduce((sum, file) => sum + file.byteSize, 0),
   });
   return zip;
+}
+
+export async function createAdminSubmissionZipStream(
+  submissionId: string,
+  actor: SessionUser,
+  storage: ResultStorage = localResultStorage,
+) {
+  assertAdmin(actor);
+  const files = await getFinalizedSubmissionFileRows(submissionId);
+  if (!files.length) {
+    throw new AppError("RESULT_SUBMISSION_NOT_FOUND", "Finalized result submission not found.", 404);
+  }
+  const output = new PassThrough();
+  const archive = new ZipArchive({ zlib: { level: 9 } });
+  archive.on("error", (error) => output.destroy(error));
+  archive.pipe(output);
+  void (async () => {
+    try {
+      for (const [index, file] of files.entries()) {
+        const bytes = await storage.read(file.storageKey);
+        const checksum = createHash("sha256").update(bytes).digest("hex");
+        if (checksum !== file.checksumSha256) {
+          throw new AppError(
+            "RESULT_FILE_INTEGRITY_ERROR",
+            "A stored result file failed its integrity check.",
+            500,
+          );
+        }
+        const safeName = basename(file.originalFilename).replace(/[^a-zA-Z0-9._-]/g, "_");
+        archive.append(bytes, { name: `${String(index + 1).padStart(2, "0")}-${safeName}` });
+      }
+      await archive.finalize();
+      await writeAudit(
+        actor.userId,
+        "ADMIN_RESULT_ZIP_DOWNLOADED",
+        "student_result_submission",
+        submissionId,
+        {
+          fileCount: files.length,
+          totalBytes: files.reduce((sum, file) => sum + file.byteSize, 0),
+        },
+      );
+    } catch (error) {
+      archive.abort();
+      output.destroy(error instanceof Error ? error : new Error("Result ZIP streaming failed."));
+    }
+  })();
+  return output;
 }
 
 const invalidationReasonSchema = z.string().trim().min(3).max(1000);

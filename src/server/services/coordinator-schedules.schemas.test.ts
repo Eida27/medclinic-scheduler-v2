@@ -24,9 +24,14 @@ describe("createBatchSchema", () => {
   });
 
   it("rejects an item that supplies both an exact date and a target week", () => {
-    const invalid = structuredClone(base);
-    invalid.items[0].targetWeekStart = "2026-07-20";
-    invalid.items[0].targetWeekEnd = "2026-07-24";
+    const invalid = {
+      ...base,
+      items: [{
+        ...base.items[0],
+        targetWeekStart: "2026-07-20",
+        targetWeekEnd: "2026-07-24",
+      }],
+    };
     expect(() => createBatchSchema.parse(invalid)).toThrow();
   });
 
