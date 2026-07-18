@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { Card } from "@/components/ui/Card";
+import { EmailVerificationReminder } from "@/components/student/EmailVerificationReminder";
 import { requireStudent } from "@/server/auth/current-student";
 import { getStudentPortalSchedule } from "@/server/repositories/student-portal.repository";
 
@@ -9,6 +10,7 @@ export default async function StudentSchedulePage() {
   if (!portal) redirect("/student/login");
   return (
     <section>
+      {!portal.emailVerifiedAt ? <EmailVerificationReminder /> : null}
       <p className="text-sm font-semibold text-muted">{portal.studentNumber}</p>
       <h1 className="mt-1 text-3xl font-bold">{portal.studentName}</h1>
       <h2 className="mt-8 text-xl font-bold">Schedule and history</h2>

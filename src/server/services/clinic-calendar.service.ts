@@ -11,6 +11,7 @@ import {
   type ClinicUnavailableDateInput,
 } from "@/server/repositories/clinic-unavailable-dates.repository";
 import type { SessionUser } from "@/types/roles";
+import { createStudentNotification } from "@/server/services/student-notifications.service";
 
 const inputSchema = z.object({
   clinicId: z.string().uuid(),
@@ -473,14 +474,20 @@ export async function createClinicUnavailableDate(raw: unknown, actor: SessionUs
           actor.userId,
         ],
       );
-      await client.query(
-        `INSERT INTO student_portal_notifications (
-           student_number, notification_type, title, message, metadata
-         ) VALUES ($1,'SCHEDULE_RESCHEDULED','Clinic schedule updated',
-                   'A clinic closure changed your appointment date. Review your updated schedule.',
-                   jsonb_build_object('clinicUnavailableDateId',$2::text))`,
-        [studentNumber, blockId],
-      );
+      await createStudentNotification(client, {
+        studentNumber,
+        notificationType: "SCHEDULE_RESCHEDULED",
+        title: "Clinic schedule updated",
+        message: clinic.rows[0].code === "KABALAKA_CLINIC"
+          ? "A clinic closure changed both clinic dates. Review your updated schedule."
+          : "A clinic closure changed your Physical Examination date; your Laboratory date is unchanged.",
+        metadata: {
+          reason: input.reason,
+          clinicUnavailableDateId: blockId,
+          previousDates: Object.fromEntries(originalMembers.map((item) => [item.scheduleType, item.appointmentDate])),
+          replacementDates: Object.fromEntries(newMembers.map((item) => [item.scheduleType, item.appointmentDate])),
+        },
+      });
     }
     await client.query(
       `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata)

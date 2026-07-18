@@ -6,6 +6,7 @@ import {
   markPairsRescheduled,
   type DisplacementCandidate,
 } from "@/server/repositories/priority-displacement.repository";
+import { createStudentNotification } from "@/server/services/student-notifications.service";
 
 export async function makeCapacityForPriorityBatch(
   input: {
@@ -219,16 +220,23 @@ export async function publishDisplacedRegularReplacements(
       generated.assignments.map((assignment) => peByStudent.get(assignment.studentNumber)),
     ],
   );
-  await client.query(
-    `INSERT INTO student_portal_notifications (
-       student_number, notification_type, title, message, metadata
-     )
-     SELECT fixture.student_number, 'SCHEDULE_RESCHEDULED', 'Schedule updated',
-            'Your clinic schedule was moved. Review the new dates in the student portal.',
-            jsonb_build_object('sourceImportId', $1::text)
-       FROM UNNEST($2::varchar[]) AS fixture(student_number)`,
-    [input.sourceImportGroupId, generated.assignments.map((assignment) => assignment.studentNumber)],
-  );
+  for (const assignment of generated.assignments) {
+    const previous = candidateByStudent.get(assignment.studentNumber)!;
+    await createStudentNotification(client, {
+      studentNumber: assignment.studentNumber,
+      notificationType: "SCHEDULE_RESCHEDULED",
+      title: "Schedule updated",
+      message: "Priority scheduling changed your Laboratory and Physical Examination dates. Review the new dates in the student portal.",
+      metadata: {
+        reason: "PRIORITY_DISPLACEMENT",
+        sourceImportId: input.sourceImportGroupId,
+        previousLaboratoryDate: previous.laboratoryDate,
+        replacementLaboratoryDate: assignment.laboratoryDate,
+        previousPhysicalExamDate: previous.physicalExamDate,
+        replacementPhysicalExamDate: assignment.physicalExamDate,
+      },
+    });
+  }
   await client.query(
     `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
      VALUES ($1, 'PRIORITY_DISPLACEMENT_APPLIED', 'schedule_import_group', $2,
