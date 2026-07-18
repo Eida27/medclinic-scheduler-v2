@@ -30,7 +30,6 @@ const publishedAppointment = {
   clinicCode: "KABALAKA_CLINIC",
   clinicName: "KABALAKA Clinic",
   appointmentDate: "2026-08-18",
-  appointmentTime: "09:30:00",
   status: "PENDING",
   isPublished: true,
   notes: null,

@@ -75,7 +75,6 @@ describe("LaboratoryPage", () => {
         studentName: "Ana Santos",
         scheduleType: "LABORATORY",
         appointmentDate: "2026-08-18",
-        appointmentTime: null,
         status: "PENDING",
       }],
       total: 280,

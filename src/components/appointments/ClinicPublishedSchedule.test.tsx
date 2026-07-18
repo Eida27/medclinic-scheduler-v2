@@ -8,7 +8,6 @@ const appointment = {
   studentName: "Ana Maria Santos Jr.",
   scheduleType: "LABORATORY",
   appointmentDate: "2026-08-18",
-  appointmentTime: "09:30:00",
   status: "PENDING",
 };
 

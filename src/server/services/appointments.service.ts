@@ -8,6 +8,7 @@ import { writeAudit } from "@/server/repositories/audit.repository";
 import {
   changeAppointmentStatusWithClient, getAppointmentMutationContext, getPublishedAppointment,
   publishBatch, rescheduleAppointmentWithClient, updateCapacitySetting,
+  setAppointmentManualLockWithClient,
   type AppointmentMutationContext, type AppointmentStatus,
 } from "@/server/repositories/appointments.repository";
 import { getScheduleBatch } from "@/server/repositories/coordinator-schedules.repository";
@@ -27,9 +28,17 @@ export function assertStatusTransition(from: AppointmentStatus, to: AppointmentS
 export const appointmentUpdateSchema = z.object({
   status: z.enum(["DRAFT", "PENDING", "COMPLETED", "NO_SHOW", "RESCHEDULED", "CANCELLED"]).optional(),
   appointmentDate: z.iso.date().optional(),
-  appointmentTime: z.union([z.string().regex(/^\d{2}:\d{2}$/), z.literal(""), z.null()]).optional(),
   notes: z.union([z.string().max(1000), z.null()]).optional(),
-}).refine((input) => input.status || input.appointmentDate, "Provide a status or a reschedule date.");
+  lockAction: z.enum(["LOCK", "UNLOCK"]).optional(),
+  lockReason: z.union([z.string().max(500), z.null()]).optional(),
+}).superRefine((input, context) => {
+  if (!input.status && !input.appointmentDate && !input.lockAction) {
+    context.addIssue({ code: "custom", message: "Provide a status, reschedule date, or lock action." });
+  }
+  if (input.lockAction === "LOCK" && !input.lockReason?.trim()) {
+    context.addIssue({ code: "custom", path: ["lockReason"], message: "Lock reason is required." });
+  }
+});
 
 function assertAppointmentMutationAuthorized(
   actor: SessionUser,
@@ -89,6 +98,30 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
   if (!current) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
   const input = appointmentUpdateSchema.parse(raw);
   assertAppointmentMutationAuthorized(actor, current);
+  if (input.lockAction) {
+    if (actor.role !== "ADMIN") {
+      throw new AppError("FORBIDDEN", "Only administrators can lock appointments.", 403);
+    }
+    await transaction(async (client) => {
+      const updated = await setAppointmentManualLockWithClient(
+        client,
+        id,
+        input.lockAction === "LOCK",
+        actor.userId,
+        input.lockAction === "LOCK" ? input.lockReason!.trim() : null,
+      );
+      if (!updated) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
+      await writeAudit(
+        actor.userId,
+        input.lockAction === "LOCK" ? "APPOINTMENT_LOCKED" : "APPOINTMENT_UNLOCKED",
+        "appointment",
+        id,
+        input.lockAction === "LOCK" ? { reason: input.lockReason!.trim() } : {},
+        client,
+      );
+    });
+    return getPublishedAppointment(id);
+  }
   if (input.appointmentDate) {
     const appointmentDate = input.appointmentDate;
     try {
@@ -104,7 +137,6 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
           client,
           appointment,
           appointmentDate,
-          input.appointmentTime || null,
           input.notes?.trim() || null,
           actor.userId,
         );

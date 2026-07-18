@@ -52,7 +52,6 @@ export function AppointmentActions({
     const form = new FormData(event.currentTarget);
     void update({
       appointmentDate: form.get("appointmentDate"),
-      appointmentTime: form.get("appointmentTime"),
       notes: form.get("notes"),
     });
   }
@@ -90,9 +89,8 @@ export function AppointmentActions({
         </form>
       ) : null}
       {["PENDING", "NO_SHOW"].includes(status) ? (
-        <form onSubmit={rescheduleSubmit} className="grid gap-3 sm:grid-cols-3">
+        <form onSubmit={rescheduleSubmit} className="grid gap-3 sm:grid-cols-2">
           <Input name="appointmentDate" type="date" required />
-          <Input name="appointmentTime" type="time" />
           <Button type="submit" variant="secondary" disabled={pending}>Create replacement</Button>
           <Textarea
             name="notes"

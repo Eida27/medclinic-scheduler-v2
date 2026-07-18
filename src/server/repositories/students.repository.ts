@@ -29,7 +29,6 @@ export type AppointmentHistory = {
   id: string;
   schedule_type: string;
   appointment_date: string;
-  appointment_time: string | null;
   status: string;
   is_published: boolean;
   notes: string | null;
@@ -180,7 +179,7 @@ export async function deactivateStudentRecord(studentNumber: string): Promise<bo
 
 export async function studentHistory(studentNumber: string) {
   const appointments = await query<AppointmentHistory>(
-    `SELECT id, schedule_type, appointment_date::text, appointment_time::text, status, is_published, notes
+    `SELECT id, schedule_type, appointment_date::text, status, is_published, notes
      FROM appointments WHERE student_number = $1 AND is_published=TRUE
      ORDER BY appointment_date DESC, created_at DESC`,
     [studentNumber],

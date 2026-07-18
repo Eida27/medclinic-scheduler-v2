@@ -56,10 +56,6 @@ export default async function AppointmentPage({
             <p className="mt-1 font-bold text-ink">{String(appointment.appointmentDate)}</p>
           </div>
           <div>
-            <p className="text-xs font-bold uppercase tracking-wide text-muted">Time</p>
-            <p className="mt-1 font-bold text-ink">{String(appointment.appointmentTime ?? "Not assigned")}</p>
-          </div>
-          <div>
             <p className="text-xs font-bold uppercase tracking-wide text-muted">Visibility</p>
             <p className="mt-1 font-bold text-ink">Published</p>
           </div>

@@ -75,7 +75,6 @@ describe("PhysicalExamPage", () => {
         studentName: "Ben Reyes",
         scheduleType: "PHYSICAL_EXAM",
         appointmentDate: "2026-08-19",
-        appointmentTime: null,
         status: "PENDING",
       }],
       total: 280,

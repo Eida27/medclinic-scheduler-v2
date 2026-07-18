@@ -75,7 +75,6 @@ function childBatch({
       studentName: "Review Student",
       scheduleType,
       appointmentDate: targetDate,
-      appointmentTime: null,
       status: "DRAFT",
       isPublished: false,
       notes: null,

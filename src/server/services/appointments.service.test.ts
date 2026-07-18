@@ -9,6 +9,7 @@ const {
   getPublishedAppointment,
   publishBatch,
   rescheduleAppointmentWithClient,
+  setAppointmentManualLockWithClient,
   transaction,
   updateCapacitySetting,
   writeAudit,
@@ -18,6 +19,7 @@ const {
   getPublishedAppointment: vi.fn(),
   publishBatch: vi.fn(),
   rescheduleAppointmentWithClient: vi.fn(),
+  setAppointmentManualLockWithClient: vi.fn(),
   transaction: vi.fn(),
   updateCapacitySetting: vi.fn(),
   writeAudit: vi.fn(),
@@ -31,6 +33,7 @@ vi.mock("@/server/repositories/appointments.repository", () => ({
   getPublishedAppointment,
   publishBatch,
   rescheduleAppointmentWithClient,
+  setAppointmentManualLockWithClient,
   updateCapacitySetting,
 }));
 vi.mock("@/server/repositories/coordinator-schedules.repository", () => ({
@@ -93,9 +96,12 @@ function publishedAppointment(
     clinicCode: clinicId === laboratoryClinicId ? "KABALAKA_CLINIC" : "CPU_CLINIC",
     clinicName: clinicId === laboratoryClinicId ? "KABALAKA Clinic" : "CPU Clinic",
     appointmentDate: "2026-08-18",
-    appointmentTime: "09:00:00",
     status,
     isPublished: true,
+    schedulePairId: "33333333-3333-4333-8333-333333333333",
+    scheduleCycleStart: 2026,
+    isManuallyLocked: false,
+    lockReason: null,
     notes: null,
     rescheduledFrom: null,
     collegeName: "College of Computer Studies",
@@ -215,7 +221,6 @@ describe("appointment mutation authorization and automatic no-show correction", 
     await expect(updateAppointment(appointmentId, {
       status: "NO_SHOW",
       appointmentDate: "2026-08-19",
-      appointmentTime: "10:00",
       notes: "Attempted mixed manual no-show",
     }, admin)).rejects.toMatchObject({
       code: "MANUAL_NO_SHOW_NOT_ALLOWED",
@@ -279,7 +284,6 @@ describe("appointment mutation authorization and automatic no-show correction", 
     await expect(updateAppointment(appointmentId, {
       status: "COMPLETED",
       appointmentDate: "2026-08-19",
-      appointmentTime: "10:00",
       notes: "Stale reschedule request",
     }, admin)).rejects.toMatchObject({
       code: "INVALID_RESCHEDULE",
@@ -308,7 +312,6 @@ describe("appointment mutation authorization and automatic no-show correction", 
       ...publishedAppointment("PENDING"),
       id: replacementId,
       appointmentDate: "2026-08-19",
-      appointmentTime: "10:00:00",
       rescheduledFrom: appointmentId,
     };
     getPublishedAppointment
@@ -322,7 +325,6 @@ describe("appointment mutation authorization and automatic no-show correction", 
     await expect(updateAppointment(appointmentId, {
       status: "COMPLETED",
       appointmentDate: "2026-08-19",
-      appointmentTime: "10:00",
       notes: "Student requested a replacement",
     }, admin)).resolves.toEqual(replacement);
 
@@ -330,7 +332,6 @@ describe("appointment mutation authorization and automatic no-show correction", 
       client,
       mutationContext(status, laboratoryClinicId, latestLog),
       "2026-08-19",
-      "10:00",
       "Student requested a replacement",
       admin.userId,
     );
@@ -463,7 +464,7 @@ describe("appointment mutation authorization and automatic no-show correction", 
 
   it.each([
     { status: "CANCELLED", notes: "Coordinator status mutation" },
-    { appointmentDate: "2026-08-19", appointmentTime: "10:00", notes: "Coordinator reschedule" },
+    { appointmentDate: "2026-08-19", notes: "Coordinator reschedule" },
   ])("rejects every coordinator mutation before writing (%o)", async (input) => {
     await expect(updateAppointment(appointmentId, input, coordinator)).rejects.toMatchObject({
       code: "FORBIDDEN",

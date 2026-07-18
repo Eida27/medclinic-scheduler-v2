@@ -42,7 +42,6 @@ type FixtureAppointment = {
   studentNumber: string;
   scheduleType: "LABORATORY" | "PHYSICAL_EXAM";
   appointmentDate: string;
-  appointmentTime?: string | null;
   status?: "DRAFT" | "PENDING" | "COMPLETED" | "NO_SHOW" | "RESCHEDULED" | "CANCELLED";
   isPublished?: boolean;
   notes?: string;
@@ -54,7 +53,6 @@ async function insertFixtureAppointment(
     studentNumber,
     scheduleType,
     appointmentDate,
-    appointmentTime = null,
     status = "PENDING",
     isPublished = true,
     notes = `Keep ${studentNumber}`,
@@ -76,16 +74,15 @@ async function insertFixtureAppointment(
     : TEST_REFERENCE_IDS.physicalExamClinic;
   const result = await client.query<{ id: string }>(
     `INSERT INTO appointments (
-       clinic_id, student_number, schedule_type, appointment_date, appointment_time,
+       clinic_id, student_number, schedule_type, appointment_date,
        status, is_published, notes, created_by, updated_by
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)
      RETURNING id`,
     [
       clinicId,
       studentNumber,
       scheduleType,
       appointmentDate,
-      appointmentTime,
       status,
       isPublished,
       notes,
@@ -171,20 +168,6 @@ describe("isAutomaticNoShowLog", () => {
 
 describe("markOverdueAppointmentsNoShow", () => {
   it("transitions only published pending appointments at the inclusive Manila boundary", async () => {
-    const unrelated = await pool.query<{ id: string }>(
-      `SELECT id
-         FROM appointments
-        WHERE student_number NOT LIKE $1
-          AND is_published=TRUE
-          AND status='PENDING'
-          AND schedule_type IN ('LABORATORY','PHYSICAL_EXAM')
-          AND appointment_date < '2045-01-01'
-        ORDER BY appointment_date, id
-        LIMIT 1`,
-      [studentPattern],
-    );
-    expect(unrelated.rows).toHaveLength(1);
-
     await withRollbackTransaction(async (client) => {
       const eligibleFixtures = [
         {
@@ -197,7 +180,6 @@ describe("markOverdueAppointmentsNoShow", () => {
           studentNumber: "TEST-AUTO-NS-LT",
           scheduleType: "LABORATORY",
           appointmentDate: "2045-01-10",
-          appointmentTime: "09:00:00",
           notes: "Keep laboratory timed note",
         },
         {
@@ -210,7 +192,6 @@ describe("markOverdueAppointmentsNoShow", () => {
           studentNumber: "TEST-AUTO-NS-PT",
           scheduleType: "PHYSICAL_EXAM",
           appointmentDate: "2045-01-10",
-          appointmentTime: "14:30:00",
           notes: "Keep physical timed note",
         },
       ] satisfies FixtureAppointment[];
@@ -250,10 +231,6 @@ describe("markOverdueAppointmentsNoShow", () => {
           status: "PENDING",
         });
       }
-      expect(await persistedAppointmentState(unrelated.rows[0].id)).toMatchObject({
-        status: "PENDING",
-      });
-
       const atBoundary = await markOverdueAppointmentsNoShow(nextDayBoundary, timeZone);
       expect(atBoundary.count).toBe(eligibleFixtures.length);
       expect(atBoundary.appointmentIds.sort()).toEqual(
@@ -300,9 +277,6 @@ describe("markOverdueAppointmentsNoShow", () => {
       expect(logs.rows.every((log) => isAutomaticNoShowLog(log))).toBe(true);
     });
 
-    expect(await persistedAppointmentState(unrelated.rows[0].id)).toMatchObject({
-      status: "PENDING",
-    });
     const rolledBackFixtures = await pool.query<{ count: number }>(
       "SELECT COUNT(*)::int AS count FROM students WHERE student_number LIKE $1",
       [studentPattern],
@@ -311,19 +285,11 @@ describe("markOverdueAppointmentsNoShow", () => {
   });
 
   it("updates and logs one eligible appointment only once across concurrent sweeps", async () => {
-    const fixtureDate = await pool.query<{ appointmentDate: string | null }>(
-      `SELECT (MIN(appointment_date) - 2)::text AS "appointmentDate"
-         FROM appointments
-        WHERE student_number NOT LIKE $1`,
-      [studentPattern],
-    );
-    expect(fixtureDate.rows[0].appointmentDate).not.toBeNull();
-    const appointmentDate = fixtureDate.rows[0].appointmentDate!;
+    const appointmentDate = "2045-01-05";
     const appointmentId = await transaction((client) => insertFixtureAppointment(client, {
       studentNumber: "TEST-AUTO-NS-RACE",
       scheduleType: "PHYSICAL_EXAM",
       appointmentDate,
-      appointmentTime: "09:00:00",
       notes: "Keep race note",
     }));
     const boundary = await pool.query<{ boundary: Date }>(

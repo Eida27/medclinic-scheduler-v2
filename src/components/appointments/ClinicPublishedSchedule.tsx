@@ -13,7 +13,6 @@ type ClinicAppointment = {
   studentName: string;
   scheduleType: string;
   appointmentDate: string;
-  appointmentTime?: string | null;
   status: string;
 };
 

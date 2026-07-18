@@ -49,7 +49,6 @@ const laboratoryBatch = {
     scheduleType: "LABORATORY",
     priorityGroupName: "Graduating",
     appointmentDate: "2026-12-10",
-    appointmentTime: null,
     status: "DRAFT",
     isPublished: false,
     notes: null,

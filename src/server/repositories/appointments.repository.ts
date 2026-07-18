@@ -11,7 +11,7 @@ export type AppointmentStatus = "DRAFT" | "PENDING" | "COMPLETED" | "NO_SHOW" | 
 type AppointmentDetail = {
   id: string; batchId: string | null; studentNumber: string; studentName: string; scheduleType: string;
   clinicId: string; clinicCode: string; clinicName: string;
-  appointmentDate: string; appointmentTime: string | null; status: AppointmentStatus; isPublished: boolean;
+  appointmentDate: string; status: AppointmentStatus; isPublished: boolean;
   notes: string | null; rescheduledFrom: string | null; collegeName: string; programName: string;
 };
 type StatusLog = { id: string; oldStatus: string | null; newStatus: string; notes: string | null; createdAt: Date; changedById: string | null; changedByName: string | null };
@@ -25,6 +25,10 @@ export type AppointmentMutationContext = {
   clinicId: string;
   clinicCode: ClinicCode;
   isPublished: boolean;
+  schedulePairId: string | null;
+  scheduleCycleStart: number;
+  isManuallyLocked: boolean;
+  lockReason: string | null;
   latestLog: AutomaticNoShowLog | null;
 };
 
@@ -72,7 +76,7 @@ export async function listAppointments(filters: {
     `SELECT a.id, a.batch_id AS "batchId", a.student_number AS "studentNumber",
             ${studentDisplayNameSql("s")} AS "studentName", a.schedule_type AS "scheduleType",
             a.clinic_id AS "clinicId", cl.code AS "clinicCode", cl.name AS "clinicName",
-            a.appointment_date::text AS "appointmentDate", a.appointment_time::text AS "appointmentTime",
+            a.appointment_date::text AS "appointmentDate",
             a.status, a.is_published AS "isPublished", c.name AS "collegeName", p.name AS "programName"
      FROM appointments a JOIN students s ON s.student_number=a.student_number
      JOIN clinics cl ON cl.id=a.clinic_id
@@ -90,8 +94,9 @@ export async function getPublishedAppointment(id: string) {
             ${studentDisplayNameSql("s")} AS "studentName",
             a.schedule_type AS "scheduleType", a.appointment_date::text AS "appointmentDate",
             a.clinic_id AS "clinicId", cl.code AS "clinicCode", cl.name AS "clinicName",
-            a.appointment_time::text AS "appointmentTime", a.status, a.is_published AS "isPublished",
-            a.notes, a.rescheduled_from AS "rescheduledFrom", c.name AS "collegeName", p.name AS "programName"
+            a.status, a.is_published AS "isPublished",
+            a.notes, a.rescheduled_from AS "rescheduledFrom", c.name AS "collegeName", p.name AS "programName",
+            a.is_manually_locked AS "isManuallyLocked", a.lock_reason AS "lockReason"
      FROM appointments a JOIN students s ON s.student_number=a.student_number
      JOIN clinics cl ON cl.id=a.clinic_id
      JOIN colleges c ON c.id=s.college_id JOIN programs p ON p.id=s.program_id
@@ -120,12 +125,20 @@ export async function getAppointmentMutationContext(id: string, client: PoolClie
     latestNewStatus: string | null;
     latestNotes: string | null;
     latestChangedById: string | null;
+    schedulePairId: string | null;
+    scheduleCycleStart: number;
+    isManuallyLocked: boolean;
+    lockReason: string | null;
   }>(
     `SELECT appointment.id, appointment.batch_id AS "batchId",
             appointment.student_number AS "studentNumber",
             appointment.schedule_type AS "scheduleType", appointment.status,
             appointment.clinic_id AS "clinicId", clinic.code AS "clinicCode",
             appointment.is_published AS "isPublished",
+            appointment.schedule_pair_id::text AS "schedulePairId",
+            appointment.schedule_cycle_start AS "scheduleCycleStart",
+            appointment.is_manually_locked AS "isManuallyLocked",
+            appointment.lock_reason AS "lockReason",
             latest.old_status AS "latestOldStatus",
             latest.new_status AS "latestNewStatus",
             latest.notes AS "latestNotes",
@@ -154,6 +167,10 @@ export async function getAppointmentMutationContext(id: string, client: PoolClie
     clinicId: row.clinicId,
     clinicCode: row.clinicCode,
     isPublished: row.isPublished,
+    schedulePairId: row.schedulePairId,
+    scheduleCycleStart: row.scheduleCycleStart,
+    isManuallyLocked: row.isManuallyLocked,
+    lockReason: row.lockReason,
     latestLog: row.latestNewStatus ? {
       oldStatus: row.latestOldStatus,
       newStatus: row.latestNewStatus,
@@ -189,11 +206,31 @@ export async function changeAppointmentStatusWithClient(
   );
 }
 
+export async function setAppointmentManualLockWithClient(
+  client: PoolClient,
+  appointmentId: string,
+  locked: boolean,
+  actorUserId: string,
+  reason: string | null,
+) {
+  const result = await client.query(
+    `UPDATE appointments
+        SET is_manually_locked=$2,
+            locked_by=CASE WHEN $2 THEN $3::uuid ELSE NULL END,
+            locked_at=CASE WHEN $2 THEN NOW() ELSE NULL END,
+            lock_reason=CASE WHEN $2 THEN $4 ELSE NULL END,
+            updated_by=$3
+      WHERE id=$1 AND is_published=TRUE
+      RETURNING id`,
+    [appointmentId, locked, actorUserId, reason],
+  );
+  return Boolean(result.rowCount);
+}
+
 export async function rescheduleAppointmentWithClient(
   client: PoolClient,
   appointment: AppointmentMutationContext,
   appointmentDate: string,
-  appointmentTime: string | null,
   notes: string | null,
   actorUserId: string,
 ) {
@@ -215,20 +252,22 @@ export async function rescheduleAppointmentWithClient(
   );
   const replacement = await client.query<{ id: string }>(
     `INSERT INTO appointments (
-      batch_id, clinic_id, student_number, schedule_type, appointment_date, appointment_time,
-      status, is_published, notes, rescheduled_from, created_by, updated_by
-    ) VALUES ($1,$2,$3,$4,$5,$6,'PENDING',$7,$8,$9,$10,$10) RETURNING id`,
+      batch_id, clinic_id, student_number, schedule_type, appointment_date,
+      status, is_published, notes, rescheduled_from, created_by, updated_by,
+      schedule_pair_id, schedule_cycle_start
+    ) VALUES ($1,$2,$3,$4,$5,'PENDING',$6,$7,$8,$9,$9,$10,$11) RETURNING id`,
     [
       appointment.batchId,
       appointment.clinicId,
       appointment.studentNumber,
       appointment.scheduleType,
       appointmentDate,
-      appointmentTime,
       appointment.isPublished,
       notes,
       appointment.id,
       actorUserId,
+      appointment.schedulePairId,
+      appointment.scheduleCycleStart,
     ],
   );
   await client.query(
@@ -262,8 +301,7 @@ export async function publicStudentSchedule(studentNumber: string) {
      FROM students s WHERE s.student_number=$1 AND s.is_active=TRUE`, [studentNumber]);
   if (!student.rows[0]) return null;
   const appointments = await query(
-    `SELECT schedule_type AS "scheduleType", appointment_date::text AS "appointmentDate",
-            appointment_time::text AS "appointmentTime", status
+    `SELECT schedule_type AS "scheduleType", appointment_date::text AS "appointmentDate", status
      FROM appointments WHERE student_number=$1 AND is_published=TRUE
      AND status NOT IN ('RESCHEDULED','CANCELLED') ORDER BY appointment_date`, [studentNumber]);
   const compliance = await query<{

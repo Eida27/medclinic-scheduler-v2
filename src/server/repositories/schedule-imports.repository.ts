@@ -89,7 +89,6 @@ export type ScheduleImportAppointment = {
   scheduleType: AppointmentScheduleType;
   priorityGroupName: string | null;
   appointmentDate: string;
-  appointmentTime: string | null;
   status: string;
   isPublished: boolean;
   notes: string | null;
@@ -802,7 +801,6 @@ export async function getImportChildBatches(
                                   appointment.schedule_type AS "scheduleType",
                                   priority_group.name AS "priorityGroupName",
                                   appointment.appointment_date::text AS "appointmentDate",
-                                  appointment.appointment_time::text AS "appointmentTime",
                                   appointment.status,
                                   appointment.is_published AS "isPublished",
                                   appointment.notes
@@ -815,7 +813,6 @@ export async function getImportChildBatches(
                                ON priority_group.id=schedule_item.priority_group_id
                             WHERE batch.import_group_id=$1
                             ORDER BY appointment.appointment_date,
-                                     appointment.appointment_time NULLS LAST,
                                      student.last_name, student.first_name, appointment.id`;
   const appointmentResult = client
     ? await client.query<ScheduleImportAppointment>(appointmentsSql, [importId])

@@ -46,7 +46,6 @@ type GeneratedAppointment = {
   scheduleType: string;
   priorityGroupName: string | null;
   appointmentDate: string;
-  appointmentTime: string | null;
   status: string;
   isPublished: boolean;
   notes: string | null;
@@ -187,7 +186,6 @@ export function ScheduleImportClinicPanel({ batch }: { batch: ScheduleImportClin
                     <th className="px-4 py-3">Student</th>
                     <th className="px-4 py-3">Priority</th>
                     <th className="px-4 py-3">Date</th>
-                    <th className="px-4 py-3">Time</th>
                     <th className="px-4 py-3">Publication</th>
                   </tr>
                 </thead>
@@ -200,7 +198,6 @@ export function ScheduleImportClinicPanel({ batch }: { batch: ScheduleImportClin
                       </td>
                       <td className="px-4 py-3">{appointment.priorityGroupName ?? "Not available"}</td>
                       <td className="px-4 py-3">{appointment.appointmentDate}</td>
-                      <td className="px-4 py-3">{appointment.appointmentTime ?? "Not assigned"}</td>
                       <td className="px-4 py-3">
                         <Badge tone={appointment.isPublished ? "success" : "neutral"}>
                           {appointment.isPublished ? "Published" : "Draft — not published"}
