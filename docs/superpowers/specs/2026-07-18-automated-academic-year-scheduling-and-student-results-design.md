@@ -6,7 +6,7 @@
 
 ## 1. Purpose
 
-Revise the current clinic scheduler so coordinators import student demographic data rather than preassigned appointment dates. The system must automatically generate date-only Laboratory and Physical Examination appointments, prioritize OJT, Tour, and Specialized students, preserve first-come-first-served ordering, manage clinic closures and automatic rescheduling, and provide a separate student portal for result uploads.
+Revise the clinic scheduler so coordinators import student demographic data rather than preassigned appointment dates. The system automatically generates date-only Laboratory and Physical Examination appointments, prioritizes OJT, Tour, and Specialized students, preserves first-come-first-served ordering, manages clinic closures and automatic rescheduling, and provides a separate student portal for result uploads.
 
 The approved design keeps the existing import lifecycle—import, validate, generate, and publish—but replaces the date-driven input model with a category-and-scheduling-window model.
 
@@ -14,7 +14,7 @@ The approved design keeps the existing import lifecycle—import, validate, gene
 
 This revision includes:
 
-- A new coordinator CSV format based on the uploaded spreadsheet.
+- A new coordinator CSV format based on the approved spreadsheet.
 - Student profile upsert by Student ID.
 - Automated academic-year scheduling.
 - Equal-priority handling for OJT, Tour, and Specialized batches.
@@ -60,11 +60,15 @@ A student's normal schedule consists of:
 1. Laboratory appointment at KABALAKA Clinic.
 2. Physical Examination appointment at CPU Clinic on the earliest available clinic day after Laboratory.
 
-The two records are logically linked even though they remain separate appointments.
+The two records are separate appointments connected by one schedule-pair identifier.
 
 ### 4.3 Accepted batch
 
 A batch becomes accepted after its file structure and student rows pass import validation. At that point the system assigns an immutable `accepted_at` timestamp. This timestamp determines FCFS order and must not change during retries, edits, validation reruns, generation, or publication.
+
+### 4.4 Scheduling cycle
+
+A scheduling cycle is identified by the selected academic year. A student may have one Laboratory/PE schedule pair per academic-year cycle. Reimporting the same student within the same cycle updates demographic information but does not replace the existing schedule. A later academic-year cycle may create a new pair while preserving all previous history.
 
 ## 5. Coordinator Import Design
 
@@ -79,8 +83,6 @@ Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth
 Schedule dates must not appear in the CSV.
 
 ### 5.2 Parsed row model
-
-Each valid row produces:
 
 ```ts
 type ImportedStudentRow = {
@@ -104,16 +106,16 @@ The parser must:
 - Require all nine headers in the approved order.
 - Treat `MI` and `Suffix` as nullable cells while retaining their columns.
 - Normalize surrounding whitespace.
-- Reject missing Student ID, surname, first name, college, course, year, or date of birth.
-- Validate Student ID length and supported format.
+- Require Student ID, surname, first name, college, course, year, and date of birth.
+- Require the CPU Student ID format `NN-NNNN-NN`, represented by `^\d{2}-\d{4}-\d{2}$`.
 - Validate year level using the supported institutional range.
-- Parse Date of Birth from the approved spreadsheet date format and store it as PostgreSQL `DATE`.
+- Parse Date of Birth from `MM-DD-YYYY` and store it as PostgreSQL `DATE`.
 - Reject impossible or future birth dates.
 - Reject duplicate Student IDs within one CSV and report both row positions.
 - Resolve College and Course against active reference data.
 - Return row-specific errors without partially accepting an invalid file.
 
-File-size and row-count limits should remain configurable, with the existing limits retained unless a later operational test proves they are too low.
+The existing import file-size and row-count limits remain in effect and should be represented by centralized constants.
 
 ### 5.4 Import form metadata
 
@@ -126,7 +128,7 @@ The import form collects values applying to the entire batch:
 
 Regular imports do not require a preferred month.
 
-The preferred priority month is resolved within the selected academic year: August–December use the first calendar year, and January–July use the second calendar year. It is a preferred starting month, not a hard ending boundary.
+The preferred priority month is resolved within the selected academic year: August–December use the academic-year start year, and January–July use the academic-year end year. It is a preferred starting month, not a hard ending boundary. If the seven-day preparation date falls after the selected month, scheduling begins from that later preparation date and continues forward.
 
 ### 5.5 Existing student upsert
 
@@ -135,11 +137,12 @@ The preferred priority month is resolved within the selected academic year: Augu
 When a Student ID already exists:
 
 - Update name fields, college, course, year level, suffix, middle initial, and date of birth.
-- Preserve existing appointments, result records, uploads, appointment history, and original queue position.
-- Do not create a new schedule request when the student already has an active or historical Laboratory/PE schedule pair from an earlier accepted import.
+- Preserve appointments, result records, uploads, appointment history, and queue metadata.
+- If a schedule pair already exists for the selected academic-year cycle, do not create another schedule request.
+- If schedules exist only for earlier cycles, create the new cycle's request normally.
 - Record the profile update in the audit log.
 
-New students are inserted and receive schedule requests from the new batch.
+New students are inserted and receive schedule requests from the accepted batch.
 
 ## 6. Scheduling Model
 
@@ -171,7 +174,7 @@ The current capacity model remains:
 - Safe daily capacity: 120.
 - Maximum daily capacity: 150.
 
-The scheduler should normally remain at or below safe capacity and must not exceed maximum capacity automatically. Any legacy manual override path must not be used by this automated workflow.
+The scheduler should normally remain at or below safe capacity and must never exceed maximum capacity automatically. A legacy manual capacity override must not be used by this automated workflow.
 
 ### 6.4 Appointment sequencing
 
@@ -189,16 +192,14 @@ Physical Examination must never occur on the same date as or before Laboratory.
 
 All newly imported categories require seven calendar days of preparation notice before Laboratory.
 
-For a new request:
-
 ```text
-earliest Laboratory date =
+earliest initial Laboratory date =
 max(batch accepted date + 7 calendar days, category scheduling-window start)
 ```
 
 After calculating the date, the scheduler moves forward to the first eligible Monday–Friday clinic date.
 
-The seven-day rule does not apply to automatic rescheduling. Replacement appointments use the earliest available future date.
+The seven-day rule applies only to initial scheduling from a new import. Automatic replacement appointments use the earliest available future date and do not restart a seven-day notice period.
 
 ### 6.6 Regular scheduling window
 
@@ -210,7 +211,7 @@ For Regular batches:
 - When capacity is insufficient, scheduling continues into April and later months until all eligible students have a pair.
 - A pre-August upload keeps its early FCFS position even though appointments begin in August.
 
-The effective start date is the later of August's scheduling start and the seven-day preparation date.
+The effective start date is the later of August 1 and the seven-day preparation date, advanced to the next eligible clinic day.
 
 ### 6.7 Priority-category scheduling window
 
@@ -221,8 +222,6 @@ For OJT, Tour, and Specialized batches:
 - If the selected month cannot hold the complete batch, scheduling continues into the following month and later months until all eligible students are scheduled.
 
 ### 6.8 Priority tiers and FCFS order
-
-Scheduling priority is:
 
 ```text
 Tier 1: OJT = Tour = Specialized
@@ -239,7 +238,7 @@ A later OJT batch does not outrank an earlier Tour or Specialized batch. All thr
 
 ### 6.9 Concurrency
 
-Import acceptance and schedule generation must be serialized sufficiently to preserve FCFS order. Use a database transaction plus an appropriate PostgreSQL advisory lock or locked queue row around:
+Import acceptance and schedule generation must be serialized sufficiently to preserve FCFS order. Use a database transaction plus a PostgreSQL advisory lock dedicated to schedule allocation around:
 
 - assigning `accepted_at`,
 - reading current capacity,
@@ -266,9 +265,12 @@ A Regular appointment is automatically movable only when:
 
 Because appointments are date-only, an appointment becomes ineligible for automatic displacement at midnight when its appointment date begins.
 
-### 7.2 Minimal displacement
+### 7.2 Minimal displacement and pair rules
 
 The scheduler must move the minimum number of Regular students required to place the priority batch. It must not rebuild the entire academic-year schedule unnecessarily.
+
+- If a Regular Laboratory slot is displaced, move Laboratory and PE as a new pair.
+- If only a Regular PE slot is displaced, preserve Laboratory and move PE only to the earliest eligible later date.
 
 Affected Regular students retain their ordering relative to one another:
 
@@ -294,17 +296,19 @@ Administrators manage unavailable dates separately for KABALAKA Clinic and CPU C
 
 An unavailable-date record supports:
 
-- One date or a continuous date range.
+- One future date or a continuous future date range.
 - Clinic.
-- Reason.
-- Optional category such as holiday, closure, maintenance, or staff unavailability.
+- Required reason.
+- Category such as holiday, closure, maintenance, or staff unavailability.
 - Creator and timestamps.
 
-Overlapping records for the same clinic should be prevented or merged by the service layer.
+Overlapping records for the same clinic are rejected by the service layer with a clear conflict message.
+
+Same-day or past emergency closures are outside automatic displacement because date-only appointments become fixed at midnight. They require an explicit manual administrator workflow.
 
 ### 8.2 Blocking dates with published appointments
 
-When an administrator creates a block affecting future published appointments, rescheduling is part of the same operational workflow.
+When an administrator creates a future block affecting published appointments, automatic rescheduling is part of the closure operation.
 
 #### CPU Clinic / PE date blocked
 
@@ -320,7 +324,7 @@ When an administrator creates a block affecting future published appointments, r
 - Find the earliest available PE date after the new Laboratory date.
 - Publish the replacement pair immediately.
 
-Protected appointments are not moved automatically and must be reported to the administrator for manual resolution.
+Protected appointments are not silently altered and are reported to the administrator for manual resolution.
 
 ## 9. Student Authentication
 
@@ -333,7 +337,7 @@ Students authenticate using:
 - Student Number.
 - Date of Birth.
 
-Student sessions must be separate from staff sessions, for example:
+Student sessions are separate from staff sessions:
 
 - Staff cookie: `medclinic_session`.
 - Student cookie: `medclinic_student_session`.
@@ -353,7 +357,7 @@ The student login endpoint must:
 - Use secure, HTTP-only, same-site cookies.
 - Restrict every student API query by the session's Student Number.
 
-Student Number plus Date of Birth is an institution-approved low-friction authentication method, but the rate limiting and strict ownership checks are mandatory because date of birth is not a secret comparable to a password.
+Student Number plus Date of Birth is the approved low-friction authentication method, but rate limiting and strict ownership checks are mandatory because date of birth is not a password-strength secret.
 
 ## 10. Optional Student Email Verification
 
@@ -372,7 +376,8 @@ After login, students may add an email address for notifications. Email setup is
 - Store only a hash of the verification token.
 - Expire unused verification requests.
 - Keep the previous verified address active until a replacement address is verified.
-- Normalize email addresses and enforce uniqueness only if institutional policy requires one student per address.
+- Normalize email addresses.
+- Permit the same email address to be used by more than one student, because family or shared addresses may be used.
 
 ### 10.3 Notification behavior
 
@@ -426,13 +431,13 @@ Each draft operation validates ownership, appointment completion, file type, per
 A draft expires after seven days of inactivity.
 
 - Activity includes adding or removing a file.
-- Cleanup deletes private storage objects and database draft metadata.
+- Cleanup deletes private storage objects and draft database metadata.
 - No warning is sent.
 - Finalized submissions are never affected.
 - The appointment remains `COMPLETED` and the result remains `PENDING_UPLOAD`.
 - The student may start a new draft.
 
-A scheduled cleanup job should run at least daily and be idempotent.
+A daily scheduled cleanup job must be idempotent. Before hard-deleting draft metadata, it records a minimal `RESULT_DRAFT_EXPIRED` audit event without filenames containing sensitive content.
 
 ### 11.5 Final submission
 
@@ -457,13 +462,14 @@ An administrator may mark a finalized submission incomplete when the files are w
 The action requires a reason and performs:
 
 1. Authorization and row locking.
-2. Mark submission as invalidated/incomplete.
-3. Delete all associated private files.
-4. Retain minimal non-document audit metadata.
-5. Change the result status to `PENDING_UPLOAD` or an equivalent incomplete state.
-6. Keep the appointment status `COMPLETED`.
-7. Permit the student to create a replacement draft.
-8. Create a portal notification and queue email when verified.
+2. Mark the submission `INVALIDATED`.
+3. Revoke document access immediately.
+4. Delete all associated private files.
+5. Retain minimal non-document audit metadata.
+6. Change the result status to `PENDING_UPLOAD`.
+7. Keep the appointment status `COMPLETED`.
+8. Permit the student to create a replacement draft.
+9. Create a portal notification and queue email when verified.
 
 Students may not replace a finalized upload until this administrator action occurs.
 
@@ -471,28 +477,26 @@ Students may not replace a finalized upload until this administrator action occu
 
 ### 13.1 Storage
 
-Store files in private object storage or a protected server-managed file store. PostgreSQL stores metadata and storage keys, not file bytes.
+The repository's first implementation uses a storage-adapter interface backed by a private local filesystem directory outside `public/`. Database rows store metadata and generated storage keys, not file bytes. The adapter boundary must permit later replacement with private object storage without changing submission services or database relationships.
 
-Storage object names must be generated by the server and must not trust user filenames for paths.
+Storage object names are generated by the server and never use the original filename as a path.
 
 ### 13.2 Access matrix
 
-| Actor | Own finalized files | Other student files | Invalidate submission | ZIP download |
+| Actor | Own finalized files | Any student's finalized files | Invalidate submission | ZIP download |
 |---|---:|---:|---:|---:|
 | Student | View/download | No | No | No |
 | Coordinator | No | No | No | No |
 | Clinic staff | No | No | No | No |
-| Administrator | Yes | Yes | Yes | Yes |
+| Administrator | Not applicable | Yes | Yes | Yes |
 
 Administrators can download individual files or an entire finalized submission as an on-demand ZIP. The ZIP contains uploaded files only and is not stored permanently.
 
-All access must pass through an authenticated application route or short-lived signed URL. Permanent public object URLs are prohibited.
+All access passes through an authenticated application route. Permanent public file URLs are prohibited.
 
-Administrator views and downloads must be audited. Student access may also be logged for security monitoring.
+Administrator views and downloads are audited. Student access may also be logged for security monitoring.
 
-## 14. Proposed Data Model Changes
-
-The implementation plan should translate this logical design into migrations. The expected additions are:
+## 14. Data Model Changes
 
 ### 14.1 Students
 
@@ -502,36 +506,39 @@ Add:
 - `email VARCHAR(254)`.
 - `email_verified_at TIMESTAMPTZ`.
 
-Persist middle initial consistently using the current middle-name field or a deliberate migration to a dedicated field; do not maintain two conflicting sources.
+Store the imported `MI` consistently in the existing middle-name field as a nullable normalized initial. Do not create a second middle-initial source.
 
 ### 14.2 Schedule imports
 
-Add or retain fields for:
+Add:
 
 - `student_category`.
-- `academic_year_start` and `academic_year_end`, or an equivalent normalized academic-year representation.
-- `preferred_month` for priority categories.
+- `academic_year_start INTEGER`.
+- `preferred_month INTEGER` for priority categories.
 - Immutable `accepted_at`.
 - Original row order on schedule items.
+
+The academic-year end is always `academic_year_start + 1` and is not stored separately.
 
 ### 14.3 Appointment linkage and locking
 
 Add or ensure:
 
-- A pair/group identifier linking Laboratory and PE for one scheduling request.
+- A schedule-cycle identifier.
+- A pair/group identifier linking Laboratory and PE.
 - A manual-lock indicator and lock metadata.
-- Rescheduling-cause metadata or a normalized rescheduling event table.
+- A normalized rescheduling event table containing cause and old/new appointment links.
 - Removal of `appointment_time`.
 
 ### 14.4 Clinic unavailable dates
 
-Create a clinic unavailable-date/range table with clinic, start date, end date, reason, category, creator, and timestamps.
+Create a table containing clinic, start date, end date, reason, category, creator, and timestamps.
 
-### 14.5 Student sessions and email verification
+### 14.5 Student authentication and email verification
 
-Create the required persistence for:
+Create persistence for:
 
-- Rate-limit/login-attempt tracking when not handled by external infrastructure.
+- Student login attempts when rate limiting is not provided by infrastructure.
 - Email verification token hashes and expiration.
 
 ### 14.6 Result submissions
@@ -539,16 +546,17 @@ Create the required persistence for:
 Use a parent-child model:
 
 - `student_result_submissions`: appointment, student, result type, status, draft activity, finalized time, invalidation reason, invalidating administrator.
-- `student_result_files`: submission, storage key, original filename, MIME type, byte size, checksum, upload time.
+- `student_result_files`: submission, storage key, original filename, detected MIME type, byte size, checksum, upload time.
 
-Suggested submission statuses:
+Submission statuses are:
 
 - `DRAFT`.
 - `FINALIZED`.
 - `INVALIDATED`.
-- `EXPIRED` when retaining cleanup history is useful; otherwise expired drafts may be hard-deleted after audit logging.
 
-Update result statuses to represent at least:
+Expired drafts are audited and hard-deleted.
+
+Result statuses must include:
 
 - `PENDING_UPLOAD`.
 - `COMPLETED`.
@@ -564,8 +572,6 @@ Create:
 
 ## 15. Service Boundaries
 
-Keep responsibilities isolated:
-
 - **CSV parser:** structural parsing and row-level validation only.
 - **Student import service:** reference resolution and student upsert.
 - **Scheduling-window resolver:** converts category, academic year, month, and preparation rule into an earliest eligible date.
@@ -574,23 +580,23 @@ Keep responsibilities isolated:
 - **Clinic calendar service:** unavailable-date administration and closure-triggered rescheduling.
 - **Student authentication service:** credential verification and student sessions.
 - **Submission service:** draft management, finalization, invalidation, and result-status synchronization.
-- **Storage adapter:** private file upload, delete, read, signed access, and ZIP streaming.
+- **Storage adapter:** private file upload, delete, read, and ZIP streaming.
 - **Notification service:** portal events and transactional email outbox.
 - **Audit repository:** immutable operational history.
 
-The rule engine should remain pure where possible: receive candidate items, capacities, existing load, blocked dates, and ordering metadata; return proposed assignments, displacements, and unscheduled reasons without performing database writes.
+The rule engine remains pure where possible: it receives candidate items, capacities, existing load, blocked dates, and ordering metadata; it returns proposed assignments, displacements, and unscheduled reasons without performing database writes.
 
 ## 16. Transaction and Failure Rules
 
 - CSV structural failure saves no batch or student changes.
-- Student upserts, batch acceptance, and initial scheduling should use a controlled transaction boundary.
-- Schedule generation and displacement must lock relevant queue/capacity state.
+- Student upserts, batch acceptance, and initial scheduling use a controlled transaction boundary.
+- Schedule generation and displacement lock relevant queue and capacity state.
 - A failed email never rolls back scheduling.
-- A failed storage upload must not create finalized file metadata.
+- A failed file write does not create finalized file metadata.
 - Final submission is all-or-nothing.
 - If one file fails final validation, the draft remains editable and the result remains `PENDING_UPLOAD`.
-- Administrative invalidation must be idempotent and must handle storage deletion retries without exposing files after invalidation.
-- Clinic-date blocking must either finish the required automatic rescheduling or clearly report protected/unresolved appointments before the administrator considers the closure operation complete.
+- Administrative invalidation is idempotent and revokes access before retryable physical deletion.
+- Future clinic-date blocking must finish automatic rescheduling or return a failure with unresolved protected appointments before the block is committed.
 
 ## 17. User Interface Changes
 
@@ -624,14 +630,14 @@ The rule engine should remain pure where possible: receive candidate items, capa
 - Optional email setup and verification.
 - Separate Laboratory and PE result sections.
 - Upload button only after matching appointment completion.
-- Draft file manager with count, individual sizes, total size, and expiration behavior.
+- Draft file manager with count, individual sizes, total size, and inactivity-expiration behavior.
 - Final Submit confirmation.
 - View/download own finalized files.
 - Incomplete reason and replacement-upload access after administrator invalidation.
 
 ## 18. Notifications
 
-Automatic schedule-change notification content must include:
+Automatic schedule-change notifications include:
 
 - Service affected.
 - Previous date.
@@ -640,7 +646,7 @@ Automatic schedule-change notification content must include:
 - Change timestamp.
 - Link to the student portal.
 
-When Laboratory moves as a pair, one notification may summarize both changed dates. When only PE moves, the notification must state that Laboratory remains unchanged.
+When Laboratory moves as a pair, one notification may summarize both changed dates. When only PE moves, the notification states that Laboratory remains unchanged.
 
 Administrative invalidation notifications include the reason and instructions to submit a replacement.
 
@@ -655,6 +661,7 @@ Audit at minimum:
 - Closure-triggered rescheduling.
 - Manual appointment lock/unlock.
 - Student result finalized.
+- Draft expiration.
 - Administrator file view/download.
 - Administrator ZIP download.
 - Submission invalidated and files deleted.
@@ -667,23 +674,27 @@ Do not place raw Date of Birth, verification tokens, or file contents in audit m
 ### 20.1 Parser tests
 
 - Exact new headers.
+- CPU Student ID format.
 - Nullable MI and Suffix.
-- Date-of-birth conversion and invalid dates.
+- `MM-DD-YYYY` date-of-birth conversion and invalid dates.
 - Duplicate Student IDs.
 - Unknown college/course.
-- Existing-student upsert without rescheduling.
+- Existing-student upsert without rescheduling in the same cycle.
+- Existing student receives a new pair in a later cycle.
 
 ### 20.2 Rule-engine tests
 
 - Laboratory before PE.
 - Friday Laboratory followed by Monday PE.
 - Blocked date exclusion by clinic.
-- Seven-day notice for every category.
+- Seven-day notice for every initial category schedule.
 - No seven-day requirement for replacements.
 - Regular August start and April overflow.
 - Priority selected-month start and cross-month overflow.
 - Equal OJT/Tour/Specialized FCFS ordering.
 - Minimal Regular displacement.
+- Laboratory displacement moves the pair.
+- PE-only displacement preserves Laboratory.
 - Deterministic concurrent import ordering.
 - Protected appointment exclusion.
 
@@ -692,6 +703,7 @@ Do not place raw Date of Birth, verification tokens, or file contents in audit m
 - PE block moves PE only.
 - Laboratory block moves the full pair.
 - Published replacements and historical `RESCHEDULED` links.
+- Same-day closure rejected from the automatic future-date flow.
 - Protected records reported, not silently altered.
 
 ### 20.4 Authentication tests
@@ -735,21 +747,23 @@ Implementation should be staged:
 6. Add student authentication and portal.
 7. Add private result drafts, finalization, access control, and invalidation.
 8. Add notifications, email outbox, and cleanup jobs.
-9. Remove obsolete date-driven CSV columns and legacy parser only after end-to-end tests pass.
+9. Remove obsolete date-driven CSV columns and the legacy parser only after end-to-end tests pass.
 10. Reset or migrate demo data as appropriate for adviser testing with the approved spreadsheet.
 
-Database migrations must be forward-only and safe to run on a non-empty development database. Any destructive cleanup should be a separate explicitly invoked development/reset operation.
+Database migrations must be forward-only and safe to run on a non-empty development database. Any destructive cleanup is a separate explicitly invoked development/reset operation.
 
 ## 22. Acceptance Criteria
 
 The revision is accepted when:
 
 - Coordinators can import the approved nine-column student CSV without schedule dates.
-- Existing students are updated without changing their existing schedules.
-- New students receive deterministic date-only Laboratory-then-PE schedules.
-- All new appointments meet the seven-day preparation rule.
+- Existing students are updated without changing an existing schedule in the same academic-year cycle.
+- Students may receive a new schedule pair in a later academic-year cycle.
+- Newly imported students receive deterministic date-only Laboratory-then-PE schedules.
+- Initial Laboratory appointments meet the seven-day preparation rule.
 - OJT, Tour, and Specialized batches share one FCFS priority queue above Regular students.
 - Priority imports can minimally displace eligible published Regular appointments.
+- Laboratory displacement moves the pair while PE-only displacement preserves Laboratory.
 - Clinic closures automatically reschedule affected appointments using the approved PE-only or pair behavior.
 - Both clinics schedule Monday–Friday and respect separate blocked dates and capacities.
 - Students authenticate using Student Number and Date of Birth.
