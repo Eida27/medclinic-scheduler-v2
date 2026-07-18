@@ -17,6 +17,7 @@ type TestStudent = {
   lastName: string;
   suffix?: string | null;
   yearLevel: number | null;
+  dateOfBirth?: string | null;
 };
 
 export async function insertTestStudent({
@@ -26,12 +27,13 @@ export async function insertTestStudent({
   lastName,
   suffix = null,
   yearLevel,
+  dateOfBirth = null,
 }: TestStudent) {
   await pool.query(
     `INSERT INTO students (
        student_number, first_name, middle_name, last_name, suffix,
-       college_id, program_id, year_level
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+       college_id, program_id, year_level, date_of_birth
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
     [
       studentNumber,
       firstName,
@@ -41,6 +43,7 @@ export async function insertTestStudent({
       TEST_REFERENCE_IDS.college,
       TEST_REFERENCE_IDS.program,
       yearLevel,
+      dateOfBirth,
     ],
   );
 }
@@ -134,6 +137,27 @@ export async function cleanupTestFixtures(
                ) AS metadata_batch(id)
                JOIN test_fixture_batches fixture_batch ON fixture_batch.id::text=metadata_batch.id
            )`,
+    );
+    await client.query(
+      `DELETE FROM student_result_submissions
+        WHERE student_number IN (SELECT student_number FROM test_fixture_students)
+           OR appointment_id IN (SELECT id FROM test_fixture_appointments)`,
+    );
+    await client.query(
+      `DELETE FROM student_portal_notifications
+        WHERE student_number IN (SELECT student_number FROM test_fixture_students)`,
+    );
+    await client.query(
+      `DELETE FROM student_email_verifications
+        WHERE student_number IN (SELECT student_number FROM test_fixture_students)`,
+    );
+    await client.query(
+      `DELETE FROM email_outbox
+        WHERE student_number IN (SELECT student_number FROM test_fixture_students)`,
+    );
+    await client.query(
+      `DELETE FROM student_login_attempts
+        WHERE student_number IN (SELECT student_number FROM test_fixture_students)`,
     );
     await client.query(
       `DELETE FROM exam_results

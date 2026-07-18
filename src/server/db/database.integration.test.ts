@@ -6,7 +6,40 @@ afterAll(async () => {
   await pool.end();
 });
 
+async function columnExists(tableName: string, columnName: string) {
+  const result = await pool.query(
+    `SELECT 1 FROM information_schema.columns
+      WHERE table_schema='public' AND table_name=$1 AND column_name=$2`,
+    [tableName, columnName],
+  );
+  return result.rowCount === 1;
+}
+
+async function tableExists(tableName: string) {
+  const result = await pool.query(
+    `SELECT 1 FROM information_schema.tables
+      WHERE table_schema='public' AND table_name=$1`,
+    [tableName],
+  );
+  return result.rowCount === 1;
+}
+
 describe("database constraints", () => {
+  it("creates the automated scheduling and student portal foundation", async () => {
+    await expect(columnExists("students", "date_of_birth")).resolves.toBe(true);
+    await expect(columnExists("schedule_import_groups", "student_category")).resolves.toBe(true);
+    await expect(columnExists("schedule_import_groups", "accepted_at")).resolves.toBe(true);
+    await expect(columnExists("coordinator_schedule_items", "source_row_order")).resolves.toBe(true);
+    await expect(columnExists("appointments", "schedule_pair_id")).resolves.toBe(true);
+    await expect(columnExists("appointments", "schedule_cycle_start")).resolves.toBe(true);
+    await expect(tableExists("clinic_unavailable_dates")).resolves.toBe(true);
+    await expect(tableExists("appointment_reschedule_events")).resolves.toBe(true);
+    await expect(tableExists("student_result_submissions")).resolves.toBe(true);
+    await expect(tableExists("student_result_files")).resolves.toBe(true);
+    await expect(tableExists("student_portal_notifications")).resolves.toBe(true);
+    await expect(tableExists("email_outbox")).resolves.toBe(true);
+  });
+
   it("creates schedule import groups with the required columns, defaults, and updated-at trigger", async () => {
     const columns = await pool.query<{
       column_name: string;
@@ -33,6 +66,10 @@ describe("database constraints", () => {
       { column_name: "created_by", data_type: "uuid", character_maximum_length: null, is_nullable: "NO", column_default: null },
       { column_name: "created_at", data_type: "timestamp with time zone", character_maximum_length: null, is_nullable: "NO", column_default: "now()" },
       { column_name: "updated_at", data_type: "timestamp with time zone", character_maximum_length: null, is_nullable: "NO", column_default: "now()" },
+      { column_name: "student_category", data_type: "character varying", character_maximum_length: 30, is_nullable: "YES", column_default: null },
+      { column_name: "academic_year_start", data_type: "integer", character_maximum_length: null, is_nullable: "YES", column_default: null },
+      { column_name: "preferred_month", data_type: "integer", character_maximum_length: null, is_nullable: "YES", column_default: null },
+      { column_name: "accepted_at", data_type: "timestamp with time zone", character_maximum_length: null, is_nullable: "NO", column_default: "clock_timestamp()" },
     ]);
 
     const created = await pool.query<{
@@ -41,11 +78,12 @@ describe("database constraints", () => {
       matched_student_count: number;
       created_at: Date;
       updated_at: Date;
+      accepted_at: Date;
     }>(
       `INSERT INTO schedule_import_groups (
          import_name, source_filename, total_rows, created_by, created_at, updated_at
        ) VALUES ($1,$2,2,$3,NOW() - INTERVAL '1 day',NOW() - INTERVAL '1 day')
-       RETURNING id, created_student_count, matched_student_count, created_at, updated_at`,
+       RETURNING id, created_student_count, matched_student_count, created_at, updated_at, accepted_at`,
       ["TEST database import group", "test-schedule.csv", "00000000-0000-4000-8000-000000000001"],
     );
     const group = created.rows[0];
@@ -58,6 +96,9 @@ describe("database constraints", () => {
         [group.id],
       );
       expect(updated.rows[0].updated_at.getTime()).toBeGreaterThan(group.updated_at.getTime());
+      await expect(
+        pool.query("UPDATE schedule_import_groups SET accepted_at=NOW() WHERE id=$1", [group.id]),
+      ).rejects.toMatchObject({ code: "23514" });
     } finally {
       await pool.query("DELETE FROM schedule_import_groups WHERE id=$1", [group.id]);
     }
