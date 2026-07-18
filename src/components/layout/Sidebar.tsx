@@ -20,6 +20,7 @@ const adminLinks = [
   ["Reference data", "/settings/reference-data"],
   ["Capacity", "/settings/capacity"],
   ["Clinic calendar", "/settings/clinic-unavailable-dates"],
+  ["Student result submissions", "/settings/student-result-submissions"],
 ] as const;
 
 export function Sidebar({ user }: { user: SessionUser }) {

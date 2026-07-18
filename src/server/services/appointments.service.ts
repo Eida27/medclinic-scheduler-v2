@@ -12,6 +12,7 @@ import {
   type AppointmentMutationContext, type AppointmentStatus,
 } from "@/server/repositories/appointments.repository";
 import { getScheduleBatch } from "@/server/repositories/coordinator-schedules.repository";
+import { ensurePendingUploadResult } from "@/server/repositories/student-result-submissions.repository";
 import type { SessionUser } from "@/types/roles";
 
 const transitions: Record<AppointmentStatus, AppointmentStatus[]> = {
@@ -90,6 +91,7 @@ export async function completeAppointmentWithClient(
     reason?.trim() || null,
     actor.userId,
   );
+  await ensurePendingUploadResult(client, appointment);
   return appointment;
 }
 

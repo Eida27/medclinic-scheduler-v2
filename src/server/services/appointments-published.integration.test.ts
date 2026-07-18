@@ -9,16 +9,11 @@ import {
 import { studentHistory } from "@/server/repositories/students.repository";
 import {
   cleanupTestFixtures,
+  insertTestStudent,
   TEST_REFERENCE_IDS,
 } from "@/test/integration-fixtures";
 import type { SessionUser } from "@/types/roles";
-import { updateAppointment } from "./appointments.service";
-import {
-  generateScheduleImport,
-  importStudentScheduleCsv,
-  publishScheduleImport,
-  validateScheduleImport,
-} from "./schedule-imports.service";
+import { publishScheduleBatch, updateAppointment } from "./appointments.service";
 
 const admin = {
   userId: TEST_REFERENCE_IDS.adminUser,
@@ -34,16 +29,6 @@ const studentNumber = "TEST-PUB-0001";
 const studentPattern = "TEST-PUB-%";
 const batchPattern = "TEST published guards%";
 const importPattern = "TEST published guards%";
-const header = [
-  "Student ID",
-  "Name",
-  "College",
-  "Course",
-  "Year",
-  "Laboratory Schedule",
-  "Physical Examination Schedule",
-].join(",");
-
 async function cleanup() {
   await cleanupTestFixtures(studentPattern, batchPattern, importPattern);
 }
@@ -56,26 +41,35 @@ afterAll(async () => {
 });
 
 describe("published-only appointment access", () => {
-  it("hides grouped drafts everywhere normal, then exposes and operates them after publication", async () => {
-    const contents = [
-      header,
-      `${studentNumber},"Santos, Ada Lynne",College of Computer Studies,BSIT,3,02-08-2027,02-09-2027`,
-    ].join("\n");
-    const created = await importStudentScheduleCsv({
-      fileName: "published-guards.csv",
-      fileSize: Buffer.byteLength(contents),
-      contents,
-      importName: "TEST published guards grouped",
-      priorityGroupId: TEST_REFERENCE_IDS.regularPriority,
-      submittedByName: "Published guards test",
-      description: "Disposable grouped appointment visibility fixture",
-    }, admin);
-    await pool.query(
-      "UPDATE students SET suffix='Jr.' WHERE student_number=$1",
-      [studentNumber],
+  it("hides historical drafts everywhere normal, then exposes and operates them after publication", async () => {
+    await insertTestStudent({
+      studentNumber,
+      firstName: "Ada Lynne",
+      lastName: "Santos",
+      suffix: "Jr.",
+      yearLevel: 3,
+    });
+    const batch = await pool.query<{ id: string }>(
+      `INSERT INTO schedule_batches (clinic_id, batch_name, status, created_by)
+       VALUES ($1,'TEST published guards historical generated','GENERATED',$2)
+       RETURNING id`,
+      [TEST_REFERENCE_IDS.laboratoryClinic, admin.userId],
     );
-    await validateScheduleImport(created.importId, admin);
-    await generateScheduleImport(created.importId, admin);
+    await pool.query(
+      `INSERT INTO appointments (
+         batch_id, clinic_id, student_number, schedule_type, appointment_date,
+         status, is_published, created_by
+       ) VALUES
+         ($1,$2,$4,'LABORATORY','2027-02-08','DRAFT',FALSE,$5),
+         ($1,$3,$4,'PHYSICAL_EXAM','2027-02-09','DRAFT',FALSE,$5)`,
+      [
+        batch.rows[0].id,
+        TEST_REFERENCE_IDS.laboratoryClinic,
+        TEST_REFERENCE_IDS.physicalExamClinic,
+        studentNumber,
+        admin.userId,
+      ],
+    );
 
     const generated = await pool.query<{
       id: string;
@@ -87,7 +81,7 @@ describe("published-only appointment access", () => {
          FROM appointments
         WHERE batch_id = ANY($1::uuid[])
         ORDER BY schedule_type`,
-      [created.batchIds],
+      [[batch.rows[0].id]],
     );
     expect(generated.rows).toHaveLength(2);
     expect(generated.rows.every((row) => row.status === "DRAFT" && !row.is_published)).toBe(true);
@@ -135,7 +129,7 @@ describe("published-only appointment access", () => {
       compliance: { laboratory: "PENDING" },
     });
 
-    await publishScheduleImport(created.importId, admin);
+    await publishScheduleBatch(batch.rows[0].id, admin.userId);
 
     const byCanonicalName = await listAppointments({
       studentNumber: "Ada Lynne Santos Jr.",

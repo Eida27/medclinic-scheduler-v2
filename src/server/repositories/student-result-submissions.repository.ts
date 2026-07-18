@@ -35,6 +35,19 @@ type DraftRow = {
   lastActivityAt: Date;
 };
 
+export async function ensurePendingUploadResult(
+  client: PoolClient,
+  appointment: { id: string; studentNumber: string; scheduleType: string },
+) {
+  const table = appointment.scheduleType === "LABORATORY" ? "laboratory_results" : "exam_results";
+  await client.query(
+    `INSERT INTO ${table} (student_number, appointment_id, result_status, encoded_by)
+     VALUES ($1,$2,'PENDING_UPLOAD',NULL)
+     ON CONFLICT (appointment_id) DO NOTHING`,
+    [appointment.studentNumber, appointment.id],
+  );
+}
+
 export async function lockOrCreateStudentResultDraft(
   client: PoolClient,
   studentNumber: string,
@@ -53,6 +66,22 @@ export async function lockOrCreateStudentResultDraft(
   );
   if (!appointment.rowCount) return { type: "not_found" as const };
   if (appointment.rows[0].status !== "COMPLETED") return { type: "unavailable" as const };
+  const finalized = await client.query(
+    `SELECT id FROM student_result_submissions
+      WHERE appointment_id=$1 AND status='FINALIZED' FOR UPDATE`,
+    [appointmentId],
+  );
+  if (finalized.rowCount) return { type: "finalized" as const };
+  const resultTable = appointment.rows[0].scheduleType === "LABORATORY"
+    ? "laboratory_results"
+    : "exam_results";
+  const resultStatus = await client.query<{ resultStatus: string }>(
+    `SELECT result_status AS "resultStatus" FROM ${resultTable} WHERE appointment_id=$1`,
+    [appointmentId],
+  );
+  if (resultStatus.rowCount && resultStatus.rows[0].resultStatus !== "PENDING_UPLOAD") {
+    return { type: "unavailable" as const };
+  }
   const existing = await client.query<DraftRow>(
     `SELECT id, appointment_id AS "appointmentId", student_number AS "studentNumber",
             result_type AS "resultType", status, last_activity_at AS "lastActivityAt"
@@ -215,4 +244,244 @@ export async function deleteStudentResultFileRow(
     "UPDATE student_result_submissions SET last_activity_at=NOW() WHERE id=$1",
     [submissionId],
   );
+}
+
+export async function lockOwnedDraftForFinalization(
+  client: PoolClient,
+  studentNumber: string,
+  appointmentId: string,
+) {
+  const result = await client.query<{
+    id: string;
+    appointmentId: string;
+    studentNumber: string;
+    resultType: "LABORATORY" | "PHYSICAL_EXAM";
+  }>(
+    `SELECT submission.id, submission.appointment_id AS "appointmentId",
+            submission.student_number AS "studentNumber", submission.result_type AS "resultType"
+       FROM student_result_submissions submission
+       JOIN appointments appointment ON appointment.id=submission.appointment_id
+      WHERE submission.appointment_id=$1 AND submission.student_number=$2
+        AND submission.status='DRAFT' AND appointment.status='COMPLETED'
+        AND appointment.is_published=TRUE
+      FOR UPDATE OF submission, appointment`,
+    [appointmentId, studentNumber],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function finalizeStudentResultDraft(
+  client: PoolClient,
+  submission: { id: string; appointmentId: string; studentNumber: string; resultType: string },
+  fileCount: number,
+  totalBytes: number,
+) {
+  await client.query(
+    `UPDATE student_result_submissions
+        SET status='FINALIZED', finalized_at=NOW(), last_activity_at=NOW()
+      WHERE id=$1 AND status='DRAFT'`,
+    [submission.id],
+  );
+  const resultTable = submission.resultType === "LABORATORY" ? "laboratory_results" : "exam_results";
+  const changed = await client.query(
+    `INSERT INTO ${resultTable} (
+       student_number, appointment_id, result_status, completed_at, encoded_by
+     ) VALUES ($1,$2,'COMPLETED',(NOW() AT TIME ZONE 'Asia/Manila')::date,NULL)
+     ON CONFLICT (appointment_id) DO UPDATE
+       SET result_status='COMPLETED',
+           completed_at=(NOW() AT TIME ZONE 'Asia/Manila')::date,
+           encoded_by=NULL
+       WHERE ${resultTable}.result_status='PENDING_UPLOAD'
+     RETURNING id`,
+    [submission.studentNumber, submission.appointmentId],
+  );
+  if (!changed.rowCount) throw new Error("Result status is no longer available for student finalization.");
+  await client.query(
+    `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
+     VALUES (NULL,'STUDENT_RESULT_SUBMISSION_FINALIZED','student_result_submission',$1,
+             jsonb_build_object('appointmentId',$2::text,'fileCount',$3::int,'totalBytes',$4::bigint))`,
+    [submission.id, submission.appointmentId, fileCount, totalBytes],
+  );
+}
+
+export async function getAccessibleStudentResultFileRow(
+  fileId: string,
+  studentNumber?: string,
+  submissionId?: string,
+) {
+  const values: unknown[] = [fileId];
+  const ownerClause = studentNumber ? `AND submission.student_number=$${values.push(studentNumber)}` : "";
+  const submissionClause = submissionId ? `AND submission.id=$${values.push(submissionId)}::uuid` : "";
+  const result = await query<{
+    id: string;
+    submissionId: string;
+    storageKey: string;
+    originalFilename: string;
+    detectedMimeType: string;
+    byteSize: string;
+    checksumSha256: string;
+  }>(
+    `SELECT file.id, file.submission_id AS "submissionId", file.storage_key AS "storageKey",
+            file.original_filename AS "originalFilename",
+            file.detected_mime_type AS "detectedMimeType", file.byte_size::text AS "byteSize",
+            file.checksum_sha256 AS "checksumSha256"
+       FROM student_result_files file
+       JOIN student_result_submissions submission ON submission.id=file.submission_id
+      WHERE file.id=$1 AND submission.status='FINALIZED'
+        AND file.deleted_at IS NULL AND file.storage_delete_pending=FALSE
+        ${ownerClause} ${submissionClause}`,
+    values,
+  );
+  const row = result.rows[0];
+  return row ? { ...row, byteSize: Number(row.byteSize) } : null;
+}
+
+export async function getFinalizedSubmissionFileRows(submissionId: string) {
+  const result = await query<{
+    id: string;
+    storageKey: string;
+    originalFilename: string;
+    detectedMimeType: string;
+    byteSize: string;
+    checksumSha256: string;
+  }>(
+    `SELECT file.id, file.storage_key AS "storageKey",
+            file.original_filename AS "originalFilename",
+            file.detected_mime_type AS "detectedMimeType", file.byte_size::text AS "byteSize",
+            file.checksum_sha256 AS "checksumSha256"
+       FROM student_result_files file
+       JOIN student_result_submissions submission ON submission.id=file.submission_id
+      WHERE submission.id=$1 AND submission.status='FINALIZED'
+        AND file.deleted_at IS NULL AND file.storage_delete_pending=FALSE
+      ORDER BY file.uploaded_at, file.id`,
+    [submissionId],
+  );
+  return result.rows.map((row) => ({ ...row, byteSize: Number(row.byteSize) }));
+}
+
+export async function listAdminStudentResultSubmissionRows() {
+  const result = await query<{
+    id: string;
+    appointmentId: string;
+    studentNumber: string;
+    resultType: string;
+    status: string;
+    finalizedAt: Date | null;
+    fileCount: number;
+    totalBytes: string;
+  }>(
+    `SELECT submission.id, submission.appointment_id AS "appointmentId",
+            submission.student_number AS "studentNumber", submission.result_type AS "resultType",
+            submission.status, submission.finalized_at AS "finalizedAt",
+            COUNT(file.id)::int AS "fileCount", COALESCE(SUM(file.byte_size),0)::text AS "totalBytes"
+       FROM student_result_submissions submission
+       LEFT JOIN student_result_files file ON file.submission_id=submission.id AND file.deleted_at IS NULL
+      WHERE submission.status IN ('FINALIZED','INVALIDATED')
+      GROUP BY submission.id
+      ORDER BY submission.finalized_at DESC, submission.id DESC`,
+  );
+  return result.rows.map((row) => ({ ...row, totalBytes: Number(row.totalBytes) }));
+}
+
+export async function getAdminStudentResultSubmissionRow(submissionId: string) {
+  const result = await query<{
+    id: string;
+    appointmentId: string;
+    studentNumber: string;
+    resultType: string;
+    status: string;
+    finalizedAt: Date | null;
+    invalidatedAt: Date | null;
+    invalidationReason: string | null;
+  }>(
+    `SELECT id, appointment_id AS "appointmentId", student_number AS "studentNumber",
+            result_type AS "resultType", status, finalized_at AS "finalizedAt",
+            invalidated_at AS "invalidatedAt", invalidation_reason AS "invalidationReason"
+       FROM student_result_submissions WHERE id=$1`,
+    [submissionId],
+  );
+  if (!result.rowCount) return null;
+  const files = result.rows[0].status === "FINALIZED"
+    ? await getFinalizedSubmissionFileRows(submissionId)
+    : [];
+  return {
+    ...result.rows[0],
+    files: files.map((file) => ({
+      id: file.id,
+      originalFilename: file.originalFilename,
+      detectedMimeType: file.detectedMimeType,
+      byteSize: file.byteSize,
+    })),
+  };
+}
+
+export async function lockFinalizedSubmissionForInvalidation(client: PoolClient, submissionId: string) {
+  const submission = await client.query<{
+    id: string;
+    appointmentId: string;
+    studentNumber: string;
+    resultType: "LABORATORY" | "PHYSICAL_EXAM";
+  }>(
+    `SELECT id, appointment_id AS "appointmentId", student_number AS "studentNumber",
+            result_type AS "resultType"
+       FROM student_result_submissions
+      WHERE id=$1 AND status='FINALIZED'
+      FOR UPDATE`,
+    [submissionId],
+  );
+  if (!submission.rowCount) return null;
+  const files = await client.query<{ id: string; storageKey: string }>(
+    `SELECT id, storage_key AS "storageKey"
+       FROM student_result_files WHERE submission_id=$1 AND deleted_at IS NULL FOR UPDATE`,
+    [submissionId],
+  );
+  return { ...submission.rows[0], files: files.rows };
+}
+
+export async function invalidateFinalizedSubmissionMetadata(
+  client: PoolClient,
+  submission: { id: string; appointmentId: string; resultType: string },
+  actorUserId: string,
+  reason: string,
+) {
+  await client.query(
+    `UPDATE student_result_submissions
+        SET status='INVALIDATED', invalidated_at=NOW(), invalidated_by=$2,
+            invalidation_reason=$3
+      WHERE id=$1 AND status='FINALIZED'`,
+    [submission.id, actorUserId, reason],
+  );
+  await client.query(
+    `UPDATE student_result_files SET storage_delete_pending=TRUE
+      WHERE submission_id=$1 AND deleted_at IS NULL`,
+    [submission.id],
+  );
+  const resultTable = submission.resultType === "LABORATORY" ? "laboratory_results" : "exam_results";
+  await client.query(
+    `UPDATE ${resultTable}
+        SET result_status='PENDING_UPLOAD', completed_at=NULL, encoded_by=NULL
+      WHERE appointment_id=$1`,
+    [submission.appointmentId],
+  );
+}
+
+export async function recordResultFileDeletion(
+  fileId: string,
+  outcome: { success: true } | { success: false; error: string },
+) {
+  if (outcome.success) {
+    await query(
+      `UPDATE student_result_files
+          SET deleted_at=NOW(), storage_delete_pending=FALSE, delete_error=NULL
+        WHERE id=$1`,
+      [fileId],
+    );
+  } else {
+    await query(
+      `UPDATE student_result_files
+          SET storage_delete_pending=TRUE, delete_error=$2
+        WHERE id=$1`,
+      [fileId, outcome.error.slice(0, 2000)],
+    );
+  }
 }

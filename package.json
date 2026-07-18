@@ -15,6 +15,7 @@
     "db:reset": "tsx --env-file=.env.local scripts/db-reset.ts"
   },
   "dependencies": {
+    "archiver": "^8.0.0",
     "bcryptjs": "^3.0.3",
     "clsx": "^2.1.1",
     "csv-parse": "^7.0.0",
@@ -32,6 +33,7 @@
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
+    "@types/archiver": "^8.0.0",
     "@types/node": "^20",
     "@types/nodemailer": "^8.0.1",
     "@types/pg": "^8.20.0",

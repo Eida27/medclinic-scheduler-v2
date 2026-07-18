@@ -6,15 +6,42 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { pool } from "@/server/db/pool";
 import { LocalResultStorage } from "@/server/storage/local-result-storage";
 import { cleanupTestFixtures, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
+import type { SessionUser } from "@/types/roles";
+import { updateAppointment } from "./appointments.service";
 import {
   addStudentResultFile,
+  createAdminSubmissionZip,
+  finalizeStudentResultSubmission,
+  getAdminStudentResultFile,
+  getStudentResultFile,
   getStudentResultSubmission,
+  invalidateStudentResultSubmission,
   removeStudentResultFile,
 } from "./student-result-submissions.service";
 
 const studentPattern = "99-94%";
 let storageRoot = "";
 let storage: LocalResultStorage;
+
+const admin: SessionUser = {
+  userId: TEST_REFERENCE_IDS.adminUser,
+  fullName: "System Admin",
+  email: "admin@medclinic.local",
+  role: "ADMIN",
+};
+const clinicStaff: SessionUser = {
+  userId: TEST_REFERENCE_IDS.clinicStaffUser,
+  fullName: "Clinic Staff",
+  email: "staff@medclinic.local",
+  role: "CLINIC_STAFF",
+  clinicId: TEST_REFERENCE_IDS.laboratoryClinic,
+};
+const coordinator: SessionUser = {
+  userId: "00000000-0000-4000-8000-000000000003",
+  fullName: "Schedule Coordinator",
+  email: "coordinator@medclinic.local",
+  role: "COORDINATOR",
+};
 
 async function cleanup() {
   await cleanupTestFixtures(studentPattern, "TEST-RESULT-DRAFT%", "TEST-RESULT-DRAFT%");
@@ -99,4 +126,143 @@ describe("student result drafts", () => {
       .rejects.toMatchObject({ code: "RESULT_TOTAL_SIZE_LIMIT", status: 422 });
     expect((await getStudentResultSubmission("99-9405-05", totalAppointmentId)).fileCount).toBe(2);
   }, 30000);
+
+  it("creates a pending upload result on completion without overwriting a manually recorded status", async () => {
+    await insertTestStudent({ studentNumber: "99-9406-06", firstName: "Complete", lastName: "Student", yearLevel: 3 });
+    const appointmentId = await appointment("99-9406-06", "PENDING");
+    await updateAppointment(appointmentId, { status: "COMPLETED" }, clinicStaff);
+    const pendingResult = await pool.query(
+      `SELECT result_status, encoded_by FROM laboratory_results WHERE appointment_id=$1`,
+      [appointmentId],
+    );
+    expect(pendingResult.rows).toEqual([{ result_status: "PENDING_UPLOAD", encoded_by: null }]);
+
+    await insertTestStudent({ studentNumber: "99-9407-07", firstName: "Manual", lastName: "Student", yearLevel: 3 });
+    const manualAppointmentId = await appointment("99-9407-07", "PENDING");
+    await pool.query(
+      `INSERT INTO laboratory_results (student_number, appointment_id, result_status, remarks, encoded_by)
+       VALUES ('99-9407-07',$1,'REQUIRES_FOLLOW_UP','Recorded by clinic',$2)`,
+      [manualAppointmentId, TEST_REFERENCE_IDS.clinicStaffUser],
+    );
+    await updateAppointment(manualAppointmentId, { status: "COMPLETED" }, clinicStaff);
+    const manualResult = await pool.query(
+      `SELECT result_status, remarks, encoded_by::text FROM laboratory_results WHERE appointment_id=$1`,
+      [manualAppointmentId],
+    );
+    expect(manualResult.rows).toEqual([{
+      result_status: "REQUIRES_FOLLOW_UP",
+      remarks: "Recorded by clinic",
+      encoded_by: TEST_REFERENCE_IDS.clinicStaffUser,
+    }]);
+  });
+
+  it("finalizes atomically, completes the matching result, and locks student mutation", async () => {
+    await insertTestStudent({ studentNumber: "99-9408-08", firstName: "Finalize", lastName: "Student", yearLevel: 3 });
+    const appointmentId = await appointment("99-9408-08");
+    const first = await addStudentResultFile("99-9408-08", appointmentId, file("lab.pdf"), storage);
+    await addStudentResultFile("99-9408-08", appointmentId, file("lab-copy.pdf", "%PDF-1.7\nsecond"), storage);
+    const finalized = await finalizeStudentResultSubmission("99-9408-08", appointmentId);
+    expect(finalized).toMatchObject({ status: "FINALIZED", fileCount: 2 });
+    const result = await pool.query(
+      `SELECT result_status, completed_at::text, encoded_by FROM laboratory_results WHERE appointment_id=$1`,
+      [appointmentId],
+    );
+    expect(result.rows[0]).toMatchObject({ result_status: "COMPLETED", encoded_by: null });
+    expect(result.rows[0].completed_at).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    const audit = await pool.query<{ metadata: Record<string, unknown> }>(
+      `SELECT metadata FROM audit_logs
+        WHERE action='STUDENT_RESULT_SUBMISSION_FINALIZED' AND entity_id=$1`,
+      [finalized.id],
+    );
+    expect(audit.rows[0].metadata).toEqual({
+      appointmentId,
+      fileCount: 2,
+      totalBytes: first.byteSize + file("lab-copy.pdf", "%PDF-1.7\nsecond").bytes.byteLength,
+    });
+    expect(JSON.stringify(audit.rows[0].metadata)).not.toMatch(/filename|birth|content/i);
+    await expect(addStudentResultFile("99-9408-08", appointmentId, file("late.pdf"), storage))
+      .rejects.toMatchObject({ code: "RESULT_SUBMISSION_FINALIZED", status: 409 });
+    await expect(removeStudentResultFile("99-9408-08", appointmentId, first.id, storage))
+      .rejects.toMatchObject({ code: "RESULT_FILE_NOT_FOUND", status: 404 });
+  });
+
+  it("enforces student ownership and admin-only individual/ZIP access", async () => {
+    for (const studentNumber of ["99-9409-09", "99-9410-10"]) {
+      await insertTestStudent({ studentNumber, firstName: "Download", lastName: "Student", yearLevel: 3 });
+    }
+    const appointmentId = await appointment("99-9409-09");
+    const added = await addStudentResultFile("99-9409-09", appointmentId, file("shared-name.pdf"), storage);
+    const finalized = await finalizeStudentResultSubmission("99-9409-09", appointmentId);
+    await expect(getStudentResultFile("99-9409-09", added.id, storage))
+      .resolves.toMatchObject({ filename: "shared-name.pdf", bytes: file().bytes });
+    await expect(getStudentResultFile("99-9410-10", added.id, storage))
+      .rejects.toMatchObject({ code: "RESULT_FILE_NOT_FOUND", status: 404 });
+    await expect(getAdminStudentResultFile(added.id, coordinator, storage))
+      .rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+    await expect(getAdminStudentResultFile(added.id, clinicStaff, storage))
+      .rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+    await expect(getAdminStudentResultFile(added.id, admin, storage))
+      .resolves.toMatchObject({ filename: "shared-name.pdf", bytes: file().bytes });
+    const zip = await createAdminSubmissionZip(finalized.id, admin, storage);
+    expect(zip.subarray(0, 2).toString("ascii")).toBe("PK");
+    expect(zip.toString("latin1")).toContain("01-shared-name.pdf");
+  });
+
+  it("invalidates metadata first, resets the result, notifies, and opens a replacement draft", async () => {
+    await insertTestStudent({ studentNumber: "99-9411-11", firstName: "Replace", lastName: "Student", yearLevel: 3 });
+    const appointmentId = await appointment("99-9411-11");
+    const added = await addStudentResultFile("99-9411-11", appointmentId, file("invalid.pdf"), storage);
+    const finalized = await finalizeStudentResultSubmission("99-9411-11", appointmentId);
+    await expect(invalidateStudentResultSubmission(finalized.id, " ", admin, storage)).rejects.toThrow();
+    await expect(invalidateStudentResultSubmission(finalized.id, "Wrong student document", coordinator, storage))
+      .rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+    await invalidateStudentResultSubmission(finalized.id, "Wrong student document", admin, storage);
+    await expect(getStudentResultFile("99-9411-11", added.id, storage))
+      .rejects.toMatchObject({ code: "RESULT_FILE_NOT_FOUND", status: 404 });
+    const state = await pool.query(
+      `SELECT submission.status, result.result_status, appointment.status AS appointment_status,
+              file.deleted_at IS NOT NULL AS deleted, notification.notification_type
+         FROM student_result_submissions submission
+         JOIN appointments appointment ON appointment.id=submission.appointment_id
+         JOIN laboratory_results result ON result.appointment_id=appointment.id
+         JOIN student_result_files file ON file.submission_id=submission.id
+         JOIN student_portal_notifications notification ON notification.student_number=submission.student_number
+        WHERE submission.id=$1`,
+      [finalized.id],
+    );
+    expect(state.rows).toEqual([{
+      status: "INVALIDATED",
+      result_status: "PENDING_UPLOAD",
+      appointment_status: "COMPLETED",
+      deleted: true,
+      notification_type: "RESULT_INVALIDATED",
+    }]);
+    const replacement = await getStudentResultSubmission("99-9411-11", appointmentId);
+    expect(replacement).toMatchObject({ status: "DRAFT", fileCount: 0 });
+    await expect(addStudentResultFile("99-9411-11", appointmentId, file("replacement.pdf"), storage))
+      .resolves.toMatchObject({ submissionId: replacement.id });
+  });
+
+  it("marks physical deletion for retry without reopening invalidated metadata", async () => {
+    await insertTestStudent({ studentNumber: "99-9412-12", firstName: "Retry", lastName: "Student", yearLevel: 3 });
+    const appointmentId = await appointment("99-9412-12");
+    await addStudentResultFile("99-9412-12", appointmentId, file("retry.pdf"), storage);
+    const finalized = await finalizeStudentResultSubmission("99-9412-12", appointmentId);
+    const failingStorage = {
+      write: storage.write.bind(storage),
+      read: storage.read.bind(storage),
+      delete: async () => { throw new Error("synthetic delete failure"); },
+    };
+    await invalidateStudentResultSubmission(finalized.id, "Unreadable result", admin, failingStorage);
+    const fileState = await pool.query(
+      `SELECT storage_delete_pending, deleted_at, delete_error
+         FROM student_result_files WHERE submission_id=$1`,
+      [finalized.id],
+    );
+    expect(fileState.rows).toEqual([{
+      storage_delete_pending: true,
+      deleted_at: null,
+      delete_error: "synthetic delete failure",
+    }]);
+  });
 });

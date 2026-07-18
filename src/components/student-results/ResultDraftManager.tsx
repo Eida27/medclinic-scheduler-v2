@@ -45,11 +45,11 @@ export function ResultDraftManager({ draft }: { draft: Draft }) {
     <div className="grid gap-5">
       <Card className="p-5">
         <p className="font-bold">{draft.resultType === "LABORATORY" ? "Laboratory" : "Physical Examination"} draft</p>
-        <p className="mt-1 text-sm text-muted">{draft.fileCount}/10 files · {formatBytes(draft.totalBytes)}/50 MB</p>
-        <p className="mt-2 text-xs text-muted">Inactive drafts expire after seven days. Add or remove a file to keep this draft active.</p>
+        <p className="mt-1 text-sm text-muted">{draft.fileCount}/10 files · {formatBytes(draft.totalBytes)}/50 MB · {draft.status}</p>
+        {draft.status === "DRAFT" ? <p className="mt-2 text-xs text-muted">Inactive drafts expire after seven days. Add or remove a file to keep this draft active.</p> : null}
       </Card>
       {error ? <Alert tone="danger">{error}</Alert> : null}
-      <form onSubmit={upload} className="flex flex-wrap items-end gap-3">
+      {draft.status === "DRAFT" ? <form onSubmit={upload} className="flex flex-wrap items-end gap-3">
         <Input
           aria-label="Result file"
           name="file"
@@ -58,7 +58,7 @@ export function ResultDraftManager({ draft }: { draft: Draft }) {
           required
         />
         <Button type="submit" disabled={pending}>{pending ? "Uploading..." : "Add file"}</Button>
-      </form>
+      </form> : <Alert tone="success">Finalized files are locked. You can download your own documents below.</Alert>}
       <div className="grid gap-3">
         {draft.files.map((file) => (
           <Card key={file.id} className="flex flex-wrap items-center justify-between gap-4 p-4">
@@ -66,7 +66,7 @@ export function ResultDraftManager({ draft }: { draft: Draft }) {
               <p className="font-semibold">{file.originalFilename}</p>
               <p className="text-xs text-muted">{formatBytes(file.byteSize)}</p>
             </div>
-            <Button
+            {draft.status === "DRAFT" ? <Button
               variant="secondary"
               onClick={async () => {
                 const response = await fetch(
@@ -80,10 +80,32 @@ export function ResultDraftManager({ draft }: { draft: Draft }) {
               }}
             >
               Remove
-            </Button>
+            </Button> : <a
+              href={`/api/student/result-files/${file.id}`}
+              className="inline-flex h-11 items-center rounded-xl border border-line px-4 text-sm font-semibold"
+            >Download</a>}
           </Card>
         ))}
       </div>
+      {draft.status === "DRAFT" && draft.fileCount ? (
+        <Button
+          variant="accent"
+          disabled={pending}
+          onClick={async () => {
+            if (!window.confirm("Final submission locks this draft. Continue?")) return;
+            setPending(true);
+            const response = await fetch(`/api/student/result-submissions/${draft.appointmentId}/finalize`, {
+              method: "POST",
+            });
+            const payload = await response.json();
+            setPending(false);
+            if (!response.ok) setError(payload.error?.message ?? "Unable to finalize this submission.");
+            else router.refresh();
+          }}
+        >
+          Final submit
+        </Button>
+      ) : null}
     </div>
   );
 }
