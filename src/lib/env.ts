@@ -10,6 +10,7 @@ const serverEnvSchema = z.object({
   SMTP_USER: z.string().min(1).optional(),
   SMTP_PASS: z.string().min(1).optional(),
   SMTP_FROM: z.string().email().optional(),
+  RESULT_UPLOAD_ROOT: z.string().min(1).default(".data/private-result-uploads"),
 });
 
 export function serverEnv() {
@@ -23,5 +24,6 @@ export function serverEnv() {
     SMTP_USER: process.env.SMTP_USER || undefined,
     SMTP_PASS: process.env.SMTP_PASS || undefined,
     SMTP_FROM: process.env.SMTP_FROM || undefined,
+    RESULT_UPLOAD_ROOT: process.env.RESULT_UPLOAD_ROOT || undefined,
   });
 }
