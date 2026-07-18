@@ -142,16 +142,12 @@ async function lockAppointments(
 
 async function lockPairAppointments(client: PoolClient, pairIds: string[]) {
   if (!pairIds.length) return [];
-  const first = pairIds[0];
-  const last = pairIds.at(-1)!;
-  return lockAppointmentsByPair(client, pairIds, first, last);
+  return lockAppointmentsByPair(client, pairIds);
 }
 
 async function lockAppointmentsByPair(
   client: PoolClient,
   pairIds: string[],
-  _first: string,
-  _last: string,
 ) {
   const result = await client.query<{
     id: string;

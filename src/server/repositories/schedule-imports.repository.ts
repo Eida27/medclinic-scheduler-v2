@@ -77,6 +77,14 @@ export type ScheduleImportListItem = {
   status: ScheduleImportStatus;
   createdAt: string;
   updatedAt: string;
+  studentCategory: CreateScheduleImportInput["studentCategory"] | null;
+  academicYearStart: number | null;
+  preferredMonth: number | null;
+  acceptedAt: string;
+  skippedStudentCount: number;
+  generatedRange: { startDate: string; endDate: string } | null;
+  overflow: { pairCountBeyondPreferredWindow: number; unscheduledStudentCount: number };
+  displacementTotal: number;
 };
 
 type StoredImportChildBatch = NonNullable<Awaited<ReturnType<typeof getScheduleBatch>>>;
@@ -676,6 +684,11 @@ type ScheduleImportSummaryRow = {
   child_statuses: string[];
   created_at: Date;
   updated_at: Date;
+  student_category: CreateScheduleImportInput["studentCategory"] | null;
+  academic_year_start: number | null;
+  preferred_month: number | null;
+  accepted_at: Date;
+  published_metadata: Record<string, unknown> | null;
 };
 
 async function loadScheduleImportGroups(importId?: string) {
@@ -690,6 +703,11 @@ async function loadScheduleImportGroups(importId?: string) {
             import_group.matched_student_count,
             import_group.submitted_by_name,
             import_group.description,
+            import_group.student_category,
+            import_group.academic_year_start,
+            import_group.preferred_month,
+            import_group.accepted_at,
+            published_audit.metadata AS published_metadata,
             creator.full_name AS created_by_name,
             COUNT(item.id) FILTER (WHERE item.schedule_type='LABORATORY')::int
               AS laboratory_item_count,
@@ -705,8 +723,17 @@ async function loadScheduleImportGroups(importId?: string) {
        JOIN users creator ON creator.id=import_group.created_by
        LEFT JOIN schedule_batches batch ON batch.import_group_id=import_group.id
        LEFT JOIN coordinator_schedule_items item ON item.batch_id=batch.id
+       LEFT JOIN LATERAL (
+         SELECT audit.metadata
+           FROM audit_logs audit
+          WHERE audit.entity_type='schedule_import_group'
+            AND audit.entity_id=import_group.id::text
+            AND audit.action='SCHEDULE_IMPORT_PUBLISHED'
+          ORDER BY audit.created_at DESC, audit.id DESC
+          LIMIT 1
+       ) published_audit ON TRUE
        ${where}
-       GROUP BY import_group.id, creator.full_name
+       GROUP BY import_group.id, creator.full_name, published_audit.metadata
        ORDER BY import_group.created_at DESC`,
     values,
   );
@@ -725,6 +752,17 @@ async function loadScheduleImportGroups(importId?: string) {
     status: deriveScheduleImportStatus(row.child_statuses),
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
+    studentCategory: row.student_category,
+    academicYearStart: row.academic_year_start,
+    preferredMonth: row.preferred_month,
+    acceptedAt: row.accepted_at.toISOString(),
+    skippedStudentCount: Number(row.published_metadata?.skippedStudentCount ?? 0),
+    generatedRange: (row.published_metadata?.generatedRange as ScheduleImportListItem["generatedRange"] | undefined) ?? null,
+    overflow: {
+      pairCountBeyondPreferredWindow: Number(row.published_metadata?.pairCountBeyondPreferredWindow ?? 0),
+      unscheduledStudentCount: 0,
+    },
+    displacementTotal: Number(row.published_metadata?.displacementTotal ?? 0),
   }));
 }
 

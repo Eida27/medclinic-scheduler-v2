@@ -5,44 +5,14 @@ import { ScheduleImportForm } from "./ScheduleImportForm";
 
 const push = vi.fn();
 const refresh = vi.fn();
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push, refresh }) }));
 
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push, refresh }),
-}));
+const headers = "Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth";
 
-const priorities = [
-  {
-    id: "30000000-0000-4000-8000-000000000004",
-    name: "Regular",
-    rankOrder: 4,
-    isActive: true,
-  },
-  {
-    id: "30000000-0000-4000-8000-000000000099",
-    name: "Retired",
-    rankOrder: 99,
-    isActive: false,
-  },
-];
-
-const headers = "Student ID,Name,College,Course,Year,Laboratory Schedule,Physical Examination Schedule";
-
-function csvFile(name = "July schedules.csv") {
-  return new File([[
-    headers,
-    '00-0000-00,"Sample, Student",College of Computer Studies,BSIT,1,07-29-2026,07-30-2026',
-  ].join("\n")], name, { type: "text/csv" });
-}
-
-async function completeRequiredFields(user: ReturnType<typeof userEvent.setup>, name = "July schedules.csv") {
-  await user.upload(screen.getByLabelText("CSV file"), csvFile(name));
-  await user.selectOptions(screen.getByLabelText("Priority group"), priorities[0].id);
-}
-
-async function reviewImport(user: ReturnType<typeof userEvent.setup>, name = "July schedules.csv") {
-  await completeRequiredFields(user, name);
-  fireEvent.submit(screen.getByRole("button", { name: "Review import" }).closest("form")!);
-  return screen.getByRole("dialog", { name: "Import and publish this CSV?" });
+function csvFile() {
+  return new File([
+    `${headers}\n23-1212-97,Abad,Aaron,A.,,College of Computer Studies,BSIT,3,08-04-2004`,
+  ], "students.csv", { type: "text/csv" });
 }
 
 describe("ScheduleImportForm", () => {
@@ -52,138 +22,56 @@ describe("ScheduleImportForm", () => {
     refresh.mockReset();
   });
 
-  it("shows only the CSV and priority inputs with the existing import guidance", () => {
-    render(<ScheduleImportForm priorities={priorities} />);
-
+  it("shows the exact workbook headers, academic year controls, and seven-day notice", () => {
+    render(<ScheduleImportForm />);
     expect(screen.getByText(headers)).toBeVisible();
-    expect(screen.getByText(/UTF-8 CSV/i)).toBeVisible();
-    expect(screen.getByText("The file may be up to 1 MB and contain up to 3,000 data rows.")).toBeVisible();
-    expect(screen.getByRole("link", { name: "Download CSV template" })).toHaveAttribute(
-      "href",
-      "/templates/student-schedule-import-template.csv",
-    );
-    expect(screen.getByLabelText("CSV file")).toBeRequired();
-    expect(screen.getByLabelText("Priority group")).toBeRequired();
-    expect(screen.queryByLabelText("Import name")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Submitted by")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Description")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Student category")).toHaveValue("REGULAR");
+    expect(screen.getByLabelText("Academic year")).toBeRequired();
+    expect(screen.queryByLabelText("Preferred month")).not.toBeInTheDocument();
+    expect(screen.getByText(/seven calendar days of preparation/i)).toBeVisible();
+    expect(screen.queryByText(/schedule dates in MM-DD-YYYY/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/at least one service date/i)).not.toBeInTheDocument();
   });
 
-  it("reviews one confirmation and cancel sends no request", async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
+  it("requires and clears preferred month for priority categories", async () => {
     const user = userEvent.setup();
-    render(<ScheduleImportForm priorities={priorities} />);
-
-    const dialog = await reviewImport(user, "Clinic appointments.csv");
-    expect(dialog).toHaveTextContent("Clinic appointments.csv");
-    expect(dialog).toHaveTextContent("Regular");
-    expect(dialog).toHaveTextContent(/publish.*Laboratory.*Physical Examination/i);
-    expect(fetchMock).not.toHaveBeenCalled();
-
-    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(fetchMock).not.toHaveBeenCalled();
+    render(<ScheduleImportForm />);
+    await user.selectOptions(screen.getByLabelText("Student category"), "OJT");
+    expect(screen.getByLabelText("Preferred month")).toBeRequired();
+    await user.selectOptions(screen.getByLabelText("Preferred month"), "9");
+    await user.selectOptions(screen.getByLabelText("Student category"), "REGULAR");
+    expect(screen.queryByLabelText("Preferred month")).not.toBeInTheDocument();
   });
 
-  it("posts exactly once after agreement and opens the published import detail", async () => {
+  it("posts file, category, academic year, and conditional preferred month once confirmed", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ data: { outcome: "PUBLISHED", importId: "grouped-import-id" } }),
+      json: async () => ({ data: { outcome: "PUBLISHED", importId: "import-id" } }),
     });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
-    render(<ScheduleImportForm priorities={priorities} />);
-
-    const dialog = await reviewImport(user);
+    render(<ScheduleImportForm />);
+    await user.upload(screen.getByLabelText("CSV file"), csvFile());
+    await user.selectOptions(screen.getByLabelText("Student category"), "TOUR");
+    await user.selectOptions(screen.getByLabelText("Academic year"), "2026");
+    await user.selectOptions(screen.getByLabelText("Preferred month"), "10");
+    fireEvent.submit(screen.getByRole("button", { name: "Review import" }).closest("form")!);
+    const dialog = screen.getByRole("dialog", { name: "Import and publish this CSV?" });
+    expect(dialog).toHaveTextContent("Tour");
+    expect(dialog).toHaveTextContent("2026–2027");
     await user.click(within(dialog).getByRole("button", { name: "Agree and import" }));
 
-    await waitFor(() => expect(push).toHaveBeenCalledWith("/students/schedule-imports/grouped-import-id"));
-    expect(refresh).toHaveBeenCalledOnce();
-    expect(fetchMock).toHaveBeenCalledOnce();
-
-    const [url, request] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("/api/schedule-imports");
-    expect(request.method).toBe("POST");
-    const body = request.body as FormData;
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/students/schedule-imports/import-id"));
+    const body = fetchMock.mock.calls[0][1].body as FormData;
     expect(body.get("file")).toBeInstanceOf(File);
-    expect(body.get("priorityGroupId")).toBe(priorities[0].id);
-    expect([...body.keys()].sort()).toEqual(["file", "priorityGroupId"]);
-  });
-
-  it("preserves the selected values and validation details after a rejected file", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
-      ok: false,
-      json: async () => ({
-        error: {
-          message: "Please correct the CSV import errors.",
-          fields: {
-            "rows.2.Course": ["Course does not match an active program."],
-            file: ["CSV files may not exceed 1 MB."],
-          },
-        },
-      }),
-    }));
-    const user = userEvent.setup();
-    render(<ScheduleImportForm priorities={priorities} />);
-
-    const dialog = await reviewImport(user, "invalid.csv");
-    await user.click(within(dialog).getByRole("button", { name: "Agree and import" }));
-
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("Please correct the CSV import errors.");
-    expect(alert).toHaveTextContent("Row 2 · Course: Course does not match an active program.");
-    expect(alert).toHaveTextContent("File: CSV files may not exceed 1 MB.");
-    expect(screen.getByText("invalid.csv")).toBeVisible();
-    expect(screen.getByLabelText("Priority group")).toHaveValue(priorities[0].id);
-    expect(screen.getByRole("button", { name: "Review import" })).toBeEnabled();
-  });
-
-  it("locks the confirmation against duplicate requests while publishing", async () => {
-    let resolveFetch!: (value: unknown) => void;
-    const fetchMock = vi.fn().mockReturnValue(new Promise((resolve) => { resolveFetch = resolve; }));
-    vi.stubGlobal("fetch", fetchMock);
-    const user = userEvent.setup();
-    render(<ScheduleImportForm priorities={priorities} />);
-
-    const dialog = await reviewImport(user);
-    await user.click(within(dialog).getByRole("button", { name: "Agree and import" }));
-
-    const pendingButton = await screen.findByRole("button", { name: "Importing and publishing…" });
-    expect(pendingButton).toBeDisabled();
-    await user.click(pendingButton);
-    expect(fetchMock).toHaveBeenCalledOnce();
-
-    resolveFetch({ ok: true, json: async () => ({ data: { outcome: "PUBLISHED", importId: "pending-import" } }) });
-    await waitFor(() => expect(push).toHaveBeenCalledWith("/students/schedule-imports/pending-import"));
-  });
-
-  it("links to the saved review checkpoint instead of navigating automatically", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        data: {
-          outcome: "REVIEW_REQUIRED",
-          importId: "review-import",
-          status: "VALIDATED",
-          stage: "GENERATE",
-          issue: { code: "ADMIN_OVERRIDE_REQUIRED", message: "Capacity override requires an administrator." },
-        },
-      }),
-    }));
-    const user = userEvent.setup();
-    render(<ScheduleImportForm priorities={priorities} />);
-
-    const dialog = await reviewImport(user);
-    await user.click(within(dialog).getByRole("button", { name: "Agree and import" }));
-
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("Capacity override requires an administrator.");
-    expect(alert).toHaveTextContent(/saved at validated/i);
-    expect(screen.getByRole("link", { name: "Review saved import" })).toHaveAttribute(
-      "href",
-      "/students/schedule-imports/review-import",
-    );
-    expect(push).not.toHaveBeenCalled();
+    expect(body.get("studentCategory")).toBe("TOUR");
+    expect(body.get("academicYearStart")).toBe("2026");
+    expect(body.get("preferredMonth")).toBe("10");
+    expect([...body.keys()].sort()).toEqual([
+      "academicYearStart",
+      "file",
+      "preferredMonth",
+      "studentCategory",
+    ]);
   });
 });

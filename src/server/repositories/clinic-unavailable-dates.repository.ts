@@ -9,6 +9,14 @@ export type ClinicUnavailableDateInput = {
   reason: string;
 };
 
+export async function listClinicOptions() {
+  const result = await query<{ id: string; name: string }>(
+    `SELECT id, name FROM clinics
+      WHERE code IN ('KABALAKA_CLINIC','CPU_CLINIC') ORDER BY name`,
+  );
+  return result.rows;
+}
+
 export async function listClinicUnavailableDateRecords() {
   const result = await query<{
     id: string;

@@ -14,7 +14,7 @@ function statusTone(status: string): "neutral" | "success" | "warning" | "danger
   return "neutral";
 }
 
-function importedAtLabel(value: string) {
+function acceptedAtLabel(value: string) {
   return new Intl.DateTimeFormat("en-PH", {
     dateStyle: "medium",
     timeStyle: "short",
@@ -22,96 +22,68 @@ function importedAtLabel(value: string) {
   }).format(new Date(value));
 }
 
-function requestLabel(count: number, service: string) {
-  return `${count} ${service} ${count === 1 ? "request" : "requests"}`;
-}
-
 export default async function ScheduleImportDetailPage({
   params,
 }: {
   params: Promise<{ importId: string }>;
 }) {
-  const user = await requireUser(["ADMIN", "COORDINATOR"]);
+  const actor = await requireUser(["ADMIN", "COORDINATOR"]);
   const { importId } = await params;
-  const detail = await getScheduleImport(importId, user);
+  const detail = await getScheduleImport(importId, actor);
+  const academicYear = detail.academicYearStart
+    ? `${detail.academicYearStart}–${detail.academicYearStart + 1}`
+    : "Legacy import";
 
   return (
     <>
       <PageHeader
         title={detail.importName}
-        description="Review both clinic schedules as one grouped import."
+        description="Published paired schedules and compact import outcomes."
         actions={<Badge tone={statusTone(detail.status)}>{detail.status}</Badge>}
       />
-
       <Card>
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(16rem,1fr)]">
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(18rem,1fr)]">
           <div>
             <CardTitle>Import details</CardTitle>
             <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
-              <div>
-                <dt className="font-semibold text-muted">Source file</dt>
-                <dd className="mt-1 break-all font-medium text-ink">{detail.sourceFilename}</dd>
-              </div>
-              <div>
-                <dt className="font-semibold text-muted">Imported</dt>
-                <dd className="mt-1 text-ink">
-                  <time dateTime={detail.createdAt}>{importedAtLabel(detail.createdAt)}</time>
-                </dd>
-              </div>
-              <div>
-                <dt className="font-semibold text-muted">Account</dt>
-                <dd className="mt-1 text-ink">Imported by {detail.createdByName}</dd>
-              </div>
-              <div>
-                <dt className="font-semibold text-muted">Submitted by</dt>
-                <dd className="mt-1 text-ink">
-                  {detail.submittedByName ? `Submitted by ${detail.submittedByName}` : "Not provided"}
-                </dd>
-              </div>
+              <div><dt className="font-semibold text-muted">Source file</dt><dd className="mt-1 break-all font-medium text-ink">{detail.sourceFilename}</dd></div>
+              <div><dt className="font-semibold text-muted">Accepted</dt><dd className="mt-1 text-ink"><time dateTime={detail.acceptedAt}>{acceptedAtLabel(detail.acceptedAt)}</time></dd></div>
+              <div><dt className="font-semibold text-muted">Category</dt><dd className="mt-1 text-ink">{detail.studentCategory ?? "Legacy"}</dd></div>
+              <div><dt className="font-semibold text-muted">Academic year</dt><dd className="mt-1 text-ink">{academicYear}</dd></div>
+              <div><dt className="font-semibold text-muted">Generated range</dt><dd className="mt-1 text-ink">{detail.generatedRange ? `${detail.generatedRange.startDate} – ${detail.generatedRange.endDate}` : "No new pair generated"}</dd></div>
+              <div><dt className="font-semibold text-muted">Imported by</dt><dd className="mt-1 text-ink">{detail.createdByName}</dd></div>
             </dl>
-            {detail.description ? <p className="mt-4 text-sm leading-6 text-muted">{detail.description}</p> : null}
           </div>
-
           <dl className="grid grid-cols-2 gap-3">
             <div className="rounded-xl border border-cpu-navy/8 bg-cpu-navy-soft/55 p-4">
-              <dt className="text-xs font-semibold text-muted">Total students</dt>
+              <dt className="text-xs font-semibold text-muted">Students</dt>
               <dd className="mt-1 text-2xl font-black text-ink">{detail.totalRows}</dd>
-              <p className="mt-1 text-xs text-muted">
-                {detail.matchedStudentCount} matched · {detail.createdStudentCount} created
-              </p>
+              <p className="mt-1 text-xs text-muted">{detail.createdStudentCount} inserted · {detail.matchedStudentCount} updated · {detail.skippedStudentCount} skipped</p>
             </div>
             <div className="rounded-xl border border-cpu-navy/8 bg-cpu-navy-soft/55 p-4">
-              <dt className="text-xs font-semibold text-muted">Combined status</dt>
-              <dd className="mt-2"><Badge tone={statusTone(detail.status)}>{detail.status}</Badge></dd>
+              <dt className="text-xs font-semibold text-muted">Published pairs</dt>
+              <dd className="mt-1 text-2xl font-black text-ink">{Math.min(detail.laboratoryItemCount, detail.physicalExaminationItemCount)}</dd>
             </div>
             <div className="rounded-xl border border-cpu-navy/8 bg-cpu-navy-soft/55 p-4">
-              <dt className="text-xs font-semibold text-muted">Laboratory</dt>
-              <dd className="mt-1 text-sm font-bold text-ink">
-                {requestLabel(detail.laboratoryItemCount, "Laboratory")}
-              </dd>
+              <dt className="text-xs font-semibold text-muted">Overflow</dt>
+              <dd className="mt-1 text-2xl font-black text-ink">{detail.overflow.pairCountBeyondPreferredWindow}</dd>
             </div>
             <div className="rounded-xl border border-cpu-navy/8 bg-cpu-navy-soft/55 p-4">
-              <dt className="text-xs font-semibold text-muted">Physical examination</dt>
-              <dd className="mt-1 text-sm font-bold text-ink">
-                {requestLabel(detail.physicalExaminationItemCount, "Physical examination")}
-              </dd>
+              <dt className="text-xs font-semibold text-muted">Displaced Regular</dt>
+              <dd className="mt-1 text-2xl font-black text-ink">{detail.displacementTotal}</dd>
             </div>
           </dl>
         </div>
       </Card>
-
-      <Card>
-        <CardTitle>Import actions</CardTitle>
-        <p className="my-3 text-sm text-muted">
-          Lifecycle actions apply atomically to every clinic section in this import.
-        </p>
-        <ScheduleImportActions importId={detail.importId} status={detail.status} actorRole={user.role} />
-      </Card>
-
+      {detail.status === "DRAFT" || detail.status === "VALIDATED" || detail.status === "GENERATED" ? (
+        <Card>
+          <CardTitle>Historical import actions</CardTitle>
+          <p className="my-3 text-sm text-muted">Lifecycle actions remain available for imports saved before automatic publication.</p>
+          <ScheduleImportActions importId={detail.importId} status={detail.status} actorRole={actor.role} />
+        </Card>
+      ) : null}
       <div className="grid gap-6">
-        {detail.childBatches.map((batch) => (
-          <ScheduleImportClinicPanel key={String(batch.id)} batch={batch} />
-        ))}
+        {detail.childBatches.map((batch) => <ScheduleImportClinicPanel key={String(batch.id)} batch={batch} />)}
       </div>
     </>
   );

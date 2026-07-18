@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState, type FormEvent } from "react";
 import { Alert } from "@/components/ui/Alert";
@@ -9,77 +8,66 @@ import { Card, CardTitle } from "@/components/ui/Card";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Field } from "@/components/ui/Field";
 import { Select } from "@/components/ui/Select";
-import type { PriorityGroup } from "@/server/repositories/reference-data.repository";
 
-type ImportError = {
-  message: string;
-  fields?: Record<string, string[]>;
+type StudentCategory = "REGULAR" | "OJT" | "TOUR" | "SPECIALIZED";
+type ImportError = { message: string; fields?: Record<string, string[]> };
+
+const REQUIRED_HEADERS = "Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth";
+const categoryLabels: Record<StudentCategory, string> = {
+  REGULAR: "Regular",
+  OJT: "OJT",
+  TOUR: "Tour",
+  SPECIALIZED: "Specialized",
 };
 
-type ReviewCheckpoint = {
-  importId: string;
-  status: string;
-  stage: string;
-  issue: ImportError & { code: string };
-};
-
-const REQUIRED_HEADERS = "Student ID,Name,College,Course,Year,Laboratory Schedule,Physical Examination Schedule";
+function currentManilaYear() {
+  return Number(new Intl.DateTimeFormat("en-US", {
+    year: "numeric",
+    timeZone: "Asia/Manila",
+  }).format(new Date()));
+}
 
 function fieldLabel(field: string) {
   const rowField = /^rows\.(\d+)\.(.+)$/.exec(field);
   if (rowField) return `Row ${rowField[1]} · ${rowField[2]}`;
-  if (field === "file") return "File";
-  if (field === "priorityGroupId") return "Priority group";
-  return field.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, (letter) => letter.toLocaleUpperCase());
+  return field.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, (letter) => letter.toUpperCase());
 }
 
-export function ScheduleImportForm({ priorities }: { priorities: PriorityGroup[] }) {
+export function ScheduleImportForm() {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [priorityGroupId, setPriorityGroupId] = useState("");
+  const currentYear = currentManilaYear();
+  const academicYears = Array.from({ length: 7 }, (_, index) => currentYear - 1 + index);
+  const [studentCategory, setStudentCategory] = useState<StudentCategory>("REGULAR");
+  const [academicYearStart, setAcademicYearStart] = useState(String(currentYear));
   const [selectedFileName, setSelectedFileName] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<ImportError>();
-  const [checkpoint, setCheckpoint] = useState<ReviewCheckpoint>();
-
-  const selectedPriority = priorities.find((priority) => priority.id === priorityGroupId);
 
   function review(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending) return;
     setError(undefined);
-    setCheckpoint(undefined);
     setConfirmOpen(true);
   }
 
   async function submit() {
-    if (pending || !formRef.current) return;
-
+    if (!formRef.current || pending) return;
     setPending(true);
     setError(undefined);
-    setCheckpoint(undefined);
-
     try {
       const response = await fetch("/api/schedule-imports", {
         method: "POST",
         body: new FormData(formRef.current),
       });
       const payload = await response.json();
-
       if (!response.ok) {
         setConfirmOpen(false);
         setError(payload.error ?? { message: "Unable to import the CSV file." });
         return;
       }
-
-      if (payload.data.outcome === "REVIEW_REQUIRED") {
-        setConfirmOpen(false);
-        setCheckpoint(payload.data as ReviewCheckpoint);
-        return;
-      }
-
       router.push(`/students/schedule-imports/${payload.data.importId}`);
       router.refresh();
     } catch {
@@ -95,9 +83,9 @@ export function ScheduleImportForm({ priorities }: { priorities: PriorityGroup[]
       <form ref={formRef} onSubmit={review}>
         <Card className="grid gap-5">
           <div>
-            <CardTitle>Master student and schedule CSV</CardTitle>
+            <CardTitle>Academic-year student CSV</CardTitle>
             <p className="mt-1 text-sm text-muted">
-              Choose the file and priority, then approve one confirmation to import and publish the complete schedule.
+              Upload student demographics and publish paired Laboratory and Physical Examination dates automatically.
             </p>
           </div>
 
@@ -109,16 +97,12 @@ export function ScheduleImportForm({ priorities }: { priorities: PriorityGroup[]
               </code>
             </div>
             <ul className="list-disc space-y-1 pl-5">
-              <li>Save and upload the file as a UTF-8 CSV.</li>
-              <li>Enter schedule dates in MM-DD-YYYY format.</li>
+              <li>Export and upload the approved workbook as a UTF-8 CSV.</li>
+              <li>Date of Birth must use MM-DD-YYYY.</li>
               <li>The file may be up to 1 MB and contain up to 3,000 data rows.</li>
-              <li>Each row must include at least one service date.</li>
+              <li>Every new schedule receives seven calendar days of preparation notice.</li>
             </ul>
-            <a
-              href="/templates/student-schedule-import-template.csv"
-              download
-              className="w-fit font-bold text-cpu-navy hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cpu-navy"
-            >
+            <a href="/templates/student-schedule-import-template.csv" download className="w-fit font-bold text-cpu-navy hover:underline">
               Download CSV template
             </a>
           </div>
@@ -129,27 +113,10 @@ export function ScheduleImportForm({ priorities }: { priorities: PriorityGroup[]
               {error.fields ? (
                 <ul className="mt-2 list-disc space-y-1 pl-5 font-normal">
                   {Object.entries(error.fields).flatMap(([field, messages]) => messages.map((message) => (
-                    <li key={`${field}:${message}`}>
-                      <span className="font-semibold">{fieldLabel(field)}:</span> {message}
-                    </li>
+                    <li key={`${field}:${message}`}><span className="font-semibold">{fieldLabel(field)}:</span> {message}</li>
                   )))}
                 </ul>
               ) : null}
-            </Alert>
-          ) : null}
-
-          {checkpoint ? (
-            <Alert tone="warning">
-              <p>{checkpoint.issue.message}</p>
-              <p className="mt-1 font-normal">
-                The import was saved at {checkpoint.status.toLocaleLowerCase()} for administrator review.
-              </p>
-              <Link
-                href={`/students/schedule-imports/${checkpoint.importId}`}
-                className="mt-2 inline-block underline"
-              >
-                Review saved import
-              </Link>
             </Alert>
           ) : null}
 
@@ -157,13 +124,7 @@ export function ScheduleImportForm({ priorities }: { priorities: PriorityGroup[]
             <div className="grid gap-1.5 text-sm font-semibold text-muted-strong">
               <label htmlFor="student-schedule-import-file">CSV file</label>
               <div className="flex h-11 min-w-0 items-center gap-3 rounded-xl border border-line bg-surface p-1 pr-3 shadow-sm">
-                <Button
-                  type="button"
-                  size="sm"
-                  className="shrink-0"
-                  disabled={pending}
-                  onClick={() => fileInputRef.current?.click()}
-                >
+                <Button type="button" size="sm" disabled={pending} onClick={() => fileInputRef.current?.click()}>
                   Choose file
                 </Button>
                 <span className="min-w-0 flex-1 truncate font-normal text-ink" aria-live="polite">
@@ -182,33 +143,48 @@ export function ScheduleImportForm({ priorities }: { priorities: PriorityGroup[]
                 onChange={(event) => setSelectedFileName(event.target.files?.[0]?.name ?? "")}
               />
             </div>
-
-            <Field label="Priority group">
+            <Field label="Student category">
               <Select
-                name="priorityGroupId"
-                required
-                value={priorityGroupId}
+                name="studentCategory"
+                value={studentCategory}
                 disabled={pending}
-                onChange={(event) => setPriorityGroupId(event.target.value)}
+                onChange={(event) => setStudentCategory(event.target.value as StudentCategory)}
               >
-                <option value="" disabled>Select priority</option>
-                {priorities.filter((priority) => priority.isActive).map((priority) => (
-                  <option key={priority.id} value={priority.id}>{priority.name}</option>
-                ))}
+                {Object.entries(categoryLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </Select>
             </Field>
+            <Field label="Academic year">
+              <Select
+                name="academicYearStart"
+                value={academicYearStart}
+                required
+                disabled={pending}
+                onChange={(event) => setAcademicYearStart(event.target.value)}
+              >
+                {academicYears.map((year) => <option key={year} value={year}>{year}–{year + 1}</option>)}
+              </Select>
+            </Field>
+            {studentCategory === "REGULAR" ? null : (
+              <Field label="Preferred month">
+                <Select name="preferredMonth" required defaultValue="" disabled={pending} key={studentCategory}>
+                  <option value="" disabled>Select preferred month</option>
+                  {Array.from({ length: 12 }, (_, index) => (
+                    <option key={index + 1} value={index + 1}>
+                      {new Intl.DateTimeFormat("en-PH", { month: "long" }).format(new Date(2026, index, 1))}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            )}
           </div>
 
-          <Button type="submit" disabled={pending} className="justify-self-start">
-            Review import
-          </Button>
+          <Button type="submit" disabled={pending} className="justify-self-start">Review import</Button>
         </Card>
       </form>
-
       <ConfirmDialog
         open={confirmOpen}
         title="Import and publish this CSV?"
-        description={`${selectedFileName} will be imported as ${selectedPriority?.name ?? "the selected"} priority. This will create or match students, then publish their Laboratory and Physical Examination schedules when processing succeeds.`}
+        description={`${selectedFileName} will be scheduled as ${categoryLabels[studentCategory]} for ${academicYearStart}–${Number(academicYearStart) + 1}. Both date-only clinic schedules will publish atomically.`}
         confirmLabel="Agree and import"
         pending={pending}
         pendingLabel="Importing and publishing…"

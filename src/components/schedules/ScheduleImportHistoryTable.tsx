@@ -14,7 +14,7 @@ function statusTone(status: ScheduleImportStatus) {
   return "neutral" as const;
 }
 
-function importedAtLabel(value: string) {
+function acceptedAtLabel(value: string) {
   return new Intl.DateTimeFormat("en-PH", {
     dateStyle: "medium",
     timeStyle: "short",
@@ -23,16 +23,9 @@ function importedAtLabel(value: string) {
 }
 
 export function ScheduleImportHistoryTable({ imports }: { imports: ScheduleImportListItem[] }) {
-  if (imports.length === 0) {
-    return (
-      <Card>
-        <p className="py-8 text-center text-sm text-muted">
-          No schedule CSV files have been imported yet.
-        </p>
-      </Card>
-    );
+  if (!imports.length) {
+    return <Card><p className="py-8 text-center text-sm text-muted">No schedule CSV files have been imported yet.</p></Card>;
   }
-
   return (
     <Card className="overflow-hidden p-0">
       <div className="overflow-x-auto">
@@ -40,41 +33,44 @@ export function ScheduleImportHistoryTable({ imports }: { imports: ScheduleImpor
           <thead className="bg-cpu-navy-soft/70 text-xs uppercase tracking-wide text-muted">
             <tr>
               <th className="px-5 py-3">Import</th>
-              <th className="px-5 py-3">Imported</th>
-              <th className="px-5 py-3">Student rows</th>
-              <th className="px-5 py-3">Laboratory</th>
-              <th className="px-5 py-3">Physical exam</th>
+              <th className="px-5 py-3">Category</th>
+              <th className="px-5 py-3">Accepted</th>
+              <th className="px-5 py-3">Students</th>
+              <th className="px-5 py-3">Published pairs</th>
               <th className="px-5 py-3">Status</th>
               <th className="px-5 py-3"><span className="sr-only">Action</span></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-line">
-            {imports.map((scheduleImport) => (
-              <tr key={scheduleImport.importId} className="transition hover:bg-cpu-navy-soft/35">
+            {imports.map((item) => (
+              <tr key={item.importId} className="transition hover:bg-cpu-navy-soft/35">
                 <td className="px-5 py-4">
-                  <p className="font-bold text-ink">{scheduleImport.importName}</p>
-                  <p className="font-mono text-xs text-muted">{scheduleImport.sourceFilename}</p>
+                  <p className="font-bold text-ink">{item.importName}</p>
+                  <p className="font-mono text-xs text-muted">{item.sourceFilename}</p>
                 </td>
                 <td className="px-5 py-4">
-                  <p>{importedAtLabel(scheduleImport.createdAt)}</p>
-                  <p className="text-xs text-muted">{scheduleImport.createdByName}</p>
-                </td>
-                <td className="px-5 py-4">
-                  <p className="font-bold text-ink">{scheduleImport.totalRows}</p>
+                  <p className="font-bold text-ink">{item.studentCategory ?? "Legacy"}</p>
                   <p className="text-xs text-muted">
-                    {scheduleImport.matchedStudentCount} matched · {scheduleImport.createdStudentCount} created
+                    {item.academicYearStart ? `${item.academicYearStart}–${item.academicYearStart + 1}` : "No academic year"}
                   </p>
                 </td>
-                <td className="px-5 py-4">{scheduleImport.laboratoryItemCount}</td>
-                <td className="px-5 py-4">{scheduleImport.physicalExaminationItemCount}</td>
                 <td className="px-5 py-4">
-                  <Badge tone={statusTone(scheduleImport.status)}>{scheduleImport.status}</Badge>
+                  <p>{acceptedAtLabel(item.acceptedAt)}</p>
+                  <p className="text-xs text-muted">{item.createdByName}</p>
                 </td>
+                <td className="px-5 py-4">
+                  <p className="font-bold text-ink">{item.totalRows}</p>
+                  <p className="text-xs text-muted">
+                    {item.createdStudentCount} inserted · {item.matchedStudentCount} updated · {item.skippedStudentCount} skipped
+                  </p>
+                </td>
+                <td className="px-5 py-4">
+                  <p>{Math.min(item.laboratoryItemCount, item.physicalExaminationItemCount)}</p>
+                  {item.displacementTotal ? <p className="text-xs text-muted">{item.displacementTotal} displaced</p> : null}
+                </td>
+                <td className="px-5 py-4"><Badge tone={statusTone(item.status)}>{item.status}</Badge></td>
                 <td className="px-5 py-4 text-right">
-                  <Link
-                    className="font-bold text-cpu-navy hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cpu-navy"
-                    href={`/students/schedule-imports/${scheduleImport.importId}`}
-                  >
+                  <Link className="font-bold text-cpu-navy hover:underline" href={`/students/schedule-imports/${item.importId}`}>
                     View details
                   </Link>
                 </td>
