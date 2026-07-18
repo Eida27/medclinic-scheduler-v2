@@ -8,6 +8,11 @@ import { getScheduleBatch } from "@/server/repositories/coordinator-schedules.re
 import type { ImportedStudentRow } from "@/server/services/student-import-csv";
 import { resolveSchedulingWindow } from "@/server/services/scheduling-window";
 import { generatePairedSchedule } from "@/server/rule-engine/generate-paired-schedule";
+import {
+  makeCapacityForPriorityBatch,
+  nextDateAfter,
+  publishDisplacedRegularReplacements,
+} from "@/server/services/priority-displacement.service";
 import { studentDisplayNameSql } from "@/server/students/student-display-name";
 
 export type ScheduleImportStatus =
@@ -371,6 +376,8 @@ export async function createScheduleImport(
         .filter((row) => row.clinic_code === clinicCode)
         .map((row) => [row.appointment_date, row.appointment_count]),
     );
+    const laboratoryLoad = loadFor("KABALAKA_CLINIC");
+    const physicalExamLoad = loadFor("CPU_CLINIC");
     const blockedDates = await client.query<{ clinic_code: ClinicCode; date: string }>(
       `SELECT clinic.code AS clinic_code, blocked.date::date::text AS date
          FROM clinic_unavailable_dates unavailable
@@ -384,7 +391,14 @@ export async function createScheduleImport(
           AND unavailable.start_date <= $2::date`,
       [windowStart, searchEndDate],
     );
-    const assignments = generatePairedSchedule({
+    const preferredWindowEnd = input.studentCategory === "REGULAR"
+      ? `${input.academicYearStart + 1}-03-31`
+      : new Date(Date.UTC(
+          (input.preferredMonth ?? 8) >= 8 ? input.academicYearStart : input.academicYearStart + 1,
+          input.preferredMonth ?? 8,
+          0,
+        )).toISOString().slice(0, 10);
+    const allocationInput = () => ({
       requests: schedulableRows.map((row) => ({
         requestId: `${importId}:${row.rowNumber}`,
         studentNumber: row.studentNumber,
@@ -401,8 +415,8 @@ export async function createScheduleImport(
         safeDailyCapacity: physicalExamCapacity.safe_daily_capacity,
         maxDailyCapacity: physicalExamCapacity.max_daily_capacity,
       },
-      existingLaboratoryLoad: loadFor("KABALAKA_CLINIC"),
-      existingPhysicalExamLoad: loadFor("CPU_CLINIC"),
+      existingLaboratoryLoad: laboratoryLoad,
+      existingPhysicalExamLoad: physicalExamLoad,
       blockedLaboratoryDates: blockedDates.rows
         .filter((row) => row.clinic_code === "KABALAKA_CLINIC")
         .map((row) => row.date),
@@ -411,6 +425,30 @@ export async function createScheduleImport(
         .map((row) => row.date),
       searchEndDate,
     });
+    let assignments = generatePairedSchedule(allocationInput());
+    const initialOverflowCount = assignments.assignments.filter(
+      (assignment) => assignment.laboratoryDate > preferredWindowEnd,
+    ).length;
+    const displacedCandidates = input.studentCategory === "REGULAR"
+      ? []
+      : await makeCapacityForPriorityBatch({
+          scheduleCycleStart: input.academicYearStart,
+          windowStart,
+          windowEnd: preferredWindowEnd,
+          neededPairCount: initialOverflowCount,
+          actorUserId,
+        }, client);
+    for (const candidate of displacedCandidates) {
+      laboratoryLoad[candidate.laboratoryDate] = Math.max(
+        0,
+        (laboratoryLoad[candidate.laboratoryDate] ?? 0) - 1,
+      );
+      physicalExamLoad[candidate.physicalExamDate] = Math.max(
+        0,
+        (physicalExamLoad[candidate.physicalExamDate] ?? 0) - 1,
+      );
+    }
+    if (displacedCandidates.length) assignments = generatePairedSchedule(allocationInput());
     if (assignments.unscheduledRequestIds.length) {
       throw new AppError(
         "SCHEDULE_CAPACITY_EXHAUSTED",
@@ -558,6 +596,13 @@ export async function createScheduleImport(
         [actorUserId, appointmentIds],
       );
     }
+    await publishDisplacedRegularReplacements({
+      candidates: displacedCandidates,
+      sourceImportGroupId: importId,
+      actorUserId,
+      replacementWindowStart: nextDateAfter(preferredWindowEnd),
+      searchEndDate,
+    }, client);
 
     const laboratoryItemCount = assignments.assignments.length;
     const physicalExaminationItemCount = assignments.assignments.length;
@@ -567,13 +612,6 @@ export async function createScheduleImport(
     const generatedRange = allDates.length
       ? { startDate: allDates[0], endDate: allDates.at(-1)! }
       : null;
-    const preferredWindowEnd = input.studentCategory === "REGULAR"
-      ? `${input.academicYearStart + 1}-03-31`
-      : new Date(Date.UTC(
-          (input.preferredMonth ?? 8) >= 8 ? input.academicYearStart : input.academicYearStart + 1,
-          input.preferredMonth ?? 8,
-          0,
-        )).toISOString().slice(0, 10);
     const pairCountBeyondPreferredWindow = assignments.assignments.filter(
       (assignment) => assignment.laboratoryDate > preferredWindowEnd,
     ).length;
@@ -591,6 +629,7 @@ export async function createScheduleImport(
       publishedAppointmentCount: appointmentIds.length,
       generatedRange,
       pairCountBeyondPreferredWindow,
+      displacementTotal: displacedCandidates.length,
     };
     await writeAudit(
       actorUserId,
@@ -617,7 +656,7 @@ export async function createScheduleImport(
         pairCountBeyondPreferredWindow,
         unscheduledStudentCount: 0,
       },
-      displacementTotal: 0,
+      displacementTotal: displacedCandidates.length,
       batchIds,
     };
   });
