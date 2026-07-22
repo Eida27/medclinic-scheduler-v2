@@ -40,10 +40,10 @@ export async function dashboardMetrics(filters: { clinicCode?: ClinicCode } = {}
         JOIN clinics cl ON cl.id=a.clinic_id
         JOIN clinic_capacity_settings c ON c.clinic_id=a.clinic_id AND c.schedule_type=a.schedule_type
         WHERE a.status='PENDING' AND a.is_published=TRUE${filters.clinicCode ? " AND cl.code=$1" : ""}
-        GROUP BY a.clinic_id,a.appointment_date,a.schedule_type,c.safe_daily_capacity
-        HAVING COUNT(*) > c.safe_daily_capacity
+        GROUP BY a.clinic_id,a.appointment_date,a.schedule_type,c.max_daily_capacity
+        HAVING COUNT(*) > c.max_daily_capacity
       ) x) AS over_capacity_dates
   `, values);
   const row = result.rows[0];
-  return { totalStudents: row.total_students, pendingAppointments: row.pending_appointments, completedPhysicalExams: row.completed_exam, completedLaboratory: row.completed_lab, noShows: row.no_shows, rescheduled: row.rescheduled, overCapacityWarnings: row.over_capacity_dates };
+  return { totalStudents: row.total_students, pendingAppointments: row.pending_appointments, completedPhysicalExams: row.completed_exam, completedLaboratory: row.completed_lab, noShows: row.no_shows, rescheduled: row.rescheduled, capacityConflicts: row.over_capacity_dates };
 }

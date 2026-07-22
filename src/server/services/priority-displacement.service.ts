@@ -81,11 +81,10 @@ export async function publishDisplacedRegularReplacements(
     clinic_id: string;
     clinic_code: "KABALAKA_CLINIC" | "CPU_CLINIC";
     schedule_type: "LABORATORY" | "PHYSICAL_EXAM";
-    safe_daily_capacity: number;
     max_daily_capacity: number;
   }>(
     `SELECT setting.clinic_id, clinic.code AS clinic_code, setting.schedule_type,
-            setting.safe_daily_capacity, setting.max_daily_capacity
+            setting.max_daily_capacity
        FROM clinic_capacity_settings setting
        JOIN clinics clinic ON clinic.id=setting.clinic_id
       WHERE (clinic.code='KABALAKA_CLINIC' AND setting.schedule_type='LABORATORY')
@@ -145,11 +144,9 @@ export async function publishDisplacedRegularReplacements(
       windowStart: input.replacementWindowStart,
     })),
     laboratoryCapacity: {
-      safeDailyCapacity: laboratoryCapacity.safe_daily_capacity,
       maxDailyCapacity: laboratoryCapacity.max_daily_capacity,
     },
     physicalExamCapacity: {
-      safeDailyCapacity: physicalExamCapacity.safe_daily_capacity,
       maxDailyCapacity: physicalExamCapacity.max_daily_capacity,
     },
     existingLaboratoryLoad: laboratoryLoad,
@@ -169,10 +166,7 @@ export async function publishDisplacedRegularReplacements(
     laboratoryLoad[assignment.laboratoryDate] = (laboratoryLoad[assignment.laboratoryDate] ?? 0) + 1;
     physicalExamLoad[assignment.physicalExamDate] = (physicalExamLoad[assignment.physicalExamDate] ?? 0) + 1;
   }
-  const physicalExamCeiling = Math.max(
-    0,
-    Math.min(physicalExamCapacity.safe_daily_capacity, physicalExamCapacity.max_daily_capacity),
-  );
+  const physicalExamCeiling = Math.max(0, physicalExamCapacity.max_daily_capacity);
   const blockedPhysicalExamSet = new Set(blockedPhysicalExamDates);
   const physicalExamOnlyAssignments = [...physicalExamOnlyCandidates]
     .sort((left, right) => (

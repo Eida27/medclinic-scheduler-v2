@@ -182,7 +182,6 @@ export type ScheduleImportValidationResult = {
   totals: {
     items: number;
     valid: number;
-    warnings: number;
     conflicts: number;
   };
   clinics: {
@@ -247,7 +246,7 @@ export async function validateScheduleImport(
       throw invalidImportStatus("Only draft or validated schedule imports can be validated.");
     }
 
-    const totals = { items: 0, valid: 0, warnings: 0, conflicts: 0 };
+    const totals = { items: 0, valid: 0, conflicts: 0 };
     const clinics: ScheduleImportValidationResult["clinics"] = {};
     for (const child of children) {
       const validation = await validateBatchWithClient(
@@ -258,7 +257,6 @@ export async function validateScheduleImport(
       );
       totals.items += validation.summary.totalItems;
       totals.valid += validation.summary.validCount;
-      totals.warnings += validation.summary.warningCount;
       totals.conflicts += validation.summary.conflictCount;
       clinics[clinicResultKey(child.clinicCode)] = {
         batchId: child.id,

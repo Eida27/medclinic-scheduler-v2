@@ -73,8 +73,6 @@ describe("CapacityForm", () => {
         maxDailyCapacity: 130,
       }),
     });
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).not.toHaveProperty("safeDailyCapacity");
-
     const saveButtons = screen.getAllByRole("button", { name: "Save" });
     expect(saveButtons[0]).toBeDisabled();
     expect(saveButtons[1]).toBeEnabled();

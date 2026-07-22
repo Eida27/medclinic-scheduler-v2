@@ -7,7 +7,7 @@ Academic-year Laboratory and Physical Examination scheduling, clinic operations,
 - Separate JWT sessions for administrators, coordinators, clinic staff, and students
 - Atomic academic-year student imports with deterministic, date-only Laboratory/PE pairs
 - Regular FCFS scheduling plus OJT, Tour, and Specialized priority windows
-- Safe daily capacity as the normal ceiling and maximum capacity as the hard guard
+- Maximum daily capacity as the sole scheduling ceiling across imports, displacement, and clinic closures
 - Minimum Regular displacement for priority capacity, with linked history and student notifications
 - Future clinic unavailable dates: CPU Clinic moves PE only; KABALAKA Clinic replaces the pair
 - Administrator appointment locks that automatic moves cannot override

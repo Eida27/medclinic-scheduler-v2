@@ -35,13 +35,4 @@ describe("checkCapacity", () => {
       message: "151 appointments exceed the maximum capacity of 150.",
     });
   });
-
-  it("does not return a warning or recommended-capacity message", () => {
-    const results = [149, 150, 151].map((count) =>
-      checkCapacity(setting.clinicId, "2026-07-06", setting.scheduleType, count, setting),
-    );
-
-    expect(results.map((result) => result.status)).toEqual(["VALID", "VALID", "CONFLICT"]);
-    expect(results.map((result) => result.message).join(" ")).not.toContain("recommended capacity");
-  });
 });

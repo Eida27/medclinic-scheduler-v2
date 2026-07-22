@@ -17,7 +17,7 @@ function isWeekday(date: string) {
 }
 
 function dailyCeiling(capacity: PairedScheduleCapacity) {
-  return Math.max(0, Math.min(capacity.safeDailyCapacity, capacity.maxDailyCapacity));
+  return Math.max(0, capacity.maxDailyCapacity);
 }
 
 function firstEligibleDate({

@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { pool } from "@/server/db/pool";
+import type { PoolClient } from "pg";
 import { cleanupTestFixtures, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import type { SessionUser } from "@/types/roles";
 import { acceptAndScheduleImport } from "./schedule-imports.service";
@@ -9,6 +10,11 @@ import { createClinicUnavailableDate } from "./clinic-calendar.service";
 const header = "Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth";
 const studentPattern = "99-95%";
 const importPattern = "REGULAR 2026-2027 - TEST-CALENDAR%";
+let originalCapacities: Array<{
+  id: string;
+  max_daily_capacity: number;
+}> = [];
+let capacityLockClient: PoolClient;
 const admin: SessionUser = {
   userId: TEST_REFERENCE_IDS.adminUser,
   fullName: "System Admin",
@@ -42,14 +48,86 @@ async function cleanup() {
   await pool.query("DELETE FROM clinic_unavailable_dates WHERE reason LIKE 'TEST-CALENDAR%'");
 }
 
-beforeAll(cleanup);
-afterEach(cleanup);
+beforeAll(async () => {
+  capacityLockClient = await pool.connect();
+  await capacityLockClient.query("SELECT pg_advisory_lock(hashtext('medclinic:test:capacity-settings'))");
+  await cleanup();
+  const capacities = await pool.query<{
+    id: string;
+    max_daily_capacity: number;
+  }>(
+    `SELECT id, max_daily_capacity
+       FROM clinic_capacity_settings
+      WHERE id IN ($1,$2)
+      ORDER BY id`,
+    [
+      "40000000-0000-4000-8000-000000000001",
+      "40000000-0000-4000-8000-000000000002",
+    ],
+  );
+  originalCapacities = capacities.rows;
+});
+afterEach(async () => {
+  await cleanup();
+  for (const capacity of originalCapacities) {
+    await pool.query(
+      `UPDATE clinic_capacity_settings
+          SET safe_daily_capacity=$2, max_daily_capacity=$2
+        WHERE id=$1`,
+      [capacity.id, capacity.max_daily_capacity],
+    );
+  }
+});
 afterAll(async () => {
   await cleanup();
+  await capacityLockClient.query("SELECT pg_advisory_unlock(hashtext('medclinic:test:capacity-settings'))");
+  capacityLockClient.release();
   await pool.end();
 });
 
 describe("clinic calendar closures", () => {
+  it("fills a replacement date to maximum capacity before moving later", async () => {
+    await acceptAndScheduleImport(importInput("TEST-CALENDAR-maximum-existing.csv", "99-9506-06"), admin);
+    await acceptAndScheduleImport(importInput("TEST-CALENDAR-maximum-moved.csv", "99-9507-07"), admin);
+    await pool.query(
+      `UPDATE appointments
+          SET appointment_date=CASE
+            WHEN student_number='99-9506-06' AND schedule_type='PHYSICAL_EXAM' THEN '2027-06-09'::date
+            WHEN student_number='99-9507-07' AND schedule_type='LABORATORY' THEN '2027-06-07'::date
+            WHEN student_number='99-9507-07' AND schedule_type='PHYSICAL_EXAM' THEN '2027-06-08'::date
+            ELSE appointment_date
+          END
+        WHERE student_number IN ('99-9506-06','99-9507-07')`,
+    );
+    await pool.query(
+      `UPDATE clinic_capacity_settings
+          SET safe_daily_capacity=2, max_daily_capacity=2
+        WHERE id IN ($1,$2)`,
+      [
+        "40000000-0000-4000-8000-000000000001",
+        "40000000-0000-4000-8000-000000000002",
+      ],
+    );
+
+    await createClinicUnavailableDate({
+      clinicId: TEST_REFERENCE_IDS.physicalExamClinic,
+      startDate: "2027-06-08",
+      endDate: "2027-06-08",
+      category: "CLOSURE",
+      reason: "TEST-CALENDAR maximum-only replacement",
+    }, admin);
+
+    const replacement = await pool.query<{ appointment_date: string }>(
+      `SELECT appointment_date::text
+         FROM appointments
+        WHERE student_number='99-9507-07'
+          AND schedule_type='PHYSICAL_EXAM'
+          AND status='PENDING'
+          AND rescheduled_from IS NOT NULL`,
+    );
+    expect(replacement.rows).toEqual([{ appointment_date: "2027-06-09" }]);
+  });
+
   it("moves only PE when a future CPU Clinic date is blocked", async () => {
     await acceptAndScheduleImport(importInput("TEST-CALENDAR-cpu.csv", "99-9501-01"), admin);
     const before = await pool.query<{ schedule_type: string; appointment_date: string }>(

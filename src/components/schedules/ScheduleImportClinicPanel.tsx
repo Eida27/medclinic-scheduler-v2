@@ -11,7 +11,6 @@ type CapacityResult = {
   date: string;
   scheduleType: string;
   count: number;
-  safeCapacity: number;
   maxCapacity: number;
   status: string;
   message: string;
@@ -20,7 +19,6 @@ type CapacityResult = {
 type ValidationSummary = {
   totalItems: number;
   validCount: number;
-  warningCount: number;
   conflictCount: number;
   capacityResults?: CapacityResult[];
 };
@@ -63,7 +61,7 @@ export type ScheduleImportClinicBatchView = {
 
 function statusTone(status: string): "neutral" | "success" | "warning" | "danger" | "info" {
   if (["PUBLISHED", "VALID"].includes(status)) return "success";
-  if (["WARNING", "VALIDATED"].includes(status)) return "warning";
+  if (status === "VALIDATED") return "warning";
   if (["CONFLICT", "CANCELLED"].includes(status)) return "danger";
   if (status === "GENERATED") return "info";
   return "neutral";
@@ -97,11 +95,10 @@ export function ScheduleImportClinicPanel({ batch }: { batch: ScheduleImportClin
           <h3 id={`${batch.id}-validation-heading`} className="font-bold text-ink">Validation</h3>
           {summary ? (
             <>
-              <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
                 {[
                   ["Total", summary.totalItems],
                   ["Valid", summary.validCount],
-                  ["Warnings", summary.warningCount],
                   ["Conflicts", summary.conflictCount],
                 ].map(([label, value]) => (
                   <div key={label} className="rounded-xl border border-cpu-navy/8 bg-cpu-navy-soft/55 p-3">
@@ -111,9 +108,6 @@ export function ScheduleImportClinicPanel({ batch }: { batch: ScheduleImportClin
                 ))}
               </dl>
               <div className="mt-3 flex flex-wrap gap-2">
-                <Badge tone={summary.warningCount ? "warning" : "success"}>
-                  {summary.warningCount} {summary.warningCount === 1 ? "warning" : "warnings"}
-                </Badge>
                 <Badge tone={summary.conflictCount ? "danger" : "success"}>
                   {summary.conflictCount} {summary.conflictCount === 1 ? "conflict" : "conflicts"}
                 </Badge>
@@ -137,7 +131,7 @@ export function ScheduleImportClinicPanel({ batch }: { batch: ScheduleImportClin
                     <Badge tone={statusTone(capacity.status)}>{capacity.status}</Badge>
                   </div>
                   <p className="mt-1 text-sm text-muted-strong">
-                    {capacity.count} scheduled / {capacity.safeCapacity} safe / {capacity.maxCapacity} maximum
+                    {capacity.count} scheduled / {capacity.maxCapacity} maximum
                   </p>
                   <p className="mt-1 text-sm text-muted">{capacity.message}</p>
                 </div>

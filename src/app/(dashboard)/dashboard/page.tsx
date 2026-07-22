@@ -11,7 +11,7 @@ export default async function DashboardPage() {
     ["Laboratory complete", metrics.completedLaboratory, "Recorded completed results"],
     ["No-shows", metrics.noShows, "Appointments requiring follow-up"],
     ["Rescheduled", metrics.rescheduled, "Original appointments replaced"],
-    ["Capacity warnings", metrics.overCapacityWarnings, "Service dates above recommended capacity"],
+    ["Capacity conflicts", metrics.capacityConflicts, "Service dates above maximum capacity"],
   ];
   return (
     <>

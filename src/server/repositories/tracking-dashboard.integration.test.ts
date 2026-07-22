@@ -21,8 +21,8 @@ const appointmentDate = "2042-06-01";
 
 beforeAll(async () => {
   await cleanupTestFixtures(studentNumberPattern, batchNamePattern);
-  const capacity = await pool.query<{ safe_daily_capacity: number }>(
-    `SELECT safe_daily_capacity
+  const capacity = await pool.query<{ max_daily_capacity: number }>(
+    `SELECT max_daily_capacity
        FROM clinic_capacity_settings
       WHERE clinic_id=$1 AND schedule_type='LABORATORY'`,
     [TEST_REFERENCE_IDS.laboratoryClinic],
@@ -30,7 +30,7 @@ beforeAll(async () => {
   await insertNumberedTestStudents(counterStudentNumberPrefix, counterStudentNumbers.length);
   await insertNumberedTestStudents(
     capacityStudentNumberPrefix,
-    Number(capacity.rows[0].safe_daily_capacity) + 1,
+    Number(capacity.rows[0].max_daily_capacity) + 1,
   );
 });
 
@@ -123,7 +123,7 @@ describe("dashboard metrics publication boundaries", () => {
   });
 
   it("counts over-capacity dates only after appointments are published", async () => {
-    const baseline = (await dashboardMetrics()).overCapacityWarnings;
+    const baseline = (await dashboardMetrics()).capacityConflicts;
     await pool.query(
       `INSERT INTO appointments (
          clinic_id, student_number, schedule_type, appointment_date,
@@ -142,7 +142,7 @@ describe("dashboard metrics publication boundaries", () => {
     );
 
     await expect(dashboardMetrics()).resolves.toMatchObject({
-      overCapacityWarnings: baseline,
+      capacityConflicts: baseline,
     });
 
     await pool.query(
@@ -153,7 +153,7 @@ describe("dashboard metrics publication boundaries", () => {
     );
 
     await expect(dashboardMetrics()).resolves.toMatchObject({
-      overCapacityWarnings: baseline + 1,
+      capacityConflicts: baseline + 1,
     });
   });
 });

@@ -21,7 +21,7 @@ type BatchItem = {
 function statusTone(status: string) {
   if (status === "PUBLISHED" || status === "VALID") return "success" as const;
   if (status === "GENERATED") return "info" as const;
-  if (status === "WARNING" || status === "VALIDATED") return "warning" as const;
+  if (status === "VALIDATED") return "warning" as const;
   if (status === "CONFLICT" || status === "CANCELLED") return "danger" as const;
   return "neutral" as const;
 }

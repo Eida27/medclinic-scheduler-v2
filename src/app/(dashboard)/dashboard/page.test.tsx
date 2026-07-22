@@ -18,7 +18,7 @@ describe("DashboardPage", () => {
       completedLaboratory: 2,
       noShows: 1,
       rescheduled: 1,
-      overCapacityWarnings: 0,
+      capacityConflicts: 0,
     });
   });
 
@@ -38,5 +38,13 @@ describe("DashboardPage", () => {
     expect(screen.getByText("Review displacement and the generated date range")).toBeVisible();
     expect(screen.queryByText("Review and validate the grouped import")).not.toBeInTheDocument();
     expect(screen.queryByText("Encode a coordinator schedule batch")).not.toBeInTheDocument();
+  });
+
+  it("describes only maximum-capacity conflicts", async () => {
+    render(await DashboardPage());
+
+    expect(screen.getByText("Capacity conflicts")).toBeVisible();
+    expect(screen.getByText("Service dates above maximum capacity")).toBeVisible();
+    expect(screen.queryByText(/warning|recommended|safe capacity/i)).not.toBeInTheDocument();
   });
 });

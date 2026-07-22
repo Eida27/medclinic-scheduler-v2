@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { pool } from "@/server/db/pool";
+import type { PoolClient } from "pg";
 import { cleanupTestFixtures, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import type { SessionUser } from "@/types/roles";
 import { acceptAndScheduleImport } from "./schedule-imports.service";
@@ -8,7 +9,8 @@ import { acceptAndScheduleImport } from "./schedule-imports.service";
 const header = "Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth";
 const studentPattern = "99-94%";
 const importPattern = "% 2026-2027 - TEST-DISPLACE%";
-let originalCapacities: Array<{ id: string; safe_daily_capacity: number; max_daily_capacity: number }> = [];
+let originalCapacities: Array<{ id: string; max_daily_capacity: number }> = [];
+let capacityLockClient: PoolClient;
 
 const admin: SessionUser = {
   userId: TEST_REFERENCE_IDS.adminUser,
@@ -59,13 +61,14 @@ async function cleanup() {
 }
 
 beforeAll(async () => {
+  capacityLockClient = await pool.connect();
+  await capacityLockClient.query("SELECT pg_advisory_lock(hashtext('medclinic:test:capacity-settings'))");
   await cleanup();
   const capacities = await pool.query<{
     id: string;
-    safe_daily_capacity: number;
     max_daily_capacity: number;
   }>(
-    `SELECT id, safe_daily_capacity, max_daily_capacity
+    `SELECT id, max_daily_capacity
        FROM clinic_capacity_settings WHERE id IN ($1,$2) ORDER BY id`,
     [
       "40000000-0000-4000-8000-000000000001",
@@ -81,17 +84,56 @@ afterAll(async () => {
   for (const capacity of originalCapacities) {
     await pool.query(
       `UPDATE clinic_capacity_settings
-          SET safe_daily_capacity=$2, max_daily_capacity=$3 WHERE id=$1`,
-      [capacity.id, capacity.safe_daily_capacity, capacity.max_daily_capacity],
+          SET safe_daily_capacity=$2, max_daily_capacity=$2 WHERE id=$1`,
+      [capacity.id, capacity.max_daily_capacity],
     );
   }
+  await capacityLockClient.query("SELECT pg_advisory_unlock(hashtext('medclinic:test:capacity-settings'))");
+  capacityLockClient.release();
   await pool.end();
 });
 
 describe("priority displacement", () => {
+  it("keeps a priority candidate date eligible until maximum capacity is reached", async () => {
+    await pool.query(
+      `UPDATE clinic_capacity_settings
+          SET safe_daily_capacity=2, max_daily_capacity=2
+        WHERE id IN ($1,$2)`,
+      [
+        "40000000-0000-4000-8000-000000000001",
+        "40000000-0000-4000-8000-000000000002",
+      ],
+    );
+    await insertEndOfMonthClosures();
+    await acceptAndScheduleImport(
+      input("TEST-DISPLACE-maximum-regular.csv", "REGULAR", ["99-9413-13"]),
+      admin,
+    );
+
+    const priority = await acceptAndScheduleImport(
+      input("TEST-DISPLACE-maximum-priority.csv", "OJT", ["99-9414-14"]),
+      admin,
+    );
+
+    expect(priority.displacementTotal).toBe(0);
+    const laboratoryDates = await pool.query<{ appointment_date: string }>(
+      `SELECT appointment_date::text
+         FROM appointments
+        WHERE student_number IN ('99-9413-13','99-9414-14')
+          AND schedule_type='LABORATORY'
+          AND status='PENDING'
+        ORDER BY student_number`,
+    );
+    expect(laboratoryDates.rows).toEqual([
+      { appointment_date: laboratoryDates.rows[0].appointment_date },
+      { appointment_date: laboratoryDates.rows[0].appointment_date },
+    ]);
+  });
+
   it("moves only the later eligible Regular pair and keeps linked history", async () => {
     await pool.query(
-      `UPDATE clinic_capacity_settings SET safe_daily_capacity=1
+      `UPDATE clinic_capacity_settings
+          SET safe_daily_capacity=1, max_daily_capacity=1
         WHERE id IN ($1,$2)`,
       [
         "40000000-0000-4000-8000-000000000001",
@@ -144,7 +186,8 @@ describe("priority displacement", () => {
 
   it("never moves manually locked Regular appointments", async () => {
     await pool.query(
-      `UPDATE clinic_capacity_settings SET safe_daily_capacity=1
+      `UPDATE clinic_capacity_settings
+          SET safe_daily_capacity=1, max_daily_capacity=1
         WHERE id IN ($1,$2)`,
       [
         "40000000-0000-4000-8000-000000000001",
@@ -178,6 +221,10 @@ describe("priority displacement", () => {
     await pool.query(
       `UPDATE clinic_capacity_settings
           SET safe_daily_capacity=CASE
+            WHEN schedule_type='LABORATORY' THEN 2
+            ELSE 1
+          END,
+              max_daily_capacity=CASE
             WHEN schedule_type='LABORATORY' THEN 2
             ELSE 1
           END
@@ -229,6 +276,10 @@ describe("priority displacement", () => {
           SET safe_daily_capacity=CASE
             WHEN schedule_type='LABORATORY' THEN 2
             ELSE 1
+          END,
+              max_daily_capacity=CASE
+            WHEN schedule_type='LABORATORY' THEN 2
+            ELSE 1
           END
         WHERE id IN ($1,$2)`,
       [
@@ -246,7 +297,8 @@ describe("priority displacement", () => {
           AND schedule_type='LABORATORY'`,
     );
     await pool.query(
-      `UPDATE clinic_capacity_settings SET safe_daily_capacity=1
+      `UPDATE clinic_capacity_settings
+          SET safe_daily_capacity=1, max_daily_capacity=1
         WHERE schedule_type='LABORATORY'`,
     );
     await pool.query(

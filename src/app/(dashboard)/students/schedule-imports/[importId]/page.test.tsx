@@ -43,17 +43,15 @@ function childBatch({
     validationSummary: {
       totalItems: 1,
       validCount: 1,
-      warningCount: 0,
       conflictCount: 0,
       capacityResults: [{
         clinicId: `${id}-clinic`,
         date: targetDate,
         scheduleType,
         count: 1,
-        safeCapacity: 120,
         maxCapacity: 150,
         status: "VALID",
-        message: "This date is within the recommended daily capacity.",
+        message: "This date is within the maximum daily capacity.",
       }],
     },
     items: [{

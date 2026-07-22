@@ -33,7 +33,7 @@ export type BatchCreate = {
 export type ValidationIssue = {
   code: string;
   message: string;
-  severity: "WARNING" | "CONFLICT";
+  severity: "CONFLICT";
   date?: string;
   scheduleType?: string;
 };
@@ -150,14 +150,13 @@ export async function listScheduleBatches(filters: { clinicCode?: ClinicCode } =
   const result = await query<{
     id: string; batch_name: string; status: string; clinic_code: ClinicCode; clinic_name: string;
     college_name: string | null; program_name: string | null;
-    submitted_by_name: string | null; created_at: Date; item_count: number; conflict_count: number; warning_count: number;
+    submitted_by_name: string | null; created_at: Date; item_count: number; conflict_count: number;
   }>(
     `SELECT b.id, b.batch_name, b.status, cl.code AS clinic_code, cl.name AS clinic_name,
             c.name AS college_name, p.name AS program_name,
             b.submitted_by_name, b.created_at,
             COUNT(i.id)::int AS item_count,
-            COUNT(*) FILTER (WHERE i.status = 'CONFLICT')::int AS conflict_count,
-            COUNT(*) FILTER (WHERE i.status = 'WARNING')::int AS warning_count
+            COUNT(*) FILTER (WHERE i.status = 'CONFLICT')::int AS conflict_count
      FROM schedule_batches b
      JOIN clinics cl ON cl.id = b.clinic_id
      LEFT JOIN colleges c ON c.id = b.college_id
@@ -173,7 +172,7 @@ export async function listScheduleBatches(filters: { clinicCode?: ClinicCode } =
     clinicName: row.clinic_name, collegeName: row.college_name,
     programName: row.program_name, submittedByName: row.submitted_by_name,
     createdAt: row.created_at.toISOString(), itemCount: row.item_count,
-    conflictCount: row.conflict_count, warningCount: row.warning_count,
+    conflictCount: row.conflict_count,
   }));
 }
 
@@ -277,11 +276,11 @@ export async function currentAppointmentLoad(client?: PoolClient) {
 }
 
 export async function capacitySettings(client?: PoolClient) {
-  const sql = "SELECT clinic_id, schedule_type, safe_daily_capacity, max_daily_capacity FROM clinic_capacity_settings WHERE is_active=TRUE";
+  const sql = "SELECT clinic_id, schedule_type, max_daily_capacity FROM clinic_capacity_settings WHERE is_active=TRUE";
   const result = client
-    ? await client.query<{ clinic_id: string; schedule_type: AppointmentScheduleType; safe_daily_capacity: number; max_daily_capacity: number }>(sql)
-    : await query<{ clinic_id: string; schedule_type: AppointmentScheduleType; safe_daily_capacity: number; max_daily_capacity: number }>(sql);
-  return result.rows.map((row) => ({ clinicId: row.clinic_id, scheduleType: row.schedule_type, safeDailyCapacity: row.safe_daily_capacity, maxDailyCapacity: row.max_daily_capacity }));
+    ? await client.query<{ clinic_id: string; schedule_type: AppointmentScheduleType; max_daily_capacity: number }>(sql)
+    : await query<{ clinic_id: string; schedule_type: AppointmentScheduleType; max_daily_capacity: number }>(sql);
+  return result.rows.map((row) => ({ clinicId: row.clinic_id, scheduleType: row.schedule_type, maxDailyCapacity: row.max_daily_capacity }));
 }
 
 export async function saveValidation(

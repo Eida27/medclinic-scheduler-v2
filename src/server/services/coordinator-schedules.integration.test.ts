@@ -18,18 +18,18 @@ const studentNumberPattern = "TEST-CS-%";
 const batchNamePattern = "TEST coordinator schedules - %";
 
 let studentNumbers: string[];
-let warningBatchId: string;
+let belowMaximumBatchId: string;
 let conflictBatchId: string;
 let physicalWeekBatchId: string;
 let laboratoryWeekBatchId: string;
-let warningDate: string;
+let belowMaximumDate: string;
 let conflictDate: string;
 let weekStart: string;
 let weekEnd: string;
 
 async function reserveUnusedFixtureDates() {
   const result = await pool.query<{
-    warning_date: string;
+    below_maximum_date: string;
     conflict_date: string;
     week_start: string;
     week_end: string;
@@ -50,7 +50,7 @@ async function reserveUnusedFixtureDates() {
         ORDER BY candidate
         LIMIT 1
      )
-     SELECT base_date::text AS warning_date,
+     SELECT base_date::text AS below_maximum_date,
             (base_date + 1)::text AS conflict_date,
             (base_date + 7)::text AS week_start,
             (base_date + 11)::text AS week_end
@@ -108,14 +108,14 @@ beforeAll(async () => {
   await cleanupTestFixtures(studentNumberPattern, batchNamePattern);
   studentNumbers = await insertNumberedTestStudents("TEST-CS-", 180);
   ({
-    warning_date: warningDate,
+    below_maximum_date: belowMaximumDate,
     conflict_date: conflictDate,
     week_start: weekStart,
     week_end: weekEnd,
   } = await reserveUnusedFixtureDates());
 
-  warningBatchId = await insertBatch(
-    "TEST coordinator schedules - warning capacity",
+  belowMaximumBatchId = await insertBatch(
+    "TEST coordinator schedules - below maximum capacity",
     TEST_REFERENCE_IDS.laboratoryClinic,
   );
   conflictBatchId = await insertBatch(
@@ -132,11 +132,11 @@ beforeAll(async () => {
   );
 
   await insertItems(
-    warningBatchId,
+    belowMaximumBatchId,
     TEST_REFERENCE_IDS.laboratoryClinic,
     "LABORATORY",
     studentNumbers.slice(0, 130),
-    { date: warningDate },
+    { date: belowMaximumDate },
   );
   await insertItems(
     conflictBatchId,
@@ -209,12 +209,12 @@ describe("coordinator scheduling workflow", () => {
     expect(batches.rowCount).toBe(0);
   });
 
-  it("classifies isolated warning and conflict capacity fixtures", async () => {
-    const warning = await validateBatch(warningBatchId, admin.userId);
+  it("keeps loads through maximum valid and classifies only over-maximum conflicts", async () => {
+    const belowMaximum = await validateBatch(belowMaximumBatchId, admin.userId);
     const conflict = await validateBatch(conflictBatchId, admin.userId);
 
-    expect(warning.summary.warningCount).toBe(130);
-    expect(warning.summary.conflictCount).toBe(0);
+    expect(belowMaximum.summary.validCount).toBe(130);
+    expect(belowMaximum.summary.conflictCount).toBe(0);
     expect(conflict.summary.conflictCount).toBe(160);
   });
 

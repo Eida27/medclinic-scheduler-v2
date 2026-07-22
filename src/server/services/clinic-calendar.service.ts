@@ -268,11 +268,10 @@ export async function createClinicUnavailableDate(raw: unknown, actor: SessionUs
       clinic_id: string;
       clinic_code: "KABALAKA_CLINIC" | "CPU_CLINIC";
       schedule_type: "LABORATORY" | "PHYSICAL_EXAM";
-      safe_daily_capacity: number;
       max_daily_capacity: number;
     }>(
       `SELECT setting.clinic_id, clinic.code AS clinic_code, setting.schedule_type,
-              setting.safe_daily_capacity, setting.max_daily_capacity
+              setting.max_daily_capacity
          FROM clinic_capacity_settings setting
          JOIN clinics clinic ON clinic.id=setting.clinic_id`,
     );
@@ -326,10 +325,9 @@ export async function createClinicUnavailableDate(raw: unknown, actor: SessionUs
       startDate: string,
       blocked: Set<string>,
       load: Record<string, number>,
-      safeCapacity: number,
       maxCapacity: number,
     ) => {
-      const ceiling = Math.min(safeCapacity, maxCapacity);
+      const ceiling = Math.max(0, maxCapacity);
       for (let date = startDate; date <= searchEndDate; date = addDays(date, 1)) {
         if (!isWeekday(date) || blocked.has(date)) continue;
         if ((load[date] ?? 0) < ceiling) return date;
@@ -347,14 +345,12 @@ export async function createClinicUnavailableDate(raw: unknown, actor: SessionUs
           oldLaboratory.appointmentDate,
           blockedLaboratory,
           laboratoryLoad,
-          laboratoryCapacity.safe_daily_capacity,
           laboratoryCapacity.max_daily_capacity,
         );
         const physicalDate = laboratoryDate && firstAvailable(
           addDays(laboratoryDate, 1),
           blockedPhysical,
           physicalLoad,
-          physicalCapacity.safe_daily_capacity,
           physicalCapacity.max_daily_capacity,
         );
         if (!laboratoryDate || !physicalDate) {
@@ -399,7 +395,6 @@ export async function createClinicUnavailableDate(raw: unknown, actor: SessionUs
             : earliestReplacementDate,
           blockedPhysical,
           physicalLoad,
-          physicalCapacity.safe_daily_capacity,
           physicalCapacity.max_daily_capacity,
         );
         if (!physicalDate) {

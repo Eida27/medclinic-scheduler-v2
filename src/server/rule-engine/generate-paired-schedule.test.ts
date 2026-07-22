@@ -17,8 +17,8 @@ function request(overrides: Partial<PairedScheduleRequest> = {}): PairedSchedule
 function generate(requests: PairedScheduleRequest[], overrides: Record<string, unknown> = {}) {
   return generatePairedSchedule({
     requests,
-    laboratoryCapacity: { safeDailyCapacity: 1, maxDailyCapacity: 2 },
-    physicalExamCapacity: { safeDailyCapacity: 1, maxDailyCapacity: 2 },
+    laboratoryCapacity: { maxDailyCapacity: 2 },
+    physicalExamCapacity: { maxDailyCapacity: 2 },
     existingLaboratoryLoad: {},
     existingPhysicalExamLoad: {},
     blockedLaboratoryDates: [],
@@ -29,6 +29,34 @@ function generate(requests: PairedScheduleRequest[], overrides: Record<string, u
 }
 
 describe("generatePairedSchedule", () => {
+  it("fills each clinic date to its maximum before moving to the next date", () => {
+    const result = generatePairedSchedule({
+      requests: [
+        request({ requestId: "first" }),
+        request({ requestId: "second", studentNumber: "23-0002-02", sourceRowOrder: 2 }),
+        request({ requestId: "third", studentNumber: "23-0003-03", sourceRowOrder: 3 }),
+      ],
+      laboratoryCapacity: { maxDailyCapacity: 2 },
+      physicalExamCapacity: { maxDailyCapacity: 2 },
+      existingLaboratoryLoad: {},
+      existingPhysicalExamLoad: {},
+      blockedLaboratoryDates: [],
+      blockedPhysicalExamDates: [],
+      searchEndDate: "2026-08-11",
+    });
+
+    expect(result.assignments.map((assignment) => assignment.laboratoryDate)).toEqual([
+      "2026-08-07",
+      "2026-08-07",
+      "2026-08-10",
+    ]);
+    expect(result.assignments.map((assignment) => assignment.physicalExamDate)).toEqual([
+      "2026-08-10",
+      "2026-08-10",
+      "2026-08-11",
+    ]);
+  });
+
   it("pairs a Friday Laboratory appointment with the following Monday PE", () => {
     const result = generate([request()]);
     expect(result.assignments).toEqual([expect.objectContaining({
@@ -67,14 +95,14 @@ describe("generatePairedSchedule", () => {
     ]);
   });
 
-  it("continues Regular allocation beyond March when safe capacity is full", () => {
+  it("continues Regular allocation beyond March", () => {
     const result = generate([
       request({ requestId: "first", windowStart: "2027-03-31" }),
       request({ requestId: "second", studentNumber: "23-0002-02", sourceRowOrder: 2, windowStart: "2027-03-31" }),
     ]);
     expect(result.assignments).toEqual([
       expect.objectContaining({ requestId: "first", laboratoryDate: "2027-03-31", physicalExamDate: "2027-04-01" }),
-      expect.objectContaining({ requestId: "second", laboratoryDate: "2027-04-01", physicalExamDate: "2027-04-02" }),
+      expect.objectContaining({ requestId: "second", laboratoryDate: "2027-03-31", physicalExamDate: "2027-04-01" }),
     ]);
   });
 
@@ -85,18 +113,12 @@ describe("generatePairedSchedule", () => {
     expect(result).toEqual({ assignments: [], unscheduledRequestIds: ["request-1"] });
   });
 
-  it("uses safe capacity as the ceiling and maximum capacity as the hard guard", () => {
-    const safeFull = generate([request()], {
+  it("uses maximum capacity as the sole ceiling", () => {
+    const maximumFull = generate([request()], {
+      laboratoryCapacity: { maxDailyCapacity: 1 },
       existingLaboratoryLoad: { "2026-08-07": 1 },
       searchEndDate: "2026-08-11",
     });
-    expect(safeFull.assignments[0].laboratoryDate).toBe("2026-08-10");
-
-    const maximumGuard = generate([request()], {
-      laboratoryCapacity: { safeDailyCapacity: 5, maxDailyCapacity: 1 },
-      existingLaboratoryLoad: { "2026-08-07": 1 },
-      searchEndDate: "2026-08-11",
-    });
-    expect(maximumGuard.assignments[0].laboratoryDate).toBe("2026-08-10");
+    expect(maximumFull.assignments[0].laboratoryDate).toBe("2026-08-10");
   });
 });

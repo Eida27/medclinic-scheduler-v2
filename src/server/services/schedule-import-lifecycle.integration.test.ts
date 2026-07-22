@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { pool } from "@/server/db/pool";
+import type { PoolClient } from "pg";
 import { cleanupTestFixtures, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import type { SessionUser } from "@/types/roles";
 import { acceptAndScheduleImport } from "./schedule-imports.service";
@@ -8,7 +9,8 @@ import { acceptAndScheduleImport } from "./schedule-imports.service";
 const header = "Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth";
 const studentPattern = "99-92%";
 const importPattern = "REGULAR 20%-20% - TEST-FCFS%";
-let originalCapacities: Array<{ id: string; safe_daily_capacity: number; max_daily_capacity: number }> = [];
+let originalCapacities: Array<{ id: string; max_daily_capacity: number }> = [];
+let capacityLockClient: PoolClient;
 
 const admin: SessionUser = {
   userId: TEST_REFERENCE_IDS.adminUser,
@@ -37,13 +39,14 @@ async function cleanup() {
 }
 
 beforeAll(async () => {
+  capacityLockClient = await pool.connect();
+  await capacityLockClient.query("SELECT pg_advisory_lock(hashtext('medclinic:test:capacity-settings'))");
   await cleanup();
   const capacities = await pool.query<{
     id: string;
-    safe_daily_capacity: number;
     max_daily_capacity: number;
   }>(
-    `SELECT id, safe_daily_capacity, max_daily_capacity
+    `SELECT id, max_daily_capacity
        FROM clinic_capacity_settings
       WHERE id IN ($1,$2) ORDER BY id`,
     [
@@ -60,15 +63,47 @@ afterAll(async () => {
   for (const capacity of originalCapacities) {
     await pool.query(
       `UPDATE clinic_capacity_settings
-          SET safe_daily_capacity=$2, max_daily_capacity=$3
+          SET safe_daily_capacity=$2, max_daily_capacity=$2
         WHERE id=$1`,
-      [capacity.id, capacity.safe_daily_capacity, capacity.max_daily_capacity],
+      [capacity.id, capacity.max_daily_capacity],
     );
   }
+  await capacityLockClient.query("SELECT pg_advisory_unlock(hashtext('medclinic:test:capacity-settings'))");
+  capacityLockClient.release();
   await pool.end();
 });
 
 describe("atomic academic-year import lifecycle", () => {
+  it("fills imported schedules to maximum capacity before using the next date", async () => {
+    await pool.query(
+      `UPDATE clinic_capacity_settings
+          SET safe_daily_capacity=2, max_daily_capacity=2
+        WHERE id IN ($1,$2)`,
+      [
+        "40000000-0000-4000-8000-000000000001",
+        "40000000-0000-4000-8000-000000000002",
+      ],
+    );
+
+    await acceptAndScheduleImport(input("TEST-FCFS-maximum-1.csv", "99-9210-10"), admin);
+    await acceptAndScheduleImport(input("TEST-FCFS-maximum-2.csv", "99-9211-11"), admin);
+    await acceptAndScheduleImport(input("TEST-FCFS-maximum-3.csv", "99-9212-12"), admin);
+
+    const laboratoryDates = await pool.query<{ appointment_date: string }>(
+      `SELECT appointment_date::text
+         FROM appointments
+        WHERE student_number IN ('99-9210-10','99-9211-11','99-9212-12')
+          AND schedule_type='LABORATORY'
+        ORDER BY student_number`,
+    );
+    expect(laboratoryDates.rows.map((row) => row.appointment_date)).toEqual([
+      laboratoryDates.rows[0].appointment_date,
+      laboratoryDates.rows[0].appointment_date,
+      expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+    ]);
+    expect(laboratoryDates.rows[2].appointment_date > laboratoryDates.rows[1].appointment_date).toBe(true);
+  });
+
   it("publishes one date-only Lab/PE pair with a shared pair ID", async () => {
     const result = await acceptAndScheduleImport(
       input("TEST-FCFS-pair.csv", "99-9201-01"),
@@ -105,7 +140,8 @@ describe("atomic academic-year import lifecycle", () => {
 
   it("serializes simultaneous imports by immutable accepted_at FCFS order", async () => {
     await pool.query(
-      `UPDATE clinic_capacity_settings SET safe_daily_capacity=1
+      `UPDATE clinic_capacity_settings
+          SET safe_daily_capacity=1, max_daily_capacity=1
         WHERE id IN ($1,$2)`,
       [
         "40000000-0000-4000-8000-000000000001",

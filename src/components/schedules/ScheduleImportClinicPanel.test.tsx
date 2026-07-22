@@ -9,18 +9,16 @@ const laboratoryBatch = {
   status: "GENERATED",
   validationSummary: {
     totalItems: 2,
-    validCount: 0,
-    warningCount: 1,
+    validCount: 1,
     conflictCount: 1,
     capacityResults: [{
       clinicId: "clinic-1",
       date: "2026-12-10",
       scheduleType: "LABORATORY",
-      count: 121,
-      safeCapacity: 120,
+      count: 130,
       maxCapacity: 150,
-      status: "WARNING",
-      message: "This date is above the recommended daily capacity.",
+      status: "VALID",
+      message: "This date is within the maximum daily capacity.",
     }],
   },
   items: [{
@@ -32,11 +30,8 @@ const laboratoryBatch = {
     targetDate: "2026-12-10",
     targetWeekStart: null,
     targetWeekEnd: null,
-    status: "WARNING",
+    status: "CONFLICT",
     validationIssues: [{
-      severity: "WARNING",
-      message: "Daily safe capacity would be exceeded.",
-    }, {
       severity: "CONFLICT",
       message: "Student already has an active laboratory appointment.",
     }],
@@ -63,10 +58,10 @@ describe("ScheduleImportClinicPanel", () => {
     expect(within(section).getByText("KABALAKA Clinic")).toBeVisible();
     expect(within(section).getByText("GENERATED")).toBeVisible();
     expect(within(section).getByText("2", { selector: "dd" })).toBeVisible();
-    expect(within(section).getByText("1 warning")).toBeVisible();
     expect(within(section).getByText("1 conflict")).toBeVisible();
-    expect(within(section).getByText("121 scheduled / 120 safe / 150 maximum")).toBeVisible();
-    expect(within(section).getByText("This date is above the recommended daily capacity.")).toBeVisible();
+    expect(within(section).getByText("130 scheduled / 150 maximum")).toBeVisible();
+    expect(within(section).getByText("This date is within the maximum daily capacity.")).toBeVisible();
+    expect(within(section).queryByText(/warning|safe|recommended/i)).not.toBeInTheDocument();
     expect(within(section).queryByRole("heading", { name: "Schedule requests" })).not.toBeInTheDocument();
 
     const generatedHeading = within(section).getByRole("heading", { name: "Generated appointments" });
@@ -76,13 +71,10 @@ describe("ScheduleImportClinicPanel", () => {
     expect(within(appointmentsTable).getByRole("columnheader", { name: "Priority" })).toBeVisible();
     expect(within(appointmentsTable).getByText("Graduating")).toBeVisible();
 
-    const exceptionSummary = within(section).getByText("Review exceptions (2 issues)");
-    const warning = within(section).getByText("Daily safe capacity would be exceeded.");
+    const exceptionSummary = within(section).getByText("Review exceptions (1 issue)");
     const conflict = within(section).getByText("Student already has an active laboratory appointment.");
-    expect(warning).not.toBeVisible();
     expect(conflict).not.toBeVisible();
     fireEvent.click(exceptionSummary);
-    expect(warning).toBeVisible();
     expect(conflict).toBeVisible();
     expect(within(section).getByText("Draft — not published")).toBeVisible();
     expect(within(section).getAllByText("2026-12-10")).toHaveLength(2);

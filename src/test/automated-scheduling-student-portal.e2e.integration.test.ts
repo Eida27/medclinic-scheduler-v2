@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { pool } from "@/server/db/pool";
+import type { PoolClient } from "pg";
 import { getStudentPortalSchedule } from "@/server/repositories/student-portal.repository";
 import { authenticateStudent } from "@/server/services/student-auth.service";
 import { createClinicUnavailableDate } from "@/server/services/clinic-calendar.service";
@@ -28,7 +29,8 @@ const studentPattern = "99-90%";
 const importPattern = "% 2026-2027 - TEST-E2E%";
 let storageRoot = "";
 let storage: LocalResultStorage;
-let originalCapacities: Array<{ id: string; safe_daily_capacity: number; max_daily_capacity: number }> = [];
+let originalCapacities: Array<{ id: string; max_daily_capacity: number }> = [];
+let capacityLockClient: PoolClient;
 
 const admin: SessionUser = {
   userId: TEST_REFERENCE_IDS.adminUser,
@@ -78,15 +80,16 @@ async function cleanup() {
 }
 
 beforeAll(async () => {
+  capacityLockClient = await pool.connect();
+  await capacityLockClient.query("SELECT pg_advisory_lock(hashtext('medclinic:test:capacity-settings'))");
   storageRoot = await mkdtemp(join(tmpdir(), "medclinic-e2e-results-"));
   storage = new LocalResultStorage(storageRoot);
   await cleanup();
   const capacities = await pool.query<{
     id: string;
-    safe_daily_capacity: number;
     max_daily_capacity: number;
   }>(
-    `SELECT id, safe_daily_capacity, max_daily_capacity
+    `SELECT id, max_daily_capacity
        FROM clinic_capacity_settings
       WHERE id IN ($1,$2) ORDER BY id`,
     [
@@ -102,10 +105,12 @@ afterAll(async () => {
   for (const capacity of originalCapacities) {
     await pool.query(
       `UPDATE clinic_capacity_settings
-          SET safe_daily_capacity=$2, max_daily_capacity=$3 WHERE id=$1`,
-      [capacity.id, capacity.safe_daily_capacity, capacity.max_daily_capacity],
+          SET safe_daily_capacity=$2, max_daily_capacity=$2 WHERE id=$1`,
+      [capacity.id, capacity.max_daily_capacity],
     );
   }
+  await capacityLockClient.query("SELECT pg_advisory_unlock(hashtext('medclinic:test:capacity-settings'))");
+  capacityLockClient.release();
   await rm(storageRoot, { recursive: true, force: true });
   await pool.end();
 });
@@ -113,7 +118,8 @@ afterAll(async () => {
 describe("automated academic-year scheduling and student results", () => {
   it("runs the complete import, displacement, closure, portal, document, and replacement story", async () => {
     await pool.query(
-      `UPDATE clinic_capacity_settings SET safe_daily_capacity=1
+      `UPDATE clinic_capacity_settings
+          SET safe_daily_capacity=1, max_daily_capacity=1
         WHERE id IN ($1,$2)`,
       [
         "40000000-0000-4000-8000-000000000001",

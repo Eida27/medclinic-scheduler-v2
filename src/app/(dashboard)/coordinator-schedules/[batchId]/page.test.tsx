@@ -23,7 +23,7 @@ const batch = {
   status: "VALIDATED",
   programName: "BSIT",
   collegeName: "College of Computer Studies",
-  validationSummary: { totalItems: 1, validCount: 1, warningCount: 0, conflictCount: 0 },
+  validationSummary: { totalItems: 1, validCount: 1, conflictCount: 0 },
   items: [{
     id: "item-1",
     studentName: "Historical Student",

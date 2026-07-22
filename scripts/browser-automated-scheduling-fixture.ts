@@ -22,7 +22,6 @@ const CAPACITY_IDS = [
 
 type CapacityState = {
   id: string;
-  safeDailyCapacity: number;
   maxDailyCapacity: number;
 };
 
@@ -158,9 +157,9 @@ async function cleanupBrowserData(state: FixtureState | null) {
     for (const capacity of state.capacities) {
       await pool.query(
         `UPDATE clinic_capacity_settings
-            SET safe_daily_capacity=$2, max_daily_capacity=$3
+            SET safe_daily_capacity=$2, max_daily_capacity=$2
           WHERE id=$1`,
-        [capacity.id, capacity.safeDailyCapacity, capacity.maxDailyCapacity],
+        [capacity.id, capacity.maxDailyCapacity],
       );
     }
   }
@@ -172,11 +171,9 @@ async function setup() {
 
   const capacities = await pool.query<{
     id: string;
-    safeDailyCapacity: number;
     maxDailyCapacity: number;
   }>(
-    `SELECT id, safe_daily_capacity AS "safeDailyCapacity",
-            max_daily_capacity AS "maxDailyCapacity"
+    `SELECT id, max_daily_capacity AS "maxDailyCapacity"
        FROM clinic_capacity_settings
       WHERE id = ANY($1::uuid[])
       ORDER BY id`,
@@ -189,7 +186,7 @@ async function setup() {
   await cleanupBrowserData(null);
   await pool.query(
     `UPDATE clinic_capacity_settings
-        SET safe_daily_capacity=1, max_daily_capacity=GREATEST(max_daily_capacity, 1)
+        SET safe_daily_capacity=1, max_daily_capacity=1
       WHERE id = ANY($1::uuid[])`,
     [CAPACITY_IDS],
   );
@@ -272,11 +269,9 @@ async function status() {
   );
   const capacities = await pool.query<{
     id: string;
-    safeDailyCapacity: number;
     maxDailyCapacity: number;
   }>(
-    `SELECT id, safe_daily_capacity AS "safeDailyCapacity",
-            max_daily_capacity AS "maxDailyCapacity"
+    `SELECT id, max_daily_capacity AS "maxDailyCapacity"
        FROM clinic_capacity_settings
       WHERE id = ANY($1::uuid[])
       ORDER BY id`,

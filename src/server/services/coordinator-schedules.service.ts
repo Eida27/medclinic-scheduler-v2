@@ -202,27 +202,25 @@ export async function validateBatchWithClient(
   for (const unscheduled of scopedPreview.unscheduledItems) {
     addIssue(unscheduled.scheduleItemId, { code: unscheduled.code, message: unscheduled.message, severity: "CONFLICT" });
   }
-  for (const capacity of scopedPreview.capacityResults.filter((result) => result.status !== "VALID")) {
-    const severity: "WARNING" | "CONFLICT" = capacity.status === "CONFLICT" ? "CONFLICT" : "WARNING";
+  for (const capacity of scopedPreview.capacityResults.filter((result) => result.status === "CONFLICT")) {
     const impacted = scopedPreview.appointments.filter((appointment) => appointment.appointmentDate === capacity.date && appointment.scheduleType === capacity.scheduleType);
     for (const appointment of impacted) {
-      const code = capacity.status === "CONFLICT" ? "CAPACITY_CONFLICT" : "CAPACITY_WARNING";
+      const code = "CAPACITY_CONFLICT";
       const existing = issues.get(appointment.scheduleItemId) ?? [];
       if (!existing.some((issue) => issue.code === code && issue.date === capacity.date && issue.scheduleType === capacity.scheduleType)) {
-        addIssue(appointment.scheduleItemId, { code, message: capacity.message, severity, date: capacity.date, scheduleType: capacity.scheduleType });
+        addIssue(appointment.scheduleItemId, { code, message: capacity.message, severity: "CONFLICT", date: capacity.date, scheduleType: capacity.scheduleType });
       }
     }
   }
 
   const itemResults = batch.items.map((item) => {
     const itemIssues = issues.get(item.id) ?? [];
-    const status = itemIssues.some((issue) => issue.severity === "CONFLICT") ? "CONFLICT" : itemIssues.length ? "WARNING" : "VALID";
+    const status = itemIssues.length ? "CONFLICT" : "VALID";
     return { id: item.id, status, issues: itemIssues };
   });
   const summary = {
     totalItems: itemResults.length,
     validCount: itemResults.filter((item) => item.status === "VALID").length,
-    warningCount: itemResults.filter((item) => item.status === "WARNING").length,
     conflictCount: itemResults.filter((item) => item.status === "CONFLICT").length,
     capacityResults: scopedPreview.capacityResults,
   };

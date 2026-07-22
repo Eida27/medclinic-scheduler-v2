@@ -341,11 +341,10 @@ export async function createScheduleImport(
       clinic_id: string;
       clinic_code: ClinicCode;
       schedule_type: AppointmentScheduleType;
-      safe_daily_capacity: number;
       max_daily_capacity: number;
     }>(
       `SELECT setting.clinic_id, clinic.code AS clinic_code, setting.schedule_type,
-              setting.safe_daily_capacity, setting.max_daily_capacity
+              setting.max_daily_capacity
          FROM clinic_capacity_settings setting
          JOIN clinics clinic ON clinic.id=setting.clinic_id
         WHERE (clinic.code='KABALAKA_CLINIC' AND setting.schedule_type='LABORATORY')
@@ -415,11 +414,9 @@ export async function createScheduleImport(
         windowStart,
       })),
       laboratoryCapacity: {
-        safeDailyCapacity: laboratoryCapacity.safe_daily_capacity,
         maxDailyCapacity: laboratoryCapacity.max_daily_capacity,
       },
       physicalExamCapacity: {
-        safeDailyCapacity: physicalExamCapacity.safe_daily_capacity,
         maxDailyCapacity: physicalExamCapacity.max_daily_capacity,
       },
       existingLaboratoryLoad: laboratoryLoad,
@@ -533,7 +530,7 @@ export async function createScheduleImport(
           Array.from(`${importName} - ${clinicLabel}`).slice(0, 150).join(""),
           commonCollegeId,
           commonProgramId,
-          JSON.stringify({ totalItems: itemCount, validCount: itemCount, warningCount: 0, conflictCount: 0 }),
+          JSON.stringify({ totalItems: itemCount, validCount: itemCount, conflictCount: 0 }),
           actorUserId,
           accepted.rows[0].acceptedAt,
           importId,
