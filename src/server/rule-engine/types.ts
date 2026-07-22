@@ -2,12 +2,11 @@ import "server-only";
 
 export type CoordinatorScheduleType = "PHYSICAL_EXAM" | "LABORATORY" | "BOTH";
 export type AppointmentScheduleType = Exclude<CoordinatorScheduleType, "BOTH">;
-export type CapacityStatus = "VALID" | "WARNING" | "CONFLICT";
+export type CapacityStatus = "VALID" | "CONFLICT";
 
 export type CapacitySetting = {
   clinicId: string;
   scheduleType: AppointmentScheduleType;
-  safeDailyCapacity: number;
   maxDailyCapacity: number;
 };
 
@@ -43,7 +42,6 @@ export type CapacityCheckResult = {
   date: string;
   scheduleType: AppointmentScheduleType;
   count: number;
-  safeCapacity: number;
   maxCapacity: number;
   message: string;
 };
@@ -87,7 +85,6 @@ export type PairedAssignment = {
 };
 
 export type PairedScheduleCapacity = {
-  safeDailyCapacity: number;
   maxDailyCapacity: number;
 };
 

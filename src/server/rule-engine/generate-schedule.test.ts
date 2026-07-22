@@ -4,8 +4,8 @@ import { generateSchedule } from "./generate-schedule";
 import type { ScheduleItemInput } from "./types";
 
 const capacities = [
-  { clinicId: "60000000-0000-4000-8000-000000000002", scheduleType: "PHYSICAL_EXAM" as const, safeDailyCapacity: 120, maxDailyCapacity: 150 },
-  { clinicId: "60000000-0000-4000-8000-000000000001", scheduleType: "LABORATORY" as const, safeDailyCapacity: 120, maxDailyCapacity: 150 },
+  { clinicId: "60000000-0000-4000-8000-000000000002", scheduleType: "PHYSICAL_EXAM" as const, maxDailyCapacity: 150 },
+  { clinicId: "60000000-0000-4000-8000-000000000001", scheduleType: "LABORATORY" as const, maxDailyCapacity: 150 },
 ];
 
 function item(overrides: Partial<ScheduleItemInput> = {}): ScheduleItemInput {
@@ -25,8 +25,8 @@ function item(overrides: Partial<ScheduleItemInput> = {}): ScheduleItemInput {
 describe("checkCapacity", () => {
   it.each([
     [120, "VALID"],
-    [121, "WARNING"],
-    [150, "WARNING"],
+    [121, "VALID"],
+    [150, "VALID"],
     [151, "CONFLICT"],
   ] as const)("classifies %i appointments as %s", (count, expected) => {
     expect(checkCapacity("60000000-0000-4000-8000-000000000002", "2026-07-06", "PHYSICAL_EXAM", count, capacities[0]).status).toBe(expected);
@@ -120,8 +120,8 @@ describe("generateSchedule", () => {
         }),
       ],
       capacities: [
-        { clinicId: "cpu", scheduleType: "PHYSICAL_EXAM", safeDailyCapacity: 1, maxDailyCapacity: 1 },
-        { clinicId: "other-clinic", scheduleType: "PHYSICAL_EXAM", safeDailyCapacity: 1, maxDailyCapacity: 1 },
+        { clinicId: "cpu", scheduleType: "PHYSICAL_EXAM", maxDailyCapacity: 1 },
+        { clinicId: "other-clinic", scheduleType: "PHYSICAL_EXAM", maxDailyCapacity: 1 },
       ],
       existingLoad: [
         { clinicId: "other-clinic", date: "2026-07-06", scheduleType: "PHYSICAL_EXAM", count: 1 },
