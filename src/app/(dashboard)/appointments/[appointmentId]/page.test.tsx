@@ -2,8 +2,9 @@ import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTOMATIC_NO_SHOW_NOTE } from "@/server/appointments/automatic-no-show";
 
-const { appointmentActions, getPublishedAppointment, notFound, requireUser } = vi.hoisted(() => ({
+const { appointmentActions, appointmentDetail, getPublishedAppointment, notFound, requireUser } = vi.hoisted(() => ({
   appointmentActions: vi.fn(() => null),
+  appointmentDetail: vi.fn(() => null),
   getPublishedAppointment: vi.fn(),
   notFound: vi.fn(() => {
     throw new Error("NEXT_NOT_FOUND");
@@ -11,31 +12,37 @@ const { appointmentActions, getPublishedAppointment, notFound, requireUser } = v
   requireUser: vi.fn(),
 }));
 
-vi.mock("next/navigation", () => ({ notFound }));
-vi.mock("@/server/auth/current-user", () => ({ requireUser }));
-vi.mock("@/server/repositories/appointments.repository", () => ({ getPublishedAppointment }));
+vi.mock("@/components/appointments/AppointmentDetail", () => ({
+  AppointmentDetail: appointmentDetail,
+}));
 vi.mock("@/components/appointments/AppointmentActions", () => ({
   AppointmentActions: appointmentActions,
 }));
+vi.mock("next/navigation", () => ({ notFound }));
+vi.mock("@/server/auth/current-user", () => ({ requireUser }));
+vi.mock("@/server/repositories/appointments.repository", () => ({ getPublishedAppointment }));
 
 import AppointmentPage from "./page";
 
+describe("AppointmentPage", () => {
+  it("delegates rendering to the shared appointment detail", async () => {
+    render(await AppointmentPage({ params: Promise.resolve({ appointmentId: "appointment-1" }) }));
+
+    expect(appointmentDetail).toHaveBeenCalledWith({
+      appointmentId: "appointment-1",
+      source: "APPOINTMENTS",
+    }, undefined);
+  });
+});
+
 const publishedAppointment = {
   id: "appointment-1",
-  batchId: "batch-1",
   studentNumber: "2026-0001",
-  studentName: "Ana Maria Santos Jr.",
+  studentName: "Santos, Ana M. (Jr.)",
   scheduleType: "LABORATORY",
   clinicId: "clinic-1",
-  clinicCode: "KABALAKA_CLINIC",
-  clinicName: "KABALAKA Clinic",
   appointmentDate: "2026-08-18",
   status: "PENDING",
-  isPublished: true,
-  notes: null,
-  rescheduledFrom: null,
-  collegeName: "College of Computer Studies",
-  programName: "BSIT",
   statusLogs: [{
     id: "log-1",
     oldStatus: "DRAFT",
@@ -47,33 +54,43 @@ const publishedAppointment = {
   }],
 };
 
-describe("AppointmentPage", () => {
+async function getActualAppointmentDetail() {
+  const appointmentDetailModule = await vi.importActual<typeof import("@/components/appointments/AppointmentDetail")>(
+    "@/components/appointments/AppointmentDetail",
+  );
+  return appointmentDetailModule.AppointmentDetail;
+}
+
+describe("AppointmentDetail", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    requireUser.mockResolvedValue({
-      userId: "staff-1",
-      fullName: "Clinic Staff",
-      email: "staff@medclinic.local",
-      role: "CLINIC_STAFF",
-      clinicId: "clinic-1",
-      clinicCode: "KABALAKA_CLINIC",
-      clinicName: "KABALAKA Clinic",
-    });
+    requireUser.mockResolvedValue({ role: "CLINIC_STAFF", clinicId: "clinic-1" });
     getPublishedAppointment.mockResolvedValue(publishedAppointment);
   });
 
-  it("loads normal detail through the published-only loader and never calls it an internal draft", async () => {
-    render(await AppointmentPage({ params: Promise.resolve({ appointmentId: "appointment-1" }) }));
+  it("renders a published appointment after enforcing the allowed roles", async () => {
+    const AppointmentDetail = await getActualAppointmentDetail();
 
-    expect(getPublishedAppointment).toHaveBeenCalledWith("appointment-1");
+    render(await AppointmentDetail({ appointmentId: "appointment-1", source: "APPOINTMENTS" }));
+
     expect(requireUser).toHaveBeenCalledWith(["ADMIN", "CLINIC_STAFF"]);
-    expect(screen.getByRole("heading", { level: 1, name: "Ana Maria Santos Jr." })).toBeVisible();
+    expect(getPublishedAppointment).toHaveBeenCalledWith("appointment-1");
+    expect(screen.getByRole("heading", { level: 1, name: "Santos, Ana M. (Jr.)" })).toBeVisible();
     expect(screen.getByText("Published")).toBeVisible();
-    expect(screen.queryByText("Internal draft")).not.toBeInTheDocument();
-    expect(screen.getByText("System Admin · Aug 1, 2026, 4:00 PM")).toBeVisible();
   });
 
-  it("enables correction when the latest log is automatic and staff belongs to the clinic", async () => {
+  it("returns not found when the published-only loader cannot find the appointment", async () => {
+    getPublishedAppointment.mockResolvedValue(null);
+    const AppointmentDetail = await getActualAppointmentDetail();
+
+    await expect(AppointmentDetail({
+      appointmentId: "draft-appointment",
+      source: "APPOINTMENTS",
+    })).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(notFound).toHaveBeenCalledOnce();
+  });
+
+  it("enables correction when the latest status log is an automatic no-show", async () => {
     getPublishedAppointment.mockResolvedValue({
       ...publishedAppointment,
       status: "NO_SHOW",
@@ -87,8 +104,9 @@ describe("AppointmentPage", () => {
         createdAt: new Date("2026-08-19T08:00:00.000Z"),
       }],
     });
+    const AppointmentDetail = await getActualAppointmentDetail();
 
-    render(await AppointmentPage({ params: Promise.resolve({ appointmentId: "appointment-1" }) }));
+    render(await AppointmentDetail({ appointmentId: "appointment-1", source: "APPOINTMENTS" }));
 
     expect(appointmentActions).toHaveBeenCalledWith({
       id: "appointment-1",
@@ -97,43 +115,35 @@ describe("AppointmentPage", () => {
     }, undefined);
   });
 
-  it("does not enable correction for staff assigned to another clinic", async () => {
-    requireUser.mockResolvedValue({
-      userId: "staff-1",
-      fullName: "Clinic Staff",
-      email: "staff@medclinic.local",
-      role: "CLINIC_STAFF",
-      clinicId: "other-clinic",
-      clinicCode: "CPU_CLINIC",
-      clinicName: "CPU Clinic",
-    });
-    getPublishedAppointment.mockResolvedValue({
-      ...publishedAppointment,
-      status: "NO_SHOW",
-      statusLogs: [{
-        id: "automatic-log",
-        oldStatus: "PENDING",
-        newStatus: "NO_SHOW",
-        notes: AUTOMATIC_NO_SHOW_NOTE,
-        changedById: null,
-        changedByName: null,
-        createdAt: new Date("2026-08-19T08:00:00.000Z"),
-      }],
-    });
+  it("returns not found when the appointment does not match the expected schedule type", async () => {
+    const AppointmentDetail = await getActualAppointmentDetail();
 
-    render(await AppointmentPage({ params: Promise.resolve({ appointmentId: "appointment-1" }) }));
-
-    expect(appointmentActions).toHaveBeenCalledWith(expect.objectContaining({
-      canCorrectNoShow: false,
-    }), undefined);
-  });
-
-  it("returns not found when the published-only loader cannot find the appointment", async () => {
-    getPublishedAppointment.mockResolvedValue(null);
-
-    await expect(AppointmentPage({
-      params: Promise.resolve({ appointmentId: "draft-appointment" }),
+    await expect(AppointmentDetail({
+      appointmentId: "appointment-1",
+      expectedScheduleType: "PHYSICAL_EXAM",
+      source: "PHYSICAL_EXAM",
     })).rejects.toThrow("NEXT_NOT_FOUND");
     expect(notFound).toHaveBeenCalledOnce();
+  });
+
+  it("returns not found when clinic staff belongs to another clinic", async () => {
+    requireUser.mockResolvedValue({ role: "CLINIC_STAFF", clinicId: "clinic-2" });
+    const AppointmentDetail = await getActualAppointmentDetail();
+
+    await expect(AppointmentDetail({
+      appointmentId: "appointment-1",
+      source: "LABORATORY",
+    })).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(notFound).toHaveBeenCalledOnce();
+  });
+
+  it("allows an administrator to view an appointment from any clinic", async () => {
+    requireUser.mockResolvedValue({ role: "ADMIN", clinicId: null });
+    const AppointmentDetail = await getActualAppointmentDetail();
+
+    render(await AppointmentDetail({ appointmentId: "appointment-1", source: "APPOINTMENTS" }));
+
+    expect(screen.getByRole("heading", { level: 1, name: "Santos, Ana M. (Jr.)" })).toBeVisible();
+    expect(notFound).not.toHaveBeenCalled();
   });
 });
