@@ -344,17 +344,17 @@ export async function publicStudentSchedule(studentNumber: string) {
 export async function getCapacitySettings() {
   return (await query(
     `SELECT s.schedule_type AS "scheduleType", c.code AS "clinicCode", c.name AS "clinicName",
-            s.safe_daily_capacity AS "safeDailyCapacity", s.max_daily_capacity AS "maxDailyCapacity"
+            s.max_daily_capacity AS "maxDailyCapacity"
        FROM clinic_capacity_settings s JOIN clinics c ON c.id=s.clinic_id
       ORDER BY c.code, s.schedule_type`,
   )).rows;
 }
 
-export async function updateCapacitySetting(clinicCode: string, scheduleType: string, safe: number, max: number) {
+export async function updateCapacitySetting(clinicCode: string, scheduleType: string, max: number) {
   return (await query(
-    `UPDATE clinic_capacity_settings SET safe_daily_capacity=$3,max_daily_capacity=$4
+    `UPDATE clinic_capacity_settings SET safe_daily_capacity=$3, max_daily_capacity=$3
      WHERE clinic_id=(SELECT id FROM clinics WHERE code=$1) AND schedule_type=$2
      RETURNING schedule_type AS "scheduleType",
-     safe_daily_capacity AS "safeDailyCapacity", max_daily_capacity AS "maxDailyCapacity"`, [clinicCode, scheduleType, safe, max],
+     max_daily_capacity AS "maxDailyCapacity"`, [clinicCode, scheduleType, max],
   )).rows[0] ?? null;
 }

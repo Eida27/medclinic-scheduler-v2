@@ -51,6 +51,7 @@ vi.mock("@/server/repositories/student-result-submissions.repository", () => ({
 
 import {
   assertStatusTransition,
+  changeCapacity,
   completeAppointmentWithClient,
   updateAppointment,
 } from "./appointments.service";
@@ -70,6 +71,55 @@ const admin = {
   clinicCode: null,
   clinicName: null,
 } satisfies SessionUser;
+
+describe("capacity settings", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    updateCapacitySetting.mockResolvedValue({
+      scheduleType: "LABORATORY",
+      maxDailyCapacity: 125,
+    });
+    writeAudit.mockResolvedValue(undefined);
+  });
+
+  it("changes capacity from a maximum-only payload", async () => {
+    await expect(changeCapacity({
+      clinicCode: "KABALAKA_CLINIC",
+      scheduleType: "LABORATORY",
+      maxDailyCapacity: 125,
+    }, admin.userId)).resolves.toEqual({
+      scheduleType: "LABORATORY",
+      maxDailyCapacity: 125,
+    });
+
+    expect(updateCapacitySetting).toHaveBeenCalledWith(
+      "KABALAKA_CLINIC",
+      "LABORATORY",
+      125,
+    );
+    expect(writeAudit).toHaveBeenCalledWith(
+      admin.userId,
+      "CAPACITY_UPDATED",
+      "capacity_setting",
+      "KABALAKA_CLINIC:LABORATORY",
+      {
+        clinicCode: "KABALAKA_CLINIC",
+        scheduleType: "LABORATORY",
+        maxDailyCapacity: 125,
+      },
+    );
+  });
+
+  it.each([
+    ["missing", { clinicCode: "KABALAKA_CLINIC", scheduleType: "LABORATORY" }],
+    ["zero", { clinicCode: "KABALAKA_CLINIC", scheduleType: "LABORATORY", maxDailyCapacity: 0 }],
+    ["negative", { clinicCode: "KABALAKA_CLINIC", scheduleType: "LABORATORY", maxDailyCapacity: -1 }],
+  ])("rejects a %s maximum capacity", async (_, input) => {
+    await expect(changeCapacity(input, admin.userId)).rejects.toBeDefined();
+    expect(updateCapacitySetting).not.toHaveBeenCalled();
+    expect(writeAudit).not.toHaveBeenCalled();
+  });
+});
 
 const laboratoryStaff = {
   userId: "00000000-0000-4000-8000-000000000002",
