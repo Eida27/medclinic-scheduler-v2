@@ -1,83 +1,11 @@
 import "server-only";
-import type { PoolClient } from "pg";
 import {
   parseAppointmentSummarySort,
   type OverallStatus,
 } from "@/components/appointments/appointment-summary";
 import { query } from "@/server/db/pool";
 import type { ClinicCode } from "@/server/clinics";
-import { studentDisplayNameSql } from "@/server/students/student-display-name";
 import { appointmentSummaryReport } from "./appointment-summary.repository";
-
-export type ResultType = "PHYSICAL_EXAM" | "LABORATORY";
-
-export async function getResultAppointmentForUpdate(
-  appointmentId: string,
-  client: PoolClient,
-): Promise<{ studentNumber: string; scheduleType: ResultType } | null> {
-  const result = await client.query<{
-    studentNumber: string;
-    scheduleType: ResultType;
-  }>(
-    `SELECT student_number AS "studentNumber", schedule_type AS "scheduleType"
-       FROM appointments
-      WHERE id=$1 AND is_published=TRUE
-      FOR UPDATE`,
-    [appointmentId],
-  );
-  return result.rows[0] ?? null;
-}
-
-export async function resultsForStudent(studentNumber: string) {
-  const student = await query<{ studentNumber: string; studentName: string; collegeName: string; programName: string }>(
-    `SELECT s.student_number AS "studentNumber", ${studentDisplayNameSql("s")} AS "studentName",
-            c.name AS "collegeName", p.name AS "programName"
-     FROM students s JOIN colleges c ON c.id=s.college_id JOIN programs p ON p.id=s.program_id
-     WHERE s.student_number=$1`, [studentNumber]);
-  if (!student.rows[0]) return null;
-  const exam = await query(
-    `SELECT r.id, r.appointment_id AS "appointmentId", r.result_status AS "resultStatus",
-            r.completed_at::text AS "completedAt", r.remarks, r.created_at AS "createdAt",
-            a.appointment_date::text AS "appointmentDate"
-     FROM exam_results r LEFT JOIN appointments a ON a.id=r.appointment_id
-     WHERE r.student_number=$1
-       AND (r.appointment_id IS NULL OR a.is_published=TRUE)
-     ORDER BY r.completed_at DESC NULLS LAST, r.created_at DESC`, [studentNumber]);
-  const laboratory = await query(
-    `SELECT r.id, r.appointment_id AS "appointmentId", r.result_status AS "resultStatus",
-            r.completed_at::text AS "completedAt", r.remarks, r.created_at AS "createdAt",
-            a.appointment_date::text AS "appointmentDate"
-     FROM laboratory_results r LEFT JOIN appointments a ON a.id=r.appointment_id
-     WHERE r.student_number=$1
-       AND (r.appointment_id IS NULL OR a.is_published=TRUE)
-     ORDER BY r.completed_at DESC NULLS LAST, r.created_at DESC`, [studentNumber]);
-  const appointments = await query(
-    `SELECT id, schedule_type AS "scheduleType", appointment_date::text AS "appointmentDate", status
-     FROM appointments
-     WHERE student_number=$1
-       AND is_published=TRUE
-       AND status IN ('PENDING','COMPLETED','NO_SHOW')
-     ORDER BY appointment_date DESC`, [studentNumber]);
-  return { ...student.rows[0], examResults: exam.rows, laboratoryResults: laboratory.rows, appointments: appointments.rows };
-}
-
-export async function upsertResult(input: {
-  studentNumber: string; appointmentId: string | null; resultType: ResultType; resultStatus: string;
-  completedAt: string | null; remarks: string | null; actorUserId: string;
-}, client: PoolClient): Promise<{ id: string }> {
-  const table = input.resultType === "PHYSICAL_EXAM" ? "exam_results" : "laboratory_results";
-  const result = input.appointmentId
-    ? await client.query<{ id: string }>(
-        `INSERT INTO ${table} (student_number, appointment_id, result_status, completed_at, remarks, encoded_by)
-         VALUES ($1,$2,$3,$4,$5,$6)
-         ON CONFLICT (appointment_id) DO UPDATE SET result_status=EXCLUDED.result_status,
-           completed_at=EXCLUDED.completed_at, remarks=EXCLUDED.remarks, encoded_by=EXCLUDED.encoded_by
-         RETURNING id`, [input.studentNumber, input.appointmentId, input.resultStatus, input.completedAt, input.remarks, input.actorUserId])
-    : await client.query<{ id: string }>(
-        `INSERT INTO ${table} (student_number, result_status, completed_at, remarks, encoded_by)
-         VALUES ($1,$2,$3,$4,$5) RETURNING id`, [input.studentNumber, input.resultStatus, input.completedAt, input.remarks, input.actorUserId]);
-  return { id: result.rows[0].id };
-}
 
 export async function complianceReport(filters: {
   clinicCode?: ClinicCode;
