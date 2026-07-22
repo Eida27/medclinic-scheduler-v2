@@ -19,6 +19,13 @@ const orderStudents = [
   ["TEST-ORDER-0006", "Inactive", "Zero"],
 ] as const;
 
+const completionStudents = [
+  ["TEST-COMPLETION-0001", "Both", "Completed"],
+  ["TEST-COMPLETION-0002", "Lab", "Pending"],
+  ["TEST-COMPLETION-0003", "Lab", "Followup"],
+  ["TEST-COMPLETION-0004", "Both", "Pending"],
+] as const;
+
 async function report(sort: Parameters<typeof appointmentSummaryReport>[0]["sort"]) {
   return appointmentSummaryReport({
     search: "TEST-ORDER-",
@@ -32,6 +39,7 @@ async function report(sort: Parameters<typeof appointmentSummaryReport>[0]["sort
 beforeAll(async () => {
   await cleanupTestFixtures("TEST-ORDER-%", "TEST order fixture%");
   await cleanupTestFixtures("TEST-PAGE-%", "TEST page fixture%");
+  await cleanupTestFixtures("TEST-COMPLETION-%", "TEST completion fixture%");
 
   for (const [studentNumber, firstName, lastName] of orderStudents) {
     await insertTestStudent({ studentNumber, firstName, lastName, yearLevel: 4 });
@@ -43,6 +51,9 @@ beforeAll(async () => {
   );
   await pool.query("UPDATE students SET is_active=FALSE WHERE student_number='TEST-ORDER-0006'");
   await insertNumberedTestStudents("TEST-PAGE-", 151);
+  for (const [studentNumber, firstName, lastName] of completionStudents) {
+    await insertTestStudent({ studentNumber, firstName, lastName, yearLevel: 4 });
+  }
 
   await pool.query(
     `INSERT INTO appointments (
@@ -88,12 +99,83 @@ beforeAll(async () => {
        ('TEST-ORDER-0003',$2,'REQUIRES_FOLLOW_UP','2046-01-15',$1,'2027-01-01','2027-01-01')`,
     [TEST_REFERENCE_IDS.adminUser, cancelled.rows[0].id],
   );
+  await pool.query(
+    `INSERT INTO exam_results (
+       student_number, result_status, completed_at, encoded_by
+     ) VALUES
+       ('TEST-COMPLETION-0001','COMPLETED','2046-01-01',$1),
+       ('TEST-COMPLETION-0002','COMPLETED','2046-01-01',$1),
+       ('TEST-COMPLETION-0003','COMPLETED','2046-01-01',$1)`,
+    [TEST_REFERENCE_IDS.adminUser],
+  );
+  await pool.query(
+    `INSERT INTO laboratory_results (
+       student_number, result_status, completed_at, encoded_by
+     ) VALUES
+       ('TEST-COMPLETION-0001','COMPLETED','2046-01-01',$1),
+       ('TEST-COMPLETION-0002','PENDING_UPLOAD',NULL,$1),
+       ('TEST-COMPLETION-0003','REQUIRES_FOLLOW_UP',NULL,$1)`,
+    [TEST_REFERENCE_IDS.adminUser],
+  );
 });
 
 afterAll(async () => {
   await cleanupTestFixtures("TEST-ORDER-%", "TEST order fixture%");
   await cleanupTestFixtures("TEST-PAGE-%", "TEST page fixture%");
+  await cleanupTestFixtures("TEST-COMPLETION-%", "TEST completion fixture%");
   await pool.end();
+});
+
+describe("appointment summary completion filters", () => {
+  const cases = [
+    [{ laboratoryStatus: "COMPLETED" }, ["TEST-COMPLETION-0001"]],
+    [{ physicalExamStatus: "COMPLETED" }, [
+      "TEST-COMPLETION-0001",
+      "TEST-COMPLETION-0003",
+      "TEST-COMPLETION-0002",
+    ]],
+    [{ laboratoryStatus: "COMPLETED", physicalExamStatus: "COMPLETED" }, [
+      "TEST-COMPLETION-0001",
+    ]],
+    [{ laboratoryStatus: "PENDING_UPLOAD", physicalExamStatus: "COMPLETED" }, [
+      "TEST-COMPLETION-0002",
+    ]],
+    [{ overallStatus: "COMPLETE" }, ["TEST-COMPLETION-0001"]],
+    [{ overallStatus: "FOLLOW_UP" }, ["TEST-COMPLETION-0003"]],
+  ] as const;
+
+  it.each(cases)("applies completion combination %o to rows and metrics", async (filters, expected) => {
+    const result = await appointmentSummaryReport({
+      search: "TEST-COMPLETION-",
+      ...filters,
+      sort: "name_asc",
+      page: 1,
+      limit: 20,
+      offset: 0,
+    });
+
+    expect(result.items.map((item) => item.studentNumber)).toEqual(expected);
+    expect(result.total).toBe(expected.length);
+    expect(result.summary.totalStudents).toBe(expected.length);
+  });
+
+  it("treats explicit placeholders and absent result rows as pending uploads", async () => {
+    const result = await appointmentSummaryReport({
+      search: "TEST-COMPLETION-",
+      laboratoryStatus: "PENDING_UPLOAD",
+      sort: "name_asc",
+      page: 1,
+      limit: 20,
+      offset: 0,
+    });
+
+    expect(result.items.map((item) => item.studentNumber)).toEqual([
+      "TEST-COMPLETION-0004",
+      "TEST-COMPLETION-0002",
+    ]);
+    expect(result.total).toBe(2);
+    expect(result.summary.totalStudents).toBe(2);
+  });
 });
 
 describe("appointment summary ordering and pagination", () => {

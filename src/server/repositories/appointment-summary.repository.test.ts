@@ -80,6 +80,35 @@ describe("appointmentSummaryReport", () => {
     ]);
   });
 
+  it("uses equivalent completion-filter values for rows and metrics before pagination", async () => {
+    await appointmentSummaryReport({
+      physicalExamStatus: "COMPLETED",
+      laboratoryStatus: "PENDING_UPLOAD",
+      sort: "name_asc",
+      page: 3,
+      limit: 20,
+      offset: 40,
+    });
+
+    const itemSql = query.mock.calls[0][0] as string;
+    const summarySql = query.mock.calls[1][0] as string;
+    const itemValues = query.mock.calls[0][1] as unknown[];
+    const summaryValues = query.mock.calls[1][1] as unknown[];
+    const itemWhere = itemSql.match(/FROM summary_rows\s+WHERE ([\s\S]+?)\s+ORDER BY/)?.[1];
+    const summaryWhere = summarySql.match(/FROM summary_rows\s+WHERE ([\s\S]+)$/)?.[1];
+
+    expect(itemWhere).toBe(summaryWhere);
+    expect(itemWhere).toContain(
+      `COALESCE(summary_rows."physicalExamStatus", 'PENDING_UPLOAD')=$1`,
+    );
+    expect(itemWhere).toContain(
+      `COALESCE(summary_rows."laboratoryStatus", 'PENDING_UPLOAD')=$2`,
+    );
+    expect(itemValues.slice(0, -2)).toEqual(summaryValues);
+    expect(summaryValues).toEqual(["COMPLETED", "PENDING_UPLOAD"]);
+    expect(itemValues).toEqual(["COMPLETED", "PENDING_UPLOAD", 20, 40]);
+  });
+
   it.each<[AppointmentSummarySort, string]>([
     ["upcoming_asc", 'summary_rows."nextSchedule" ASC NULLS LAST'],
     ["upcoming_desc", 'summary_rows."nextSchedule" DESC NULLS LAST'],

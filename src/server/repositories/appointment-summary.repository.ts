@@ -253,8 +253,18 @@ export async function appointmentSummaryReport(filters: AppointmentSummaryFilter
   if (filters.collegeId) add(`summary_rows."collegeId"=?::uuid`, filters.collegeId);
   if (filters.programId) add(`summary_rows."programId"=?::uuid`, filters.programId);
   if (filters.priorityGroupId) add(`summary_rows."priorityGroupId"=?::uuid`, filters.priorityGroupId);
-  if (filters.physicalExamStatus) add(`summary_rows."physicalExamStatus"=?`, filters.physicalExamStatus);
-  if (filters.laboratoryStatus) add(`summary_rows."laboratoryStatus"=?`, filters.laboratoryStatus);
+  if (filters.physicalExamStatus) {
+    add(
+      `COALESCE(summary_rows."physicalExamStatus", 'PENDING_UPLOAD')=?`,
+      filters.physicalExamStatus,
+    );
+  }
+  if (filters.laboratoryStatus) {
+    add(
+      `COALESCE(summary_rows."laboratoryStatus", 'PENDING_UPLOAD')=?`,
+      filters.laboratoryStatus,
+    );
+  }
   if (filters.overallStatus) add(`summary_rows."overallStatus"=?`, filters.overallStatus);
   if (filters.clinicCode) {
     add(`summary_rows."latestAppointmentClinicCode"=?`, filters.clinicCode);
