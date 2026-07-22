@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool, type PoolClient } from "pg";
@@ -12,6 +12,9 @@ import {
 export const APPROVED_CSV_PATH =
   "C:\\endless_refinement\\microsoft_docs\\Physical_Laboratory_Scheduling_Completed.csv";
 export const EXPECTED_APPROVED_ROWS = 280;
+export const EXPECTED_APPROVED_BYTE_LENGTH = 23_834;
+export const EXPECTED_APPROVED_SHA256 =
+  "fa01469d107bd0401444b9f95f555ffaf68a4c116b4600af8142c15dca5d3c17";
 
 const FIXTURE_DIRECTORY = resolve(".data/browser-clinic-scheduler-ux");
 const STATE_FILE = resolve(FIXTURE_DIRECTORY, "state.json");
@@ -78,13 +81,22 @@ type FixtureState = {
     successCalendarDate: string;
     failureCalendarDate: string;
   };
+  cleanup?: CleanupProgress;
 };
 
 type ApprovedCsvInspection = {
+  byteLength: number;
+  sha256: string;
   bomHex: string;
   acceptedRows: number;
   studentNumbers: string[];
   rows: ImportedStudentRow[];
+};
+
+type ApprovedCsvExpectations = {
+  expectedRows: number;
+  expectedByteLength: number;
+  expectedSha256: string;
 };
 
 const WINDOWS_1252_SPECIAL = new Map<number, number>([
@@ -129,8 +141,24 @@ export function requiredProgramReferences(rows: ImportedStudentRow[]): ProgramRe
 
 export function inspectApprovedCsv(
   bytes: Uint8Array,
-  expectedRows = EXPECTED_APPROVED_ROWS,
+  expected: number | ApprovedCsvExpectations = {
+    expectedRows: EXPECTED_APPROVED_ROWS,
+    expectedByteLength: EXPECTED_APPROVED_BYTE_LENGTH,
+    expectedSha256: EXPECTED_APPROVED_SHA256,
+  },
 ): ApprovedCsvInspection {
+  const expectedRows = typeof expected === "number" ? expected : expected.expectedRows;
+  const actualSha256 = sha256(bytes);
+  if (typeof expected !== "number" && bytes.byteLength !== expected.expectedByteLength) {
+    throw new Error(
+      `Approved CSV byte length must be exactly ${expected.expectedByteLength}; found ${bytes.byteLength}.`,
+    );
+  }
+  if (typeof expected !== "number" && actualSha256 !== expected.expectedSha256) {
+    throw new Error(
+      `Approved CSV SHA-256 must be ${expected.expectedSha256}; found ${actualSha256}.`,
+    );
+  }
   const bomHex = Buffer.from(bytes.subarray(0, 3)).toString("hex");
   if (bomHex !== "efbbbf") {
     throw new Error(`Approved CSV must begin with the UTF-8 BOM EF BB BF; found ${bomHex || "no bytes"}.`);
@@ -140,6 +168,8 @@ export function inspectApprovedCsv(
     throw new Error(`Approved CSV must contain exactly ${expectedRows} accepted rows; parsed ${rows.length}.`);
   }
   return {
+    byteLength: bytes.byteLength,
+    sha256: actualSha256,
     bomHex,
     acceptedRows: rows.length,
     studentNumbers: rows.map((row) => row.studentNumber),
@@ -418,6 +448,79 @@ function importSummary(imported: NonNullable<FixtureState["imported"]>) {
   };
 }
 
+export type PublishedImportSummary = {
+  importId: string;
+  importStatus: string;
+  totalRows: number;
+  processedStudentCount: number;
+  batchCount: number;
+  batchStatuses: string[];
+  coordinatorItemCount: number;
+  laboratoryItemCount: number;
+  physicalExamItemCount: number;
+  appointmentCount: number;
+  publishedAppointmentCount: number;
+  pendingAppointmentCount: number;
+  laboratoryAppointmentCount: number;
+  physicalExamAppointmentCount: number;
+  pairedStudentCount: number;
+};
+
+export function validatePublishedImport(
+  summary: PublishedImportSummary,
+  expectedStudents = EXPECTED_APPROVED_ROWS,
+) {
+  const expectedAppointments = expectedStudents * 2;
+  if (
+    summary.importStatus !== "PUBLISHED"
+    || summary.batchCount !== 2
+    || summary.batchStatuses.length !== 2
+    || summary.batchStatuses.some((status) => status !== "PUBLISHED")
+  ) {
+    throw new Error(
+      `Import ${summary.importId} must be fully published with exactly two published child batches; `
+      + `found status ${summary.importStatus} and batches ${JSON.stringify(summary.batchStatuses)}.`,
+    );
+  }
+  if (summary.totalRows !== expectedStudents || summary.processedStudentCount !== expectedStudents) {
+    throw new Error(
+      `Import ${summary.importId} must contain and process exactly ${expectedStudents} students; `
+      + `found total ${summary.totalRows} and processed ${summary.processedStudentCount}.`,
+    );
+  }
+  if (
+    summary.coordinatorItemCount !== expectedAppointments
+    || summary.laboratoryItemCount !== expectedStudents
+    || summary.physicalExamItemCount !== expectedStudents
+  ) {
+    throw new Error(
+      `Import ${summary.importId} must have exactly ${expectedAppointments} coordinator items `
+      + `(${expectedStudents} per service); found ${summary.coordinatorItemCount}.`,
+    );
+  }
+  if (
+    summary.appointmentCount !== expectedAppointments
+    || summary.publishedAppointmentCount !== expectedAppointments
+    || summary.pendingAppointmentCount !== expectedAppointments
+    || summary.laboratoryAppointmentCount !== expectedStudents
+    || summary.physicalExamAppointmentCount !== expectedStudents
+    || summary.pairedStudentCount !== expectedStudents
+  ) {
+    throw new Error(
+      `Import ${summary.importId} must have exactly ${expectedAppointments} appointments, all published and pending, `
+      + `with ${expectedStudents} complete service pairs; found ${JSON.stringify({
+        appointmentCount: summary.appointmentCount,
+        publishedAppointmentCount: summary.publishedAppointmentCount,
+        pendingAppointmentCount: summary.pendingAppointmentCount,
+        laboratoryAppointmentCount: summary.laboratoryAppointmentCount,
+        physicalExamAppointmentCount: summary.physicalExamAppointmentCount,
+        pairedStudentCount: summary.pairedStudentCount,
+      })}.`,
+    );
+  }
+  return summary;
+}
+
 async function peñaStudent(client: PoolClient, state: FixtureState) {
   const result = await client.query<{ studentNumber: string; surname: string }>(
     `SELECT student_number AS "studentNumber", last_name AS surname
@@ -472,13 +575,76 @@ async function stage(pool: Pool) {
     if (imported.importIds.length !== 1) {
       throw new Error(`Expected one UI import for ${state.temporaryCsv.filename}; found ${imported.importIds.length}.`);
     }
-    const importRow = await client.query<{ totalRows: number }>(
-      `SELECT total_rows AS "totalRows" FROM schedule_import_groups WHERE id=$1 FOR UPDATE`,
+    const importRow = await client.query<{ totalRows: number; processedStudentCount: number }>(
+      `SELECT total_rows AS "totalRows",
+              (created_student_count + matched_student_count)::int AS "processedStudentCount"
+         FROM schedule_import_groups WHERE id=$1 FOR UPDATE`,
       [imported.importIds[0]],
     );
-    if (importRow.rows[0]?.totalRows !== EXPECTED_APPROVED_ROWS) {
-      throw new Error(`Expected imported row count ${EXPECTED_APPROVED_ROWS}; found ${importRow.rows[0]?.totalRows ?? "none"}.`);
-    }
+    const batches = await client.query<{ id: string; status: string }>(
+      "SELECT id::text, status FROM schedule_batches WHERE import_group_id=$1 ORDER BY id FOR UPDATE",
+      [imported.importIds[0]],
+    );
+    await client.query(
+      "SELECT id FROM coordinator_schedule_items WHERE batch_id=ANY($1::uuid[]) FOR UPDATE",
+      [imported.batchIds],
+    );
+    await client.query(
+      "SELECT id FROM appointments WHERE batch_id=ANY($1::uuid[]) FOR UPDATE",
+      [imported.batchIds],
+    );
+    const items = await client.query<{
+      coordinatorItemCount: number;
+      laboratoryItemCount: number;
+      physicalExamItemCount: number;
+    }>(
+      `SELECT COUNT(*)::int AS "coordinatorItemCount",
+              COUNT(*) FILTER (WHERE schedule_type='LABORATORY')::int AS "laboratoryItemCount",
+              COUNT(*) FILTER (WHERE schedule_type='PHYSICAL_EXAM')::int AS "physicalExamItemCount"
+         FROM coordinator_schedule_items WHERE batch_id=ANY($1::uuid[])`,
+      [imported.batchIds],
+    );
+    const appointments = await client.query<{
+      appointmentCount: number;
+      publishedAppointmentCount: number;
+      pendingAppointmentCount: number;
+      laboratoryAppointmentCount: number;
+      physicalExamAppointmentCount: number;
+    }>(
+      `SELECT COUNT(*)::int AS "appointmentCount",
+              COUNT(*) FILTER (WHERE is_published=TRUE)::int AS "publishedAppointmentCount",
+              COUNT(*) FILTER (WHERE status='PENDING')::int AS "pendingAppointmentCount",
+              COUNT(*) FILTER (WHERE schedule_type='LABORATORY')::int AS "laboratoryAppointmentCount",
+              COUNT(*) FILTER (WHERE schedule_type='PHYSICAL_EXAM')::int AS "physicalExamAppointmentCount"
+         FROM appointments WHERE batch_id=ANY($1::uuid[])`,
+      [imported.batchIds],
+    );
+    const paired = await client.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM (
+         SELECT student_number
+           FROM appointments
+          WHERE batch_id=ANY($1::uuid[]) AND status='PENDING' AND is_published=TRUE
+          GROUP BY student_number
+         HAVING COUNT(*)=2
+            AND COUNT(*) FILTER (WHERE schedule_type='LABORATORY')=1
+            AND COUNT(*) FILTER (WHERE schedule_type='PHYSICAL_EXAM')=1
+       ) complete_pair`,
+      [imported.batchIds],
+    );
+    const batchStatuses = batches.rows.map((batch) => batch.status);
+    const publication = validatePublishedImport({
+      importId: imported.importIds[0],
+      importStatus: batchStatuses.length > 0 && batchStatuses.every((status) => status === "PUBLISHED")
+        ? "PUBLISHED"
+        : "NEEDS_REVIEW",
+      totalRows: importRow.rows[0]?.totalRows ?? 0,
+      processedStudentCount: importRow.rows[0]?.processedStudentCount ?? 0,
+      batchCount: batches.rows.length,
+      batchStatuses,
+      ...items.rows[0],
+      ...appointments.rows[0],
+      pairedStudentCount: paired.rows[0]?.count ?? 0,
+    });
     const pairs = await client.query<{
       studentNumber: string;
       laboratoryId: string;
@@ -569,6 +735,7 @@ async function stage(pool: Pool) {
       statePath: STATE_FILE,
       phase: state.phase,
       import: importSummary(state.imported!),
+      publication,
       peñaStudent: await peñaStudent(client, state),
       browser: {
         ...state.staged,
@@ -622,11 +789,12 @@ async function status(pool: Pool) {
   }
 }
 
-type OwnedIds = {
+export type CleanupManifest = {
   imports: string[];
   batches: string[];
-  appointments: string[];
   coordinatorItems: string[];
+  createdStudents: string[];
+  appointments: string[];
   closures: string[];
   submissions: string[];
   resultFiles: Array<{ id: string; storageKey: string }>;
@@ -636,10 +804,86 @@ type OwnedIds = {
   audits: string[];
   notifications: string[];
   events: string[];
-  createdStudents: string[];
+  verificationTokens: string[];
+  loginAttempts: string[];
+  outbox: string[];
+  referencePrograms: string[];
 };
 
-async function collectOwnedIds(client: PoolClient, state: FixtureState): Promise<OwnedIds> {
+export type CleanupProgress = {
+  phase: "MANIFESTED" | "DATABASE_DELETED" | "FILES_DELETED";
+  manifest: CleanupManifest;
+  privateResultStorageKeys: string[];
+  privateResultDirectories: string[];
+};
+
+export type CleanupResidue = {
+  imports: number;
+  batches: number;
+  coordinatorItems: number;
+  students: number;
+  appointments: number;
+  closures: number;
+  submissions: number;
+  resultFiles: number;
+  laboratoryResults: number;
+  examResults: number;
+  statusLogs: number;
+  events: number;
+  notifications: number;
+  audits: number;
+  verificationTokens: number;
+  loginAttempts: number;
+  outbox: number;
+  referencePrograms: number;
+  privateStorageDirectories: number;
+};
+
+type PersistedCleanupActions = {
+  captureManifest: () => Promise<CleanupManifest>;
+  persist: (progress: CleanupProgress) => Promise<void>;
+  deleteDatabase: (manifest: CleanupManifest) => Promise<void>;
+  deletePrivateFiles: (directories: string[]) => Promise<void>;
+  prove: (manifest: CleanupManifest, directories: string[]) => Promise<CleanupResidue>;
+};
+
+export function assertZeroCleanupResidue(residue: CleanupResidue) {
+  const remaining = Object.entries(residue).filter(([, count]) => count !== 0);
+  if (remaining.length) {
+    throw new Error(
+      `Fixture cleanup residue remains: ${remaining.map(([category, count]) => `${category}=${count}`).join(", ")}.`,
+    );
+  }
+}
+
+export async function runPersistedCleanup(
+  progress: CleanupProgress | undefined,
+  actions: PersistedCleanupActions,
+) {
+  let current = progress;
+  if (!current) {
+    const manifest = await actions.captureManifest();
+    current = {
+      phase: "MANIFESTED",
+      manifest,
+      privateResultStorageKeys: manifest.resultFiles.map((file) => file.storageKey),
+      privateResultDirectories: resultStorageDirectories(manifest.resultFiles),
+    };
+    await actions.persist(current);
+  }
+
+  await actions.deleteDatabase(current.manifest);
+  current = { ...current, phase: "DATABASE_DELETED" };
+  await actions.persist(current);
+  await actions.deletePrivateFiles(current.privateResultDirectories);
+  current = { ...current, phase: "FILES_DELETED" };
+  await actions.persist(current);
+  const proof = await actions.prove(current.manifest, current.privateResultDirectories);
+  assertZeroCleanupResidue(proof);
+  return proof;
+}
+
+async function collectCleanupManifest(client: PoolClient, state: FixtureState): Promise<CleanupManifest> {
   const imports = await idRows(
     client,
     "SELECT id::text AS id FROM schedule_import_groups WHERE source_filename=$1 AND created_at >= $2::timestamptz",
@@ -697,28 +941,39 @@ async function collectOwnedIds(client: PoolClient, state: FixtureState): Promise
       [imports, closures, appointments],
     )
     : [];
-  const notifications = closures.length
-    ? await idRows(
+  const notifications = differenceIds(
+    await idRows(
       client,
-      "SELECT id::text AS id FROM student_portal_notifications WHERE metadata->>'clinicUnavailableDateId'=ANY($1::text[])",
-      [closures],
-    )
-    : [];
-  const auditCandidates = (imports.length || batches.length || appointments.length || closures.length)
-    ? await idRows(
-      client,
-      `SELECT id::text AS id FROM audit_logs
-        WHERE (entity_type='schedule_import_group' AND entity_id=ANY($1::text[]))
-           OR (entity_type='schedule_batch' AND entity_id=ANY($2::text[]))
-           OR (entity_type='appointment' AND entity_id=ANY($3::text[]))
-           OR (entity_type='clinic_unavailable_date' AND entity_id=ANY($4::text[]))
-           OR metadata->>'importId'=ANY($1::text[])
-           OR metadata->>'batchId'=ANY($2::text[])
-           OR metadata->>'replacementId'=ANY($3::text[])
-           OR metadata->>'clinicUnavailableDateId'=ANY($4::text[])`,
-      [imports, batches, appointments, closures],
-    )
-    : [];
+      `SELECT id::text AS id FROM student_portal_notifications
+        WHERE student_number=ANY($1::varchar[])
+           OR metadata->>'clinicUnavailableDateId'=ANY($2::text[])`,
+      [state.studentNumbers, closures],
+    ),
+    state.baseline.ids.notifications,
+  );
+  const auditCandidates = await idRows(
+    client,
+    `SELECT id::text AS id FROM audit_logs
+      WHERE (entity_type='schedule_import_group' AND entity_id=ANY($1::text[]))
+         OR (entity_type='schedule_batch' AND entity_id=ANY($2::text[]))
+         OR (entity_type='appointment' AND entity_id=ANY($3::text[]))
+         OR (entity_type='clinic_unavailable_date' AND entity_id=ANY($4::text[]))
+         OR (entity_type='student' AND entity_id=ANY($5::text[]))
+         OR entity_id=ANY($6::text[])
+         OR metadata->>'importId'=ANY($1::text[])
+         OR metadata->>'batchId'=ANY($2::text[])
+         OR metadata->>'replacementId'=ANY($3::text[])
+         OR metadata->>'clinicUnavailableDateId'=ANY($4::text[])
+         OR metadata->>'studentNumber'=ANY($5::text[])`,
+    [
+      imports,
+      batches,
+      appointments,
+      closures,
+      state.studentNumbers,
+      [...laboratoryResults, ...examResults, ...submissions],
+    ],
+  );
   const preExisting = new Set(state.preExistingStudents.map((student) => String(student.student_number)));
   const createdStudents = (await client.query<{ student_number: string }>(
     "SELECT student_number FROM students WHERE student_number=ANY($1::varchar[])",
@@ -738,9 +993,34 @@ async function collectOwnedIds(client: PoolClient, state: FixtureState): Promise
     examResults,
     statusLogs,
     audits: differenceIds(auditCandidates, state.baseline.ids.audits),
-    notifications: differenceIds(notifications, state.baseline.ids.notifications),
+    notifications,
     events: differenceIds(events, state.baseline.ids.rescheduleEvents),
     createdStudents,
+    verificationTokens: differenceIds(
+      await idRows(
+        client,
+        "SELECT id::text AS id FROM student_email_verifications WHERE student_number=ANY($1::varchar[])",
+        [state.studentNumbers],
+      ),
+      state.baseline.ids.verificationTokens,
+    ),
+    loginAttempts: differenceIds(
+      await idRows(
+        client,
+        "SELECT id::text AS id FROM student_login_attempts WHERE student_number=ANY($1::varchar[])",
+        [state.studentNumbers],
+      ),
+      state.baseline.ids.loginAttempts,
+    ),
+    outbox: differenceIds(
+      await idRows(
+        client,
+        "SELECT id::text AS id FROM email_outbox WHERE student_number=ANY($1::varchar[])",
+        [state.studentNumbers],
+      ),
+      state.baseline.ids.outbox,
+    ),
+    referencePrograms: state.referencePrograms.temporary.map((program) => program.id),
   };
 }
 
@@ -787,55 +1067,107 @@ async function restorePrograms(client: PoolClient, programs: JsonObject[]) {
   await client.query("ALTER TABLE programs ENABLE TRIGGER programs_updated_at");
 }
 
-export function resultStorageDirectories(files: OwnedIds["resultFiles"]) {
+export function resultStorageDirectories(files: CleanupManifest["resultFiles"]) {
   return [...new Set(files.map((file) => file.storageKey.split("/")[0]).filter(Boolean))];
 }
 
-async function removePrivateFiles(files: OwnedIds["resultFiles"]) {
-  const directories = resultStorageDirectories(files);
+function privateStorageTarget(directory: string) {
+  const target = resolve(RESULT_STORAGE_ROOT, directory);
+  if (!target.startsWith(`${RESULT_STORAGE_ROOT}${sep}`)) {
+    throw new Error(`Refusing to access result storage outside ${RESULT_STORAGE_ROOT}: ${target}`);
+  }
+  return target;
+}
+
+async function removePrivateFiles(directories: string[]) {
   for (const directory of directories) {
-    const target = resolve(RESULT_STORAGE_ROOT, directory);
-    if (!target.startsWith(`${RESULT_STORAGE_ROOT}${sep}`)) {
-      throw new Error(`Refusing to remove result storage outside ${RESULT_STORAGE_ROOT}: ${target}`);
-    }
-    await rm(target, { recursive: true, force: true });
+    await rm(privateStorageTarget(directory), { recursive: true, force: true });
   }
 }
 
-async function cleanup(pool: Pool) {
-  const state = await readState();
-  if (!state) {
-    return { mode: "cleanup", statePath: STATE_FILE, phase: "ABSENT", message: "No fixture state exists." };
+async function existingPrivateDirectoryCount(directories: string[]) {
+  let count = 0;
+  for (const directory of directories) {
+    try {
+      await access(privateStorageTarget(directory));
+      count += 1;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
   }
+  return count;
+}
+
+async function countIds(client: PoolClient, table: string, ids: string[]) {
+  if (!ids.length) return 0;
+  return Number((await client.query(
+    `SELECT COUNT(*)::int AS count FROM ${table} WHERE id=ANY($1::uuid[])`,
+    [ids],
+  )).rows[0].count);
+}
+
+export async function countCleanupResidue(
+  client: PoolClient,
+  manifest: CleanupManifest,
+  privateDirectories: string[],
+): Promise<CleanupResidue> {
+  return {
+    imports: await countIds(client, "schedule_import_groups", manifest.imports),
+    batches: await countIds(client, "schedule_batches", manifest.batches),
+    coordinatorItems: await countIds(client, "coordinator_schedule_items", manifest.coordinatorItems),
+    students: manifest.createdStudents.length
+      ? Number((await client.query(
+        "SELECT COUNT(*)::int AS count FROM students WHERE student_number=ANY($1::varchar[])",
+        [manifest.createdStudents],
+      )).rows[0].count)
+      : 0,
+    appointments: await countIds(client, "appointments", manifest.appointments),
+    closures: await countIds(client, "clinic_unavailable_dates", manifest.closures),
+    submissions: await countIds(client, "student_result_submissions", manifest.submissions),
+    resultFiles: await countIds(client, "student_result_files", manifest.resultFiles.map((file) => file.id)),
+    laboratoryResults: await countIds(client, "laboratory_results", manifest.laboratoryResults),
+    examResults: await countIds(client, "exam_results", manifest.examResults),
+    statusLogs: await countIds(client, "appointment_status_logs", manifest.statusLogs),
+    events: await countIds(client, "appointment_reschedule_events", manifest.events),
+    notifications: await countIds(client, "student_portal_notifications", manifest.notifications),
+    audits: await countIds(client, "audit_logs", manifest.audits),
+    verificationTokens: await countIds(client, "student_email_verifications", manifest.verificationTokens),
+    loginAttempts: await countIds(client, "student_login_attempts", manifest.loginAttempts),
+    outbox: await countIds(client, "email_outbox", manifest.outbox),
+    referencePrograms: await countIds(client, "programs", manifest.referencePrograms),
+    privateStorageDirectories: await existingPrivateDirectoryCount(privateDirectories),
+  };
+}
+
+async function deleteDatabaseManifest(pool: Pool, state: FixtureState, manifest: CleanupManifest) {
   const client = await pool.connect();
-  let owned: OwnedIds;
   try {
     await client.query("BEGIN");
-    owned = await collectOwnedIds(client, state);
-    await deleteByIds(client, "audit_logs", owned.audits);
-    await deleteByIds(client, "student_portal_notifications", owned.notifications);
-    await deleteByIds(client, "appointment_reschedule_events", owned.events);
-    await deleteByIds(client, "student_result_files", owned.resultFiles.map((file) => file.id));
-    await deleteByIds(client, "student_result_submissions", owned.submissions);
-    await deleteByIds(client, "exam_results", owned.examResults);
-    await deleteByIds(client, "laboratory_results", owned.laboratoryResults);
-    await deleteByIds(client, "appointment_status_logs", owned.statusLogs);
-    await deleteByIds(client, "appointments", owned.appointments);
-    await deleteByIds(client, "coordinator_schedule_items", owned.coordinatorItems);
-    await deleteByIds(client, "schedule_batches", owned.batches);
-    await deleteByIds(client, "schedule_import_groups", owned.imports);
-    await deleteByIds(client, "clinic_unavailable_dates", owned.closures);
+    await deleteByIds(client, "audit_logs", manifest.audits);
+    await deleteByIds(client, "student_portal_notifications", manifest.notifications);
+    await deleteByIds(client, "appointment_reschedule_events", manifest.events);
+    await deleteByIds(client, "student_result_files", manifest.resultFiles.map((file) => file.id));
+    await deleteByIds(client, "student_result_submissions", manifest.submissions);
+    await deleteByIds(client, "exam_results", manifest.examResults);
+    await deleteByIds(client, "laboratory_results", manifest.laboratoryResults);
+    await deleteByIds(client, "appointment_status_logs", manifest.statusLogs);
+    await deleteByIds(client, "appointments", manifest.appointments);
+    await deleteByIds(client, "coordinator_schedule_items", manifest.coordinatorItems);
+    await deleteByIds(client, "schedule_batches", manifest.batches);
+    await deleteByIds(client, "schedule_import_groups", manifest.imports);
+    await deleteByIds(client, "clinic_unavailable_dates", manifest.closures);
+    await deleteByIds(client, "student_email_verifications", manifest.verificationTokens);
+    await deleteByIds(client, "student_login_attempts", manifest.loginAttempts);
+    await deleteByIds(client, "email_outbox", manifest.outbox);
     await restoreStudents(client, state.preExistingStudents);
-    if (owned.createdStudents.length) {
-      await client.query("DELETE FROM students WHERE student_number=ANY($1::varchar[])", [owned.createdStudents]);
-    }
-    await restorePrograms(client, state.referencePrograms.preExisting);
-    if (state.referencePrograms.temporary.length) {
+    if (manifest.createdStudents.length) {
       await client.query(
-        "DELETE FROM programs WHERE id=ANY($1::uuid[])",
-        [state.referencePrograms.temporary.map((program) => program.id)],
+        "DELETE FROM students WHERE student_number=ANY($1::varchar[])",
+        [manifest.createdStudents],
       );
     }
+    await restorePrograms(client, state.referencePrograms.preExisting);
+    await deleteByIds(client, "programs", manifest.referencePrograms);
     for (const capacity of state.baseline.capacities) {
       await client.query(
         `UPDATE clinic_capacity_settings
@@ -851,11 +1183,41 @@ async function cleanup(pool: Pool) {
   } finally {
     client.release();
   }
-  await removePrivateFiles(owned!.resultFiles);
+}
+
+async function cleanup(pool: Pool) {
+  const state = await readState();
+  if (!state) {
+    return { mode: "cleanup", statePath: STATE_FILE, phase: "ABSENT", message: "No fixture state exists." };
+  }
+
+  const proof = await runPersistedCleanup(state.cleanup, {
+    captureManifest: async () => {
+      const client = await pool.connect();
+      try {
+        return await collectCleanupManifest(client, state);
+      } finally {
+        client.release();
+      }
+    },
+    persist: async (progress) => {
+      state.cleanup = progress;
+      await writeState(state);
+    },
+    deleteDatabase: async (manifest) => deleteDatabaseManifest(pool, state, manifest),
+    deletePrivateFiles: removePrivateFiles,
+    prove: async (manifest, privateDirectories) => {
+      const client = await pool.connect();
+      try {
+        return await countCleanupResidue(client, manifest, privateDirectories);
+      } finally {
+        client.release();
+      }
+    },
+  });
 
   const proofClient = await pool.connect();
   try {
-    const residue = await collectOwnedIds(proofClient, state);
     const capacities = await proofClient.query<CapacityBaseline>(
       `SELECT id::text, safe_daily_capacity AS "safeDailyCapacity", max_daily_capacity AS "maxDailyCapacity"
          FROM clinic_capacity_settings ORDER BY id`,
@@ -884,23 +1246,6 @@ async function cleanup(pool: Pool) {
       currentPrograms,
       "id",
     );
-    const proof = {
-      imports: residue.imports.length,
-      students: residue.createdStudents.length,
-      appointments: residue.appointments.length,
-      closures: residue.closures.length,
-      submissions: residue.submissions.length,
-      audits: residue.audits.length,
-      notifications: residue.notifications.length,
-      events: residue.events.length,
-      referencePrograms: Number((await proofClient.query(
-        "SELECT COUNT(*)::int AS count FROM programs WHERE id=ANY($1::uuid[])",
-        [state.referencePrograms.temporary.map((program) => program.id)],
-      )).rows[0].count),
-    };
-    if (Object.values(proof).some((count) => count !== 0)) {
-      throw new Error(`Fixture cleanup residue remains: ${JSON.stringify(proof)}. State retained at ${STATE_FILE}.`);
-    }
     if (baselineCapacityJson !== currentCapacityJson) {
       throw new Error(`Capacity restoration mismatch. State retained at ${STATE_FILE}.`);
     }

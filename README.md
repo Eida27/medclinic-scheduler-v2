@@ -177,7 +177,7 @@ Tests cover schema/backfills, the exact nine-column CSV, 3,000-row atomic import
 
 ### Clinic UX Browser acceptance fixture
 
-The targeted fixture reads `C:\endless_refinement\microsoft_docs\Physical_Laboratory_Scheduling_Completed.csv` in place and requires its UTF-8 BOM plus exactly 280 accepted rows. It never changes, copies, or commits that source file. `prepare` creates an ignored Windows-1252 upload under `.data/browser-clinic-scheduler-ux/` with exactly one `Peña` value, records matching-student/reference/capacity baselines, and prints the absolute upload and state paths.
+The targeted fixture reads `C:\endless_refinement\microsoft_docs\Physical_Laboratory_Scheduling_Completed.csv` in place and requires its exact 23,834-byte length, SHA-256 `fa01469d107bd0401444b9f95f555ffaf68a4c116b4600af8142c15dca5d3c17`, UTF-8 BOM, and exactly 280 accepted rows. It never changes, copies, or commits that source file. `prepare` creates an ignored Windows-1252 upload under `.data/browser-clinic-scheduler-ux/` with exactly one `Peña` value, records matching-student/reference/capacity baselines, and prints the absolute upload and state paths.
 
 ```powershell
 npm run acceptance:clinic-ux -- prepare
@@ -188,7 +188,7 @@ npm run acceptance:clinic-ux -- status
 npm run acceptance:clinic-ux -- cleanup
 ```
 
-The ignored state is `.data/browser-clinic-scheduler-ux/state.json`. `stage` requires exactly one 280-row import with the unique temporary filename and prepares deterministic past correction, both-completed, mixed-result, clinic-context, successful-calendar, and protected-failure-calendar records. `cleanup` uses the recorded import/appointment/closure IDs, restores pre-existing student and program rows plus both capacity columns, removes its private/temp files, and refuses to remove storage outside `RESULT_UPLOAD_ROOT`. Its final JSON reports residue counts for fixture imports, students, appointments, closures, submissions, audits, notifications, events, and temporary reference programs; every count must be zero.
+The ignored state is `.data/browser-clinic-scheduler-ux/state.json`. `stage` requires exactly one fully published 280-student import: two published service batches, 560 coordinator items, 560 published pending appointments, and 280 complete Laboratory/PE pairs. It fails before staging mutations if any count or status is partial, then prepares deterministic past correction, both-completed, mixed-result, clinic-context, successful-calendar, and protected-failure-calendar records. Before cleanup commits a database deletion, state persists the exact owned IDs plus every private storage key/directory. Retries reuse that manifest even when root rows are already gone. Final proof queries every manifest ID directly, restores pre-existing student/program rows and both capacity columns, removes private/temp files only below `RESULT_UPLOAD_ROOT`, and requires zero residue in every reported category before removing state.
 
 ## Demonstration Flow
 
