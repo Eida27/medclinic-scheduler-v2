@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { pool } from "@/server/db/pool";
+import { pool, transaction } from "@/server/db/pool";
 import {
   cleanupAndRestoreCapacitySettings,
   setupCapacityFixtureLock,
@@ -15,6 +15,7 @@ import { createClinicUnavailableDate } from "./clinic-calendar.service";
 const header = "Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth";
 const studentPattern = "99-95%";
 const importPattern = "REGULAR 2026-2027 - TEST-CALENDAR%";
+const suiteStartedAt = new Date();
 let capacityFixture: CapacityFixtureLock | null = null;
 const admin: SessionUser = {
   userId: TEST_REFERENCE_IDS.adminUser,
@@ -44,8 +45,8 @@ function addCalendarDays(date: string, amount: number) {
   return value.toISOString().slice(0, 10);
 }
 
-async function readFailedBlockState(studentNumber: string, attemptedReason: string) {
-  const [appointments, block, statusLogs, rescheduleEvents, notifications, audits] = await Promise.all([
+async function readFailedBlockState(studentNumber: string) {
+  const [appointments, blocks, statusLogs, rescheduleEvents, notifications, audits] = await Promise.all([
     pool.query(
       `SELECT id::text, schedule_type, appointment_date::text, status,
               rescheduled_from::text, updated_by::text, updated_at::text
@@ -55,8 +56,11 @@ async function readFailedBlockState(studentNumber: string, attemptedReason: stri
       [studentNumber],
     ),
     pool.query(
-      "SELECT id::text FROM clinic_unavailable_dates WHERE reason=$1 ORDER BY id",
-      [attemptedReason],
+      `SELECT id::text, clinic_id::text, start_date::text, end_date::text,
+              category, reason, created_by::text, created_at::text, updated_at::text
+         FROM clinic_unavailable_dates
+        WHERE reason LIKE 'TEST-CALENDAR%'
+        ORDER BY id`,
     ),
     pool.query(
       `SELECT COUNT(*)::int AS count
@@ -76,28 +80,64 @@ async function readFailedBlockState(studentNumber: string, attemptedReason: stri
       [studentNumber],
     ),
     pool.query(
-      `SELECT COUNT(*)::int AS count
+      `SELECT id::text, entity_id, metadata::text, created_at::text
          FROM audit_logs
         WHERE action='CLINIC_UNAVAILABLE_DATE_CREATED'
+          AND entity_type='clinic_unavailable_date'
           AND actor_user_id=$1
-          AND metadata->>'clinicId'=$2`,
-      [TEST_REFERENCE_IDS.adminUser, TEST_REFERENCE_IDS.physicalExamClinic],
+          AND (
+            created_at >= $2
+            OR entity_id IN (
+              SELECT id::text
+                FROM clinic_unavailable_dates
+               WHERE reason LIKE 'TEST-CALENDAR%'
+            )
+          )
+        ORDER BY id`,
+      [TEST_REFERENCE_IDS.adminUser, suiteStartedAt],
     ),
   ]);
 
   return {
     appointments: appointments.rows,
-    attemptedBlocks: block.rows,
+    calendarBlocks: blocks.rows,
     statusLogCount: statusLogs.rows[0].count,
     rescheduleEventCount: rescheduleEvents.rows[0].count,
     notificationCount: notifications.rows[0].count,
-    auditCount: audits.rows[0].count,
+    audits: audits.rows,
   };
 }
 
 async function cleanup() {
   await cleanupTestFixtures(studentPattern, importPattern, importPattern);
-  await pool.query("DELETE FROM clinic_unavailable_dates WHERE reason LIKE 'TEST-CALENDAR%'");
+  await transaction(async (client) => {
+    const blocks = await client.query<{ id: string }>(
+      "SELECT id FROM clinic_unavailable_dates WHERE reason LIKE 'TEST-CALENDAR%' FOR UPDATE",
+    );
+    const blockIds = blocks.rows.map((block) => block.id);
+    if (!blockIds.length) return;
+    await client.query(
+      `DELETE FROM audit_logs
+        WHERE action='CLINIC_UNAVAILABLE_DATE_CREATED'
+          AND entity_type='clinic_unavailable_date'
+          AND entity_id = ANY($1::text[])`,
+      [blockIds],
+    );
+    await client.query(
+      "DELETE FROM clinic_unavailable_dates WHERE id = ANY($1::uuid[])",
+      [blockIds],
+    );
+  });
+  const auditResidue = await pool.query(
+    `SELECT id::text
+       FROM audit_logs
+      WHERE action='CLINIC_UNAVAILABLE_DATE_CREATED'
+        AND entity_type='clinic_unavailable_date'
+        AND actor_user_id=$1
+        AND created_at >= $2`,
+    [TEST_REFERENCE_IDS.adminUser, suiteStartedAt],
+  );
+  expect(auditResidue.rows).toEqual([]);
 }
 
 beforeAll(async () => {
@@ -331,10 +371,7 @@ describe("clinic calendar closures", () => {
         WHERE id=$1`,
       [pe.rows[0].id, TEST_REFERENCE_IDS.adminUser],
     );
-    const before = await readFailedBlockState(
-      "99-9503-03",
-      "TEST-CALENDAR protected closure",
-    );
+    const before = await readFailedBlockState("99-9503-03");
 
     await expect(createClinicUnavailableDate({
       clinicId: TEST_REFERENCE_IDS.physicalExamClinic,
@@ -347,10 +384,7 @@ describe("clinic calendar closures", () => {
       status: 409,
       fields: { unresolved: [expect.stringContaining(pe.rows[0].id)] },
     });
-    const after = await readFailedBlockState(
-      "99-9503-03",
-      "TEST-CALENDAR protected closure",
-    );
+    const after = await readFailedBlockState("99-9503-03");
     expect(after).toEqual(before);
   });
 
@@ -371,7 +405,7 @@ describe("clinic calendar closures", () => {
        ) VALUES ($1,$2,$2,'HOLIDAY','TEST-CALENDAR existing one-day block',$3)`,
       [TEST_REFERENCE_IDS.physicalExamClinic, blockedDate, TEST_REFERENCE_IDS.adminUser],
     );
-    const before = await readFailedBlockState(studentNumber, attemptedReason);
+    const before = await readFailedBlockState(studentNumber);
 
     await expect(createClinicUnavailableDate({
       clinicId: TEST_REFERENCE_IDS.physicalExamClinic,
@@ -380,7 +414,7 @@ describe("clinic calendar closures", () => {
       category: "HOLIDAY",
       reason: attemptedReason,
     }, admin)).rejects.toMatchObject({ code: "CLINIC_BLOCK_OVERLAP", status: 409 });
-    const after = await readFailedBlockState(studentNumber, attemptedReason);
+    const after = await readFailedBlockState(studentNumber);
     expect(after).toEqual(before);
   });
 
@@ -406,7 +440,7 @@ describe("clinic calendar closures", () => {
         TEST_REFERENCE_IDS.adminUser,
       ],
     );
-    const before = await readFailedBlockState(studentNumber, attemptedReason);
+    const before = await readFailedBlockState(studentNumber);
 
     await expect(createClinicUnavailableDate({
       clinicId: TEST_REFERENCE_IDS.physicalExamClinic,
@@ -418,7 +452,7 @@ describe("clinic calendar closures", () => {
       code: "CLINIC_BLOCK_REPLACEMENT_UNAVAILABLE",
       status: 409,
     });
-    const after = await readFailedBlockState(studentNumber, attemptedReason);
+    const after = await readFailedBlockState(studentNumber);
     expect(after).toEqual(before);
   });
 });
