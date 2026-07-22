@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { Button } from "@/components/ui/Button";
+import { Spinner } from "@/components/ui/Spinner";
 
 type ConfirmDialogProps = {
   open: boolean;
@@ -47,6 +48,7 @@ export function ConfirmDialog({
       <div
         role="dialog"
         aria-modal="true"
+        aria-busy={pending}
         aria-labelledby="confirm-dialog-title"
         aria-describedby="confirm-dialog-description"
         className="w-full max-w-md rounded-3xl border border-line bg-surface p-6 shadow-2xl"
@@ -57,7 +59,12 @@ export function ConfirmDialog({
         <div className="mt-6 flex justify-end gap-3">
           <Button ref={cancelButtonRef} variant="secondary" onClick={onCancel} disabled={pending}>Cancel</Button>
           <Button variant={danger ? "danger" : "primary"} onClick={onConfirm} disabled={pending}>
-            {pending ? pendingLabel : confirmLabel}
+            {pending ? (
+              <span className="inline-flex items-center gap-2">
+                <Spinner size="sm" label={pendingLabel} />
+                {pendingLabel}
+              </span>
+            ) : confirmLabel}
           </Button>
         </div>
       </div>
