@@ -1,0 +1,151 @@
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ClinicUnavailableDateRecord } from "@/server/repositories/clinic-unavailable-dates.repository";
+import { ClinicUnavailableCalendar } from "./ClinicUnavailableCalendar";
+
+const clinics = [
+  { id: "60000000-0000-4000-8000-000000000001", name: "KABALAKA Clinic" },
+  { id: "60000000-0000-4000-8000-000000000002", name: "CPU Clinic" },
+];
+
+const unavailableDates: ClinicUnavailableDateRecord[] = [
+  {
+    id: "unavailable-1",
+    clinicId: clinics[0].id,
+    clinicCode: "KABALAKA_CLINIC",
+    clinicName: clinics[0].name,
+    startDate: "2026-08-19",
+    endDate: "2026-08-20",
+    category: "MAINTENANCE",
+    reason: "Generator testing",
+    createdByName: "Clinic Admin",
+    createdAt: "2026-07-01T00:00:00.000Z",
+  },
+];
+
+function renderCalendar() {
+  return render(
+    <ClinicUnavailableCalendar
+      clinics={clinics}
+      unavailableDates={unavailableDates}
+      initialMonth="2026-08"
+      today="2026-08-17"
+    />,
+  );
+}
+
+function completeControls() {
+  const user = userEvent.setup();
+  fireEvent.change(screen.getByLabelText("Clinic"), { target: { value: clinics[0].id } });
+  fireEvent.change(screen.getByLabelText("Category"), { target: { value: "MAINTENANCE" } });
+  fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "Equipment maintenance" } });
+  return user;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("ClinicUnavailableCalendar", () => {
+  it("renders the month and disables invalid, non-working, and unavailable dates", async () => {
+    renderCalendar();
+
+    expect(screen.getByRole("heading", { name: "August 2026" })).toBeInTheDocument();
+    for (const weekday of ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]) {
+      expect(screen.getByText(weekday)).toBeInTheDocument();
+    }
+
+    const availableDate = screen.getByRole("button", { name: "August 18, 2026 — available" });
+    expect(availableDate).toBeDisabled();
+    expect(screen.getByRole("button", { name: "August 14, 2026 — past" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "August 17, 2026 — today" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "August 22, 2026 — weekend" })).toBeDisabled();
+
+    await completeControls();
+
+    expect(availableDate).toBeEnabled();
+    expect(
+      screen.getByRole("button", {
+        name: "August 19, 2026 — unavailable: Maintenance, Generator testing",
+      }),
+    ).toBeDisabled();
+  });
+
+  it("moves between calendar months", async () => {
+    const user = userEvent.setup();
+    renderCalendar();
+
+    await user.click(screen.getByRole("button", { name: "Next month" }));
+    expect(screen.getByRole("heading", { name: "September 2026" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Previous month" }));
+    expect(screen.getByRole("heading", { name: "August 2026" })).toBeInTheDocument();
+  });
+
+  it("posts one date once, shows saving state, and records the moved impact", async () => {
+    const response = deferred<Response>();
+    const fetchMock = vi.fn().mockReturnValue(response.promise);
+    vi.stubGlobal("fetch", fetchMock);
+    renderCalendar();
+    const user = await completeControls();
+
+    await user.click(screen.getByRole("button", { name: "August 18, 2026 — available" }));
+
+    const savingDate = screen.getByRole("button", { name: "August 18, 2026 — saving" });
+    expect(savingDate).toBeDisabled();
+    expect(within(savingDate).getByRole("status", { name: "Saving August 18, 2026" })).toBeInTheDocument();
+    fireEvent.click(savingDate);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledWith("/api/clinic-unavailable-dates", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        clinicId: clinics[0].id,
+        startDate: "2026-08-18",
+        endDate: "2026-08-18",
+        category: "MAINTENANCE",
+        reason: "Equipment maintenance",
+      }),
+    });
+
+    response.resolve(new Response(JSON.stringify({
+      data: { id: "unavailable-new", movedStudentCount: 2, movedAppointmentCount: 4 },
+    }), { status: 201, headers: { "content-type": "application/json" } }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("2 students");
+    expect(screen.getByRole("alert")).toHaveTextContent("4 appointments");
+    expect(
+      screen.getByRole("button", {
+        name: "August 18, 2026 — unavailable: Maintenance, Equipment maintenance",
+      }),
+    ).toBeDisabled();
+  });
+
+  it("rolls a date back to available after a 409 response", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: {
+        code: "CLINIC_BLOCK_OVERLAP",
+        message: "This clinic already has an overlapping unavailable date.",
+      },
+    }), { status: 409, headers: { "content-type": "application/json" } })));
+    renderCalendar();
+    const user = await completeControls();
+
+    await user.click(screen.getByRole("button", { name: "August 18, 2026 — available" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This clinic already has an overlapping unavailable date.",
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "August 18, 2026 — available" })).toBeEnabled();
+    });
+  });
+});
