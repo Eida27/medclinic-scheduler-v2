@@ -1,6 +1,19 @@
 import "server-only";
 import type { PoolClient } from "pg";
 import { query } from "@/server/db/pool";
+import { AppError } from "@/lib/errors";
+
+export type AppointmentResultCorrectionState =
+  | { type: "CLEAR" }
+  | {
+    type: "PENDING_PLACEHOLDER";
+    resultId: string;
+    table: "laboratory_results" | "exam_results";
+  }
+  | {
+    type: "PROTECTED";
+    reason: "FINALIZED_SUBMISSION" | "UPLOADED_FILES" | "VERIFIED_RESULT";
+  };
 
 export type StudentResultFileMetadata = {
   id: string;
@@ -34,6 +47,77 @@ type DraftRow = {
   status: "DRAFT";
   lastActivityAt: Date;
 };
+
+export async function getAppointmentResultCorrectionState(
+  client: PoolClient,
+  appointment: { id: string; scheduleType: string },
+): Promise<AppointmentResultCorrectionState> {
+  const table = appointment.scheduleType === "LABORATORY"
+    ? "laboratory_results" as const
+    : "exam_results" as const;
+  const result = await client.query<{ id: string; resultStatus: string }>(
+    table === "laboratory_results"
+      ? `SELECT id, result_status AS "resultStatus"
+           FROM laboratory_results
+          WHERE appointment_id=$1
+          FOR UPDATE`
+      : `SELECT id, result_status AS "resultStatus"
+           FROM exam_results
+          WHERE appointment_id=$1
+          FOR UPDATE`,
+    [appointment.id],
+  );
+  const submissions = await client.query<{ id: string; status: string }>(
+    `SELECT id, status
+       FROM student_result_submissions
+      WHERE appointment_id=$1
+      FOR UPDATE`,
+    [appointment.id],
+  );
+  const files = await client.query<{ activeFileCount: number }>(
+    `SELECT COUNT(file.id)::int AS "activeFileCount"
+       FROM student_result_submissions submission
+       JOIN student_result_files file ON file.submission_id=submission.id
+      WHERE submission.appointment_id=$1 AND file.deleted_at IS NULL`,
+    [appointment.id],
+  );
+
+  if (submissions.rows.some((submission) => submission.status === "FINALIZED")) {
+    return { type: "PROTECTED", reason: "FINALIZED_SUBMISSION" };
+  }
+  if (files.rows[0].activeFileCount > 0) {
+    return { type: "PROTECTED", reason: "UPLOADED_FILES" };
+  }
+  if (result.rows[0] && result.rows[0].resultStatus !== "PENDING_UPLOAD") {
+    return { type: "PROTECTED", reason: "VERIFIED_RESULT" };
+  }
+  if (result.rows[0]) {
+    return { type: "PENDING_PLACEHOLDER", resultId: result.rows[0].id, table };
+  }
+  return { type: "CLEAR" };
+}
+
+export async function deletePendingResultPlaceholder(
+  client: PoolClient,
+  state: Extract<AppointmentResultCorrectionState, { type: "PENDING_PLACEHOLDER" }>,
+): Promise<void> {
+  const deleted = state.table === "laboratory_results"
+    ? await client.query(
+      "DELETE FROM laboratory_results WHERE id=$1 AND result_status='PENDING_UPLOAD' RETURNING id",
+      [state.resultId],
+    )
+    : await client.query(
+      "DELETE FROM exam_results WHERE id=$1 AND result_status='PENDING_UPLOAD' RETURNING id",
+      [state.resultId],
+    );
+  if (deleted.rowCount !== 1) {
+    throw new AppError(
+      "APPOINTMENT_RESULT_CONFLICT",
+      "The appointment result changed. Refresh and try again.",
+      409,
+    );
+  }
+}
 
 export async function ensurePendingUploadResult(
   client: PoolClient,
