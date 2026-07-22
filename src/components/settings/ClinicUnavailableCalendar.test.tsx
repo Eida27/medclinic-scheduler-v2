@@ -56,7 +56,7 @@ afterEach(() => {
 });
 
 describe("ClinicUnavailableCalendar", () => {
-  it("renders the month and disables invalid, non-working, and unavailable dates", async () => {
+  it("disables invalid and non-working dates while keeping unavailable weekdays focusable", async () => {
     renderCalendar();
 
     expect(screen.getByRole("heading", { name: "August 2026" })).toBeInTheDocument();
@@ -69,15 +69,52 @@ describe("ClinicUnavailableCalendar", () => {
     expect(screen.getByRole("button", { name: "August 14, 2026 — past" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "August 17, 2026 — today" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "August 22, 2026 — weekend" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "September 1, 2026 — outside current month" })).toBeDisabled();
+
+    const unavailableDate = screen.getByRole("button", {
+      name: "August 19, 2026 — unavailable: Maintenance, Generator testing",
+    });
+    expect(unavailableDate).toBeEnabled();
+    expect(unavailableDate).toHaveAttribute("aria-disabled", "true");
 
     await completeControls();
 
     expect(availableDate).toBeEnabled();
-    expect(
-      screen.getByRole("button", {
-        name: "August 19, 2026 — unavailable: Maintenance, Generator testing",
-      }),
-    ).toBeDisabled();
+    expect(unavailableDate).toBeEnabled();
+    expect(unavailableDate).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("selects unavailable dates by pointer or keyboard and discloses accessible details without posting", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    renderCalendar();
+    const user = await completeControls();
+    const firstUnavailableDate = screen.getByRole("button", {
+      name: "August 19, 2026 — unavailable: Maintenance, Generator testing",
+    });
+    const secondUnavailableDate = screen.getByRole("button", {
+      name: "August 20, 2026 — unavailable: Maintenance, Generator testing",
+    });
+
+    await user.click(firstUnavailableDate);
+
+    const details = screen.getByRole("region", { name: "Unavailable date details" });
+    expect(firstUnavailableDate).toHaveAttribute("aria-pressed", "true");
+    expect(firstUnavailableDate).toHaveAttribute("aria-describedby", details.id);
+    expect(within(details).getByText("KABALAKA Clinic")).toBeInTheDocument();
+    expect(within(details).getByText("Maintenance")).toBeInTheDocument();
+    expect(within(details).getByText("Generator testing")).toBeInTheDocument();
+    expect(within(details).getByText("August 19, 2026 to August 20, 2026")).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    secondUnavailableDate.focus();
+    expect(secondUnavailableDate).toHaveFocus();
+    await user.keyboard("{Enter}");
+
+    expect(firstUnavailableDate).toHaveAttribute("aria-pressed", "false");
+    expect(secondUnavailableDate).toHaveAttribute("aria-pressed", "true");
+    expect(secondUnavailableDate).toHaveAttribute("aria-describedby", details.id);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("moves between calendar months", async () => {
@@ -126,7 +163,7 @@ describe("ClinicUnavailableCalendar", () => {
       screen.getByRole("button", {
         name: "August 18, 2026 — unavailable: Maintenance, Equipment maintenance",
       }),
-    ).toBeDisabled();
+    ).toHaveAttribute("aria-disabled", "true");
   });
 
   it("rolls a date back to available after a 409 response", async () => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Card, CardTitle } from "@/components/ui/Card";
@@ -62,7 +62,9 @@ export function ClinicUnavailableCalendar({
   const [records, setRecords] = useState(unavailableDates);
   const [success, setSuccess] = useState<Impact>();
   const [error, setError] = useState<ApiError>();
+  const [selectedUnavailableDate, setSelectedUnavailableDate] = useState<string>();
   const submitting = useRef(false);
+  const unavailableDetailsId = useId();
 
   const days = useMemo(() => buildMonthGrid(month), [month]);
   const recordsForClinic = useMemo(
@@ -73,6 +75,9 @@ export function ClinicUnavailableCalendar({
     () => expandUnavailableRanges(recordsForClinic),
     [recordsForClinic],
   );
+  const selectedUnavailable = selectedUnavailableDate
+    ? unavailableByDate.get(selectedUnavailableDate)
+    : undefined;
   const trimmedReason = reason.trim();
   const formIsValid = Boolean(selectedClinicId) && trimmedReason.length >= 3 && trimmedReason.length <= 500;
 
@@ -166,6 +171,7 @@ export function ClinicUnavailableCalendar({
             disabled={Boolean(pendingDate)}
             onChange={(event) => {
               setSelectedClinicId(event.target.value);
+              setSelectedUnavailableDate(undefined);
               setSuccess(undefined);
               setError(undefined);
             }}
@@ -203,7 +209,10 @@ export function ClinicUnavailableCalendar({
           size="sm"
           aria-label="Previous month"
           disabled={Boolean(pendingDate)}
-          onClick={() => setMonth((current) => shiftMonth(current, -1))}
+          onClick={() => {
+            setSelectedUnavailableDate(undefined);
+            setMonth((current) => shiftMonth(current, -1));
+          }}
         >
           Previous
         </Button>
@@ -213,7 +222,10 @@ export function ClinicUnavailableCalendar({
           size="sm"
           aria-label="Next month"
           disabled={Boolean(pendingDate)}
-          onClick={() => setMonth((current) => shiftMonth(current, 1))}
+          onClick={() => {
+            setSelectedUnavailableDate(undefined);
+            setMonth((current) => shiftMonth(current, 1));
+          }}
         >
           Next
         </Button>
@@ -250,14 +262,19 @@ export function ClinicUnavailableCalendar({
               } else if (isOutsideMonth) {
                 stateLabel = "outside current month";
               }
-              const disabled = Boolean(
-                unavailable
-                || isToday
+              const genuinelyNonActionable = Boolean(
+                isToday
                 || isPast
                 || day.isWeekend
-                || isOutsideMonth
-                || !formIsValid
-                || pendingDate,
+                || isOutsideMonth,
+              );
+              const disabled = Boolean(
+                genuinelyNonActionable
+                || pendingDate
+                || (!unavailable && !formIsValid),
+              );
+              const isSelectedUnavailable = Boolean(
+                unavailable && selectedUnavailableDate === day.date,
               );
 
               return (
@@ -265,12 +282,19 @@ export function ClinicUnavailableCalendar({
                   key={day.date}
                   type="button"
                   aria-label={`${dateLabel} — ${stateLabel}`}
-                  title={unavailable
-                    ? `${unavailable.clinicName}: ${categoryLabels[unavailable.category]} — ${unavailable.reason} (${unavailable.startDate} to ${unavailable.endDate})`
-                    : undefined}
+                  aria-disabled={unavailable ? true : undefined}
+                  aria-pressed={unavailable ? isSelectedUnavailable : undefined}
+                  aria-controls={unavailable ? unavailableDetailsId : undefined}
+                  aria-describedby={isSelectedUnavailable ? unavailableDetailsId : undefined}
                   disabled={disabled}
-                  onClick={() => markUnavailable(day.date)}
-                  className="flex min-h-20 flex-col items-center justify-center gap-1 rounded-xl border border-line bg-surface px-2 py-3 text-sm font-semibold text-ink transition hover:border-cpu-navy/30 hover:bg-cpu-navy-soft disabled:cursor-not-allowed disabled:bg-canvas disabled:text-muted"
+                  onClick={() => {
+                    if (unavailable) {
+                      setSelectedUnavailableDate(day.date);
+                      return;
+                    }
+                    void markUnavailable(day.date);
+                  }}
+                  className="flex min-h-20 flex-col items-center justify-center gap-1 rounded-xl border border-line bg-surface px-2 py-3 text-sm font-semibold text-ink transition hover:border-cpu-navy/30 hover:bg-cpu-navy-soft aria-disabled:bg-canvas aria-disabled:text-muted aria-pressed:border-cpu-navy aria-pressed:ring-2 aria-pressed:ring-cpu-navy/20 disabled:cursor-not-allowed disabled:bg-canvas disabled:text-muted"
                 >
                   <span>{day.dayOfMonth}</span>
                   {isSaving ? <Spinner size="sm" label={`Saving ${dateLabel}`} /> : null}
@@ -281,6 +305,39 @@ export function ClinicUnavailableCalendar({
           </div>
         </section>
       </div>
+
+      {selectedUnavailable ? (
+        <section
+          id={unavailableDetailsId}
+          role="region"
+          aria-labelledby={`${unavailableDetailsId}-title`}
+          className="rounded-xl border border-line bg-canvas/60 p-4"
+        >
+          <h3 id={`${unavailableDetailsId}-title`} className="font-bold text-ink">
+            Unavailable date details
+          </h3>
+          <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+            <div>
+              <dt className="font-semibold text-muted">Clinic</dt>
+              <dd className="text-ink">{selectedUnavailable.clinicName}</dd>
+            </div>
+            <div>
+              <dt className="font-semibold text-muted">Category</dt>
+              <dd className="text-ink">{categoryLabels[selectedUnavailable.category]}</dd>
+            </div>
+            <div>
+              <dt className="font-semibold text-muted">Reason</dt>
+              <dd className="text-ink">{selectedUnavailable.reason}</dd>
+            </div>
+            <div>
+              <dt className="font-semibold text-muted">Original date range</dt>
+              <dd className="text-ink">
+                {formatDate(selectedUnavailable.startDate)} to {formatDate(selectedUnavailable.endDate)}
+              </dd>
+            </div>
+          </dl>
+        </section>
+      ) : null}
     </Card>
   );
 }

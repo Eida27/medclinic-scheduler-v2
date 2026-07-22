@@ -21,6 +21,102 @@ const STATE_FILE = resolve(FIXTURE_DIRECTORY, "state.json");
 const RESULT_STORAGE_ROOT = resolve(process.env.RESULT_UPLOAD_ROOT ?? ".data/private-result-uploads");
 const ADMIN_USER_ID = "00000000-0000-4000-8000-000000000001";
 const LABORATORY_CLINIC_ID = "60000000-0000-4000-8000-000000000001";
+const LOOPBACK_DATABASE_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+
+export type AcceptanceDatabaseIdentity = {
+  scheme: "postgresql";
+  host: string;
+  port: string;
+  database: string;
+};
+
+export function normalizeAcceptanceDatabaseIdentity(
+  databaseUrl: string,
+): AcceptanceDatabaseIdentity {
+  let parsed: URL;
+  try {
+    parsed = new URL(databaseUrl);
+  } catch {
+    throw new Error("DATABASE_URL must be a valid PostgreSQL URL.");
+  }
+  if (parsed.protocol !== "postgres:" && parsed.protocol !== "postgresql:") {
+    throw new Error("DATABASE_URL must use the PostgreSQL scheme.");
+  }
+  const host = parsed.hostname.replace(/^\[(.*)\]$/, "$1").toLocaleLowerCase();
+  let database: string;
+  try {
+    database = decodeURIComponent(parsed.pathname.replace(/^\//, ""));
+  } catch {
+    throw new Error("DATABASE_URL must contain a valid database name.");
+  }
+  if (!host || !database) {
+    throw new Error("DATABASE_URL must contain a host and database name.");
+  }
+  return {
+    scheme: "postgresql",
+    host,
+    port: parsed.port || "5432",
+    database,
+  };
+}
+
+export function assertSafeAcceptanceDatabase(
+  databaseUrl: string | undefined,
+  exclusiveDatabase: string | undefined,
+) {
+  if (!databaseUrl) {
+    throw new Error("DATABASE_URL is required (normally loaded from .env.local).");
+  }
+  const identity = normalizeAcceptanceDatabaseIdentity(databaseUrl);
+  if (!LOOPBACK_DATABASE_HOSTS.has(identity.host)) {
+    throw new Error("Clinic UX acceptance requires a PostgreSQL database on a loopback host.");
+  }
+  if (exclusiveDatabase !== "1") {
+    throw new Error(
+      "Set CLINIC_UX_ACCEPTANCE_EXCLUSIVE_DATABASE=1 only for a local database dedicated to Clinic UX acceptance.",
+    );
+  }
+  return identity;
+}
+
+export function assertMatchingAcceptanceDatabaseIdentity(
+  current: AcceptanceDatabaseIdentity,
+  persisted: AcceptanceDatabaseIdentity | undefined,
+) {
+  if (!persisted) {
+    throw new Error(
+      "Fixture state has no database identity. Refusing to connect; restore or inspect the original acceptance database manually.",
+    );
+  }
+  if (
+    current.scheme !== persisted.scheme
+    || current.host !== persisted.host
+    || current.port !== persisted.port
+    || current.database !== persisted.database
+  ) {
+    throw new Error(
+      "Current DATABASE_URL identity does not match the fixture database identity stored in state. Switch back to the original database before continuing.",
+    );
+  }
+}
+
+export async function runGuardedAcceptanceDatabaseOperation<T>({
+  databaseUrl,
+  exclusiveDatabase,
+  persistedIdentity,
+  operation,
+}: {
+  databaseUrl: string | undefined;
+  exclusiveDatabase: string | undefined;
+  persistedIdentity?: AcceptanceDatabaseIdentity;
+  operation: (identity: AcceptanceDatabaseIdentity) => Promise<T> | T;
+}) {
+  const currentIdentity = assertSafeAcceptanceDatabase(databaseUrl, exclusiveDatabase);
+  if (persistedIdentity) {
+    assertMatchingAcceptanceDatabaseIdentity(currentIdentity, persistedIdentity);
+  }
+  return operation(currentIdentity);
+}
 
 type JsonObject = Record<string, unknown>;
 type CapacityBaseline = {
@@ -37,10 +133,11 @@ type TemporaryProgram = {
   name: string;
 };
 type FixtureState = {
-  version: 1;
+  version: 2;
   runId: string;
   phase: "PREPARING" | "PREPARED" | "IMPORTED" | "STAGED";
   startedAt: string;
+  databaseIdentity: AcceptanceDatabaseIdentity;
   source: {
     path: string;
     sha256: string;
@@ -270,7 +367,7 @@ async function captureBaselineIds(client: PoolClient, studentNumbers: string[]):
   };
 }
 
-async function prepare(pool: Pool) {
+async function prepare(pool: Pool, databaseIdentity: AcceptanceDatabaseIdentity) {
   if (await readState()) {
     throw new Error(`Fixture state already exists at ${STATE_FILE}. Run cleanup before preparing another acceptance run.`);
   }
@@ -327,10 +424,11 @@ async function prepare(pool: Pool) {
       });
     }
     state = {
-      version: 1,
+      version: 2,
       runId,
       phase: "PREPARING",
       startedAt: new Date().toISOString(),
+      databaseIdentity,
       source: {
         path: APPROVED_CSV_PATH,
         sha256: sha256(sourceBytes),
@@ -564,9 +662,10 @@ async function findEmptyFutureWeekday(client: PoolClient) {
   return result.rows[0].date;
 }
 
-async function stage(pool: Pool) {
+async function stage(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
   const state = await readState();
   if (!state) throw new Error(`No fixture state exists at ${STATE_FILE}. Run prepare first.`);
+  assertMatchingAcceptanceDatabaseIdentity(currentIdentity, state.databaseIdentity);
   if (state.phase === "STAGED") throw new Error("Fixture states are already staged; use status or cleanup.");
   const client = await pool.connect();
   try {
@@ -752,11 +851,12 @@ async function stage(pool: Pool) {
   }
 }
 
-async function status(pool: Pool) {
+async function status(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
   const state = await readState();
   if (!state) {
     return { mode: "status", statePath: STATE_FILE, phase: "ABSENT" };
   }
+  assertMatchingAcceptanceDatabaseIdentity(currentIdentity, state.databaseIdentity);
   const client = await pool.connect();
   try {
     const imported = await captureImport(client, state);
@@ -1207,11 +1307,12 @@ async function deleteDatabaseManifest(pool: Pool, state: FixtureState, manifest:
   }
 }
 
-async function cleanup(pool: Pool) {
+async function cleanup(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
   const state = await readState();
   if (!state) {
     return { mode: "cleanup", statePath: STATE_FILE, phase: "ABSENT", message: "No fixture state exists." };
   }
+  assertMatchingAcceptanceDatabaseIdentity(currentIdentity, state.databaseIdentity);
 
   const proof = await runPersistedCleanup(state.cleanup, {
     captureManifest: async () => {
@@ -1294,19 +1395,41 @@ async function cleanup(pool: Pool) {
 
 async function run() {
   const mode = process.argv[2];
-  if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required (normally loaded from .env.local). ");
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-  try {
-    const output = mode === "prepare" ? await prepare(pool)
-      : mode === "stage" ? await stage(pool)
-        : mode === "status" ? await status(pool)
-          : mode === "cleanup" ? await cleanup(pool)
-            : null;
-    if (!output) throw new Error("Use prepare, stage, status, or cleanup.");
-    console.log(JSON.stringify(output, null, 2));
-  } finally {
-    await pool.end();
+  if (!mode || !["prepare", "stage", "status", "cleanup"].includes(mode)) {
+    throw new Error(
+      "Use prepare, stage, status, or cleanup with a loopback PostgreSQL DATABASE_URL and CLINIC_UX_ACCEPTANCE_EXCLUSIVE_DATABASE=1.",
+    );
   }
+  const persistedState = await readState();
+  const persistedIdentity = persistedState
+    ? persistedState.databaseIdentity
+    : undefined;
+  if (persistedState && !persistedIdentity) {
+    assertMatchingAcceptanceDatabaseIdentity(
+      assertSafeAcceptanceDatabase(
+        process.env.DATABASE_URL,
+        process.env.CLINIC_UX_ACCEPTANCE_EXCLUSIVE_DATABASE,
+      ),
+      persistedIdentity,
+    );
+  }
+  const output = await runGuardedAcceptanceDatabaseOperation({
+    databaseUrl: process.env.DATABASE_URL,
+    exclusiveDatabase: process.env.CLINIC_UX_ACCEPTANCE_EXCLUSIVE_DATABASE,
+    persistedIdentity,
+    operation: async (currentIdentity) => {
+      const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+      try {
+        return mode === "prepare" ? await prepare(pool, currentIdentity)
+          : mode === "stage" ? await stage(pool, currentIdentity)
+            : mode === "status" ? await status(pool, currentIdentity)
+              : await cleanup(pool, currentIdentity);
+      } finally {
+        await pool.end();
+      }
+    },
+  });
+  console.log(JSON.stringify(output, null, 2));
 }
 
 const invokedPath = process.argv[1] ? resolve(process.argv[1]) : "";

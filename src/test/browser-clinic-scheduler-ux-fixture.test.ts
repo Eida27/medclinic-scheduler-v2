@@ -4,14 +4,18 @@ import { describe, expect, it, vi } from "vitest";
 import { parseStudentImportCsv } from "../server/services/student-import-csv";
 import {
   baselineRowsMatch,
+  assertMatchingAcceptanceDatabaseIdentity,
+  assertSafeAcceptanceDatabase,
   createWindows1252Variant,
   countCleanupResidue,
   differenceIds,
   EXPECTED_APPROVED_BYTE_LENGTH,
   EXPECTED_APPROVED_SHA256,
   inspectApprovedCsv,
+  normalizeAcceptanceDatabaseIdentity,
   requiredProgramReferences,
   resultStorageDirectories,
+  runGuardedAcceptanceDatabaseOperation,
   runPersistedCleanup,
   assertZeroCleanupResidue,
   validatePublishedImport,
@@ -70,6 +74,73 @@ const zeroResidue = (): CleanupResidue => ({
 });
 
 describe("browser clinic scheduler UX fixture helpers", () => {
+  it("rejects remote PostgreSQL databases and requires the exclusive-database opt-in", () => {
+    expect(() => assertSafeAcceptanceDatabase(
+      "postgresql://fixture:secret@db.example.com:5432/clinic_ux",
+      "1",
+    )).toThrow(/loopback/i);
+    expect(() => assertSafeAcceptanceDatabase(
+      "postgresql://fixture:secret@localhost:5432/clinic_ux",
+      undefined,
+    )).toThrow(/CLINIC_UX_ACCEPTANCE_EXCLUSIVE_DATABASE=1/);
+  });
+
+  it.each([
+    [
+      "postgresql://fixture:secret@localhost/clinic_ux",
+      { scheme: "postgresql", host: "localhost", port: "5432", database: "clinic_ux" },
+    ],
+    [
+      "postgres://fixture:secret@127.0.0.1:5544/clinic_ux?sslmode=disable",
+      { scheme: "postgresql", host: "127.0.0.1", port: "5544", database: "clinic_ux" },
+    ],
+    [
+      "postgresql://fixture:secret@[::1]:5433/clinic_ux",
+      { scheme: "postgresql", host: "::1", port: "5433", database: "clinic_ux" },
+    ],
+  ])("accepts an opted-in loopback database at %s", (databaseUrl, expectedIdentity) => {
+    expect(assertSafeAcceptanceDatabase(databaseUrl, "1")).toEqual(expectedIdentity);
+  });
+
+  it("normalizes a credential-free database identity", () => {
+    const identity = normalizeAcceptanceDatabaseIdentity(
+      "postgresql://secret-user:secret-password@LOCALHOST:5432/clinic%5Fux?sslmode=require#private",
+    );
+    const serialized = JSON.stringify(identity);
+
+    expect(identity).toEqual({
+      scheme: "postgresql",
+      host: "localhost",
+      port: "5432",
+      database: "clinic_ux",
+    });
+    expect(serialized).not.toContain("secret-user");
+    expect(serialized).not.toContain("secret-password");
+    expect(serialized).not.toContain("sslmode");
+    expect(serialized).not.toContain("private");
+  });
+
+  it("refuses cleanup on a database identity mismatch before any destructive operation", async () => {
+    const persistedIdentity = normalizeAcceptanceDatabaseIdentity(
+      "postgresql://fixture:original@localhost:5432/clinic_ux_original",
+    );
+    const deleteOrRestore = vi.fn();
+
+    expect(() => assertMatchingAcceptanceDatabaseIdentity(
+      normalizeAcceptanceDatabaseIdentity(
+        "postgresql://fixture:current@localhost:5432/clinic_ux_other",
+      ),
+      persistedIdentity,
+    )).toThrow(/does not match/i);
+    await expect(runGuardedAcceptanceDatabaseOperation({
+      databaseUrl: "postgresql://fixture:current@localhost:5432/clinic_ux_other",
+      exclusiveDatabase: "1",
+      persistedIdentity,
+      operation: deleteOrRestore,
+    })).rejects.toThrow(/does not match/i);
+    expect(deleteOrRestore).not.toHaveBeenCalled();
+  });
+
   it("requires the approved UTF-8 BOM and expected accepted-row count", () => {
     const bytes = Buffer.from(csv, "utf8");
 
