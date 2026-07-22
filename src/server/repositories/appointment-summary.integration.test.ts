@@ -176,6 +176,42 @@ describe("appointment summary completion filters", () => {
     expect(result.total).toBe(2);
     expect(result.summary.totalStudents).toBe(2);
   });
+
+  it("returns only the laboratory follow-up and physical-completed student", async () => {
+    const result = await appointmentSummaryReport({
+      search: "TEST-COMPLETION-",
+      laboratoryStatus: "REQUIRES_FOLLOW_UP",
+      physicalExamStatus: "COMPLETED",
+      sort: "name_asc",
+      page: 1,
+      limit: 20,
+      offset: 0,
+    });
+
+    expect(result.items.map((item) => item.studentNumber)).toEqual([
+      "TEST-COMPLETION-0003",
+    ]);
+    expect(result.total).toBe(1);
+    expect(result.summary.totalStudents).toBe(1);
+  });
+
+  it("returns only the student with both results pending", async () => {
+    const result = await appointmentSummaryReport({
+      search: "TEST-COMPLETION-",
+      laboratoryStatus: "PENDING_UPLOAD",
+      physicalExamStatus: "PENDING_UPLOAD",
+      sort: "name_asc",
+      page: 1,
+      limit: 20,
+      offset: 0,
+    });
+
+    expect(result.items.map((item) => item.studentNumber)).toEqual([
+      "TEST-COMPLETION-0004",
+    ]);
+    expect(result.total).toBe(1);
+    expect(result.summary.totalStudents).toBe(1);
+  });
 });
 
 describe("appointment summary ordering and pagination", () => {
