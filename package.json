@@ -12,7 +12,8 @@
     "test:watch": "node --env-file=.env.local ./node_modules/vitest/vitest.mjs",
     "db:migrate": "tsx --env-file=.env.local scripts/db-migrate.ts",
     "db:seed": "tsx --env-file=.env.local scripts/db-seed.ts",
-    "db:reset": "tsx --env-file=.env.local scripts/db-reset.ts"
+    "db:reset": "tsx --env-file=.env.local scripts/db-reset.ts",
+    "acceptance:clinic-ux": "tsx --env-file=.env.local scripts/browser-clinic-scheduler-ux-fixture.ts"
   },
   "dependencies": {
     "archiver": "^8.0.0",

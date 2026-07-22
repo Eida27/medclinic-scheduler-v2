@@ -21,7 +21,7 @@ describe("ConfirmDialog", () => {
 
     expect(screen.getByRole("dialog")).toHaveAttribute("aria-busy", "true");
     expect(screen.getByRole("status", { name: "Working" })).toBeVisible();
-    expect(screen.getByRole("button", { name: /working/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Working" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
 
     fireEvent.keyDown(document, { key: "Escape" });

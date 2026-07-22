@@ -58,7 +58,12 @@ export function ConfirmDialog({
         <p id="confirm-dialog-description" className="mt-2 text-sm leading-6 text-muted">{description}</p>
         <div className="mt-6 flex justify-end gap-3">
           <Button ref={cancelButtonRef} variant="secondary" onClick={onCancel} disabled={pending}>Cancel</Button>
-          <Button variant={danger ? "danger" : "primary"} onClick={onConfirm} disabled={pending}>
+          <Button
+            variant={danger ? "danger" : "primary"}
+            onClick={onConfirm}
+            disabled={pending}
+            aria-label={pending ? pendingLabel : undefined}
+          >
             {pending ? (
               <span className="inline-flex items-center gap-2">
                 <Spinner size="sm" label={pendingLabel} />

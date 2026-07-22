@@ -154,7 +154,7 @@ npm run db:migrate
 npm run db:seed
 ```
 
-Migrations 008 and 009 add academic-year ordering/cycles, displacement/closure metadata, student identity/notifications, private submission metadata, `PENDING_UPLOAD`, and the date-only appointment schema. Migrations are forward-only and safe for a non-empty database.
+Migrations 008 and 009 add academic-year ordering/cycles, displacement/closure metadata, student identity/notifications, private submission metadata, `PENDING_UPLOAD`, and the date-only appointment schema. Migration 010 normalizes the deprecated safe-capacity column to maximum capacity; application scheduling uses maximum capacity only. Migrations are forward-only and safe for a non-empty database.
 
 Reset is destructive and deliberately guarded:
 
@@ -174,6 +174,21 @@ npm run build
 ```
 
 Tests cover schema/backfills, the exact nine-column CSV, 3,000-row atomic imports, scheduling windows/capacity/concurrency, displacement, closure rollback, manual locks, date-only no-shows, separate sessions/throttling, strict ownership, file signatures/limits, finalization, ZIP access, invalidation, cleanup, outbox retry, and the full cross-feature scenario.
+
+### Clinic UX Browser acceptance fixture
+
+The targeted fixture reads `C:\endless_refinement\microsoft_docs\Physical_Laboratory_Scheduling_Completed.csv` in place and requires its UTF-8 BOM plus exactly 280 accepted rows. It never changes, copies, or commits that source file. `prepare` creates an ignored Windows-1252 upload under `.data/browser-clinic-scheduler-ux/` with exactly one `Peña` value, records matching-student/reference/capacity baselines, and prints the absolute upload and state paths.
+
+```powershell
+npm run acceptance:clinic-ux -- prepare
+# Upload the printed CSV through the UI and wait for the published import page.
+npm run acceptance:clinic-ux -- stage
+npm run acceptance:clinic-ux -- status
+# Perform the printed correction, filter, clinic-context, and calendar checks.
+npm run acceptance:clinic-ux -- cleanup
+```
+
+The ignored state is `.data/browser-clinic-scheduler-ux/state.json`. `stage` requires exactly one 280-row import with the unique temporary filename and prepares deterministic past correction, both-completed, mixed-result, clinic-context, successful-calendar, and protected-failure-calendar records. `cleanup` uses the recorded import/appointment/closure IDs, restores pre-existing student and program rows plus both capacity columns, removes its private/temp files, and refuses to remove storage outside `RESULT_UPLOAD_ROOT`. Its final JSON reports residue counts for fixture imports, students, appointments, closures, submissions, audits, notifications, events, and temporary reference programs; every count must be zero.
 
 ## Demonstration Flow
 
