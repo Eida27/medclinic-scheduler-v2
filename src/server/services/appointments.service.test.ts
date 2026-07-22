@@ -1,10 +1,12 @@
 import type { PoolClient } from "pg";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTOMATIC_NO_SHOW_NOTE } from "@/server/appointments/automatic-no-show";
 import type { SessionUser } from "@/types/roles";
 
 const {
   changeAppointmentStatusWithClient,
+  deletePendingResultPlaceholder,
+  getAppointmentResultCorrectionState,
   getAppointmentMutationContext,
   getPublishedAppointment,
   publishBatch,
@@ -15,6 +17,8 @@ const {
   writeAudit,
 } = vi.hoisted(() => ({
   changeAppointmentStatusWithClient: vi.fn(),
+  deletePendingResultPlaceholder: vi.fn(),
+  getAppointmentResultCorrectionState: vi.fn(),
   getAppointmentMutationContext: vi.fn(),
   getPublishedAppointment: vi.fn(),
   publishBatch: vi.fn(),
@@ -38,6 +42,11 @@ vi.mock("@/server/repositories/appointments.repository", () => ({
 }));
 vi.mock("@/server/repositories/coordinator-schedules.repository", () => ({
   getScheduleBatch: vi.fn(),
+}));
+vi.mock("@/server/repositories/student-result-submissions.repository", () => ({
+  deletePendingResultPlaceholder,
+  ensurePendingUploadResult: vi.fn(),
+  getAppointmentResultCorrectionState,
 }));
 
 import {
@@ -119,12 +128,14 @@ function mutationContext(
     notes: string | null;
     changedById: string | null;
   } | null = null,
+  appointmentDate = "2026-08-18",
 ) {
   return {
     id: appointmentId,
     batchId: null,
     studentNumber: "2026-0001",
     scheduleType: "LABORATORY",
+    appointmentDate,
     status,
     clinicId,
     clinicCode: clinicId === laboratoryClinicId ? "KABALAKA_CLINIC" : "CPU_CLINIC",
@@ -149,7 +160,7 @@ describe("appointment status transitions", () => {
     expect(() => assertStatusTransition(from, to)).not.toThrow();
   });
 
-  it("rejects reopening a completed appointment", () => {
+  it("keeps completed-to-pending out of the ordinary transition path", () => {
     expect(() => assertStatusTransition("COMPLETED", "PENDING")).toThrow();
   });
 
@@ -163,12 +174,190 @@ describe("appointment mutation authorization and automatic no-show correction", 
     vi.clearAllMocks();
     getPublishedAppointment.mockResolvedValue(publishedAppointment());
     getAppointmentMutationContext.mockResolvedValue(mutationContext());
+    getAppointmentResultCorrectionState.mockResolvedValue({ type: "CLEAR" });
     changeAppointmentStatusWithClient.mockResolvedValue(undefined);
+    deletePendingResultPlaceholder.mockResolvedValue(undefined);
     rescheduleAppointmentWithClient.mockResolvedValue(replacementId);
     writeAudit.mockResolvedValue(undefined);
     transaction.mockImplementation(async (callback: (transactionClient: PoolClient) => Promise<unknown>) => (
       callback(client)
     ));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it.each([
+    ["PENDING", admin] as const,
+    ["NO_SHOW", laboratoryStaff] as const,
+  ])("corrects a completed appointment to %s in the guarded audited order", async (target, actor) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-21T16:30:00.000Z"));
+    const steps: string[] = [];
+    const locked = mutationContext("COMPLETED", laboratoryClinicId, null, "2026-07-21");
+    const placeholder = {
+      type: "PENDING_PLACEHOLDER" as const,
+      resultId: "44444444-4444-4444-8444-444444444444",
+      table: "laboratory_results" as const,
+    };
+    getPublishedAppointment.mockResolvedValue(publishedAppointment("COMPLETED"));
+    getAppointmentMutationContext.mockImplementation(async () => {
+      steps.push("lock");
+      return locked;
+    });
+    getAppointmentResultCorrectionState.mockImplementation(async () => {
+      steps.push("inspect");
+      return placeholder;
+    });
+    deletePendingResultPlaceholder.mockImplementation(async () => {
+      steps.push("delete");
+    });
+    changeAppointmentStatusWithClient.mockImplementation(async () => {
+      steps.push("change");
+    });
+    writeAudit.mockImplementation(async () => {
+      steps.push("audit");
+    });
+
+    await updateAppointment(appointmentId, {
+      status: target,
+      correctionReason: "  Incorrect student selected  ",
+      source: "LABORATORY",
+    }, actor);
+
+    expect(steps).toEqual(["lock", "inspect", "delete", "change", "audit"]);
+    expect(getAppointmentMutationContext).toHaveBeenCalledWith(appointmentId, client);
+    expect(getAppointmentResultCorrectionState).toHaveBeenCalledWith(client, locked);
+    expect(deletePendingResultPlaceholder).toHaveBeenCalledWith(client, placeholder);
+    expect(changeAppointmentStatusWithClient).toHaveBeenCalledWith(
+      client,
+      appointmentId,
+      "COMPLETED",
+      target,
+      "Incorrect student selected",
+      actor.userId,
+    );
+    expect(writeAudit).toHaveBeenCalledWith(
+      actor.userId,
+      "APPOINTMENT_STATUS_CORRECTED",
+      "appointment",
+      appointmentId,
+      {
+        oldStatus: "COMPLETED",
+        newStatus: target,
+        reason: "Incorrect student selected",
+        source: "LABORATORY",
+      },
+      client,
+    );
+  });
+
+  it.each([
+    ["missing", { status: "PENDING" }],
+    ["blank", { status: "PENDING", correctionReason: "   " }],
+  ])("requires a correction reason when it is %s", async (_, input) => {
+    getPublishedAppointment.mockResolvedValue(publishedAppointment("COMPLETED"));
+    getAppointmentMutationContext.mockResolvedValue(mutationContext("COMPLETED"));
+
+    await expect(updateAppointment(appointmentId, input, admin)).rejects.toMatchObject({
+      code: "CORRECTION_REASON_REQUIRED",
+      status: 422,
+    });
+    expect(getAppointmentMutationContext).toHaveBeenCalledWith(appointmentId, client);
+    expect(getAppointmentResultCorrectionState).not.toHaveBeenCalled();
+    expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
+    expect(writeAudit).not.toHaveBeenCalled();
+  });
+
+  it("rejects a completed correction target outside pending and no-show", async () => {
+    getPublishedAppointment.mockResolvedValue(publishedAppointment("COMPLETED"));
+    getAppointmentMutationContext.mockResolvedValue(mutationContext("COMPLETED"));
+
+    await expect(updateAppointment(appointmentId, {
+      status: "CANCELLED",
+      correctionReason: "Incorrect student selected",
+      source: "LABORATORY",
+    }, admin)).rejects.toMatchObject({ status: 422 });
+    expect(getAppointmentResultCorrectionState).not.toHaveBeenCalled();
+    expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["today", "2026-07-22"],
+    ["future", "2026-07-23"],
+  ])("rejects a completed-to-no-show correction dated %s in Manila", async (_, appointmentDate) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-21T16:30:00.000Z"));
+    getPublishedAppointment.mockResolvedValue(publishedAppointment("COMPLETED"));
+    getAppointmentMutationContext.mockResolvedValue(
+      mutationContext("COMPLETED", laboratoryClinicId, null, appointmentDate),
+    );
+
+    await expect(updateAppointment(appointmentId, {
+      status: "NO_SHOW",
+      correctionReason: "Incorrect student selected",
+      source: "LABORATORY",
+    }, admin)).rejects.toMatchObject({
+      code: "NO_SHOW_REQUIRES_PAST_DATE",
+      status: 422,
+    });
+    expect(getAppointmentResultCorrectionState).not.toHaveBeenCalled();
+    expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
+  });
+
+  it("protects completed result data from status correction", async () => {
+    getPublishedAppointment.mockResolvedValue(publishedAppointment("COMPLETED"));
+    getAppointmentMutationContext.mockResolvedValue(mutationContext("COMPLETED"));
+    getAppointmentResultCorrectionState.mockResolvedValue({
+      type: "PROTECTED",
+      reason: "VERIFIED_RESULT",
+    });
+
+    await expect(updateAppointment(appointmentId, {
+      status: "PENDING",
+      correctionReason: "Incorrect student selected",
+      source: "LABORATORY",
+    }, admin)).rejects.toMatchObject({
+      code: "APPOINTMENT_RESULT_PROTECTED",
+      status: 409,
+    });
+    expect(deletePendingResultPlaceholder).not.toHaveBeenCalled();
+    expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
+    expect(writeAudit).not.toHaveBeenCalled();
+  });
+
+  it("rejects a completed correction when the locked status is stale", async () => {
+    getPublishedAppointment.mockResolvedValue(publishedAppointment("COMPLETED"));
+    getAppointmentMutationContext.mockResolvedValue(mutationContext("PENDING"));
+
+    await expect(updateAppointment(appointmentId, {
+      status: "PENDING",
+      correctionReason: "Incorrect student selected",
+      source: "LABORATORY",
+    }, admin)).rejects.toMatchObject({
+      code: "APPOINTMENT_STATUS_CONFLICT",
+      status: 409,
+    });
+    expect(getAppointmentResultCorrectionState).not.toHaveBeenCalled();
+    expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
+    expect(writeAudit).not.toHaveBeenCalled();
+  });
+
+  it("rejects cross-clinic staff before inspecting a completed correction", async () => {
+    getPublishedAppointment.mockResolvedValue(publishedAppointment("COMPLETED", physicalExamClinicId));
+    getAppointmentMutationContext.mockResolvedValue(mutationContext("COMPLETED", physicalExamClinicId));
+
+    await expect(updateAppointment(appointmentId, {
+      status: "PENDING",
+      correctionReason: "Incorrect student selected",
+      source: "LABORATORY",
+    }, laboratoryStaff)).rejects.toMatchObject({
+      code: "CLINIC_ACCESS_DENIED",
+      status: 403,
+    });
+    expect(getAppointmentResultCorrectionState).not.toHaveBeenCalled();
+    expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
   });
 
   it("completes a pending appointment and audits the change in the same transaction", async () => {

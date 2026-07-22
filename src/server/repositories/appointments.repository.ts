@@ -32,6 +32,10 @@ export type AppointmentMutationContext = {
   latestLog: AutomaticNoShowLog | null;
 };
 
+type AppointmentMutationContextWithDate = AppointmentMutationContext & {
+  appointmentDate: string;
+};
+
 const appointmentListOrderBy: Record<AppointmentListSort, string> = {
   soonest: "a.appointment_date ASC, s.last_name ASC, s.first_name ASC, a.student_number ASC, a.id ASC",
   latest: "a.appointment_date DESC, s.last_name ASC, s.first_name ASC, a.student_number ASC, a.id ASC",
@@ -117,6 +121,7 @@ export async function getAppointmentMutationContext(id: string, client: PoolClie
     batchId: string | null;
     studentNumber: string;
     scheduleType: string;
+    appointmentDate: string;
     status: AppointmentStatus;
     clinicId: string;
     clinicCode: ClinicCode;
@@ -132,7 +137,8 @@ export async function getAppointmentMutationContext(id: string, client: PoolClie
   }>(
     `SELECT appointment.id, appointment.batch_id AS "batchId",
             appointment.student_number AS "studentNumber",
-            appointment.schedule_type AS "scheduleType", appointment.status,
+            appointment.schedule_type AS "scheduleType",
+            appointment.appointment_date::text AS "appointmentDate", appointment.status,
             appointment.clinic_id AS "clinicId", clinic.code AS "clinicCode",
             appointment.is_published AS "isPublished",
             appointment.schedule_pair_id::text AS "schedulePairId",
@@ -163,6 +169,7 @@ export async function getAppointmentMutationContext(id: string, client: PoolClie
     batchId: row.batchId,
     studentNumber: row.studentNumber,
     scheduleType: row.scheduleType,
+    appointmentDate: row.appointmentDate,
     status: row.status,
     clinicId: row.clinicId,
     clinicCode: row.clinicCode,
@@ -177,7 +184,7 @@ export async function getAppointmentMutationContext(id: string, client: PoolClie
       notes: row.latestNotes,
       changedById: row.latestChangedById,
     } : null,
-  } satisfies AppointmentMutationContext;
+  } satisfies AppointmentMutationContextWithDate;
 }
 
 export async function changeAppointmentStatusWithClient(

@@ -12,7 +12,11 @@ import {
   type AppointmentMutationContext, type AppointmentStatus,
 } from "@/server/repositories/appointments.repository";
 import { getScheduleBatch } from "@/server/repositories/coordinator-schedules.repository";
-import { ensurePendingUploadResult } from "@/server/repositories/student-result-submissions.repository";
+import {
+  deletePendingResultPlaceholder,
+  ensurePendingUploadResult,
+  getAppointmentResultCorrectionState,
+} from "@/server/repositories/student-result-submissions.repository";
 import type { SessionUser } from "@/types/roles";
 
 const transitions: Record<AppointmentStatus, AppointmentStatus[]> = {
@@ -32,6 +36,8 @@ export const appointmentUpdateSchema = z.object({
   notes: z.union([z.string().max(1000), z.null()]).optional(),
   lockAction: z.enum(["LOCK", "UNLOCK"]).optional(),
   lockReason: z.union([z.string().max(500), z.null()]).optional(),
+  correctionReason: z.string().trim().min(3).max(1000).optional(),
+  source: z.enum(["APPOINTMENTS", "LABORATORY", "PHYSICAL_EXAM"]).optional(),
 }).superRefine((input, context) => {
   if (!input.status && !input.appointmentDate && !input.lockAction) {
     context.addIssue({ code: "custom", message: "Provide a status, reschedule date, or lock action." });
@@ -40,6 +46,40 @@ export const appointmentUpdateSchema = z.object({
     context.addIssue({ code: "custom", path: ["lockReason"], message: "Lock reason is required." });
   }
 });
+
+type AppointmentUpdateInput = z.infer<typeof appointmentUpdateSchema>;
+
+function parseAppointmentUpdate(raw: unknown, currentStatus: AppointmentStatus): AppointmentUpdateInput {
+  const parsed = appointmentUpdateSchema.safeParse(raw);
+  if (parsed.success) return parsed.data;
+  if (
+    currentStatus === "COMPLETED"
+    && typeof raw === "object"
+    && raw !== null
+    && "status" in raw
+    && (raw.status === "PENDING" || raw.status === "NO_SHOW")
+    && "correctionReason" in raw
+    && typeof raw.correctionReason === "string"
+    && parsed.error.issues.every((issue) => issue.path[0] === "correctionReason" && issue.code === "too_small")
+  ) {
+    const withoutInvalidReason = appointmentUpdateSchema.safeParse({ ...raw, correctionReason: undefined });
+    if (withoutInvalidReason.success) {
+      return { ...withoutInvalidReason.data, correctionReason: raw.correctionReason.trim() };
+    }
+  }
+  throw parsed.error;
+}
+
+function manilaToday() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Manila",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${value.year}-${value.month}-${value.day}`;
+}
 
 function assertAppointmentMutationAuthorized(
   actor: SessionUser,
@@ -95,10 +135,77 @@ export async function completeAppointmentWithClient(
   return appointment;
 }
 
+async function correctCompletedAppointmentWithClient(
+  id: string,
+  target: "PENDING" | "NO_SHOW",
+  correctionReason: string | undefined,
+  source: "APPOINTMENTS" | "LABORATORY" | "PHYSICAL_EXAM" | undefined,
+  actor: SessionUser,
+  client: PoolClient,
+) {
+  const appointment = await getAppointmentMutationContext(id, client);
+  if (!appointment) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
+  assertAppointmentMutationAuthorized(actor, appointment);
+  if (appointment.status !== "COMPLETED") {
+    throw new AppError(
+      "APPOINTMENT_STATUS_CONFLICT",
+      "The appointment status changed. Refresh and try again.",
+      409,
+    );
+  }
+  const reason = correctionReason?.trim();
+  if (!reason || reason.length < 3) {
+    throw new AppError(
+      "CORRECTION_REASON_REQUIRED",
+      "Enter a reason for correcting this completed appointment.",
+      422,
+    );
+  }
+  if (target === "NO_SHOW" && appointment.appointmentDate >= manilaToday()) {
+    throw new AppError(
+      "NO_SHOW_REQUIRES_PAST_DATE",
+      "A completed appointment can be corrected to no-show only after its appointment date.",
+      422,
+    );
+  }
+  const resultState = await getAppointmentResultCorrectionState(client, appointment);
+  if (resultState.type === "PROTECTED") {
+    throw new AppError(
+      "APPOINTMENT_RESULT_PROTECTED",
+      "This appointment has protected result data and cannot be corrected.",
+      409,
+    );
+  }
+  if (resultState.type === "PENDING_PLACEHOLDER") {
+    await deletePendingResultPlaceholder(client, resultState);
+  }
+  await changeAppointmentStatusWithClient(
+    client,
+    id,
+    "COMPLETED",
+    target,
+    reason,
+    actor.userId,
+  );
+  await writeAudit(
+    actor.userId,
+    "APPOINTMENT_STATUS_CORRECTED",
+    "appointment",
+    id,
+    {
+      oldStatus: "COMPLETED",
+      newStatus: target,
+      reason,
+      source: source ?? "APPOINTMENTS",
+    },
+    client,
+  );
+}
+
 export async function updateAppointment(id: string, raw: unknown, actor: SessionUser) {
   const current = await getPublishedAppointment(id);
   if (!current) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
-  const input = appointmentUpdateSchema.parse(raw);
+  const input = parseAppointmentUpdate(raw, current.status);
   assertAppointmentMutationAuthorized(actor, current);
   if (input.lockAction) {
     if (actor.role !== "ADMIN") {
@@ -157,6 +264,21 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
       if (isPostgresUniqueViolation(error)) throw new AppError("ACTIVE_APPOINTMENT_EXISTS", "The student already has an active appointment for this service.", 409);
       throw error;
     }
+  }
+  if (
+    current.status === "COMPLETED"
+    && (input.status === "PENDING" || input.status === "NO_SHOW")
+  ) {
+    const correctionTarget = input.status;
+    await transaction((client) => correctCompletedAppointmentWithClient(
+      id,
+      correctionTarget,
+      input.correctionReason,
+      input.source,
+      actor,
+      client,
+    ));
+    return getPublishedAppointment(id);
   }
   if (input.status === "COMPLETED") {
     await transaction(async (client) => {
