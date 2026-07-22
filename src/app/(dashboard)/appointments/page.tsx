@@ -8,6 +8,11 @@ import {
   APPOINTMENT_PAGE_SIZE,
   parseAppointmentPage,
 } from "@/components/appointments/appointment-pagination";
+import {
+  appointmentResultStatusLabel,
+  overallStatusLabel,
+  statusTone,
+} from "@/components/appointments/status-labels";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
@@ -17,15 +22,9 @@ import {
   appointmentSummaryReport,
   type AppointmentSummaryItem,
 } from "@/server/repositories/appointment-summary.repository";
-import {
-  listColleges,
-  listPriorityGroups,
-  listPrograms,
-} from "@/server/repositories/reference-data.repository";
 
 type AppointmentsSearchParams = Record<string, string | undefined>;
 
-const appointmentStatuses = ["PENDING", "COMPLETED", "NO_SHOW"];
 const resultStatuses = ["PENDING_UPLOAD", "COMPLETED", "REQUIRES_FOLLOW_UP", "NOT_APPLICABLE"];
 const overallStatuses: OverallStatus[] = ["FOLLOW_UP", "INCOMPLETE", "COMPLETE"];
 const sortOptions = [
@@ -41,13 +40,6 @@ function isOverallStatus(value?: string): value is OverallStatus {
   return overallStatuses.includes(value as OverallStatus);
 }
 
-function statusTone(value: string | null) {
-  if (value === "COMPLETED" || value === "COMPLETE") return "success" as const;
-  if (value === "NO_SHOW") return "danger" as const;
-  if (value === "REQUIRES_FOLLOW_UP" || value === "FOLLOW_UP") return "warning" as const;
-  return "neutral" as const;
-}
-
 export default async function AppointmentsPage({
   searchParams,
 }: {
@@ -56,49 +48,24 @@ export default async function AppointmentsPage({
   const params = await searchParams;
   const page = parseAppointmentPage(params.page);
   const sort = parseAppointmentSummarySort(params.sort);
-  const appointmentStatus = params.appointmentStatus ?? params.status;
   const overallStatus = isOverallStatus(params.overallStatus) ? params.overallStatus : undefined;
   const filters = {
     studentNumber: params.studentNumber,
-    appointmentDate: params.appointmentDate,
-    appointmentStatus,
-    collegeId: params.collegeId,
-    programId: params.programId,
-    priorityGroupId: params.priorityGroupId,
     physicalExamStatus: params.physicalExamStatus,
     laboratoryStatus: params.laboratoryStatus,
     overallStatus,
     sort,
   };
-  const hasAdvancedFilters = Boolean(
-    params.appointmentDate
-      || appointmentStatus
-      || params.collegeId
-      || params.programId
-      || params.priorityGroupId
-      || params.physicalExamStatus
-      || params.laboratoryStatus,
-  );
-  const [report, colleges, programs, priorities] = await Promise.all([
-    appointmentSummaryReport({
-      search: params.studentNumber,
-      appointmentDate: params.appointmentDate,
-      appointmentStatus,
-      collegeId: params.collegeId,
-      programId: params.programId,
-      priorityGroupId: params.priorityGroupId,
-      physicalExamStatus: params.physicalExamStatus,
-      laboratoryStatus: params.laboratoryStatus,
-      overallStatus,
-      sort,
-      page,
-      limit: APPOINTMENT_PAGE_SIZE,
-      offset: (page - 1) * APPOINTMENT_PAGE_SIZE,
-    }),
-    listColleges(),
-    listPrograms(),
-    listPriorityGroups(),
-  ]);
+  const report = await appointmentSummaryReport({
+    search: params.studentNumber,
+    physicalExamStatus: params.physicalExamStatus,
+    laboratoryStatus: params.laboratoryStatus,
+    overallStatus,
+    sort,
+    page,
+    limit: APPOINTMENT_PAGE_SIZE,
+    offset: (page - 1) * APPOINTMENT_PAGE_SIZE,
+  });
   const singular = report.total === 1;
   const metrics = [
     ["Matching students", report.summary.totalStudents],
@@ -123,95 +90,64 @@ export default async function AppointmentsPage({
         ))}
       </section>
       <Card>
-        <form className="grid gap-4">
-          <div className="grid gap-3 md:grid-cols-4">
-            <label className="grid gap-1.5 text-sm font-bold text-ink">
-              <span>Student name or number</span>
-              <Input
-                name="studentNumber"
-                defaultValue={params.studentNumber}
-                placeholder="Search by name or student number"
-              />
-            </label>
-            <label className="grid gap-1.5 text-sm font-bold text-ink">
-              <span>Overall status</span>
-              <Select name="overallStatus" defaultValue={overallStatus}>
-                <option value="">Any overall status</option>
-                {overallStatuses.map((status) => <option key={status}>{status}</option>)}
-              </Select>
-            </label>
-            <label className="grid gap-1.5 text-sm font-bold text-ink">
-              <span>Sort</span>
-              <Select name="sort" defaultValue={sort}>
-                {sortOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-              </Select>
-            </label>
-            <button
-              className="mt-auto h-11 rounded-xl border border-line bg-surface font-bold text-ink transition hover:border-cpu-navy/25 hover:bg-cpu-navy-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cpu-navy"
-              type="submit"
-            >
-              Apply filters
-            </button>
-          </div>
-          <details open={hasAdvancedFilters} className="rounded-xl border border-line bg-canvas/45 p-4">
-            <summary className="cursor-pointer font-bold text-ink">More filters</summary>
-            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <label className="grid gap-1.5 text-sm font-bold text-ink">
-                <span>Appointment date</span>
-                <Input name="appointmentDate" type="date" defaultValue={params.appointmentDate} />
-              </label>
-              <label className="grid gap-1.5 text-sm font-bold text-ink">
-                <span>Appointment status</span>
-                <Select name="appointmentStatus" defaultValue={appointmentStatus}>
-                  <option value="">Any appointment status</option>
-                  {appointmentStatuses.map((status) => <option key={status}>{status}</option>)}
-                </Select>
-              </label>
-              <label className="grid gap-1.5 text-sm font-bold text-ink">
-                <span>College</span>
-                <Select name="collegeId" defaultValue={params.collegeId}>
-                  <option value="">All colleges</option>
-                  {colleges.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                </Select>
-              </label>
-              <label className="grid gap-1.5 text-sm font-bold text-ink">
-                <span>Program</span>
-                <Select name="programId" defaultValue={params.programId}>
-                  <option value="">All programs</option>
-                  {programs.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                </Select>
-              </label>
-              <label className="grid gap-1.5 text-sm font-bold text-ink">
-                <span>Priority</span>
-                <Select name="priorityGroupId" defaultValue={params.priorityGroupId}>
-                  <option value="">All priorities</option>
-                  {priorities.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                </Select>
-              </label>
-              <label className="grid gap-1.5 text-sm font-bold text-ink">
-                <span>Physical result</span>
-                <Select name="physicalExamStatus" defaultValue={params.physicalExamStatus}>
-                  <option value="">Any physical result</option>
-                  {resultStatuses.map((status) => <option key={status}>{status}</option>)}
-                </Select>
-              </label>
-              <label className="grid gap-1.5 text-sm font-bold text-ink">
-                <span>Laboratory result</span>
-                <Select name="laboratoryStatus" defaultValue={params.laboratoryStatus}>
-                  <option value="">Any laboratory result</option>
-                  {resultStatuses.map((status) => <option key={status}>{status}</option>)}
-                </Select>
-              </label>
-              <Link className="mt-auto flex h-11 items-center justify-center rounded-xl border border-line bg-surface text-sm font-bold text-ink hover:bg-cpu-navy-soft" href="/appointments">
-                Clear filters
-              </Link>
-            </div>
-          </details>
+        <form className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
+          <label className="grid gap-1.5 text-sm font-bold text-ink">
+            <span>Student name or number</span>
+            <Input
+              name="studentNumber"
+              defaultValue={params.studentNumber}
+              placeholder="Search by name or student number"
+            />
+          </label>
+          <label className="grid gap-1.5 text-sm font-bold text-ink">
+            <span>Overall completion</span>
+            <Select name="overallStatus" defaultValue={overallStatus}>
+              <option value="">Any overall status</option>
+              {overallStatuses.map((status) => (
+                <option key={status} value={status}>{overallStatusLabel(status)}</option>
+              ))}
+            </Select>
+          </label>
+          <label className="grid gap-1.5 text-sm font-bold text-ink">
+            <span>Laboratory status</span>
+            <Select name="laboratoryStatus" defaultValue={params.laboratoryStatus}>
+              <option value="">Any laboratory status</option>
+              {resultStatuses.map((status) => (
+                <option key={status} value={status}>{appointmentResultStatusLabel(status)}</option>
+              ))}
+            </Select>
+          </label>
+          <label className="grid gap-1.5 text-sm font-bold text-ink">
+            <span>Physical exam status</span>
+            <Select name="physicalExamStatus" defaultValue={params.physicalExamStatus}>
+              <option value="">Any physical exam status</option>
+              {resultStatuses.map((status) => (
+                <option key={status} value={status}>{appointmentResultStatusLabel(status)}</option>
+              ))}
+            </Select>
+          </label>
+          <label className="grid gap-1.5 text-sm font-bold text-ink">
+            <span>Sort</span>
+            <Select name="sort" defaultValue={sort}>
+              {sortOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </Select>
+          </label>
+          <button
+            className="mt-auto h-11 rounded-xl border border-line bg-surface font-bold text-ink transition hover:border-cpu-navy/25 hover:bg-cpu-navy-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cpu-navy"
+            type="submit"
+          >
+            Apply filters
+          </button>
+          <Link className="mt-auto flex h-11 items-center justify-center rounded-xl border border-line bg-surface text-sm font-bold text-ink hover:bg-cpu-navy-soft" href="/appointments">
+            Clear filters
+          </Link>
         </form>
       </Card>
       <Card className="overflow-hidden p-0">
         {report.items.length === 0 ? (
-          <p className="p-8 text-center text-sm text-muted">No students match these filters.</p>
+          <p className="p-8 text-center text-sm text-muted">
+            No students match the selected filters. Clear one or more filters and try again.
+          </p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
@@ -234,13 +170,17 @@ export default async function AppointmentsPage({
                       <p className="mt-1 text-xs text-muted">{item.programName}</p>
                     </td>
                     <td className="px-5 py-4">
-                      <Badge tone={statusTone(item.laboratoryStatus)}>{item.laboratoryStatus}</Badge>
+                      <Badge tone={statusTone(item.laboratoryStatus)}>
+                        {appointmentResultStatusLabel(item.laboratoryStatus)}
+                      </Badge>
                     </td>
                     <td className="px-5 py-4">
-                      <Badge tone={statusTone(item.physicalExamStatus)}>{item.physicalExamStatus}</Badge>
+                      <Badge tone={statusTone(item.physicalExamStatus)}>
+                        {appointmentResultStatusLabel(item.physicalExamStatus)}
+                      </Badge>
                     </td>
                     <td className="px-5 py-4 text-center">
-                      <Badge tone={statusTone(item.overallStatus)}>{item.overallStatus}</Badge>
+                      <Badge tone={statusTone(item.overallStatus)}>{overallStatusLabel(item.overallStatus)}</Badge>
                     </td>
                   </tr>
                 ))}

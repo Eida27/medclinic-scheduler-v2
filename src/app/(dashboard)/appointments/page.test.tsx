@@ -1,27 +1,13 @@
 import { render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const {
-  appointmentSummaryReport,
-  listAppointments,
-  listColleges,
-  listPriorityGroups,
-  listPrograms,
-} = vi.hoisted(() => ({
+const { appointmentSummaryReport, listAppointments } = vi.hoisted(() => ({
   appointmentSummaryReport: vi.fn(),
   listAppointments: vi.fn(),
-  listColleges: vi.fn(),
-  listPriorityGroups: vi.fn(),
-  listPrograms: vi.fn(),
 }));
 
 vi.mock("@/server/repositories/appointment-summary.repository", () => ({ appointmentSummaryReport }));
 vi.mock("@/server/repositories/appointments.repository", () => ({ listAppointments }));
-vi.mock("@/server/repositories/reference-data.repository", () => ({
-  listColleges,
-  listPriorityGroups,
-  listPrograms,
-}));
 
 import AppointmentsPage from "./page";
 
@@ -56,12 +42,9 @@ describe("AppointmentsPage", () => {
         pendingAny: 0,
       },
     });
-    listColleges.mockResolvedValue([{ id: "college-1", name: "CCS" }]);
-    listPrograms.mockResolvedValue([{ id: "program-1", name: "BSCS" }]);
-    listPriorityGroups.mockResolvedValue([{ id: "priority-1", name: "Graduating" }]);
   });
 
-  it("renders the combined metrics, filters, and result-only service summaries", async () => {
+  it("renders the approved filters and result-only service summaries with readable labels", async () => {
     appointmentSummaryReport.mockResolvedValue({
       items: [summaryItem],
       total: 301,
@@ -91,11 +74,6 @@ describe("AppointmentsPage", () => {
 
     expect(appointmentSummaryReport).toHaveBeenCalledWith({
       search: "Aaron",
-      appointmentDate: "2026-07-30",
-      appointmentStatus: "PENDING",
-      collegeId: "college-1",
-      programId: "program-1",
-      priorityGroupId: "priority-1",
       physicalExamStatus: "COMPLETED",
       laboratoryStatus: "REQUIRES_FOLLOW_UP",
       overallStatus: "FOLLOW_UP",
@@ -111,9 +89,24 @@ describe("AppointmentsPage", () => {
     expect(screen.getByText("Laboratory completed")).toBeVisible();
     expect(screen.getByText("Incomplete any")).toBeVisible();
     expect(screen.getByRole("textbox", { name: "Student name or number" })).toHaveValue("Aaron");
-    expect(screen.getByRole("combobox", { name: "Overall status" })).toHaveValue("FOLLOW_UP");
+    expect(screen.getByRole("combobox", { name: "Overall completion" })).toHaveValue("FOLLOW_UP");
+    expect(screen.getByRole("combobox", { name: "Laboratory status" })).toHaveValue("REQUIRES_FOLLOW_UP");
+    expect(screen.getByRole("combobox", { name: "Physical exam status" })).toHaveValue("COMPLETED");
     expect(screen.getByRole("combobox", { name: "Sort" })).toHaveValue("name_desc");
-    expect(screen.getByText("More filters").closest("details")).toHaveAttribute("open");
+    expect(screen.getByRole("button", { name: "Apply filters" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Clear filters" })).toHaveAttribute("href", "/appointments");
+    expect(screen.queryByText("More filters")).not.toBeInTheDocument();
+    for (const removedLabel of ["Appointment date", "Appointment status", "College", "Program", "Priority"]) {
+      expect(screen.queryByLabelText(removedLabel)).not.toBeInTheDocument();
+    }
+
+    for (const name of ["Laboratory status", "Physical exam status"]) {
+      const select = screen.getByRole("combobox", { name });
+      expect(within(select).getByRole("option", { name: "Pending" })).toHaveValue("PENDING_UPLOAD");
+      expect(within(select).getByRole("option", { name: "Completed" })).toHaveValue("COMPLETED");
+      expect(within(select).getByRole("option", { name: "Needs follow-up" })).toHaveValue("REQUIRES_FOLLOW_UP");
+      expect(within(select).getByRole("option", { name: "Not applicable" })).toHaveValue("NOT_APPLICABLE");
+    }
 
     const headers = screen.getAllByRole("columnheader");
     expect(headers).toHaveLength(4);
@@ -141,9 +134,8 @@ describe("AppointmentsPage", () => {
       "/students/23-8200-01",
     );
     expect(within(row).getAllByRole("link")).toEqual([studentLink]);
-    expect(within(row).getByText("REQUIRES_FOLLOW_UP")).toBeVisible();
-    expect(within(row).getByText("COMPLETED")).toBeVisible();
-    expect(within(row).getByText("FOLLOW_UP")).toBeVisible();
+    expect(within(row).getAllByText("Needs follow-up")).toHaveLength(2);
+    expect(within(row).getByText("Completed")).toBeVisible();
     expect(within(row).queryByText("2026-07-29")).not.toBeInTheDocument();
     expect(within(row).queryByText("2026-07-30")).not.toBeInTheDocument();
     expect(within(row).queryByText("Result")).not.toBeInTheDocument();
@@ -156,13 +148,8 @@ describe("AppointmentsPage", () => {
 
     const nextHref = screen.getByRole("link", { name: "Next page" }).getAttribute("href");
     const nextUrl = new URL(nextHref!, "http://localhost");
-    expect(Object.fromEntries(nextUrl.searchParams)).toMatchObject({
+    expect(Object.fromEntries(nextUrl.searchParams)).toEqual({
       studentNumber: "Aaron",
-      appointmentDate: "2026-07-30",
-      appointmentStatus: "PENDING",
-      collegeId: "college-1",
-      programId: "program-1",
-      priorityGroupId: "priority-1",
       physicalExamStatus: "COMPLETED",
       laboratoryStatus: "REQUIRES_FOLLOW_UP",
       overallStatus: "FOLLOW_UP",
@@ -184,14 +171,13 @@ describe("AppointmentsPage", () => {
         offset: 0,
         sort: "upcoming_asc",
       }));
-      expect(screen.getByText("More filters").closest("details")).not.toHaveAttribute("open");
     },
   );
 
   it("renders an empty student-summary state without pagination", async () => {
     render(await AppointmentsPage({ searchParams: Promise.resolve({}) }));
 
-    expect(screen.getByText("No students match these filters.")).toBeVisible();
+    expect(screen.getByText("No students match the selected filters. Clear one or more filters and try again.")).toBeVisible();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
     expect(screen.queryByRole("navigation", { name: "Appointment pagination" })).not.toBeInTheDocument();
   });
