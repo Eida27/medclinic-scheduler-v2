@@ -115,13 +115,28 @@ describe("AppointmentDetail", () => {
     }, undefined);
   });
 
-  it("returns not found when the appointment does not match the expected schedule type", async () => {
+  it("returns not found when a laboratory appointment is opened from the physical exam route", async () => {
     const AppointmentDetail = await getActualAppointmentDetail();
 
     await expect(AppointmentDetail({
       appointmentId: "appointment-1",
       expectedScheduleType: "PHYSICAL_EXAM",
       source: "PHYSICAL_EXAM",
+    })).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(notFound).toHaveBeenCalledOnce();
+  });
+
+  it("returns not found when a physical exam appointment is opened from the laboratory route", async () => {
+    getPublishedAppointment.mockResolvedValue({
+      ...publishedAppointment,
+      scheduleType: "PHYSICAL_EXAM",
+    });
+    const AppointmentDetail = await getActualAppointmentDetail();
+
+    await expect(AppointmentDetail({
+      appointmentId: "appointment-1",
+      expectedScheduleType: "LABORATORY",
+      source: "LABORATORY",
     })).rejects.toThrow("NEXT_NOT_FOUND");
     expect(notFound).toHaveBeenCalledOnce();
   });

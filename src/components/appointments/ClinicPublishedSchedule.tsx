@@ -122,7 +122,7 @@ export function ClinicPublishedSchedule({
                     <td className="px-5 py-4">{appointment.appointmentDate}</td>
                     <td className="px-5 py-4"><Badge tone={statusTone(appointment.status)}>{appointment.status}</Badge></td>
                     <td className="px-5 py-4 text-right">
-                      <Link className="font-bold text-cpu-navy hover:underline" href={`/appointments/${appointment.id}`}>
+                      <Link className="font-bold text-cpu-navy hover:underline" href={`${basePath}/${appointment.id}`}>
                         Open
                       </Link>
                     </td>

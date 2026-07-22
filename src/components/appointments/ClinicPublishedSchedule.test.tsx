@@ -56,7 +56,7 @@ describe("ClinicPublishedSchedule", () => {
     expect(within(row).getByText("PENDING")).toBeVisible();
     expect(within(row).getByRole("link", { name: "Open" })).toHaveAttribute(
       "href",
-      "/appointments/appointment-1",
+      "/laboratory/appointment-1",
     );
     expect(screen.getByText("Page 1 of 1")).toBeVisible();
     expect(screen.queryByRole("link", { name: "Previous page" })).not.toBeInTheDocument();
@@ -109,6 +109,10 @@ describe("ClinicPublishedSchedule", () => {
     expect(screen.getByRole("link", { name: "Next page" })).toHaveAttribute(
       "href",
       "/physical-exam?studentNumber=Ana+Santos&sort=latest&appointmentDate=2026-08-18&status=PENDING&page=2",
+    );
+    expect(screen.getByRole("link", { name: "Open" })).toHaveAttribute(
+      "href",
+      "/physical-exam/appointment-1",
     );
   });
 });
