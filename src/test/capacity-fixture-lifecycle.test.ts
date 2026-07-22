@@ -33,6 +33,18 @@ describe("capacity-mutating fixture lifecycle", () => {
     expect(source).toMatch(/afterEach\(async \(\) => \{[\s\S]*cleanupAndRestoreCapacitySettings/);
   });
 
+  it("ends the pool while preserving a connection failure", async () => {
+    const connectionFailure = new Error("connection failed");
+    const pool = {
+      connect: vi.fn().mockRejectedValue(connectionFailure),
+      end: vi.fn().mockRejectedValue(new Error("pool end failed")),
+    } as unknown as Pool;
+
+    await expect(setupCapacityFixtureLock(pool, vi.fn())).rejects.toBe(connectionFailure);
+
+    expect(pool.end).toHaveBeenCalledOnce();
+  });
+
   it("releases the lock and pool while preserving a setup failure", async () => {
     const setupFailure = new Error("setup failed");
     const client = {

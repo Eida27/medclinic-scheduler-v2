@@ -23,18 +23,18 @@ function firstFailure(current: unknown, next: unknown) {
 
 async function shutdownCapacityFixtureLock(
   pool: Pool,
-  client: PoolClient,
+  client: PoolClient | undefined,
   initialFailure?: unknown,
   unlock = true,
 ) {
   let failure = initialFailure;
   try {
-    if (unlock) await client.query(CAPACITY_UNLOCK_SQL);
+    if (client && unlock) await client.query(CAPACITY_UNLOCK_SQL);
   } catch (error) {
     failure = firstFailure(failure, error);
   } finally {
     try {
-      client.release();
+      client?.release();
     } catch (error) {
       failure = firstFailure(failure, error);
     } finally {
@@ -90,9 +90,10 @@ export async function setupCapacityFixtureLock(
   pool: Pool,
   setup: () => Promise<void>,
 ): Promise<CapacityFixtureLock> {
-  const client = await pool.connect();
+  let client: PoolClient | undefined;
   let lockAcquired = false;
   try {
+    client = await pool.connect();
     await client.query(CAPACITY_LOCK_SQL);
     lockAcquired = true;
     await setup();
