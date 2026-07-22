@@ -2,11 +2,15 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
+const { operationalStatusLabel, refresh } = vi.hoisted(() => ({
+  operationalStatusLabel: vi.fn((value: string) => `Readable ${value}`),
+  refresh: vi.fn(),
+}));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh }),
 }));
+vi.mock("@/components/appointments/status-labels", () => ({ operationalStatusLabel }));
 
 import { CompletedStatusCorrection } from "./CompletedStatusCorrection";
 
@@ -43,8 +47,8 @@ describe("CompletedStatusCorrection", () => {
     renderCorrection();
 
     expect(screen.getByRole("heading", { name: "Correct completed status" })).toBeVisible();
-    expect(screen.getByRole("option", { name: "Pending" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "No-show" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Readable PENDING" })).toHaveValue("PENDING");
+    expect(screen.getByRole("option", { name: "Readable NO_SHOW" })).toHaveValue("NO_SHOW");
     expect(screen.getByLabelText("Correction reason")).toBeRequired();
   });
 
@@ -54,7 +58,7 @@ describe("CompletedStatusCorrection", () => {
   ])("disables no-show for a %s Manila appointment", (_, appointmentDate) => {
     renderCorrection(appointmentDate);
 
-    expect(screen.getByRole("option", { name: "No-show" })).toBeDisabled();
+    expect(screen.getByRole("option", { name: "Readable NO_SHOW" })).toBeDisabled();
     expect(screen.getByText(
       "No-show corrections are available only after the appointment date.",
     )).toBeVisible();
@@ -64,7 +68,7 @@ describe("CompletedStatusCorrection", () => {
     vi.setSystemTime(new Date("2026-07-21T16:30:00.000Z"));
     renderCorrection("2026-07-22");
 
-    expect(screen.getByRole("option", { name: "No-show" })).toBeDisabled();
+    expect(screen.getByRole("option", { name: "Readable NO_SHOW" })).toBeDisabled();
   });
 
   it("opens confirmation before sending the correction PATCH", async () => {
@@ -78,6 +82,9 @@ describe("CompletedStatusCorrection", () => {
     await user.click(screen.getByRole("button", { name: "Review correction" }));
 
     expect(screen.getByRole("dialog", { name: "Confirm status correction?" })).toBeVisible();
+    expect(screen.getByText(
+      "This will change the completed appointment to Readable NO_SHOW and record your reason in its history.",
+    )).toBeVisible();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

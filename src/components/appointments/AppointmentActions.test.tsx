@@ -2,11 +2,15 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
+const { operationalStatusLabel, refresh } = vi.hoisted(() => ({
+  operationalStatusLabel: vi.fn((value: string) => `Readable ${value}`),
+  refresh: vi.fn(),
+}));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh }),
 }));
+vi.mock("@/components/appointments/status-labels", () => ({ operationalStatusLabel }));
 
 import { AppointmentActions } from "./AppointmentActions";
 
@@ -31,9 +35,15 @@ describe("AppointmentActions automatic no-show correction", () => {
 
     const status = screen.getByRole("combobox");
     expect(status).toHaveValue("COMPLETED");
-    expect(screen.getByRole("option", { name: "Completed" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "Cancelled" })).toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: "No-show" })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Readable COMPLETED" })).toHaveValue("COMPLETED");
+    expect(screen.getByRole("option", { name: "Readable CANCELLED" })).toHaveValue("CANCELLED");
+    expect(screen.queryByRole("option", { name: "Readable NO_SHOW" })).not.toBeInTheDocument();
+  });
+
+  it("uses the shared operational label for a draft cancellation target", () => {
+    render(<AppointmentActions id="appointment-1" status="DRAFT" />);
+
+    expect(screen.getByRole("option", { name: "Readable CANCELLED" })).toHaveValue("CANCELLED");
   });
 
   it("does not place completed-status corrections in ordinary actions", () => {

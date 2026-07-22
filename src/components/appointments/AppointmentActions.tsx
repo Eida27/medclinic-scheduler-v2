@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
+import { operationalStatusLabel } from "@/components/appointments/status-labels";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -63,11 +64,11 @@ export function AppointmentActions({
         <form onSubmit={statusSubmit} className="grid gap-3 sm:grid-cols-3">
           <Select name="status" defaultValue={status}>
             {status === "DRAFT" ? (
-              <option value="CANCELLED">Cancel draft</option>
+              <option value="CANCELLED">{operationalStatusLabel("CANCELLED")}</option>
             ) : (
               <>
-                <option value="COMPLETED">Completed</option>
-                <option value="CANCELLED">Cancelled</option>
+                <option value="COMPLETED">{operationalStatusLabel("COMPLETED")}</option>
+                <option value="CANCELLED">{operationalStatusLabel("CANCELLED")}</option>
               </>
             )}
           </Select>

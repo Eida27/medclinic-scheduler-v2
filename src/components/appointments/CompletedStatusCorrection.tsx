@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
+import { operationalStatusLabel } from "@/components/appointments/status-labels";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -102,8 +103,8 @@ export function CompletedStatusCorrection({
             onChange={(event) => setTarget(event.target.value as CorrectionTarget)}
             disabled={pending}
           >
-            <option value="PENDING">Pending</option>
-            <option value="NO_SHOW" disabled={noShowDisabled}>No-show</option>
+            <option value="PENDING">{operationalStatusLabel("PENDING")}</option>
+            <option value="NO_SHOW" disabled={noShowDisabled}>{operationalStatusLabel("NO_SHOW")}</option>
           </Select>
         </label>
         <label className="grid gap-1 text-sm font-semibold text-ink sm:col-span-2">
@@ -129,7 +130,7 @@ export function CompletedStatusCorrection({
       <ConfirmDialog
         open={confirmOpen}
         title="Confirm status correction?"
-        description={`This will change the completed appointment to ${target === "PENDING" ? "Pending" : "No-show"} and record your reason in its history.`}
+        description={`This will change the completed appointment to ${operationalStatusLabel(target)} and record your reason in its history.`}
         confirmLabel="Confirm correction"
         pending={pending}
         pendingLabel="Saving correction"
