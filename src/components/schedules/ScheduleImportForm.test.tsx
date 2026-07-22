@@ -15,6 +15,14 @@ function csvFile() {
   ], "students.csv", { type: "text/csv" });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
+
 describe("ScheduleImportForm", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -75,5 +83,46 @@ describe("ScheduleImportForm", () => {
       "preferredMonth",
       "studentCategory",
     ]);
+  });
+
+  it("stays locked after a successful import until navigation unmounts the form", async () => {
+    const request = deferred<{ ok: boolean; json: () => Promise<{ data: { importId: string } }> }>();
+    const fetchMock = vi.fn().mockReturnValue(request.promise);
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<ScheduleImportForm />);
+    await user.upload(screen.getByLabelText("CSV file"), csvFile());
+    fireEvent.submit(screen.getByRole("button", { name: "Review import" }).closest("form")!);
+    const confirmButton = screen.getByRole("button", { name: "Agree and import" });
+
+    await user.click(confirmButton);
+    await user.click(screen.getByRole("button", { name: /importing and publishing/i }));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("dialog")).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("button", { name: /importing and publishing/i })).toBeDisabled();
+
+    request.resolve({
+      ok: true,
+      json: async () => ({ data: { importId: "import-id" } }),
+    });
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/students/schedule-imports/import-id"));
+    expect(screen.getByRole("button", { name: /importing and publishing/i })).toBeDisabled();
+  });
+
+  it("restores editing after an import request fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false,
+      json: async () => ({ error: { message: "The CSV could not be imported." } }),
+    }));
+    const user = userEvent.setup();
+    render(<ScheduleImportForm />);
+    await user.upload(screen.getByLabelText("CSV file"), csvFile());
+    fireEvent.submit(screen.getByRole("button", { name: "Review import" }).closest("form")!);
+    await user.click(screen.getByRole("button", { name: "Agree and import" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByText("The CSV could not be imported.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Review import" })).toBeEnabled();
   });
 });

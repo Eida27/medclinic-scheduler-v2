@@ -66,6 +66,7 @@ export function ScheduleImportForm() {
       if (!response.ok) {
         setConfirmOpen(false);
         setError(payload.error ?? { message: "Unable to import the CSV file." });
+        setPending(false);
         return;
       }
       router.push(`/students/schedule-imports/${payload.data.importId}`);
@@ -73,7 +74,6 @@ export function ScheduleImportForm() {
     } catch {
       setConfirmOpen(false);
       setError({ message: "Unable to import the CSV file." });
-    } finally {
       setPending(false);
     }
   }
