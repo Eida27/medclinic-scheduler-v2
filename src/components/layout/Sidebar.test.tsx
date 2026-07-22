@@ -38,6 +38,7 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("link", { name: "Compliance" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Students" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Coordinator schedules" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Results" })).not.toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "Dashboard navigation" })).toHaveClass("scrollbar-none");
   });
 
@@ -65,6 +66,7 @@ describe("Sidebar", () => {
     expect(screen.getByRole("link", { name: "Users" })).toBeVisible();
     expect(screen.getByRole("link", { name: "Reference data" })).toBeVisible();
     expect(screen.getByRole("link", { name: "Capacity" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Results" })).not.toBeInTheDocument();
   });
 
   it("limits coordinators to Dashboard and Students & Schedules", () => {

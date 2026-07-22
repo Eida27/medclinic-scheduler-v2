@@ -12,7 +12,6 @@ const primaryLinks = [
   ["Physical exam", "/physical-exam"],
   ["Students & Schedules", "/students"],
   ["Appointments", "/appointments"],
-  ["Results", "/results"],
 ] as const;
 
 const adminLinks = [
