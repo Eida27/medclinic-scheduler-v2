@@ -1,16 +1,20 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { pool } from "@/server/db/pool";
-import type { PoolClient } from "pg";
 import { cleanupTestFixtures, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
+import {
+  cleanupAndRestoreCapacitySettings,
+  setupCapacityFixtureLock,
+  teardownCapacityFixtureLock,
+  type CapacityFixtureLock,
+} from "@/test/capacity-fixture-lifecycle";
 import type { SessionUser } from "@/types/roles";
 import { acceptAndScheduleImport } from "./schedule-imports.service";
 
 const header = "Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth";
 const studentPattern = "99-92%";
 const importPattern = "REGULAR 20%-20% - TEST-FCFS%";
-let originalCapacities: Array<{ id: string; max_daily_capacity: number }> = [];
-let capacityLockClient: PoolClient;
+let capacityFixture: CapacityFixtureLock | null = null;
 
 const admin: SessionUser = {
   userId: TEST_REFERENCE_IDS.adminUser,
@@ -39,38 +43,20 @@ async function cleanup() {
 }
 
 beforeAll(async () => {
-  capacityLockClient = await pool.connect();
-  await capacityLockClient.query("SELECT pg_advisory_lock(hashtext('medclinic:test:capacity-settings'))");
-  await cleanup();
-  const capacities = await pool.query<{
-    id: string;
-    max_daily_capacity: number;
-  }>(
-    `SELECT id, max_daily_capacity
-       FROM clinic_capacity_settings
-      WHERE id IN ($1,$2) ORDER BY id`,
-    [
-      "40000000-0000-4000-8000-000000000001",
-      "40000000-0000-4000-8000-000000000002",
-    ],
-  );
-  originalCapacities = capacities.rows;
+  capacityFixture = await setupCapacityFixtureLock(pool, cleanup);
 });
 
-afterEach(cleanup);
+afterEach(async () => {
+  if (!capacityFixture) return;
+  await cleanupAndRestoreCapacitySettings(
+    pool,
+    capacityFixture.originalCapacities,
+    cleanup,
+  );
+});
 afterAll(async () => {
-  await cleanup();
-  for (const capacity of originalCapacities) {
-    await pool.query(
-      `UPDATE clinic_capacity_settings
-          SET safe_daily_capacity=$2, max_daily_capacity=$2
-        WHERE id=$1`,
-      [capacity.id, capacity.max_daily_capacity],
-    );
-  }
-  await capacityLockClient.query("SELECT pg_advisory_unlock(hashtext('medclinic:test:capacity-settings'))");
-  capacityLockClient.release();
-  await pool.end();
+  if (!capacityFixture) return;
+  await teardownCapacityFixtureLock(pool, capacityFixture, cleanup);
 });
 
 describe("atomic academic-year import lifecycle", () => {
