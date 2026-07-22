@@ -86,6 +86,28 @@ describe("browser clinic scheduler UX fixture helpers", () => {
   });
 
   it.each([
+    "postgresql://fixture:secret-password@localhost:5432/clinic_ux?host=remote.example",
+    "postgresql://fixture:secret-password@localhost:5432/clinic_ux?port=5432",
+    "postgresql://fixture:secret-password@localhost:5432/clinic_ux?HOST=localhost&host=remote.example",
+  ])("rejects PostgreSQL host or port query overrides before running the guarded operation", async (databaseUrl) => {
+    const operation = vi.fn();
+
+    await expect(runGuardedAcceptanceDatabaseOperation({
+      databaseUrl,
+      exclusiveDatabase: "1",
+      operation,
+    })).rejects.toThrow(/host or port query/i);
+    expect(operation).not.toHaveBeenCalled();
+
+    try {
+      assertSafeAcceptanceDatabase(databaseUrl, "1");
+    } catch (error) {
+      expect(String(error)).not.toContain("secret-password");
+      expect(String(error)).not.toContain(databaseUrl);
+    }
+  });
+
+  it.each([
     [
       "postgresql://fixture:secret@localhost/clinic_ux",
       { scheme: "postgresql", host: "localhost", port: "5432", database: "clinic_ux" },
@@ -118,6 +140,22 @@ describe("browser clinic scheduler UX fixture helpers", () => {
     expect(serialized).not.toContain("secret-password");
     expect(serialized).not.toContain("sslmode");
     expect(serialized).not.toContain("private");
+  });
+
+  it("keeps pg-reserved encoded database separators distinct and rejects malformed escapes", () => {
+    const encodedSeparator = normalizeAcceptanceDatabaseIdentity(
+      "postgresql://fixture:secret@localhost:5432/clinic%2Fux",
+    );
+    const literalSeparator = normalizeAcceptanceDatabaseIdentity(
+      "postgresql://fixture:secret@localhost:5432/clinic/ux",
+    );
+
+    expect(encodedSeparator.database).toBe("clinic%2Fux");
+    expect(literalSeparator.database).toBe("clinic/ux");
+    expect(encodedSeparator).not.toEqual(literalSeparator);
+    expect(() => normalizeAcceptanceDatabaseIdentity(
+      "postgresql://fixture:secret@localhost:5432/clinic%ZZux",
+    )).toThrow(/valid database name/i);
   });
 
   it("refuses cleanup on a database identity mismatch before any destructive operation", async () => {

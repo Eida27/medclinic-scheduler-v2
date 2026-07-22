@@ -42,10 +42,17 @@ export function normalizeAcceptanceDatabaseIdentity(
   if (parsed.protocol !== "postgres:" && parsed.protocol !== "postgresql:") {
     throw new Error("DATABASE_URL must use the PostgreSQL scheme.");
   }
+  const hasDestinationOverride = [...parsed.searchParams.keys()].some((parameter) => {
+    const normalized = parameter.toLocaleLowerCase();
+    return normalized === "host" || normalized === "port";
+  });
+  if (hasDestinationOverride) {
+    throw new Error("DATABASE_URL must not use host or port query parameters.");
+  }
   const host = parsed.hostname.replace(/^\[(.*)\]$/, "$1").toLocaleLowerCase();
   let database: string;
   try {
-    database = decodeURIComponent(parsed.pathname.replace(/^\//, ""));
+    database = decodeURI(parsed.pathname.replace(/^\//, ""));
   } catch {
     throw new Error("DATABASE_URL must contain a valid database name.");
   }

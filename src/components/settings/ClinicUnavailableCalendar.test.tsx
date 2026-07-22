@@ -22,6 +22,30 @@ const unavailableDates: ClinicUnavailableDateRecord[] = [
     createdByName: "Clinic Admin",
     createdAt: "2026-07-01T00:00:00.000Z",
   },
+  {
+    id: "unavailable-past",
+    clinicId: clinics[0].id,
+    clinicCode: "KABALAKA_CLINIC",
+    clinicName: clinics[0].name,
+    startDate: "2026-08-14",
+    endDate: "2026-08-14",
+    category: "CLOSURE",
+    reason: "Storm cleanup",
+    createdByName: "Clinic Admin",
+    createdAt: "2026-07-01T00:00:00.000Z",
+  },
+  {
+    id: "unavailable-weekend",
+    clinicId: clinics[0].id,
+    clinicCode: "KABALAKA_CLINIC",
+    clinicName: clinics[0].name,
+    startDate: "2026-08-22",
+    endDate: "2026-08-23",
+    category: "STAFF_UNAVAILABILITY",
+    reason: "Staff retreat",
+    createdByName: "Clinic Admin",
+    createdAt: "2026-07-01T00:00:00.000Z",
+  },
 ];
 
 function renderCalendar() {
@@ -66,22 +90,73 @@ describe("ClinicUnavailableCalendar", () => {
 
     const availableDate = screen.getByRole("button", { name: "August 18, 2026 — available" });
     expect(availableDate).toBeDisabled();
-    expect(screen.getByRole("button", { name: "August 14, 2026 — past" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "August 13, 2026 — past" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "August 17, 2026 — today" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "August 22, 2026 — weekend" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "August 29, 2026 — weekend" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "September 1, 2026 — outside current month" })).toBeDisabled();
 
     const unavailableDate = screen.getByRole("button", {
       name: "August 19, 2026 — unavailable: Maintenance, Generator testing",
     });
     expect(unavailableDate).toBeEnabled();
-    expect(unavailableDate).toHaveAttribute("aria-disabled", "true");
+    expect(unavailableDate).not.toHaveAttribute("aria-disabled");
+    expect(unavailableDate).not.toHaveAttribute("aria-controls");
+    expect(unavailableDate).not.toHaveAttribute("aria-describedby");
 
     await completeControls();
 
     expect(availableDate).toBeEnabled();
     expect(unavailableDate).toBeEnabled();
-    expect(unavailableDate).toHaveAttribute("aria-disabled", "true");
+    expect(unavailableDate).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("selects past and weekend unavailable dates without posting while available peers stay disabled", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    renderCalendar();
+    const user = await completeControls();
+    const pastUnavailable = screen.getByRole("button", {
+      name: "August 14, 2026 — unavailable: Closure, Storm cleanup",
+    });
+    const weekendUnavailable = screen.getByRole("button", {
+      name: "August 22, 2026 — unavailable: Staff unavailability, Staff retreat",
+    });
+
+    expect(pastUnavailable).toBeEnabled();
+    expect(weekendUnavailable).toBeEnabled();
+    expect(pastUnavailable).not.toHaveAttribute("aria-disabled");
+    expect(weekendUnavailable).not.toHaveAttribute("aria-disabled");
+    expect(pastUnavailable).not.toHaveAttribute("aria-controls");
+    expect(weekendUnavailable).not.toHaveAttribute("aria-controls");
+    expect(screen.getByRole("button", { name: "August 13, 2026 — past" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "August 29, 2026 — weekend" })).toBeDisabled();
+
+    await user.click(pastUnavailable);
+
+    const details = screen.getByRole("region", { name: "Unavailable date details" });
+    expect(pastUnavailable).toHaveAttribute("aria-pressed", "true");
+    expect(pastUnavailable).toHaveAttribute("aria-controls", details.id);
+    expect(pastUnavailable).toHaveAttribute("aria-describedby", details.id);
+    expect(weekendUnavailable).not.toHaveAttribute("aria-controls");
+    expect(within(details).getByText("Closure")).toBeInTheDocument();
+    expect(within(details).getByText("Storm cleanup")).toBeInTheDocument();
+    expect(within(details).getByText("August 14, 2026 to August 14, 2026")).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    weekendUnavailable.focus();
+    await user.keyboard(" ");
+
+    expect(weekendUnavailable).toHaveFocus();
+    expect(pastUnavailable).toHaveAttribute("aria-pressed", "false");
+    expect(pastUnavailable).not.toHaveAttribute("aria-controls");
+    expect(pastUnavailable).not.toHaveAttribute("aria-describedby");
+    expect(weekendUnavailable).toHaveAttribute("aria-pressed", "true");
+    expect(weekendUnavailable).toHaveAttribute("aria-controls", details.id);
+    expect(weekendUnavailable).toHaveAttribute("aria-describedby", details.id);
+    expect(within(details).getByText("Staff unavailability")).toBeInTheDocument();
+    expect(within(details).getByText("Staff retreat")).toBeInTheDocument();
+    expect(within(details).getByText("August 22, 2026 to August 23, 2026")).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("selects unavailable dates by pointer or keyboard and discloses accessible details without posting", async () => {
@@ -96,11 +171,18 @@ describe("ClinicUnavailableCalendar", () => {
       name: "August 20, 2026 — unavailable: Maintenance, Generator testing",
     });
 
+    expect(firstUnavailableDate).not.toHaveAttribute("aria-controls");
+    expect(firstUnavailableDate).not.toHaveAttribute("aria-describedby");
+    expect(secondUnavailableDate).not.toHaveAttribute("aria-controls");
+    expect(secondUnavailableDate).not.toHaveAttribute("aria-describedby");
+
     await user.click(firstUnavailableDate);
 
     const details = screen.getByRole("region", { name: "Unavailable date details" });
     expect(firstUnavailableDate).toHaveAttribute("aria-pressed", "true");
+    expect(firstUnavailableDate).toHaveAttribute("aria-controls", details.id);
     expect(firstUnavailableDate).toHaveAttribute("aria-describedby", details.id);
+    expect(secondUnavailableDate).not.toHaveAttribute("aria-controls");
     expect(within(details).getByText("KABALAKA Clinic")).toBeInTheDocument();
     expect(within(details).getByText("Maintenance")).toBeInTheDocument();
     expect(within(details).getByText("Generator testing")).toBeInTheDocument();
@@ -112,7 +194,10 @@ describe("ClinicUnavailableCalendar", () => {
     await user.keyboard("{Enter}");
 
     expect(firstUnavailableDate).toHaveAttribute("aria-pressed", "false");
+    expect(firstUnavailableDate).not.toHaveAttribute("aria-controls");
+    expect(firstUnavailableDate).not.toHaveAttribute("aria-describedby");
     expect(secondUnavailableDate).toHaveAttribute("aria-pressed", "true");
+    expect(secondUnavailableDate).toHaveAttribute("aria-controls", details.id);
     expect(secondUnavailableDate).toHaveAttribute("aria-describedby", details.id);
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -138,6 +223,10 @@ describe("ClinicUnavailableCalendar", () => {
 
     const savingDate = screen.getByRole("button", { name: "August 18, 2026 — saving" });
     expect(savingDate).toBeDisabled();
+    expect(screen.getByRole("button", {
+      name: "August 19, 2026 — unavailable: Maintenance, Generator testing",
+    })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "August 21, 2026 — available" })).toBeDisabled();
     expect(within(savingDate).getByRole("status", { name: "Saving August 18, 2026" })).toBeInTheDocument();
     fireEvent.click(savingDate);
     expect(fetchMock).toHaveBeenCalledOnce();
@@ -159,11 +248,11 @@ describe("ClinicUnavailableCalendar", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("2 students");
     expect(screen.getByRole("alert")).toHaveTextContent("4 appointments");
-    expect(
-      screen.getByRole("button", {
-        name: "August 18, 2026 — unavailable: Maintenance, Equipment maintenance",
-      }),
-    ).toHaveAttribute("aria-disabled", "true");
+    const newlyUnavailable = screen.getByRole("button", {
+      name: "August 18, 2026 — unavailable: Maintenance, Equipment maintenance",
+    });
+    expect(newlyUnavailable).toBeEnabled();
+    expect(newlyUnavailable).not.toHaveAttribute("aria-disabled");
   });
 
   it("rolls a date back to available after a 409 response", async () => {

@@ -262,16 +262,10 @@ export function ClinicUnavailableCalendar({
               } else if (isOutsideMonth) {
                 stateLabel = "outside current month";
               }
-              const genuinelyNonActionable = Boolean(
-                isToday
-                || isPast
-                || day.isWeekend
-                || isOutsideMonth,
-              );
               const disabled = Boolean(
-                genuinelyNonActionable
+                isOutsideMonth
                 || pendingDate
-                || (!unavailable && !formIsValid),
+                || (!unavailable && (isToday || isPast || day.isWeekend || !formIsValid)),
               );
               const isSelectedUnavailable = Boolean(
                 unavailable && selectedUnavailableDate === day.date,
@@ -282,9 +276,8 @@ export function ClinicUnavailableCalendar({
                   key={day.date}
                   type="button"
                   aria-label={`${dateLabel} — ${stateLabel}`}
-                  aria-disabled={unavailable ? true : undefined}
                   aria-pressed={unavailable ? isSelectedUnavailable : undefined}
-                  aria-controls={unavailable ? unavailableDetailsId : undefined}
+                  aria-controls={isSelectedUnavailable ? unavailableDetailsId : undefined}
                   aria-describedby={isSelectedUnavailable ? unavailableDetailsId : undefined}
                   disabled={disabled}
                   onClick={() => {
@@ -294,7 +287,7 @@ export function ClinicUnavailableCalendar({
                     }
                     void markUnavailable(day.date);
                   }}
-                  className="flex min-h-20 flex-col items-center justify-center gap-1 rounded-xl border border-line bg-surface px-2 py-3 text-sm font-semibold text-ink transition hover:border-cpu-navy/30 hover:bg-cpu-navy-soft aria-disabled:bg-canvas aria-disabled:text-muted aria-pressed:border-cpu-navy aria-pressed:ring-2 aria-pressed:ring-cpu-navy/20 disabled:cursor-not-allowed disabled:bg-canvas disabled:text-muted"
+                  className="flex min-h-20 flex-col items-center justify-center gap-1 rounded-xl border border-line bg-surface px-2 py-3 text-sm font-semibold text-ink transition hover:border-cpu-navy/30 hover:bg-cpu-navy-soft aria-pressed:border-cpu-navy aria-pressed:ring-2 aria-pressed:ring-cpu-navy/20 disabled:cursor-not-allowed disabled:bg-canvas disabled:text-muted"
                 >
                   <span>{day.dayOfMonth}</span>
                   {isSaving ? <Spinner size="sm" label={`Saving ${dateLabel}`} /> : null}
