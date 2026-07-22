@@ -2,11 +2,14 @@
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { PoolClient } from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { pool, transaction } from "@/server/db/pool";
 import {
   deletePendingResultPlaceholder,
   getAppointmentResultCorrectionState,
+  invalidateFinalizedSubmissionMetadata,
+  lockFinalizedSubmissionForInvalidation,
 } from "@/server/repositories/student-result-submissions.repository";
 import { LocalResultStorage } from "@/server/storage/local-result-storage";
 import { cleanupTestFixtures, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
@@ -83,6 +86,21 @@ async function appointment(
 
 function file(filename = "result.pdf", body = "%PDF-1.7\nsynthetic result") {
   return { filename, declaredMimeType: "application/pdf", bytes: Buffer.from(body) };
+}
+
+async function waitForClientLock(observer: PoolClient, clientPid: number) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const activity = await observer.query<{ waitEventType: string | null }>(
+      `SELECT wait_event_type AS "waitEventType"
+         FROM pg_stat_activity
+        WHERE pid=$1`,
+      [clientPid],
+    );
+    if (activity.rows[0]?.waitEventType === "Lock") return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for the concurrent transaction to block on a database lock.");
 }
 
 beforeAll(async () => {
@@ -458,5 +476,75 @@ describe("appointment result correction protection", () => {
         status: 409,
       });
     });
+  });
+
+  it("uses invalidation-compatible lock order during concurrent correction inspection", async () => {
+    await insertTestStudent({ studentNumber: "99-9421-21", firstName: "Concurrent", lastName: "Correction", yearLevel: 3 });
+    const appointmentId = await appointment("99-9421-21");
+    await pool.query(
+      `INSERT INTO laboratory_results (
+         student_number, appointment_id, result_status, completed_at, encoded_by
+       ) VALUES ('99-9421-21',$1,'COMPLETED','2027-08-02',$2)`,
+      [appointmentId, TEST_REFERENCE_IDS.clinicStaffUser],
+    );
+    const submission = await pool.query<{ id: string }>(
+      `INSERT INTO student_result_submissions (
+         appointment_id, student_number, result_type, status, finalized_at
+       ) VALUES ($1,'99-9421-21','LABORATORY','FINALIZED',NOW())
+       RETURNING id`,
+      [appointmentId],
+    );
+    const correctionClient = await pool.connect();
+    const invalidationClient = await pool.connect();
+
+    try {
+      await Promise.all([
+        correctionClient.query("BEGIN"),
+        invalidationClient.query("BEGIN"),
+      ]);
+      await Promise.all([
+        correctionClient.query("SET LOCAL deadlock_timeout='100ms'"),
+        invalidationClient.query("SET LOCAL deadlock_timeout='100ms'"),
+      ]);
+      const correctionPid = await correctionClient.query<{ pid: number }>("SELECT pg_backend_pid() AS pid");
+      const lockedSubmission = await lockFinalizedSubmissionForInvalidation(
+        invalidationClient,
+        submission.rows[0].id,
+      );
+      if (!lockedSubmission) throw new Error("Expected a finalized submission fixture.");
+
+      const correctionTask = getAppointmentResultCorrectionState(correctionClient, {
+        id: appointmentId,
+        scheduleType: "LABORATORY",
+      }).then(async (state) => {
+        await correctionClient.query("COMMIT");
+        return state;
+      });
+      await waitForClientLock(invalidationClient, correctionPid.rows[0].pid);
+      const invalidationTask = invalidateFinalizedSubmissionMetadata(
+        invalidationClient,
+        lockedSubmission,
+        TEST_REFERENCE_IDS.adminUser,
+        "Concurrent invalidation fixture",
+      ).then(() => invalidationClient.query("COMMIT"));
+
+      const [correctionOutcome, invalidationOutcome] = await Promise.allSettled([
+        correctionTask,
+        invalidationTask,
+      ]);
+      expect(invalidationOutcome).toMatchObject({ status: "fulfilled" });
+      expect(correctionOutcome).toMatchObject({
+        status: "fulfilled",
+        value: {
+          type: "PENDING_PLACEHOLDER",
+          table: "laboratory_results",
+        },
+      });
+    } finally {
+      await correctionClient.query("ROLLBACK").catch(() => undefined);
+      await invalidationClient.query("ROLLBACK").catch(() => undefined);
+      correctionClient.release();
+      invalidationClient.release();
+    }
   });
 });

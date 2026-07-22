@@ -55,6 +55,13 @@ export async function getAppointmentResultCorrectionState(
   const table = appointment.scheduleType === "LABORATORY"
     ? "laboratory_results" as const
     : "exam_results" as const;
+  const submissions = await client.query<{ id: string; status: string }>(
+    `SELECT id, status
+       FROM student_result_submissions
+      WHERE appointment_id=$1
+      FOR UPDATE`,
+    [appointment.id],
+  );
   const result = await client.query<{ id: string; resultStatus: string }>(
     table === "laboratory_results"
       ? `SELECT id, result_status AS "resultStatus"
@@ -65,13 +72,6 @@ export async function getAppointmentResultCorrectionState(
            FROM exam_results
           WHERE appointment_id=$1
           FOR UPDATE`,
-    [appointment.id],
-  );
-  const submissions = await client.query<{ id: string; status: string }>(
-    `SELECT id, status
-       FROM student_result_submissions
-      WHERE appointment_id=$1
-      FOR UPDATE`,
     [appointment.id],
   );
   const files = await client.query<{ activeFileCount: number }>(
