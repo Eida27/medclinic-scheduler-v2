@@ -9,6 +9,32 @@ export type ClinicUnavailableDateInput = {
   reason: string;
 };
 
+export type ClinicUnavailableDateRecord = {
+  id: string;
+  clinicId: string;
+  clinicCode: string;
+  clinicName: string;
+  startDate: string;
+  endDate: string;
+  category: ClinicUnavailableDateInput["category"];
+  reason: string;
+  createdByName: string;
+  createdAt: string;
+};
+
+type ClinicUnavailableDateRow = {
+  id: string;
+  clinic_id: string;
+  clinic_code: string;
+  clinic_name: string;
+  start_date: string;
+  end_date: string;
+  category: ClinicUnavailableDateInput["category"];
+  reason: string;
+  created_by_name: string;
+  created_at: Date;
+};
+
 export async function listClinicOptions() {
   const result = await query<{ id: string; name: string }>(
     `SELECT id, name FROM clinics
@@ -17,19 +43,8 @@ export async function listClinicOptions() {
   return result.rows;
 }
 
-export async function listClinicUnavailableDateRecords() {
-  const result = await query<{
-    id: string;
-    clinic_id: string;
-    clinic_code: string;
-    clinic_name: string;
-    start_date: string;
-    end_date: string;
-    category: ClinicUnavailableDateInput["category"];
-    reason: string;
-    created_by_name: string;
-    created_at: Date;
-  }>(
+export async function listClinicUnavailableDateRecords(): Promise<ClinicUnavailableDateRecord[]> {
+  const result = await query<ClinicUnavailableDateRow>(
     `SELECT unavailable.id, unavailable.clinic_id, clinic.code AS clinic_code,
             clinic.name AS clinic_name, unavailable.start_date::text,
             unavailable.end_date::text, unavailable.category, unavailable.reason,
