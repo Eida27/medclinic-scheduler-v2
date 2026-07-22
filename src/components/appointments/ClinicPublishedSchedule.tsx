@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { AppointmentPagination } from "@/components/appointments/AppointmentPagination";
 import type { AppointmentListSort } from "@/components/appointments/appointment-list-sort";
+import { operationalStatusLabel, statusTone } from "@/components/appointments/status-labels";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
@@ -40,12 +41,6 @@ const sortOptions: Array<[AppointmentListSort, string]> = [
   ["latest", "Latest"],
 ];
 
-function statusTone(status: string) {
-  if (status === "COMPLETED") return "success" as const;
-  if (status === "NO_SHOW" || status === "CANCELLED") return "danger" as const;
-  return "warning" as const;
-}
-
 export function ClinicPublishedSchedule({
   basePath,
   title,
@@ -77,7 +72,9 @@ export function ClinicPublishedSchedule({
             <span>Status</span>
             <Select name="status" defaultValue={filters.status}>
               <option value="">All operational statuses</option>
-              {operationalStatuses.map((status) => <option key={status}>{status}</option>)}
+              {operationalStatuses.map((status) => (
+                <option key={status} value={status}>{operationalStatusLabel(status)}</option>
+              ))}
             </Select>
           </label>
           <label className="grid gap-1.5 text-sm font-bold text-ink">
@@ -120,7 +117,11 @@ export function ClinicPublishedSchedule({
                     </td>
                     <td className="px-5 py-4">{appointment.scheduleType.replaceAll("_", " ")}</td>
                     <td className="px-5 py-4">{appointment.appointmentDate}</td>
-                    <td className="px-5 py-4"><Badge tone={statusTone(appointment.status)}>{appointment.status}</Badge></td>
+                    <td className="px-5 py-4">
+                      <Badge tone={statusTone(appointment.status)}>
+                        {operationalStatusLabel(appointment.status)}
+                      </Badge>
+                    </td>
                     <td className="px-5 py-4 text-right">
                       <Link className="font-bold text-cpu-navy hover:underline" href={`${basePath}/${appointment.id}`}>
                         Open

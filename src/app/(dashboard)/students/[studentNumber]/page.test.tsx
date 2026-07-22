@@ -53,4 +53,21 @@ describe("StudentDetailsPage permissions", () => {
     expect(screen.getByText("Read-only student")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Deactivate" })).not.toBeInTheDocument();
   });
+
+  it("shows readable appointment status labels in student history", async () => {
+    getStudentDetails.mockResolvedValue({
+      ...student,
+      appointments: [{
+        id: "appointment-1",
+        schedule_type: "LABORATORY",
+        appointment_date: "2026-08-18",
+        status: "NO_SHOW",
+      }],
+    });
+
+    render(await StudentDetailsPage({ params: Promise.resolve({ studentNumber: "24-0001" }) }));
+
+    expect(screen.getByText("No-show")).toBeVisible();
+    expect(screen.queryByText("NO_SHOW")).not.toBeInTheDocument();
+  });
 });

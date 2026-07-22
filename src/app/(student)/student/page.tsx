@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { operationalStatusLabel } from "@/components/appointments/status-labels";
 import { Card } from "@/components/ui/Card";
 import { EmailVerificationReminder } from "@/components/student/EmailVerificationReminder";
 import { requireStudent } from "@/server/auth/current-student";
@@ -21,7 +22,7 @@ export default async function StudentSchedulePage() {
               <p className="font-bold">{appointment.scheduleType === "LABORATORY" ? "Laboratory" : "Physical Examination"}</p>
               <p className="text-sm text-muted">{appointment.appointmentDate}</p>
             </div>
-            <span className="text-sm font-semibold">{appointment.status.replaceAll("_", " ")}</span>
+            <span className="text-sm font-semibold">{operationalStatusLabel(appointment.status)}</span>
           </Card>
         )) : <Card className="p-5 text-sm text-muted">No published appointments yet.</Card>}
       </div>

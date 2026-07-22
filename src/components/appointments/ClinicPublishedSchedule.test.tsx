@@ -38,7 +38,7 @@ describe("ClinicPublishedSchedule", () => {
     const status = screen.getByRole("combobox", { name: "Status" });
     expect(status).toHaveValue("PENDING");
     expect(within(status).queryByRole("option", { name: "DRAFT" })).not.toBeInTheDocument();
-    expect(within(status).getByRole("option", { name: "NO_SHOW" })).toBeInTheDocument();
+    expect(within(status).getByRole("option", { name: "No-show" })).toHaveValue("NO_SHOW");
     expect(screen.queryByRole("combobox", { name: /visibility/i })).not.toBeInTheDocument();
 
     const sort = screen.getByRole("combobox", { name: "Sort" });
@@ -53,7 +53,7 @@ describe("ClinicPublishedSchedule", () => {
     const row = screen.getByRole("row", { name: /Ana Maria Santos Jr\./ });
     expect(within(row).getByText("2026-0001")).toBeVisible();
     expect(within(row).getByText("2026-08-18")).toBeVisible();
-    expect(within(row).getByText("PENDING")).toBeVisible();
+    expect(within(row).getByText("Pending")).toBeVisible();
     expect(within(row).getByRole("link", { name: "Open" })).toHaveAttribute(
       "href",
       "/laboratory/appointment-1",

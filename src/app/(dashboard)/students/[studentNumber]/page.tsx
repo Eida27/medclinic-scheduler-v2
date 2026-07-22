@@ -1,4 +1,5 @@
 import { Badge } from "@/components/ui/Badge";
+import { operationalStatusLabel, statusTone } from "@/components/appointments/status-labels";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { DeactivateStudentButton } from "@/components/students/DeactivateStudentButton";
@@ -17,7 +18,7 @@ export default async function StudentDetailsPage({ params }: { params: Promise<{
     <>
       <PageHeader title={student.fullName} description={`${student.studentNumber} · ${student.programName}`} actions={readOnly ? undefined : <DeactivateStudentButton studentNumber={student.studentNumber} />} />
       <StudentForm colleges={colleges} programs={programs} student={student} readOnly={readOnly} />
-      <Card><CardTitle>Appointment history</CardTitle><div className="mt-4 grid gap-3">{student.appointments.map((appointment: AppointmentHistory) => <div key={appointment.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-cpu-navy/8 bg-cpu-navy-soft/55 p-4"><div><p className="font-bold text-ink">{appointment.schedule_type.replaceAll("_", " ")}</p><p className="text-sm text-muted">{appointment.appointment_date}</p></div><Badge tone={appointment.status === "COMPLETED" ? "success" : appointment.status === "NO_SHOW" ? "danger" : "neutral"}>{appointment.status}</Badge></div>)}{student.appointments.length === 0 ? <p className="text-sm text-muted">No appointments yet.</p> : null}</div></Card>
+      <Card><CardTitle>Appointment history</CardTitle><div className="mt-4 grid gap-3">{student.appointments.map((appointment: AppointmentHistory) => <div key={appointment.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-cpu-navy/8 bg-cpu-navy-soft/55 p-4"><div><p className="font-bold text-ink">{appointment.schedule_type.replaceAll("_", " ")}</p><p className="text-sm text-muted">{appointment.appointment_date}</p></div><Badge tone={statusTone(appointment.status)}>{operationalStatusLabel(appointment.status)}</Badge></div>)}{student.appointments.length === 0 ? <p className="text-sm text-muted">No appointments yet.</p> : null}</div></Card>
     </>
   );
 }

@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { AppointmentActions } from "@/components/appointments/AppointmentActions";
 import { CompletedStatusCorrection } from "@/components/appointments/CompletedStatusCorrection";
+import { operationalStatusLabel, statusTone } from "@/components/appointments/status-labels";
 import { Badge } from "@/components/ui/Badge";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -53,8 +54,8 @@ export async function AppointmentDetail({
         title={String(appointment.studentName)}
         description={`${appointment.studentNumber} · ${String(appointment.scheduleType).replaceAll("_", " ")}`}
         actions={(
-          <Badge tone={appointment.status === "COMPLETED" ? "success" : "warning"}>
-            {String(appointment.status)}
+          <Badge tone={statusTone(String(appointment.status))}>
+            {operationalStatusLabel(String(appointment.status))}
           </Badge>
         )}
       />
@@ -94,7 +95,9 @@ export async function AppointmentDetail({
         <div className="mt-4 grid gap-3">
           {statusLogs.map((log) => (
             <div key={log.id} className="rounded-xl border border-cpu-navy/8 bg-cpu-navy-soft/55 p-4 text-sm">
-              <p className="font-bold text-ink">{log.oldStatus ?? "Created"} → {log.newStatus}</p>
+              <p className="font-bold text-ink">
+                {log.oldStatus ? operationalStatusLabel(log.oldStatus) : "Created"} → {operationalStatusLabel(log.newStatus)}
+              </p>
               <p className="text-muted">
                 {log.changedByName ?? "System"} · {statusLogTimestamp(log.createdAt)}
               </p>

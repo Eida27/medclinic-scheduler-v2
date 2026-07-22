@@ -112,6 +112,9 @@ describe("AppointmentDetail", () => {
 
     render(await AppointmentDetail({ appointmentId: "appointment-1", source: "APPOINTMENTS" }));
 
+    expect(screen.getByText("No-show")).toBeVisible();
+    expect(screen.getByText("Pending → No-show")).toBeVisible();
+    expect(screen.queryByText("NO_SHOW")).not.toBeInTheDocument();
     expect(appointmentActions).toHaveBeenCalledWith({
       id: "appointment-1",
       status: "NO_SHOW",
