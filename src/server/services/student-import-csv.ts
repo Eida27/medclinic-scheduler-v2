@@ -40,11 +40,11 @@ function fail(fields: Record<string, string[]>): never {
 
 function decodeInput(input: string | ArrayBuffer | Uint8Array): string {
   if (typeof input === "string") return input;
+  const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
   try {
-    const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
-    fail({ file: ["The file must be valid UTF-8."] });
+    return new TextDecoder("windows-1252").decode(bytes);
   }
 }
 

@@ -4,6 +4,24 @@
 
 Simplify the administrative and clinic workflows, prevent accidental duplicate actions, keep users within the correct clinic context, allow safe status corrections, repair completion filtering, and remove redundant system features.
 
+## 0. Standard Windows CSV Compatibility
+
+The academic-year student importer accepts the two standard Excel CSV exports used by staff:
+
+- CSV UTF-8, with or without a byte-order mark (BOM).
+- Excel CSV (Comma delimited), decoded as Windows-1252.
+
+String inputs continue to reach the CSV parser unchanged. Byte inputs are decoded as strict UTF-8 first using a fatal decoder; only a UTF-8 decoding failure triggers a Windows-1252 decode of the same bytes. UTF-16 remains unsupported, and no encoding dependency or sniffing layer is added.
+
+All importer rules remain unchanged: the exact nine-column header contract and order, trailing-empty-column normalization, 1 MB file limit, 3,000-row limit, strict `MM-DD-YYYY` dates, duplicate detection, validation messages unrelated to encoding, and the single atomic import transaction.
+
+### Acceptance criteria
+
+- UTF-8 byte input parses with and without a BOM.
+- Windows-1252 input preserves characters such as `Peña`.
+- Malformed CSV and incorrect headers remain rejected.
+- Import guidance names both CSV UTF-8 and Excel CSV (Comma delimited) / Windows-1252 without implying that every CSV encoding is accepted.
+
 ## 1. Student Schedule Import Progress
 
 ### Revised behavior
@@ -311,6 +329,8 @@ All asynchronous controls must:
 
 The implementation must include tests for:
 
+- UTF-8 byte input with and without a BOM, plus Windows-1252 fallback.
+- Malformed CSV and the exact nine-column schema remain rejected.
 - Import button remains locked until navigation or failure.
 - Import cannot submit twice.
 - Laboratory rows link to Laboratory detail routes.
@@ -333,6 +353,7 @@ The implementation must include tests for:
 
 ## Delivery Order
 
+0. Standard Windows CSV compatibility and executable plan amendments
 1. Import loading and reusable asynchronous UI state
 2. Clinic-specific detail routing
 3. Audited completed-status corrections

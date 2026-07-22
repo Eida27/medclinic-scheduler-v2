@@ -97,7 +97,7 @@ export function ScheduleImportForm() {
               </code>
             </div>
             <ul className="list-disc space-y-1 pl-5">
-              <li>Export and upload the approved workbook as a UTF-8 CSV.</li>
+              <li>Upload the approved workbook as CSV UTF-8 or Excel CSV (Comma delimited) / Windows-1252.</li>
               <li>Date of Birth must use MM-DD-YYYY.</li>
               <li>The file may be up to 1 MB and contain up to 3,000 data rows.</li>
               <li>Every new schedule receives seven calendar days of preparation notice.</li>

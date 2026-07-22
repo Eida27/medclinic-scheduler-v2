@@ -26,6 +26,8 @@ function fieldsFrom(input: string | Uint8Array) {
 }
 
 describe("parseStudentImportCsv", () => {
+  const validRow = "23-1212-97,Abad,Aaron,,,College of Computer Studies,BSIT,3,08-04-2004";
+
   it("parses the exact nine-column workbook export and nullable MI and suffix", () => {
     const input = [
       header,
@@ -68,6 +70,38 @@ describe("parseStudentImportCsv", () => {
     ].join("\n"))).toEqual({
       file: [`CSV headers must exactly match: ${header}.`],
     });
+  });
+
+  it("rejects malformed CSV", () => {
+    expect(fieldsFrom([
+      header,
+      '23-1212-97,"Abad,Aaron,,,College of Computer Studies,BSIT,3,08-04-2004',
+    ].join("\n"))).toEqual({
+      file: ["The file is not valid CSV."],
+    });
+  });
+
+  it("parses UTF-8 bytes without a BOM", () => {
+    const bytes = new TextEncoder().encode([header, validRow].join("\n"));
+
+    expect(parseStudentImportCsv(bytes)).toHaveLength(1);
+  });
+
+  it("parses UTF-8 bytes with a BOM", () => {
+    const contents = new TextEncoder().encode([header, validRow].join("\n"));
+    const bytes = new Uint8Array([0xef, 0xbb, 0xbf, ...contents]);
+
+    expect(parseStudentImportCsv(bytes)).toHaveLength(1);
+  });
+
+  it("falls back to Windows-1252 for standard Excel CSV bytes", () => {
+    const contents = [
+      header,
+      "23-1212-97,Peña,Aaron,,,College of Computer Studies,BSIT,3,08-04-2004",
+    ].join("\n");
+    const bytes = Uint8Array.from(contents, (character) => character.charCodeAt(0));
+
+    expect(parseStudentImportCsv(bytes)[0].surname).toBe("Peña");
   });
 
   it("rejects malformed IDs and impossible or future birth dates", () => {

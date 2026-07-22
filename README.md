@@ -73,7 +73,7 @@ Change seeded passwords before real deployment. Students sign in separately with
 
 ## Academic-Year Student CSV
 
-The supplied workbook is a reference source. Export it as UTF-8 CSV before upload; the application does not accept XLSX. The original workbook is never modified.
+The supplied workbook is a reference source. Export it as **CSV UTF-8** or Excel **CSV (Comma delimited)** / Windows-1252 before upload. The application does not accept XLSX or UTF-16 CSV. The original workbook is never modified.
 
 Use these headers in this exact order:
 
@@ -178,7 +178,7 @@ Tests cover schema/backfills, the exact nine-column CSV, 3,000-row atomic import
 ## Demonstration Flow
 
 1. Sign in as coordinator and open **Students & Schedules → New academic-year import**.
-2. Upload an exported nine-column UTF-8 CSV, choose category/year (and preferred month when required), and submit once.
+2. Upload an exported nine-column CSV UTF-8 or Excel CSV (Comma delimited) / Windows-1252 file, choose category/year (and preferred month when required), and submit once.
 3. Confirm the import is `PUBLISHED`, dates are date-only, Laboratory precedes PE, and overflow/displacement totals are visible.
 4. Import a priority category against constrained capacity and review the Regular student's linked replacement history and notification.
 5. As administrator, add CPU and KABALAKA unavailable dates and confirm their PE-only/pair rules.

@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Deliver the approved clinic-scheduler UI/UX revision: reliable import progress, clinic-context appointment profiles, audited completed-status corrections, simplified completion filters, removal of the legacy Results workspace, maximum-only capacity rules, and an interactive unavailable-date calendar.
+**Goal:** Deliver the approved clinic-scheduler UI/UX revision: standard Excel CSV compatibility, reliable import progress, clinic-context appointment profiles, audited completed-status corrections, simplified completion filters, removal of the legacy Results workspace, maximum-only capacity rules, and an interactive unavailable-date calendar.
 
-**Architecture:** Preserve the existing Next.js App Router, PostgreSQL repository/service boundaries, and role-based authorization. Introduce small shared UI and appointment-detail components, keep appointment mutations transactional and audited, retain legacy database capacity columns only for compatibility, and reuse the existing clinic-block service for single-day calendar selections.
+**Architecture:** Preserve the existing Next.js App Router, PostgreSQL repository/service boundaries, and role-based authorization. Decode byte-based student CSV inputs as strict UTF-8 with a Windows-1252 fallback, introduce small shared UI and appointment-detail components, keep appointment mutations transactional and audited, retain legacy database capacity columns only for compatibility, and reuse the existing clinic-block service for single-day calendar selections.
 
 **Tech Stack:** Next.js 16.2.6 App Router, React 19.2.4, TypeScript 5, Tailwind CSS 4, PostgreSQL via `pg`, Zod 4, Vitest 4, Testing Library.
 
@@ -17,8 +17,9 @@
 - Keep `/appointments/[appointmentId]` for users entering from Appointments.
 - Keep `/results` only as a temporary server redirect to `/appointments`.
 - Keep `safe_daily_capacity` in the database for compatibility, but synchronize it to `max_daily_capacity` and stop using it as an operational rule.
+- Preserve the exact nine-column student CSV contract and atomic import behavior. Decode byte inputs as strict UTF-8 first, falling back to Windows-1252 only when UTF-8 decoding fails; keep UTF-16 unsupported and add no encoding dependency.
 - Use TDD: every behavior change starts with a failing focused test.
-- Run focused tests after each task and the full verification suite before completion.
+- Run focused tests after each task, then run the complete test suite, lint, and production build before completion.
 
 ---
 
@@ -38,13 +39,15 @@
 - `src/components/settings/ClinicUnavailableCalendar.test.tsx` — calendar rendering, loading, success, and failure tests.
 - `src/components/settings/clinic-calendar.ts` — pure month-grid and unavailable-range expansion helpers.
 - `src/components/settings/clinic-calendar.test.ts` — unit tests for calendar date calculations.
-- `database/migrations/009_maximum_only_capacity.sql` — normalize legacy safe capacity values and document compatibility behavior.
+- `database/migrations/010_maximum_only_capacity.sql` — normalize legacy safe capacity values and document compatibility behavior.
 
 ### Modified files
 
 - `src/components/ui/ConfirmDialog.tsx`
 - `src/components/schedules/ScheduleImportForm.tsx`
 - `src/components/schedules/ScheduleImportForm.test.tsx`
+- `src/server/services/student-import-csv.ts`
+- `src/server/services/student-import-csv.test.ts`
 - `src/components/appointments/ClinicPublishedSchedule.tsx`
 - `src/components/appointments/ClinicPublishedSchedule.test.tsx`
 - `src/app/(dashboard)/appointments/[appointmentId]/page.tsx`
@@ -79,7 +82,7 @@
 - `src/app/(dashboard)/settings/clinic-unavailable-dates/page.tsx`
 - `src/app/api/clinic-unavailable-dates/route.test.ts`
 - `src/server/services/clinic-calendar.service.test.ts` or the repository’s existing clinic-calendar integration test file if present
-- `README.md` only if it currently documents Results or recommended-capacity behavior
+- `README.md`
 
 ### Deleted files
 
@@ -87,6 +90,81 @@
 - `src/app/api/results/route.ts`
 - `src/app/api/results/route.test.ts`
 - Delete any Results-workspace-only component test if present.
+
+---
+
+### Task 0: Amend the plan and add standard Windows CSV compatibility
+
+**Files:**
+- Modify: `docs/superpowers/specs/2026-07-22-clinic-scheduler-ui-ux-revision-design.md`
+- Modify: `docs/superpowers/plans/2026-07-22-clinic-scheduler-ui-ux-revision.md`
+- Modify: `src/server/services/student-import-csv.test.ts`
+- Modify: `src/server/services/student-import-csv.ts`
+- Modify: `src/components/schedules/ScheduleImportForm.test.tsx`
+- Modify: `src/components/schedules/ScheduleImportForm.tsx`
+- Modify: `README.md`
+
+**Interfaces:**
+- Keep `parseStudentImportCsv(input: string | ArrayBuffer | Uint8Array): ImportedStudentRow[]` unchanged.
+- Return string inputs to the CSV parser unchanged.
+- For byte inputs, try `new TextDecoder("utf-8", { fatal: true })` first and use `new TextDecoder("windows-1252")` only when strict UTF-8 decoding fails.
+- Keep UTF-16 unsupported and preserve all schema, limit, validation, and atomic transaction behavior.
+
+- [ ] **Step 1: Add focused parser regressions and verify RED**
+
+Add tests for UTF-8 bytes without a BOM, UTF-8 bytes with a BOM, Windows-1252 bytes containing `Peña` (`0xF1`), malformed CSV, and the existing exact-header rejection.
+
+```bash
+npm test -- src/server/services/student-import-csv.test.ts
+```
+
+Expected: the Windows-1252 test fails under the current strict UTF-8-only decoder; the UTF-8 and validation tests pass.
+
+- [ ] **Step 2: Implement the minimal byte-decoding fallback and verify GREEN**
+
+Decode the same byte array as Windows-1252 only inside the strict UTF-8 decoder's failure path. Do not add encoding sniffing, UTF-16 support, or a dependency.
+
+```bash
+npm test -- src/server/services/student-import-csv.test.ts
+```
+
+Expected: all parser tests pass.
+
+- [ ] **Step 3: Test and update user-facing compatibility guidance**
+
+First add copy assertions to the existing form test, verify that they fail, then update the form guidance to name CSV UTF-8 and Excel CSV (Comma delimited) / Windows-1252.
+
+```bash
+npm test -- src/components/schedules/ScheduleImportForm.test.tsx
+```
+
+Expected: the new copy assertions fail before the form update and pass afterward.
+
+- [ ] **Step 4: Amend the approved documents and README**
+
+Document the strict UTF-8-first fallback, unsupported UTF-16, unchanged nine-column/limit/atomic-import rules, Task 0, migration `010_maximum_only_capacity.sql`, and both accepted standard Excel CSV formats.
+
+- [ ] **Step 5: Run focused verification**
+
+```bash
+npm test -- src/server/services/student-import-csv.test.ts src/components/schedules/ScheduleImportForm.test.tsx
+```
+
+Expected: all focused tests pass.
+
+- [ ] **Step 6: Verify the external completed CSV without modifying it**
+
+Read `C:\endless_refinement\microsoft_docs\Physical_Laboratory_Scheduling_Completed.csv` directly, confirm bytes `EF BB BF`, and parse exactly 280 rows. Do not copy the file into the repository.
+
+- [ ] **Step 7: Run the complete test suite and commit**
+
+```bash
+npm test
+git add docs/superpowers/specs/2026-07-22-clinic-scheduler-ui-ux-revision-design.md docs/superpowers/plans/2026-07-22-clinic-scheduler-ui-ux-revision.md src/server/services/student-import-csv.test.ts src/server/services/student-import-csv.ts src/components/schedules/ScheduleImportForm.test.tsx src/components/schedules/ScheduleImportForm.tsx README.md
+git commit -m "feat: accept standard Windows CSV imports"
+```
+
+Expected: the full suite passes. If the recorded concurrent no-show baseline failure reproduces under load, rerun that exact test alone and report both results without changing no-show code.
 
 ---
 
@@ -880,7 +958,7 @@ git commit -m "refactor: remove legacy results workspace"
 ### Task 12: Normalize the database to maximum-only capacity
 
 **Files:**
-- Create: `database/migrations/009_maximum_only_capacity.sql`
+- Create: `database/migrations/010_maximum_only_capacity.sql`
 - Modify: `src/server/repositories/appointments.repository.ts`
 - Modify: `src/server/services/appointments.service.ts`
 - Test: `src/server/services/appointments.service.test.ts`
@@ -952,7 +1030,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add database/migrations/009_maximum_only_capacity.sql src/server/repositories/appointments.repository.ts src/server/services/appointments.service.ts src/server/services/appointments.service.test.ts src/app/api/settings/capacity/route.test.ts
+git add database/migrations/010_maximum_only_capacity.sql src/server/repositories/appointments.repository.ts src/server/services/appointments.service.ts src/server/services/appointments.service.test.ts src/app/api/settings/capacity/route.test.ts
 git commit -m "refactor: make maximum the only capacity setting"
 ```
 
@@ -1391,7 +1469,7 @@ git commit -m "refactor: show readable appointment status labels"
 - Modify: `README.md` if setup or feature descriptions are stale.
 
 **Interfaces:**
-- Entire application builds and all tests pass after migration 009.
+- Entire application builds and all tests pass after migration 010.
 
 - [ ] **Step 1: Install dependencies**
 
@@ -1407,7 +1485,7 @@ Expected: successful install with no missing lockfile changes unless dependency 
 npm run db:migrate
 ```
 
-Expected: migration `009_maximum_only_capacity.sql` applies successfully and existing capacity rows have equal safe/max values.
+Expected: migration `010_maximum_only_capacity.sql` applies successfully and existing capacity rows have equal safe/max values.
 
 - [ ] **Step 3: Run the full test suite**
 
@@ -1477,6 +1555,8 @@ Skip this commit when verification produces no additional changes.
 
 ## Final Acceptance Checklist
 
+- [ ] UTF-8 student CSV bytes parse with and without a BOM, and standard Excel CSV (Comma delimited) / Windows-1252 bytes parse without changing the nine-column schema or atomic import behavior.
+- [ ] UTF-16 CSV remains unsupported; malformed CSV and incorrect headers remain rejected.
 - [ ] Import confirmation remains visibly busy and locked until successful navigation or request failure.
 - [ ] Laboratory and Physical Exam links preserve their sidebar context.
 - [ ] Wrong-service clinic detail URLs return not found.

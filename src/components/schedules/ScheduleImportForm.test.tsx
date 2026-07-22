@@ -27,6 +27,8 @@ describe("ScheduleImportForm", () => {
     expect(screen.getByText(headers)).toBeVisible();
     expect(screen.getByLabelText("Student category")).toHaveValue("REGULAR");
     expect(screen.getByLabelText("Academic year")).toBeRequired();
+    expect(screen.getByText(/CSV UTF-8/)).toBeVisible();
+    expect(screen.getByText(/CSV \(Comma delimited\).*Windows-1252/)).toBeVisible();
     expect(screen.queryByLabelText("Preferred month")).not.toBeInTheDocument();
     expect(screen.getByText(/seven calendar days of preparation/i)).toBeVisible();
     expect(screen.queryByText(/schedule dates in MM-DD-YYYY/i)).not.toBeInTheDocument();
