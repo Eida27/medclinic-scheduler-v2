@@ -44,6 +44,57 @@ function addCalendarDays(date: string, amount: number) {
   return value.toISOString().slice(0, 10);
 }
 
+async function readFailedBlockState(studentNumber: string, attemptedReason: string) {
+  const [appointments, block, statusLogs, rescheduleEvents, notifications, audits] = await Promise.all([
+    pool.query(
+      `SELECT id::text, schedule_type, appointment_date::text, status,
+              rescheduled_from::text, updated_by::text, updated_at::text
+         FROM appointments
+        WHERE student_number=$1
+        ORDER BY id`,
+      [studentNumber],
+    ),
+    pool.query(
+      "SELECT id::text FROM clinic_unavailable_dates WHERE reason=$1 ORDER BY id",
+      [attemptedReason],
+    ),
+    pool.query(
+      `SELECT COUNT(*)::int AS count
+         FROM appointment_status_logs log
+         JOIN appointments appointment ON appointment.id=log.appointment_id
+        WHERE appointment.student_number=$1`,
+      [studentNumber],
+    ),
+    pool.query(
+      "SELECT COUNT(*)::int AS count FROM appointment_reschedule_events WHERE student_number=$1",
+      [studentNumber],
+    ),
+    pool.query(
+      `SELECT COUNT(*)::int AS count
+         FROM student_portal_notifications
+        WHERE student_number=$1 AND notification_type='SCHEDULE_RESCHEDULED'`,
+      [studentNumber],
+    ),
+    pool.query(
+      `SELECT COUNT(*)::int AS count
+         FROM audit_logs
+        WHERE action='CLINIC_UNAVAILABLE_DATE_CREATED'
+          AND actor_user_id=$1
+          AND metadata->>'clinicId'=$2`,
+      [TEST_REFERENCE_IDS.adminUser, TEST_REFERENCE_IDS.physicalExamClinic],
+    ),
+  ]);
+
+  return {
+    appointments: appointments.rows,
+    attemptedBlocks: block.rows,
+    statusLogCount: statusLogs.rows[0].count,
+    rescheduleEventCount: rescheduleEvents.rows[0].count,
+    notificationCount: notifications.rows[0].count,
+    auditCount: audits.rows[0].count,
+  };
+}
+
 async function cleanup() {
   await cleanupTestFixtures(studentPattern, importPattern, importPattern);
   await pool.query("DELETE FROM clinic_unavailable_dates WHERE reason LIKE 'TEST-CALENDAR%'");
@@ -280,6 +331,10 @@ describe("clinic calendar closures", () => {
         WHERE id=$1`,
       [pe.rows[0].id, TEST_REFERENCE_IDS.adminUser],
     );
+    const before = await readFailedBlockState(
+      "99-9503-03",
+      "TEST-CALENDAR protected closure",
+    );
 
     await expect(createClinicUnavailableDate({
       clinicId: TEST_REFERENCE_IDS.physicalExamClinic,
@@ -292,26 +347,78 @@ describe("clinic calendar closures", () => {
       status: 409,
       fields: { unresolved: [expect.stringContaining(pe.rows[0].id)] },
     });
-    const blocks = await pool.query(
-      "SELECT 1 FROM clinic_unavailable_dates WHERE reason='TEST-CALENDAR protected closure'",
+    const after = await readFailedBlockState(
+      "99-9503-03",
+      "TEST-CALENDAR protected closure",
     );
-    expect(blocks.rowCount).toBe(0);
+    expect(after).toEqual(before);
   });
 
-  it("rejects overlapping ranges for the same clinic", async () => {
-    await createClinicUnavailableDate({
-      clinicId: TEST_REFERENCE_IDS.physicalExamClinic,
-      startDate: "2027-07-01",
-      endDate: "2027-07-03",
-      category: "HOLIDAY",
-      reason: "TEST-CALENDAR first range",
-    }, admin);
+  it("rejects a one-day overlap without mutating appointments", async () => {
+    const studentNumber = "99-9508-08";
+    const attemptedReason = "TEST-CALENDAR one-day overlap";
+    await acceptAndScheduleImport(importInput("TEST-CALENDAR-overlap.csv", studentNumber), admin);
+    const physical = await pool.query<{ appointment_date: string }>(
+      `SELECT appointment_date::text
+         FROM appointments
+        WHERE student_number=$1 AND schedule_type='PHYSICAL_EXAM'`,
+      [studentNumber],
+    );
+    const blockedDate = physical.rows[0].appointment_date;
+    await pool.query(
+      `INSERT INTO clinic_unavailable_dates (
+         clinic_id, start_date, end_date, category, reason, created_by
+       ) VALUES ($1,$2,$2,'HOLIDAY','TEST-CALENDAR existing one-day block',$3)`,
+      [TEST_REFERENCE_IDS.physicalExamClinic, blockedDate, TEST_REFERENCE_IDS.adminUser],
+    );
+    const before = await readFailedBlockState(studentNumber, attemptedReason);
+
     await expect(createClinicUnavailableDate({
       clinicId: TEST_REFERENCE_IDS.physicalExamClinic,
-      startDate: "2027-07-03",
-      endDate: "2027-07-04",
+      startDate: blockedDate,
+      endDate: blockedDate,
       category: "HOLIDAY",
-      reason: "TEST-CALENDAR overlap",
+      reason: attemptedReason,
     }, admin)).rejects.toMatchObject({ code: "CLINIC_BLOCK_OVERLAP", status: 409 });
+    const after = await readFailedBlockState(studentNumber, attemptedReason);
+    expect(after).toEqual(before);
+  });
+
+  it("rolls back the entire block when no replacement date is available", async () => {
+    const studentNumber = "99-9509-09";
+    const attemptedReason = "TEST-CALENDAR unavailable replacement";
+    await acceptAndScheduleImport(importInput("TEST-CALENDAR-no-replacement.csv", studentNumber), admin);
+    const physical = await pool.query<{ appointment_date: string }>(
+      `SELECT appointment_date::text
+         FROM appointments
+        WHERE student_number=$1 AND schedule_type='PHYSICAL_EXAM'`,
+      [studentNumber],
+    );
+    const blockedDate = physical.rows[0].appointment_date;
+    await pool.query(
+      `INSERT INTO clinic_unavailable_dates (
+         clinic_id, start_date, end_date, category, reason, created_by
+       ) VALUES ($1,$2,$3,'CLOSURE','TEST-CALENDAR replacement horizon blocked',$4)`,
+      [
+        TEST_REFERENCE_IDS.physicalExamClinic,
+        addCalendarDays(blockedDate, 1),
+        addCalendarDays(blockedDate, 366 * 5),
+        TEST_REFERENCE_IDS.adminUser,
+      ],
+    );
+    const before = await readFailedBlockState(studentNumber, attemptedReason);
+
+    await expect(createClinicUnavailableDate({
+      clinicId: TEST_REFERENCE_IDS.physicalExamClinic,
+      startDate: blockedDate,
+      endDate: blockedDate,
+      category: "CLOSURE",
+      reason: attemptedReason,
+    }, admin)).rejects.toMatchObject({
+      code: "CLINIC_BLOCK_REPLACEMENT_UNAVAILABLE",
+      status: 409,
+    });
+    const after = await readFailedBlockState(studentNumber, attemptedReason);
+    expect(after).toEqual(before);
   });
 });
