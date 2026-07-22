@@ -83,4 +83,33 @@ describe("CapacityForm", () => {
     resolveResponse(jsonResponse({ data: { scheduleType: "LABORATORY", maxDailyCapacity: 130 } }));
     await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
   });
+
+  it("shows a fallback and resets the submitted card when the request fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Network unavailable")));
+    const user = userEvent.setup();
+    render(<CapacityForm settings={settings} />);
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save" });
+    await user.click(saveButtons[0]);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Unable to update the capacity setting.",
+    );
+    expect(saveButtons[0]).toBeEnabled();
+    expect(saveButtons[1]).toBeEnabled();
+    expect(screen.queryByRole("status", { name: "Saving capacity" })).not.toBeInTheDocument();
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("does not submit an empty maximum", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<CapacityForm settings={settings} />);
+
+    await user.clear(screen.getAllByLabelText("Maximum students per day")[0]);
+    await user.click(screen.getAllByRole("button", { name: "Save" })[0]);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

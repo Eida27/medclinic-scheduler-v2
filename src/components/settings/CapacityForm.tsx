@@ -48,6 +48,8 @@ export function CapacityForm({ settings }: { settings: Setting[] }) {
       }
 
       router.refresh();
+    } catch {
+      setError("Unable to update the capacity setting.");
     } finally {
       setPendingByKey((current) => ({ ...current, [key]: false }));
     }
@@ -81,6 +83,7 @@ export function CapacityForm({ settings }: { settings: Setting[] }) {
                   name="maxDailyCapacity"
                   type="number"
                   min="1"
+                  required
                   defaultValue={setting.maxDailyCapacity}
                   disabled={pending}
                 />
