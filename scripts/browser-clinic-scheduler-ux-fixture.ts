@@ -872,18 +872,25 @@ export async function runPersistedCleanup(
     await actions.persist(current);
   }
 
-  await actions.deleteDatabase(current.manifest);
-  current = { ...current, phase: "DATABASE_DELETED" };
-  await actions.persist(current);
-  await actions.deletePrivateFiles(current.privateResultDirectories);
-  current = { ...current, phase: "FILES_DELETED" };
-  await actions.persist(current);
+  if (current.phase === "MANIFESTED") {
+    await actions.deleteDatabase(current.manifest);
+    current = { ...current, phase: "DATABASE_DELETED" };
+    await actions.persist(current);
+  }
+  if (current.phase === "DATABASE_DELETED") {
+    await actions.deletePrivateFiles(current.privateResultDirectories);
+    current = { ...current, phase: "FILES_DELETED" };
+    await actions.persist(current);
+  }
   const proof = await actions.prove(current.manifest, current.privateResultDirectories);
   assertZeroCleanupResidue(proof);
   return proof;
 }
 
-async function collectCleanupManifest(client: PoolClient, state: FixtureState): Promise<CleanupManifest> {
+export async function collectCleanupManifest(
+  client: PoolClient,
+  state: FixtureState,
+): Promise<CleanupManifest> {
   const imports = await idRows(
     client,
     "SELECT id::text AS id FROM schedule_import_groups WHERE source_filename=$1 AND created_at >= $2::timestamptz",
@@ -941,13 +948,21 @@ async function collectCleanupManifest(client: PoolClient, state: FixtureState): 
       [imports, closures, appointments],
     )
     : [];
+  const preExisting = new Set(state.preExistingStudents.map((student) => String(student.student_number)));
+  const createdStudents = (await client.query<{ student_number: string }>(
+    "SELECT student_number FROM students WHERE student_number=ANY($1::varchar[])",
+    [state.studentNumbers],
+  )).rows.map((row) => row.student_number).filter((studentNumber) => !preExisting.has(studentNumber));
   const notifications = differenceIds(
     await idRows(
       client,
       `SELECT id::text AS id FROM student_portal_notifications
         WHERE student_number=ANY($1::varchar[])
-           OR metadata->>'clinicUnavailableDateId'=ANY($2::text[])`,
-      [state.studentNumbers, closures],
+           OR metadata->>'sourceImportId'=ANY($2::text[])
+           OR metadata->>'clinicUnavailableDateId'=ANY($3::text[])
+           OR metadata->>'appointmentId'=ANY($4::text[])
+           OR metadata->>'submissionId'=ANY($5::text[])`,
+      [createdStudents, imports, closures, appointments, submissions],
     ),
     state.baseline.ids.notifications,
   );
@@ -961,24 +976,23 @@ async function collectCleanupManifest(client: PoolClient, state: FixtureState): 
          OR (entity_type='student' AND entity_id=ANY($5::text[]))
          OR entity_id=ANY($6::text[])
          OR metadata->>'importId'=ANY($1::text[])
+         OR metadata->>'sourceImportId'=ANY($1::text[])
          OR metadata->>'batchId'=ANY($2::text[])
          OR metadata->>'replacementId'=ANY($3::text[])
          OR metadata->>'clinicUnavailableDateId'=ANY($4::text[])
-         OR metadata->>'studentNumber'=ANY($5::text[])`,
+         OR metadata->>'studentNumber'=ANY($5::text[])
+         OR metadata->>'appointmentId'=ANY($3::text[])
+         OR metadata->>'submissionId'=ANY($7::text[])`,
     [
       imports,
       batches,
       appointments,
       closures,
-      state.studentNumbers,
-      [...laboratoryResults, ...examResults, ...submissions],
+      createdStudents,
+      [...laboratoryResults, ...examResults, ...submissions, ...resultFiles.map((file) => file.id)],
+      submissions,
     ],
   );
-  const preExisting = new Set(state.preExistingStudents.map((student) => String(student.student_number)));
-  const createdStudents = (await client.query<{ student_number: string }>(
-    "SELECT student_number FROM students WHERE student_number=ANY($1::varchar[])",
-    [state.studentNumbers],
-  )).rows.map((row) => row.student_number).filter((studentNumber) => !preExisting.has(studentNumber));
   return {
     imports,
     batches,
@@ -1000,7 +1014,7 @@ async function collectCleanupManifest(client: PoolClient, state: FixtureState): 
       await idRows(
         client,
         "SELECT id::text AS id FROM student_email_verifications WHERE student_number=ANY($1::varchar[])",
-        [state.studentNumbers],
+        [createdStudents],
       ),
       state.baseline.ids.verificationTokens,
     ),
@@ -1008,7 +1022,7 @@ async function collectCleanupManifest(client: PoolClient, state: FixtureState): 
       await idRows(
         client,
         "SELECT id::text AS id FROM student_login_attempts WHERE student_number=ANY($1::varchar[])",
-        [state.studentNumbers],
+        [createdStudents],
       ),
       state.baseline.ids.loginAttempts,
     ),
@@ -1016,7 +1030,7 @@ async function collectCleanupManifest(client: PoolClient, state: FixtureState): 
       await idRows(
         client,
         "SELECT id::text AS id FROM email_outbox WHERE student_number=ANY($1::varchar[])",
-        [state.studentNumbers],
+        [createdStudents],
       ),
       state.baseline.ids.outbox,
     ),
@@ -1139,43 +1153,51 @@ export async function countCleanupResidue(
   };
 }
 
+export async function deleteDatabaseManifestWithClient(
+  client: PoolClient,
+  state: FixtureState,
+  manifest: CleanupManifest,
+) {
+  await deleteByIds(client, "audit_logs", manifest.audits);
+  await deleteByIds(client, "student_portal_notifications", manifest.notifications);
+  await deleteByIds(client, "appointment_reschedule_events", manifest.events);
+  await deleteByIds(client, "student_result_files", manifest.resultFiles.map((file) => file.id));
+  await deleteByIds(client, "student_result_submissions", manifest.submissions);
+  await deleteByIds(client, "exam_results", manifest.examResults);
+  await deleteByIds(client, "laboratory_results", manifest.laboratoryResults);
+  await deleteByIds(client, "appointment_status_logs", manifest.statusLogs);
+  await deleteByIds(client, "appointments", manifest.appointments);
+  await deleteByIds(client, "coordinator_schedule_items", manifest.coordinatorItems);
+  await deleteByIds(client, "schedule_batches", manifest.batches);
+  await deleteByIds(client, "schedule_import_groups", manifest.imports);
+  await deleteByIds(client, "clinic_unavailable_dates", manifest.closures);
+  await deleteByIds(client, "student_email_verifications", manifest.verificationTokens);
+  await deleteByIds(client, "student_login_attempts", manifest.loginAttempts);
+  await deleteByIds(client, "email_outbox", manifest.outbox);
+  await restoreStudents(client, state.preExistingStudents);
+  if (manifest.createdStudents.length) {
+    await client.query(
+      "DELETE FROM students WHERE student_number=ANY($1::varchar[])",
+      [manifest.createdStudents],
+    );
+  }
+  await restorePrograms(client, state.referencePrograms.preExisting);
+  await deleteByIds(client, "programs", manifest.referencePrograms);
+  for (const capacity of state.baseline.capacities) {
+    await client.query(
+      `UPDATE clinic_capacity_settings
+          SET safe_daily_capacity=$2, max_daily_capacity=$3
+        WHERE id=$1`,
+      [capacity.id, capacity.safeDailyCapacity, capacity.maxDailyCapacity],
+    );
+  }
+}
+
 async function deleteDatabaseManifest(pool: Pool, state: FixtureState, manifest: CleanupManifest) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await deleteByIds(client, "audit_logs", manifest.audits);
-    await deleteByIds(client, "student_portal_notifications", manifest.notifications);
-    await deleteByIds(client, "appointment_reschedule_events", manifest.events);
-    await deleteByIds(client, "student_result_files", manifest.resultFiles.map((file) => file.id));
-    await deleteByIds(client, "student_result_submissions", manifest.submissions);
-    await deleteByIds(client, "exam_results", manifest.examResults);
-    await deleteByIds(client, "laboratory_results", manifest.laboratoryResults);
-    await deleteByIds(client, "appointment_status_logs", manifest.statusLogs);
-    await deleteByIds(client, "appointments", manifest.appointments);
-    await deleteByIds(client, "coordinator_schedule_items", manifest.coordinatorItems);
-    await deleteByIds(client, "schedule_batches", manifest.batches);
-    await deleteByIds(client, "schedule_import_groups", manifest.imports);
-    await deleteByIds(client, "clinic_unavailable_dates", manifest.closures);
-    await deleteByIds(client, "student_email_verifications", manifest.verificationTokens);
-    await deleteByIds(client, "student_login_attempts", manifest.loginAttempts);
-    await deleteByIds(client, "email_outbox", manifest.outbox);
-    await restoreStudents(client, state.preExistingStudents);
-    if (manifest.createdStudents.length) {
-      await client.query(
-        "DELETE FROM students WHERE student_number=ANY($1::varchar[])",
-        [manifest.createdStudents],
-      );
-    }
-    await restorePrograms(client, state.referencePrograms.preExisting);
-    await deleteByIds(client, "programs", manifest.referencePrograms);
-    for (const capacity of state.baseline.capacities) {
-      await client.query(
-        `UPDATE clinic_capacity_settings
-            SET safe_daily_capacity=$2, max_daily_capacity=$3
-          WHERE id=$1`,
-        [capacity.id, capacity.safeDailyCapacity, capacity.maxDailyCapacity],
-      );
-    }
+    await deleteDatabaseManifestWithClient(client, state, manifest);
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");

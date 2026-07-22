@@ -188,6 +188,7 @@ describe("browser clinic scheduler UX fixture helpers", () => {
     let captureCalls = 0;
     let databaseDeleteCalls = 0;
     let fileDeleteCalls = 0;
+    let proofCalls = 0;
     let failFileDeletion = true;
     const actions = {
       captureManifest: async () => {
@@ -205,7 +206,10 @@ describe("browser clinic scheduler UX fixture helpers", () => {
         expect(directories).toEqual(["submission-id"]);
         if (failFileDeletion) throw new Error("injected file deletion failure");
       },
-      prove: async () => zeroResidue(),
+      prove: async () => {
+        proofCalls += 1;
+        return zeroResidue();
+      },
     };
 
     await expect(runPersistedCleanup(undefined, actions))
@@ -224,8 +228,41 @@ describe("browser clinic scheduler UX fixture helpers", () => {
       },
     })).resolves.toEqual(zeroResidue());
     expect(captureCalls).toBe(1);
-    expect(databaseDeleteCalls).toBe(2);
+    expect(databaseDeleteCalls).toBe(1);
     expect(fileDeleteCalls).toBe(2);
+    expect(proofCalls).toBe(1);
+  });
+
+  it("runs proof only when cleanup already persisted FILES_DELETED", async () => {
+    const persist = vi.fn();
+    const deleteDatabase = vi.fn(() => Promise.reject(new Error("must not replay database cleanup")));
+    const deletePrivateFiles = vi.fn(() => Promise.reject(new Error("must not replay file cleanup")));
+    let failProof = true;
+    const prove = vi.fn(async () => {
+      if (failProof) throw new Error("injected proof failure");
+      return zeroResidue();
+    });
+    const persisted: CleanupProgress = {
+      phase: "FILES_DELETED",
+      manifest: emptyManifest,
+      privateResultStorageKeys: ["submission-id/lab.pdf"],
+      privateResultDirectories: ["submission-id"],
+    };
+    const actions = {
+      captureManifest: async () => { throw new Error("must not recapture"); },
+      persist,
+      deleteDatabase,
+      deletePrivateFiles,
+      prove,
+    };
+
+    await expect(runPersistedCleanup(persisted, actions)).rejects.toThrow("injected proof failure");
+    failProof = false;
+    await expect(runPersistedCleanup(persisted, actions)).resolves.toEqual(zeroResidue());
+    expect(persist).not.toHaveBeenCalled();
+    expect(deleteDatabase).not.toHaveBeenCalled();
+    expect(deletePrivateFiles).not.toHaveBeenCalled();
+    expect(prove).toHaveBeenCalledTimes(2);
   });
 
   it("detects an orphan child by exact manifest ID after its roots are gone", async () => {
