@@ -2,9 +2,10 @@ import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTOMATIC_NO_SHOW_NOTE } from "@/server/appointments/automatic-no-show";
 
-const { appointmentActions, appointmentDetail, getPublishedAppointment, notFound, requireUser } = vi.hoisted(() => ({
+const { appointmentActions, appointmentDetail, completedStatusCorrection, getPublishedAppointment, notFound, requireUser } = vi.hoisted(() => ({
   appointmentActions: vi.fn(() => null),
   appointmentDetail: vi.fn(() => null),
+  completedStatusCorrection: vi.fn(() => null),
   getPublishedAppointment: vi.fn(),
   notFound: vi.fn(() => {
     throw new Error("NEXT_NOT_FOUND");
@@ -17,6 +18,9 @@ vi.mock("@/components/appointments/AppointmentDetail", () => ({
 }));
 vi.mock("@/components/appointments/AppointmentActions", () => ({
   AppointmentActions: appointmentActions,
+}));
+vi.mock("@/components/appointments/CompletedStatusCorrection", () => ({
+  CompletedStatusCorrection: completedStatusCorrection,
 }));
 vi.mock("next/navigation", () => ({ notFound }));
 vi.mock("@/server/auth/current-user", () => ({ requireUser }));
@@ -113,6 +117,30 @@ describe("AppointmentDetail", () => {
       status: "NO_SHOW",
       canCorrectNoShow: true,
     }, undefined);
+  });
+
+  it("renders the separate completed correction with date and route source", async () => {
+    getPublishedAppointment.mockResolvedValue({
+      ...publishedAppointment,
+      status: "COMPLETED",
+    });
+    const AppointmentDetail = await getActualAppointmentDetail();
+
+    render(await AppointmentDetail({ appointmentId: "appointment-1", source: "LABORATORY" }));
+
+    expect(completedStatusCorrection).toHaveBeenCalledWith({
+      appointmentId: "appointment-1",
+      appointmentDate: "2026-08-18",
+      source: "LABORATORY",
+    }, undefined);
+  });
+
+  it("does not render completed correction for an ordinary pending appointment", async () => {
+    const AppointmentDetail = await getActualAppointmentDetail();
+
+    render(await AppointmentDetail({ appointmentId: "appointment-1", source: "APPOINTMENTS" }));
+
+    expect(completedStatusCorrection).not.toHaveBeenCalled();
   });
 
   it("returns not found when a laboratory appointment is opened from the physical exam route", async () => {

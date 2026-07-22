@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { AppointmentActions } from "@/components/appointments/AppointmentActions";
+import { CompletedStatusCorrection } from "@/components/appointments/CompletedStatusCorrection";
 import { Badge } from "@/components/ui/Badge";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -34,6 +35,7 @@ function statusLogTimestamp(value: Date) {
 export async function AppointmentDetail({
   appointmentId,
   expectedScheduleType,
+  source,
 }: AppointmentDetailProps) {
   const user = await requireUser(["ADMIN", "CLINIC_STAFF"]);
   const appointment = await getPublishedAppointment(appointmentId);
@@ -76,6 +78,15 @@ export async function AppointmentDetail({
             status={String(appointment.status)}
             canCorrectNoShow={canCorrectNoShow}
           />
+          {appointment.status === "COMPLETED" ? (
+            <div className="mt-5">
+              <CompletedStatusCorrection
+                appointmentId={String(appointment.id)}
+                appointmentDate={String(appointment.appointmentDate)}
+                source={source}
+              />
+            </div>
+          ) : null}
         </div>
       </Card>
       <Card>

@@ -36,6 +36,14 @@ describe("AppointmentActions automatic no-show correction", () => {
     expect(screen.queryByRole("option", { name: "No-show" })).not.toBeInTheDocument();
   });
 
+  it("does not place completed-status corrections in ordinary actions", () => {
+    render(<AppointmentActions id="appointment-1" status="COMPLETED" />);
+
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Correction reason")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
   it("shows a required correction form only for an eligible no-show", () => {
     render(
       <AppointmentActions
