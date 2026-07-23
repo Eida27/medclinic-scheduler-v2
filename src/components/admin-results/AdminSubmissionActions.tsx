@@ -8,7 +8,12 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Field } from "@/components/ui/Field";
 import { Input } from "@/components/ui/Input";
 
-export function AdminSubmissionActions({ submissionId }: { submissionId: string }) {
+type Props = {
+  submissionId: string;
+  resultLabel: "Laboratory" | "Physical Exam";
+};
+
+export function AdminSubmissionActions({ submissionId, resultLabel }: Props) {
   const router = useRouter();
   const [error, setError] = useState<string>();
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -23,6 +28,7 @@ export function AdminSubmissionActions({ submissionId }: { submissionId: string 
   }
 
   async function invalidate() {
+    setError(undefined);
     setPending(true);
     const response = await fetch(`/api/admin/student-result-submissions/${submissionId}/invalidate`, {
       method: "POST",
@@ -31,8 +37,13 @@ export function AdminSubmissionActions({ submissionId }: { submissionId: string 
     });
     const payload = await response.json();
     setPending(false);
-    if (!response.ok) setError(payload.error?.message ?? "Unable to invalidate this submission.");
-    else {
+    if (!response.ok) {
+      setError(payload.error?.message ?? "Unable to invalidate this submission.");
+      if (response.status === 409) {
+        setConfirmOpen(false);
+        router.refresh();
+      }
+    } else {
       setConfirmOpen(false);
       router.refresh();
     }
@@ -44,19 +55,21 @@ export function AdminSubmissionActions({ submissionId }: { submissionId: string 
         href={`/api/admin/student-result-submissions/${submissionId}/zip`}
         className="inline-flex h-11 items-center justify-center rounded-xl bg-cpu-navy px-4 text-sm font-semibold text-white"
       >
-        Download ZIP
+        Download {resultLabel} ZIP
       </a>
       <form onSubmit={reviewInvalidation} className="grid gap-3">
-        <Field label="Invalidation reason">
+        <Field label={`${resultLabel} invalidation reason`}>
           <Input name="reason" minLength={3} maxLength={1000} required />
         </Field>
-        <Button type="submit" variant="danger" disabled={pending}>Invalidate and reopen upload</Button>
+        <Button type="submit" variant="danger" disabled={pending}>
+          Invalidate {resultLabel} and reopen upload
+        </Button>
       </form>
       <ConfirmDialog
         open={confirmOpen}
-        title="Invalidate this submission?"
+        title={`Invalidate ${resultLabel} submission?`}
         description="The student will regain upload access and the finalized files will be revoked."
-        confirmLabel="Invalidate submission"
+        confirmLabel={`Invalidate ${resultLabel} submission`}
         pending={pending}
         pendingLabel="Invalidating..."
         danger

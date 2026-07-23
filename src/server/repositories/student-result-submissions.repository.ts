@@ -623,6 +623,7 @@ type AdminProfileDetailRow = {
   physicalExamAppointmentStatus: Exclude<AttendanceStatus, "UNSCHEDULED"> | null;
   submissionId: string | null;
   submissionAppointmentId: string | null;
+  submissionAppointmentDate: string | null;
   submissionResultType: ScheduleType | null;
   submissionStatus: "FINALIZED" | "INVALIDATED" | null;
   submissionFinalizedAt: Date | null;
@@ -662,6 +663,7 @@ export async function getAdminStudentResultProfileRow(
             physical_appointment.status AS "physicalExamAppointmentStatus",
             submission.id AS "submissionId",
             submission.appointment_id AS "submissionAppointmentId",
+            submission_appointment.appointment_date::text AS "submissionAppointmentDate",
             submission.result_type AS "submissionResultType",
             submission.status AS "submissionStatus",
             submission.finalized_at AS "submissionFinalizedAt",
@@ -685,6 +687,8 @@ export async function getAdminStudentResultProfileRow(
        LEFT JOIN student_result_submissions submission
          ON submission.student_number=student.student_number
         AND submission.status IN ('FINALIZED','INVALIDATED')
+       LEFT JOIN appointments submission_appointment
+         ON submission_appointment.id=submission.appointment_id
        LEFT JOIN student_result_files file ON file.submission_id=submission.id
       WHERE student.student_number=$1
       ORDER BY GREATEST(
@@ -709,6 +713,7 @@ export async function getAdminStudentResultProfileRow(
     if (
       !row.submissionId
       || !row.submissionAppointmentId
+      || !row.submissionAppointmentDate
       || !row.submissionResultType
       || !row.submissionStatus
       || !row.submissionFinalizedAt
@@ -723,6 +728,7 @@ export async function getAdminStudentResultProfileRow(
         submission: {
           id: row.submissionId,
           appointmentId: row.submissionAppointmentId,
+          appointmentDate: row.submissionAppointmentDate,
           resultType: row.submissionResultType,
           status: row.submissionStatus,
           finalizedAt: row.submissionFinalizedAt,
@@ -918,6 +924,60 @@ export async function lockFinalizedSubmissionForInvalidation(client: PoolClient,
     [submissionId],
   );
   return { ...submission.rows[0], files: files.rows };
+}
+
+export async function lockCurrentFinalizedSubmissionForInvalidation(
+  client: PoolClient,
+  submissionId: string,
+) {
+  const submission = await client.query<{
+    id: string;
+    appointmentId: string;
+    studentNumber: string;
+    resultType: "LABORATORY" | "PHYSICAL_EXAM";
+    status: "DRAFT" | "FINALIZED" | "INVALIDATED";
+    isCurrent: boolean;
+  }>(
+    `WITH ${CURRENT_EFFECTIVE_APPOINTMENTS_CTE}
+     SELECT submission.id,
+            submission.appointment_id AS "appointmentId",
+            submission.student_number AS "studentNumber",
+            submission.result_type AS "resultType",
+            submission.status,
+            EXISTS (
+              SELECT 1
+                FROM current_effective_appointments current_appointment
+               WHERE current_appointment.id=submission.appointment_id
+                 AND current_appointment."studentNumber"=submission.student_number
+                 AND current_appointment."scheduleType"=submission.result_type
+            ) AS "isCurrent"
+       FROM student_result_submissions submission
+      WHERE submission.id=$1
+      FOR UPDATE OF submission`,
+    [submissionId],
+  );
+  if (!submission.rowCount) return { type: "not_found" as const };
+  const locked = submission.rows[0];
+  if (locked.status !== "FINALIZED" || !locked.isCurrent) {
+    return { type: "conflict" as const };
+  }
+  const files = await client.query<{ id: string; storageKey: string }>(
+    `SELECT id, storage_key AS "storageKey"
+       FROM student_result_files
+      WHERE submission_id=$1 AND deleted_at IS NULL
+      FOR UPDATE`,
+    [submissionId],
+  );
+  return {
+    type: "ready" as const,
+    submission: {
+      id: locked.id,
+      appointmentId: locked.appointmentId,
+      studentNumber: locked.studentNumber,
+      resultType: locked.resultType,
+      files: files.rows,
+    },
+  };
 }
 
 export async function invalidateFinalizedSubmissionMetadata(

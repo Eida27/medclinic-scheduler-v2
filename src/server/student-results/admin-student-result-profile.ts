@@ -23,6 +23,7 @@ export type AdminResultFile = {
 export type AdminResultSubmission = {
   id: string;
   appointmentId: string;
+  appointmentDate: string;
   resultType: ScheduleType;
   status: "FINALIZED" | "INVALIDATED";
   finalizedAt: Date;

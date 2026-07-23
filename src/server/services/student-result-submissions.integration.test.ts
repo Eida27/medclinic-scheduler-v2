@@ -91,6 +91,34 @@ function file(filename = "result.pdf", body = "%PDF-1.7\nsynthetic result") {
   return { filename, declaredMimeType: "application/pdf", bytes: Buffer.from(body) };
 }
 
+async function invalidationSnapshot(submissionId: string) {
+  const result = await pool.query(
+    `SELECT submission.status,
+            submission.invalidated_at::text AS "invalidatedAt",
+            submission.invalidation_reason AS "invalidationReason",
+            result.result_status AS "resultStatus",
+            result.completed_at::text AS "completedAt",
+            result.encoded_by::text AS "encodedBy",
+            file.storage_delete_pending AS "storageDeletePending",
+            file.deleted_at::text AS "deletedAt",
+            file.delete_error AS "deleteError",
+            (SELECT COUNT(*)::int
+               FROM student_portal_notifications notification
+              WHERE notification.student_number=submission.student_number
+                AND notification.notification_type='RESULT_INVALIDATED') AS notifications,
+            (SELECT COUNT(*)::int
+              FROM audit_logs audit
+              WHERE audit.action='STUDENT_RESULT_SUBMISSION_INVALIDATED'
+                AND audit.entity_id=submission.id::text) AS audits
+       FROM student_result_submissions submission
+       JOIN laboratory_results result ON result.appointment_id=submission.appointment_id
+       JOIN student_result_files file ON file.submission_id=submission.id
+      WHERE submission.id=$1`,
+    [submissionId],
+  );
+  return result.rows;
+}
+
 async function waitForClientLock(observer: PoolClient, clientPid: number) {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
@@ -304,7 +332,16 @@ describe("student result drafts", () => {
     await expect(invalidateStudentResultSubmission(finalized.id, " ", admin, storage)).rejects.toThrow();
     await expect(invalidateStudentResultSubmission(finalized.id, "Wrong student document", coordinator, storage))
       .rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
-    await invalidateStudentResultSubmission(finalized.id, "Wrong student document", admin, storage);
+    await expect(invalidateStudentResultSubmission(
+      finalized.id,
+      "Wrong student document",
+      admin,
+      storage,
+    )).resolves.toEqual({
+      id: finalized.id,
+      status: "INVALIDATED",
+      studentNumber: "99-9411-11",
+    });
     await expect(getStudentResultFile("99-9411-11", added.id, storage))
       .rejects.toMatchObject({ code: "RESULT_FILE_NOT_FOUND", status: 404 });
     const state = await pool.query(
@@ -329,6 +366,90 @@ describe("student result drafts", () => {
     expect(replacement).toMatchObject({ status: "DRAFT", fileCount: 0 });
     await expect(addStudentResultFile("99-9411-11", appointmentId, file("replacement.pdf"), storage))
       .resolves.toMatchObject({ submissionId: replacement.id });
+  });
+
+  it("rejects a repeated invalidation as a conflict without any further mutation or cleanup", async () => {
+    await insertTestStudent({ studentNumber: "99-9422-22", firstName: "Repeated", lastName: "Invalidation", yearLevel: 3 });
+    const appointmentId = await appointment("99-9422-22");
+    await addStudentResultFile("99-9422-22", appointmentId, file("repeated.pdf"), storage);
+    const finalized = await finalizeStudentResultSubmission("99-9422-22", appointmentId, storage);
+    await invalidateStudentResultSubmission(finalized.id, "First invalidation", admin, storage);
+    const before = await invalidationSnapshot(finalized.id);
+    let deleteCalls = 0;
+    const trackingStorage = {
+      write: storage.write.bind(storage),
+      read: storage.read.bind(storage),
+      delete: async (storageKey: string) => {
+        deleteCalls += 1;
+        await storage.delete(storageKey);
+      },
+    };
+
+    await expect(invalidateStudentResultSubmission(
+      finalized.id,
+      "Repeated invalidation",
+      admin,
+      trackingStorage,
+    )).rejects.toMatchObject({
+      code: "RESULT_SUBMISSION_CONFLICT",
+      status: 409,
+      message: "This result submission is stale and can no longer be invalidated. Refresh the student profile and try again.",
+    });
+
+    expect(await invalidationSnapshot(finalized.id)).toEqual(before);
+    expect(deleteCalls).toBe(0);
+  });
+
+  it("rejects an older finalized submission after a newer published appointment without mutation or cleanup", async () => {
+    await insertTestStudent({ studentNumber: "99-9423-23", firstName: "Stale", lastName: "Appointment", yearLevel: 3 });
+    const oldAppointmentId = await appointment("99-9423-23");
+    const added = await addStudentResultFile("99-9423-23", oldAppointmentId, file("stale.pdf"), storage);
+    const finalized = await finalizeStudentResultSubmission("99-9423-23", oldAppointmentId, storage);
+    await pool.query(
+      `INSERT INTO appointments (
+         clinic_id, student_number, schedule_type, appointment_date,
+         status, is_published, created_by
+       ) VALUES ($1,'99-9423-23','LABORATORY','2027-08-03','PENDING',TRUE,$2)`,
+      [TEST_REFERENCE_IDS.laboratoryClinic, TEST_REFERENCE_IDS.adminUser],
+    );
+    const before = await invalidationSnapshot(finalized.id);
+    const storedBytes = await storage.read(added.storageKey);
+    let deleteCalls = 0;
+    const trackingStorage = {
+      write: storage.write.bind(storage),
+      read: storage.read.bind(storage),
+      delete: async (storageKey: string) => {
+        deleteCalls += 1;
+        await storage.delete(storageKey);
+      },
+    };
+
+    await expect(invalidateStudentResultSubmission(
+      finalized.id,
+      "Invalid stale submission",
+      admin,
+      trackingStorage,
+    )).rejects.toMatchObject({
+      code: "RESULT_SUBMISSION_CONFLICT",
+      status: 409,
+      message: "This result submission is stale and can no longer be invalidated. Refresh the student profile and try again.",
+    });
+
+    expect(await invalidationSnapshot(finalized.id)).toEqual(before);
+    await expect(storage.read(added.storageKey)).resolves.toEqual(storedBytes);
+    expect(deleteCalls).toBe(0);
+  });
+
+  it("keeps an unknown invalidation target as RESULT_SUBMISSION_NOT_FOUND", async () => {
+    await expect(invalidateStudentResultSubmission(
+      "00000000-0000-4000-8000-ffffffffffff",
+      "Unknown submission",
+      admin,
+      storage,
+    )).rejects.toMatchObject({
+      code: "RESULT_SUBMISSION_NOT_FOUND",
+      status: 404,
+    });
   });
 
   it("marks physical deletion for retry without reopening invalidated metadata", async () => {

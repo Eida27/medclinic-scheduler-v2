@@ -24,7 +24,7 @@ import {
   listAdminStudentResultProfileRows,
   listAdminStudentResultSubmissionRows,
   listDraftFilesForUpdate,
-  lockFinalizedSubmissionForInvalidation,
+  lockCurrentFinalizedSubmissionForInvalidation,
   lockOrCreateStudentResultDraft,
   lockOwnedDraftForFinalization,
   lockOwnedDraftFile,
@@ -362,10 +362,18 @@ export async function invalidateStudentResultSubmission(
   assertAdmin(actor);
   const reason = invalidationReasonSchema.parse(rawReason);
   const invalidated = await transaction(async (client) => {
-    const submission = await lockFinalizedSubmissionForInvalidation(client, submissionId);
-    if (!submission) {
+    const lock = await lockCurrentFinalizedSubmissionForInvalidation(client, submissionId);
+    if (lock.type === "not_found") {
       throw new AppError("RESULT_SUBMISSION_NOT_FOUND", "Finalized result submission not found.", 404);
     }
+    if (lock.type === "conflict") {
+      throw new AppError(
+        "RESULT_SUBMISSION_CONFLICT",
+        "This result submission is stale and can no longer be invalidated. Refresh the student profile and try again.",
+        409,
+      );
+    }
+    const { submission } = lock;
     await invalidateFinalizedSubmissionMetadata(client, submission, actor.userId, reason);
     await createStudentNotification(client, {
       studentNumber: submission.studentNumber,
@@ -393,5 +401,9 @@ export async function invalidateStudentResultSubmission(
       });
     }
   }
-  return { id: submissionId, status: "INVALIDATED" as const };
+  return {
+    id: submissionId,
+    status: "INVALIDATED" as const,
+    studentNumber: invalidated.studentNumber,
+  };
 }

@@ -1,3 +1,4 @@
+import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { dataResponse, errorResponse } from "@/lib/api-response";
 import { requireUser } from "@/server/auth/current-user";
@@ -10,11 +11,16 @@ export async function POST(request: Request, context: Context) {
   try {
     const actor = await requireUser(["ADMIN"]);
     const { reason } = schema.parse(await request.json());
-    return dataResponse(await invalidateStudentResultSubmission(
+    const invalidated = await invalidateStudentResultSubmission(
       (await context.params).submissionId,
       reason,
       actor,
-    ));
+    );
+    revalidatePath("/settings/student-result-submissions");
+    revalidatePath(
+      `/settings/student-result-submissions/students/${encodeURIComponent(invalidated.studentNumber)}`,
+    );
+    return dataResponse(invalidated);
   } catch (error) {
     return errorResponse(error);
   }

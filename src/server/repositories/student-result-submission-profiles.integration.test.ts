@@ -379,7 +379,9 @@ describe("administrator student result profile repository", () => {
       state: "NOT_SUBMITTED",
       submission: null,
     });
-    expect(newCycle?.history.map((item) => item.id)).toContain(oldFinalizedId);
+    expect(newCycle?.history.find((item) => item.id === oldFinalizedId)).toMatchObject({
+      appointmentDate: "2097-04-10",
+    });
 
     const replacement = await getAdminStudentResultProfileRow("TEST-PROFILE-0005");
     expect(replacement?.laboratory.submission).toMatchObject({
