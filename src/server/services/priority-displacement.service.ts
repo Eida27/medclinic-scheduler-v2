@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import { AppError } from "@/lib/errors";
 import { generatePairedSchedule } from "@/server/rule-engine/generate-paired-schedule";
+import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import {
   lockEligibleRegularPairs,
   lockEligibleRegularPhysicalExams,
@@ -25,6 +26,10 @@ export async function makeCapacityForPriorityBatch(
     windowEnd: input.windowEnd,
     limit: input.neededPairCount,
   });
+  await lockEffectiveAppointmentScopes(client, candidates.flatMap((candidate) => [
+    { studentNumber: candidate.studentNumber, scheduleType: "LABORATORY" },
+    { studentNumber: candidate.studentNumber, scheduleType: "PHYSICAL_EXAM" },
+  ]));
   await markDisplacedAppointmentsRescheduled(client, candidates, input.actorUserId);
   return candidates;
 }
@@ -47,11 +52,16 @@ export async function makePhysicalExamCapacityForPriorityBatch(
       windowStart,
       windowEnd: input.windowEnd,
       limit: 1,
+      excludedPhysicalExamIds: candidates.map((candidate) => candidate.physicalExamAppointmentId),
     });
     if (!candidate) continue;
-    await markDisplacedAppointmentsRescheduled(client, [candidate], input.actorUserId);
     candidates.push(candidate);
   }
+  await lockEffectiveAppointmentScopes(client, candidates.map((candidate) => ({
+    studentNumber: candidate.studentNumber,
+    scheduleType: "PHYSICAL_EXAM",
+  })));
+  await markDisplacedAppointmentsRescheduled(client, candidates, input.actorUserId);
   return candidates;
 }
 
@@ -71,6 +81,14 @@ export async function publishDisplacedRegularReplacements(
   client: PoolClient,
 ) {
   if (!input.candidates.length) return [];
+  await lockEffectiveAppointmentScopes(client, input.candidates.flatMap((candidate) => (
+    candidate.displacementType === "PAIR"
+      ? [
+          { studentNumber: candidate.studentNumber, scheduleType: "LABORATORY" },
+          { studentNumber: candidate.studentNumber, scheduleType: "PHYSICAL_EXAM" },
+        ]
+      : [{ studentNumber: candidate.studentNumber, scheduleType: "PHYSICAL_EXAM" }]
+  )));
   const pairCandidates = input.candidates.filter(
     (candidate) => candidate.displacementType === "PAIR",
   );

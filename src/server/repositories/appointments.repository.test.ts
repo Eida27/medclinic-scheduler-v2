@@ -67,6 +67,7 @@ describe("rescheduleAppointmentWithClient", () => {
     const actorUserId = "00000000-0000-4000-8000-000000000001";
     const client = {
       query: vi.fn()
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] })
         .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: appointment.id }] })
         .mockResolvedValueOnce({ rowCount: 1, rows: [] })
         .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: replacementId }] })
@@ -83,16 +84,21 @@ describe("rescheduleAppointmentWithClient", () => {
 
     expect(client.query).toHaveBeenNthCalledWith(
       1,
+      "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+      ["medclinic:effective-appointment:v1:LABORATORY:2026-0001"],
+    );
+    expect(client.query).toHaveBeenNthCalledWith(
+      2,
       expect.stringContaining("WHERE id=$1 AND status=$2 AND is_published=TRUE"),
       [appointment.id, "PENDING", actorUserId],
     );
     expect(client.query).toHaveBeenNthCalledWith(
-      2,
+      3,
       expect.stringContaining("appointment_status_logs"),
       [appointment.id, "PENDING", "Student requested a replacement", actorUserId],
     );
     expect(client.query).toHaveBeenNthCalledWith(
-      4,
+      5,
       expect.stringContaining("appointment_status_logs"),
       [replacementId, "Student requested a replacement", actorUserId],
     );

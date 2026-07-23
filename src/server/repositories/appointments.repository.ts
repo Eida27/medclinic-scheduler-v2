@@ -5,6 +5,7 @@ import { AppError } from "@/lib/errors";
 import type { AutomaticNoShowLog } from "@/server/appointments/automatic-no-show";
 import { query, transaction } from "@/server/db/pool";
 import type { ClinicCode } from "@/server/clinics";
+import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import { studentDisplayNameSql } from "@/server/students/student-display-name";
 
 export type AppointmentStatus = "DRAFT" | "PENDING" | "COMPLETED" | "NO_SHOW" | "RESCHEDULED" | "CANCELLED";
@@ -241,6 +242,7 @@ export async function rescheduleAppointmentWithClient(
   notes: string | null,
   actorUserId: string,
 ) {
+  await lockEffectiveAppointmentScopes(client, [appointment]);
   const changed = await client.query(
     `UPDATE appointments
         SET status='RESCHEDULED', updated_by=$3
@@ -291,6 +293,16 @@ export async function publishBatch(batchId: string, actorUserId: string, client?
     const batch = await transactionClient.query<{ status: string }>("SELECT status FROM schedule_batches WHERE id=$1 FOR UPDATE", [batchId]);
     if (!batch.rows[0]) return null;
     if (batch.rows[0].status !== "GENERATED") return { invalidStatus: batch.rows[0].status };
+    const draftScopes = await transactionClient.query<{
+      studentNumber: string;
+      scheduleType: string;
+    }>(
+      `SELECT student_number AS "studentNumber", schedule_type AS "scheduleType"
+         FROM appointments
+        WHERE batch_id=$1 AND status='DRAFT'`,
+      [batchId],
+    );
+    await lockEffectiveAppointmentScopes(transactionClient, draftScopes.rows);
     const appointments = await transactionClient.query("UPDATE appointments SET status='PENDING', is_published=TRUE, updated_by=$2 WHERE batch_id=$1 AND status='DRAFT' RETURNING id", [batchId, actorUserId]);
     for (const appointment of appointments.rows) {
       await transactionClient.query("INSERT INTO appointment_status_logs (appointment_id, old_status, new_status, changed_by) VALUES ($1,'DRAFT','PENDING',$2)", [appointment.id, actorUserId]);

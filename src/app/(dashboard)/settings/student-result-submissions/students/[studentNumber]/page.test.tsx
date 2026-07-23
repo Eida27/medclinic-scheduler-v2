@@ -104,11 +104,15 @@ describe("AdminStudentResultProfilePage", () => {
     expect(within(section).getByText("Appointment: Completed · 2026-08-18")).toBeVisible();
     expect(within(section).getByText("Finalized: Aug 19, 2026, 12:00 AM")).toBeVisible();
     expect(within(section).getByText("1 file · 2 KB")).toBeVisible();
-    expect(within(section).getByRole("link", { name: "Download laboratory.pdf" })).toHaveAttribute(
+    expect(within(section).getByRole("link", {
+      name: "Download Laboratory file 1 for appointment 2026-08-18: laboratory.pdf",
+    })).toHaveAttribute(
       "href",
       "/api/admin/student-result-submissions/lab-submission/files/lab-file",
     );
-    expect(within(section).getByRole("link", { name: "Download Laboratory ZIP" })).toHaveAttribute(
+    expect(within(section).getByRole("link", {
+      name: "Download Laboratory ZIP for appointment 2026-08-18, submission 1",
+    })).toHaveAttribute(
       "href",
       "/api/admin/student-result-submissions/lab-submission/zip",
     );
@@ -219,16 +223,77 @@ describe("AdminStudentResultProfilePage", () => {
     expect(within(history).getByText("Invalidated: Jun 20, 2026, 12:00 AM")).toBeVisible();
     expect(within(history).getByText("Reason: Superseded scan")).toBeVisible();
     expect(within(history).getByText("3 files · 4 KB")).toBeVisible();
-    expect(within(history).getByRole("link", { name: "Download older-lab.pdf" })).toHaveAttribute(
+    expect(within(history).getByRole("link", {
+      name: "Download Laboratory history submission 1 file 1 for appointment 2026-07-18: older-lab.pdf",
+    })).toHaveAttribute(
       "href",
       "/api/admin/student-result-submissions/older-lab-finalized/files/older-lab-file",
     );
-    expect(within(history).getByRole("link", { name: "Download Laboratory ZIP" })).toHaveAttribute(
+    expect(within(history).getByRole("link", {
+      name: "Download Laboratory ZIP for appointment 2026-07-18, history submission 1",
+    })).toHaveAttribute(
       "href",
       "/api/admin/student-result-submissions/older-lab-finalized/zip",
     );
     expect(within(history).queryByLabelText("Laboratory invalidation reason")).not.toBeInTheDocument();
     expect(within(history).queryByRole("link", { name: /older-exam|Physical Exam ZIP/i })).not.toBeInTheDocument();
+  });
+
+  it("gives every current and historical download a unique accessible name despite duplicate filenames", async () => {
+    const duplicate = (id: string) => ({
+      id,
+      originalFilename: "duplicate.pdf",
+      detectedMimeType: "application/pdf",
+      byteSize: 1024,
+    });
+    getAdminStudentResultProfile.mockResolvedValue({
+      ...baseProfile,
+      laboratory: {
+        ...baseProfile.laboratory,
+        submission: {
+          ...laboratorySubmission,
+          fileCount: 2,
+          totalBytes: 2048,
+          files: [duplicate("current-file-1"), duplicate("current-file-2")],
+        },
+      },
+      history: [
+        {
+          ...laboratorySubmission,
+          id: "history-lab-1",
+          appointmentId: "history-appointment-1",
+          appointmentDate: "2026-07-18",
+          files: [duplicate("history-file-1")],
+        },
+        {
+          ...laboratorySubmission,
+          id: "history-lab-2",
+          appointmentId: "history-appointment-2",
+          appointmentDate: "2026-06-18",
+          files: [duplicate("history-file-2")],
+        },
+      ],
+    });
+
+    render(await AdminStudentResultProfilePage({
+      params: Promise.resolve({ studentNumber: "23%2F8200%2001" }),
+    }));
+
+    const downloads = screen.getAllByRole("link", { name: /download/i });
+    const names = downloads.map((link) => link.getAttribute("aria-label"));
+    expect(names.every(Boolean)).toBe(true);
+    expect(new Set(names).size).toBe(names.length);
+    expect(names).toEqual(expect.arrayContaining([
+      "Download Laboratory file 1 for appointment 2026-08-18: duplicate.pdf",
+      "Download Laboratory file 2 for appointment 2026-08-18: duplicate.pdf",
+      "Download Laboratory ZIP for appointment 2026-08-18, submission 1",
+      "Download Laboratory history submission 1 file 1 for appointment 2026-07-18: duplicate.pdf",
+      "Download Laboratory ZIP for appointment 2026-07-18, history submission 1",
+      "Download Laboratory history submission 2 file 1 for appointment 2026-06-18: duplicate.pdf",
+      "Download Laboratory ZIP for appointment 2026-06-18, history submission 2",
+    ]));
+    expect(screen.getAllByText("Download duplicate.pdf")).toHaveLength(4);
+    expect(screen.getAllByText("Download Laboratory ZIP")).toHaveLength(3);
   });
 
   it("renders the history empty state", async () => {

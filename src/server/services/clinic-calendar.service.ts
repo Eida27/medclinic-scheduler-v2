@@ -10,6 +10,7 @@ import {
   listClinicUnavailableDateRecords,
   type ClinicUnavailableDateInput,
 } from "@/server/repositories/clinic-unavailable-dates.repository";
+import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import type { SessionUser } from "@/types/roles";
 import { createStudentNotification } from "@/server/services/student-notifications.service";
 
@@ -246,6 +247,7 @@ export async function createClinicUnavailableDate(raw: unknown, actor: SessionUs
           (pairMembers.get(pairId) ?? []).map((appointment) => [appointment.id, appointment] as const)
         ))).values()]
       : affected;
+    await lockEffectiveAppointmentScopes(client, appointmentsToMove);
     const unresolved = appointmentsToMove.filter((appointment) => (
       appointment.status !== "PENDING"
       || appointment.isManuallyLocked

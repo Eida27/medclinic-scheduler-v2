@@ -104,6 +104,7 @@ export async function lockEligibleRegularPhysicalExams(
     windowStart: string;
     windowEnd: string;
     limit: number;
+    excludedPhysicalExamIds?: string[];
   },
 ): Promise<DisplacementCandidate[]> {
   if (input.limit <= 0) return [];
@@ -144,6 +145,7 @@ export async function lockEligibleRegularPhysicalExams(
         AND physical.status='PENDING'
         AND physical.is_published=TRUE
         AND physical.is_manually_locked=FALSE
+        AND NOT (physical.id = ANY($5::uuid[]))
         AND NOT EXISTS (
           SELECT 1 FROM student_result_submissions submission
            WHERE submission.appointment_id=physical.id
@@ -159,7 +161,13 @@ export async function lockEligibleRegularPhysicalExams(
                physical.student_number DESC
       LIMIT $4
       FOR UPDATE OF physical SKIP LOCKED`,
-    [input.scheduleCycleStart, input.windowStart, input.windowEnd, input.limit],
+    [
+      input.scheduleCycleStart,
+      input.windowStart,
+      input.windowEnd,
+      input.limit,
+      input.excludedPhysicalExamIds ?? [],
+    ],
   );
   return result.rows.map((row) => ({
     displacementType: "PHYSICAL_EXAM_ONLY",

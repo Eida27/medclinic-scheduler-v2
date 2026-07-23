@@ -54,7 +54,7 @@ export function StudentResultSection({ section }: { section: AdminCurrentResultS
                 <p>Finalized: {formatResultDateTime(submission.finalizedAt)}</p>
                 <p>{submission.fileCount} {submission.fileCount === 1 ? "file" : "files"} · {formatResultBytes(submission.totalBytes)}</p>
               </div>
-              {submission.files.map((file) => (
+              {submission.files.map((file, fileIndex) => (
                 <Card key={file.id} className="flex flex-wrap items-center justify-between gap-4 p-4">
                   <div>
                     <p className="font-semibold text-ink">{file.originalFilename}</p>
@@ -62,6 +62,7 @@ export function StudentResultSection({ section }: { section: AdminCurrentResultS
                   </div>
                   <a
                     href={`/api/admin/student-result-submissions/${submission.id}/files/${file.id}`}
+                    aria-label={`Download ${label} file ${fileIndex + 1} for appointment ${submission.appointmentDate}: ${file.originalFilename}`}
                     className="inline-flex h-11 items-center rounded-xl border border-line px-4 text-sm font-semibold"
                   >
                     Download {file.originalFilename}
@@ -69,7 +70,11 @@ export function StudentResultSection({ section }: { section: AdminCurrentResultS
                 </Card>
               ))}
             </div>
-            <AdminSubmissionActions submissionId={submission.id} resultLabel={label} />
+            <AdminSubmissionActions
+              submissionId={submission.id}
+              resultLabel={label}
+              appointmentDate={submission.appointmentDate}
+            />
           </div>
         ) : null}
       </Card>

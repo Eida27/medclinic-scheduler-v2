@@ -9,8 +9,10 @@ import {
   deletePendingResultPlaceholder,
   getAppointmentResultCorrectionState,
   invalidateFinalizedSubmissionMetadata,
+  lockCurrentFinalizedSubmissionForInvalidation,
   lockFinalizedSubmissionForInvalidation,
 } from "@/server/repositories/student-result-submissions.repository";
+import { publishBatch } from "@/server/repositories/appointments.repository";
 import { LocalResultStorage } from "@/server/storage/local-result-storage";
 import { cleanupTestFixtures, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import type { SessionUser } from "@/types/roles";
@@ -132,6 +134,44 @@ async function waitForClientLock(observer: PoolClient, clientPid: number) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error("Timed out waiting for the concurrent transaction to block on a database lock.");
+}
+
+async function waitForAdvisoryLockWaiter(
+  observer: PoolClient,
+  taskSettled: () => boolean,
+) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const locks = await observer.query<{ waiting: number }>(
+      `SELECT COUNT(*)::int AS waiting
+         FROM pg_locks
+        WHERE locktype='advisory' AND granted=FALSE`,
+    );
+    if (locks.rows[0].waiting > 0) return;
+    if (taskSettled()) {
+      throw new Error("The concurrent operation completed without waiting on the appointment-scope advisory lock.");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for the appointment-scope advisory lock.");
+}
+
+async function generatedDraftAppointment(studentNumber: string, suffix: string) {
+  const batch = await pool.query<{ id: string }>(
+    `INSERT INTO schedule_batches (clinic_id, batch_name, status, created_by)
+     VALUES ($1,$2,'GENERATED',$3)
+     RETURNING id`,
+    [TEST_REFERENCE_IDS.laboratoryClinic, `TEST-RESULT-DRAFT-${suffix}`, TEST_REFERENCE_IDS.adminUser],
+  );
+  const draft = await pool.query<{ id: string }>(
+    `INSERT INTO appointments (
+       batch_id, clinic_id, student_number, schedule_type, appointment_date,
+       status, is_published, created_by
+     ) VALUES ($1,$2,$3,'LABORATORY','2027-08-03','DRAFT',FALSE,$4)
+     RETURNING id`,
+    [batch.rows[0].id, TEST_REFERENCE_IDS.laboratoryClinic, studentNumber, TEST_REFERENCE_IDS.adminUser],
+  );
+  return { batchId: batch.rows[0].id, appointmentId: draft.rows[0].id };
 }
 
 beforeAll(async () => {
@@ -438,6 +478,112 @@ describe("student result drafts", () => {
     expect(await invalidationSnapshot(finalized.id)).toEqual(before);
     await expect(storage.read(added.storageKey)).resolves.toEqual(storedBytes);
     expect(deleteCalls).toBe(0);
+  });
+
+  it("waits for concurrent publication, then rejects stale invalidation without deleting files", async () => {
+    const studentNumber = "99-9424-24";
+    await insertTestStudent({ studentNumber, firstName: "Publish", lastName: "First", yearLevel: 3 });
+    const oldAppointmentId = await appointment(studentNumber);
+    const added = await addStudentResultFile(studentNumber, oldAppointmentId, file("publication-race.pdf"), storage);
+    const finalized = await finalizeStudentResultSubmission(studentNumber, oldAppointmentId, storage);
+    const draft = await generatedDraftAppointment(studentNumber, "publication-first");
+    const publicationClient = await pool.connect();
+    const observer = await pool.connect();
+    let invalidationSettled = false;
+    let deleteCalls = 0;
+    const trackingStorage = {
+      write: storage.write.bind(storage),
+      read: storage.read.bind(storage),
+      delete: async (storageKey: string) => {
+        deleteCalls += 1;
+        await storage.delete(storageKey);
+      },
+    };
+
+    try {
+      await publicationClient.query("BEGIN");
+      await publishBatch(draft.batchId, admin.userId, publicationClient);
+      const invalidationTask = invalidateStudentResultSubmission(
+        finalized.id,
+        "Concurrent publication fixture",
+        admin,
+        trackingStorage,
+      ).finally(() => { invalidationSettled = true; });
+
+      await waitForAdvisoryLockWaiter(observer, () => invalidationSettled);
+      await publicationClient.query("COMMIT");
+
+      await expect(invalidationTask).rejects.toMatchObject({
+        code: "RESULT_SUBMISSION_CONFLICT",
+        status: 409,
+      });
+      await expect(storage.read(added.storageKey)).resolves.toEqual(file("publication-race.pdf").bytes);
+      expect(deleteCalls).toBe(0);
+      expect((await invalidationSnapshot(finalized.id))[0]).toMatchObject({ status: "FINALIZED" });
+    } finally {
+      await publicationClient.query("ROLLBACK").catch(() => undefined);
+      publicationClient.release();
+      observer.release();
+    }
+  });
+
+  it("holds publication until an in-flight invalidation commits for the same appointment scope", async () => {
+    const studentNumber = "99-9425-25";
+    await insertTestStudent({ studentNumber, firstName: "Invalidate", lastName: "First", yearLevel: 3 });
+    const oldAppointmentId = await appointment(studentNumber);
+    await addStudentResultFile(studentNumber, oldAppointmentId, file("invalidation-race.pdf"), storage);
+    const finalized = await finalizeStudentResultSubmission(studentNumber, oldAppointmentId, storage);
+    const draft = await generatedDraftAppointment(studentNumber, "invalidation-first");
+    const invalidationClient = await pool.connect();
+    const publicationClient = await pool.connect();
+    const observer = await pool.connect();
+    let publicationSettled = false;
+
+    try {
+      await Promise.all([
+        invalidationClient.query("BEGIN"),
+        publicationClient.query("BEGIN"),
+      ]);
+      const locked = await lockCurrentFinalizedSubmissionForInvalidation(
+        invalidationClient,
+        finalized.id,
+      );
+      if (locked.type !== "ready") throw new Error("Expected a current finalized submission fixture.");
+      await invalidateFinalizedSubmissionMetadata(
+        invalidationClient,
+        locked.submission,
+        admin.userId,
+        "Concurrent invalidation fixture",
+      );
+
+      const publicationTask = publishBatch(
+        draft.batchId,
+        admin.userId,
+        publicationClient,
+      ).finally(() => { publicationSettled = true; });
+      await waitForAdvisoryLockWaiter(observer, () => publicationSettled);
+      await invalidationClient.query("COMMIT");
+      await expect(publicationTask).resolves.toEqual({ count: 1 });
+      await publicationClient.query("COMMIT");
+
+      expect((await invalidationSnapshot(finalized.id))[0]).toMatchObject({ status: "INVALIDATED" });
+      const effective = await pool.query<{ id: string }>(
+        `SELECT id
+           FROM appointments
+          WHERE student_number=$1 AND schedule_type='LABORATORY'
+            AND is_published=TRUE AND status NOT IN ('RESCHEDULED','CANCELLED')
+          ORDER BY appointment_date DESC, created_at DESC, id DESC
+          LIMIT 1`,
+        [studentNumber],
+      );
+      expect(effective.rows[0].id).toBe(draft.appointmentId);
+    } finally {
+      await invalidationClient.query("ROLLBACK").catch(() => undefined);
+      await publicationClient.query("ROLLBACK").catch(() => undefined);
+      invalidationClient.release();
+      publicationClient.release();
+      observer.release();
+    }
   });
 
   it("keeps an unknown invalidation target as RESULT_SUBMISSION_NOT_FOUND", async () => {

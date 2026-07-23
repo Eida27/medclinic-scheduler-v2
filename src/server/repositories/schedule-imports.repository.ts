@@ -4,6 +4,7 @@ import { AppError } from "@/lib/errors";
 import type { AppointmentScheduleType, ClinicCode } from "@/server/clinics";
 import { query, transaction } from "@/server/db/pool";
 import { writeAudit } from "@/server/repositories/audit.repository";
+import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import { getScheduleBatch } from "@/server/repositories/coordinator-schedules.repository";
 import type { ImportedStudentRow } from "@/server/services/student-import-csv";
 import { resolveSchedulingWindow } from "@/server/services/scheduling-window";
@@ -591,6 +592,11 @@ export async function createScheduleImport(
       "PHYSICAL_EXAM",
       assignments.assignments.map((assignment) => assignment.physicalExamDate),
     );
+
+    await lockEffectiveAppointmentScopes(client, assignments.assignments.flatMap((assignment) => [
+      { studentNumber: assignment.studentNumber, scheduleType: "LABORATORY" },
+      { studentNumber: assignment.studentNumber, scheduleType: "PHYSICAL_EXAM" },
+    ]));
 
     const appointmentIds: string[] = [];
     const insertAppointments = async (

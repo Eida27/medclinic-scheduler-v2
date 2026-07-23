@@ -17,7 +17,7 @@ export function SubmissionHistory({ submissions }: { submissions: AdminResultSub
       <h2 id="submission-history-heading" className="mb-4 text-xl font-bold text-ink">Submission history</h2>
       {submissions.length ? (
         <div className="grid gap-4">
-          {submissions.map((submission) => {
+          {submissions.map((submission, submissionIndex) => {
             const label = resultLabel(submission.resultType);
             const mayDownload = submission.status === "FINALIZED" && submission.files.length > 0;
             return (
@@ -41,7 +41,7 @@ export function SubmissionHistory({ submissions }: { submissions: AdminResultSub
                 </div>
                 {mayDownload ? (
                   <div className="grid gap-3">
-                    {submission.files.map((file) => (
+                    {submission.files.map((file, fileIndex) => (
                       <Card key={file.id} className="flex flex-wrap items-center justify-between gap-4 p-4">
                         <div>
                           <p className="font-semibold text-ink">{file.originalFilename}</p>
@@ -49,6 +49,7 @@ export function SubmissionHistory({ submissions }: { submissions: AdminResultSub
                         </div>
                         <a
                           href={`/api/admin/student-result-submissions/${submission.id}/files/${file.id}`}
+                          aria-label={`Download ${label} history submission ${submissionIndex + 1} file ${fileIndex + 1} for appointment ${submission.appointmentDate}: ${file.originalFilename}`}
                           className="inline-flex h-11 items-center rounded-xl border border-line px-4 text-sm font-semibold"
                         >
                           Download {file.originalFilename}
@@ -57,6 +58,7 @@ export function SubmissionHistory({ submissions }: { submissions: AdminResultSub
                     ))}
                     <a
                       href={`/api/admin/student-result-submissions/${submission.id}/zip`}
+                      aria-label={`Download ${label} ZIP for appointment ${submission.appointmentDate}, history submission ${submissionIndex + 1}`}
                       className="inline-flex h-11 items-center justify-center rounded-xl bg-cpu-navy px-4 text-sm font-semibold text-white"
                     >
                       Download {label} ZIP

@@ -1,6 +1,7 @@
 import "server-only";
 import type { PoolClient } from "pg";
 import { query } from "@/server/db/pool";
+import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import { AppError } from "@/lib/errors";
 import {
   CURRENT_EFFECTIVE_APPOINTMENTS_CTE,
@@ -930,6 +931,25 @@ export async function lockCurrentFinalizedSubmissionForInvalidation(
   client: PoolClient,
   submissionId: string,
 ) {
+  const identity = await client.query<{
+    id: string;
+    appointmentId: string;
+    studentNumber: string;
+    resultType: "LABORATORY" | "PHYSICAL_EXAM";
+  }>(
+    `SELECT id, appointment_id AS "appointmentId", student_number AS "studentNumber",
+            result_type AS "resultType"
+       FROM student_result_submissions
+      WHERE id=$1
+      FOR UPDATE`,
+    [submissionId],
+  );
+  if (!identity.rowCount) return { type: "not_found" as const };
+  await lockEffectiveAppointmentScopes(client, [{
+    studentNumber: identity.rows[0].studentNumber,
+    scheduleType: identity.rows[0].resultType,
+  }]);
+
   const submission = await client.query<{
     id: string;
     appointmentId: string;
@@ -951,12 +971,10 @@ export async function lockCurrentFinalizedSubmissionForInvalidation(
                  AND current_appointment."studentNumber"=submission.student_number
                  AND current_appointment."scheduleType"=submission.result_type
             ) AS "isCurrent"
-       FROM student_result_submissions submission
-      WHERE submission.id=$1
-      FOR UPDATE OF submission`,
+      FROM student_result_submissions submission
+      WHERE submission.id=$1`,
     [submissionId],
   );
-  if (!submission.rowCount) return { type: "not_found" as const };
   const locked = submission.rows[0];
   if (locked.status !== "FINALIZED" || !locked.isCurrent) {
     return { type: "conflict" as const };

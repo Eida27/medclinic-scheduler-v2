@@ -11,9 +11,16 @@ import { Input } from "@/components/ui/Input";
 type Props = {
   submissionId: string;
   resultLabel: "Laboratory" | "Physical Exam";
+  appointmentDate: string;
+  submissionIndex?: number;
 };
 
-export function AdminSubmissionActions({ submissionId, resultLabel }: Props) {
+export function AdminSubmissionActions({
+  submissionId,
+  resultLabel,
+  appointmentDate,
+  submissionIndex = 1,
+}: Props) {
   const router = useRouter();
   const [error, setError] = useState<string>();
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -23,6 +30,7 @@ export function AdminSubmissionActions({ submissionId, resultLabel }: Props) {
   function reviewInvalidation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    setError(undefined);
     setInvalidationReason(String(form.get("reason")));
     setConfirmOpen(true);
   }
@@ -30,29 +38,41 @@ export function AdminSubmissionActions({ submissionId, resultLabel }: Props) {
   async function invalidate() {
     setError(undefined);
     setPending(true);
-    const response = await fetch(`/api/admin/student-result-submissions/${submissionId}/invalidate`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ reason: invalidationReason }),
-    });
-    const payload = await response.json();
-    setPending(false);
-    if (!response.ok) {
-      setError(payload.error?.message ?? "Unable to invalidate this submission.");
-      if (response.status === 409) {
+    try {
+      const response = await fetch(`/api/admin/student-result-submissions/${submissionId}/invalidate`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reason: invalidationReason }),
+      });
+      const payload: { error?: { message?: string } } = await response.json();
+      if (!response.ok) {
+        setError(payload.error?.message ?? "Unable to invalidate this submission.");
+        if (response.status === 409) {
+          setConfirmOpen(false);
+          router.refresh();
+        }
+      } else {
         setConfirmOpen(false);
         router.refresh();
       }
-    } else {
-      setConfirmOpen(false);
-      router.refresh();
+    } catch {
+      setError("Unable to invalidate this submission.");
+    } finally {
+      setPending(false);
     }
   }
+
+  function closeConfirmation() {
+    setConfirmOpen(false);
+    setError(undefined);
+  }
+
   return (
     <div className="grid gap-4">
-      {error ? <Alert tone="danger">{error}</Alert> : null}
+      {error && !confirmOpen ? <Alert tone="danger">{error}</Alert> : null}
       <a
         href={`/api/admin/student-result-submissions/${submissionId}/zip`}
+        aria-label={`Download ${resultLabel} ZIP for appointment ${appointmentDate}, submission ${submissionIndex}`}
         className="inline-flex h-11 items-center justify-center rounded-xl bg-cpu-navy px-4 text-sm font-semibold text-white"
       >
         Download {resultLabel} ZIP
@@ -69,11 +89,12 @@ export function AdminSubmissionActions({ submissionId, resultLabel }: Props) {
         open={confirmOpen}
         title={`Invalidate ${resultLabel} submission?`}
         description="The student will regain upload access and the finalized files will be revoked."
+        error={error}
         confirmLabel={`Invalidate ${resultLabel} submission`}
         pending={pending}
         pendingLabel="Invalidating..."
         danger
-        onCancel={() => setConfirmOpen(false)}
+        onCancel={closeConfirmation}
         onConfirm={invalidate}
       />
     </div>

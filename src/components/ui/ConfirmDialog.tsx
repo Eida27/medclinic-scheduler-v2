@@ -8,6 +8,7 @@ type ConfirmDialogProps = {
   open: boolean;
   title: string;
   description: string;
+  error?: string;
   confirmLabel: string;
   pending?: boolean;
   pendingLabel?: string;
@@ -20,6 +21,7 @@ export function ConfirmDialog({
   open,
   title,
   description,
+  error,
   confirmLabel,
   pending = false,
   pendingLabel = "Working...",
@@ -50,12 +52,23 @@ export function ConfirmDialog({
         aria-modal="true"
         aria-busy={pending}
         aria-labelledby="confirm-dialog-title"
-        aria-describedby="confirm-dialog-description"
+        aria-describedby={error
+          ? "confirm-dialog-description confirm-dialog-error"
+          : "confirm-dialog-description"}
         className="w-full max-w-md rounded-3xl border border-line bg-surface p-6 shadow-2xl"
       >
         <div className="mb-5 h-1.5 w-14 rounded-full bg-cpu-gold" />
         <h2 id="confirm-dialog-title" className="text-xl font-bold text-ink">{title}</h2>
         <p id="confirm-dialog-description" className="mt-2 text-sm leading-6 text-muted">{description}</p>
+        {error ? (
+          <p
+            id="confirm-dialog-error"
+            role="alert"
+            className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
+          >
+            {error}
+          </p>
+        ) : null}
         <div className="mt-6 flex justify-end gap-3">
           <Button ref={cancelButtonRef} variant="secondary" onClick={onCancel} disabled={pending}>Cancel</Button>
           <Button
