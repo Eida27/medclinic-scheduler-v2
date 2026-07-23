@@ -21,7 +21,6 @@ describe("overallStatusLabel", () => {
   it.each([
     ["COMPLETE", "Complete"],
     ["INCOMPLETE", "Incomplete"],
-    ["FOLLOW_UP", "Needs follow-up"],
   ])("labels %s as %s", (value, expected) => {
     expect(overallStatusLabel(value)).toBe(expected);
   });
@@ -29,6 +28,7 @@ describe("overallStatusLabel", () => {
 
 describe("operationalStatusLabel", () => {
   it.each([
+    ["UNSCHEDULED", "Unscheduled"],
     ["PENDING", "Pending"],
     ["COMPLETED", "Completed"],
     ["NO_SHOW", "No-show"],
@@ -61,6 +61,7 @@ describe("statusTone", () => {
     ["RESCHEDULED", "warning"],
     ["PENDING_UPLOAD", "neutral"],
     ["NOT_APPLICABLE", "neutral"],
+    ["UNSCHEDULED", "neutral"],
     ["INCOMPLETE", "neutral"],
     ["UNKNOWN_STATUS", "neutral"],
   ] as const)("maps %s to %s", (value, expected) => {

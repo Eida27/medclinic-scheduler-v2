@@ -13,20 +13,19 @@ import AppointmentsPage from "./page";
 
 const summaryItem = {
   studentNumber: "23-8200-01",
-  studentName: "Aaron Abad",
+  studentName: "Abad, Aaron",
   collegeName: "College of Computer Studies",
   programName: "BS Computer Science",
-  appointmentStatus: "PENDING",
   physicalExamStatus: "COMPLETED",
-  laboratoryStatus: "REQUIRES_FOLLOW_UP",
+  laboratoryStatus: "NO_SHOW",
   physicalExamAppointmentId: "physical-1",
   physicalExamAppointmentDate: "2026-07-30",
   physicalExamAppointmentStatus: "PENDING",
   laboratoryAppointmentId: "laboratory-1",
   laboratoryAppointmentDate: "2026-07-29",
   laboratoryAppointmentStatus: "NO_SHOW",
-  nextSchedule: "2026-07-30",
-  overallStatus: "FOLLOW_UP",
+  nextSchedule: null,
+  overallStatus: "INCOMPLETE",
 };
 
 describe("AppointmentsPage", () => {
@@ -44,7 +43,7 @@ describe("AppointmentsPage", () => {
     });
   });
 
-  it("renders the approved filters and result-only service summaries with readable labels", async () => {
+  it("renders the approved attendance filters and service summaries with readable labels", async () => {
     appointmentSummaryReport.mockResolvedValue({
       items: [summaryItem],
       total: 301,
@@ -65,8 +64,8 @@ describe("AppointmentsPage", () => {
         programId: "program-1",
         priorityGroupId: "priority-1",
         physicalExamStatus: "COMPLETED",
-        laboratoryStatus: "REQUIRES_FOLLOW_UP",
-        overallStatus: "FOLLOW_UP",
+        laboratoryStatus: "NO_SHOW",
+        overallStatus: "INCOMPLETE",
         sort: "name_desc",
         page: "2",
       }),
@@ -75,8 +74,8 @@ describe("AppointmentsPage", () => {
     expect(appointmentSummaryReport).toHaveBeenCalledWith({
       search: "Aaron",
       physicalExamStatus: "COMPLETED",
-      laboratoryStatus: "REQUIRES_FOLLOW_UP",
-      overallStatus: "FOLLOW_UP",
+      laboratoryStatus: "NO_SHOW",
+      overallStatus: "INCOMPLETE",
       sort: "name_desc",
       page: 2,
       limit: 150,
@@ -89,8 +88,8 @@ describe("AppointmentsPage", () => {
     expect(screen.getByText("Laboratory completed")).toBeVisible();
     expect(screen.getByText("Incomplete any")).toBeVisible();
     expect(screen.getByRole("textbox", { name: "Student name or number" })).toHaveValue("Aaron");
-    expect(screen.getByRole("combobox", { name: "Overall completion" })).toHaveValue("FOLLOW_UP");
-    expect(screen.getByRole("combobox", { name: "Laboratory status" })).toHaveValue("REQUIRES_FOLLOW_UP");
+    expect(screen.getByRole("combobox", { name: "Overall completion" })).toHaveValue("INCOMPLETE");
+    expect(screen.getByRole("combobox", { name: "Laboratory status" })).toHaveValue("NO_SHOW");
     expect(screen.getByRole("combobox", { name: "Physical exam status" })).toHaveValue("COMPLETED");
     expect(screen.getByRole("combobox", { name: "Sort" })).toHaveValue("name_desc");
     expect(screen.getByRole("button", { name: "Apply filters" })).toBeVisible();
@@ -102,10 +101,13 @@ describe("AppointmentsPage", () => {
 
     for (const name of ["Laboratory status", "Physical exam status"]) {
       const select = screen.getByRole("combobox", { name });
-      expect(within(select).getByRole("option", { name: "Pending" })).toHaveValue("PENDING_UPLOAD");
+      expect(within(select).getByRole("option", { name: "Unscheduled" })).toHaveValue("UNSCHEDULED");
+      expect(within(select).getByRole("option", { name: "Pending" })).toHaveValue("PENDING");
       expect(within(select).getByRole("option", { name: "Completed" })).toHaveValue("COMPLETED");
-      expect(within(select).getByRole("option", { name: "Needs follow-up" })).toHaveValue("REQUIRES_FOLLOW_UP");
-      expect(within(select).getByRole("option", { name: "Not applicable" })).toHaveValue("NOT_APPLICABLE");
+      expect(within(select).getByRole("option", { name: "No-show" })).toHaveValue("NO_SHOW");
+      expect(within(select).getByRole("option", { name: "Rescheduled" })).toHaveValue("RESCHEDULED");
+      expect(within(select).getByRole("option", { name: "Cancelled" })).toHaveValue("CANCELLED");
+      expect(within(select).queryByRole("option", { name: "Needs follow-up" })).not.toBeInTheDocument();
     }
 
     const headers = screen.getAllByRole("columnheader");
@@ -121,21 +123,22 @@ describe("AppointmentsPage", () => {
     });
     expect(headers[3]).toHaveClass("text-center");
 
-    const row = screen.getByRole("row", { name: /Aaron Abad/ });
+    const row = screen.getByRole("row", { name: /Abad, Aaron/ });
     const cells = within(row).getAllByRole("cell");
     expect(cells).toHaveLength(4);
     cells.slice(0, 3).forEach((cell) => {
       expect(cell).not.toHaveClass("text-center");
     });
     expect(cells[3]).toHaveClass("text-center");
-    const studentLink = within(row).getByRole("link", { name: "Aaron Abad" });
+    const studentLink = within(row).getByRole("link", { name: "Abad, Aaron" });
     expect(studentLink).toHaveAttribute(
       "href",
       "/students/23-8200-01",
     );
     expect(within(row).getAllByRole("link")).toEqual([studentLink]);
-    expect(within(row).getAllByText("Needs follow-up")).toHaveLength(2);
+    expect(within(row).getByText("No-show")).toBeVisible();
     expect(within(row).getByText("Completed")).toBeVisible();
+    expect(within(row).getByText("Incomplete")).toBeVisible();
     expect(within(row).queryByText("2026-07-29")).not.toBeInTheDocument();
     expect(within(row).queryByText("2026-07-30")).not.toBeInTheDocument();
     expect(within(row).queryByText("Result")).not.toBeInTheDocument();
@@ -151,8 +154,8 @@ describe("AppointmentsPage", () => {
     expect(Object.fromEntries(nextUrl.searchParams)).toEqual({
       studentNumber: "Aaron",
       physicalExamStatus: "COMPLETED",
-      laboratoryStatus: "REQUIRES_FOLLOW_UP",
-      overallStatus: "FOLLOW_UP",
+      laboratoryStatus: "NO_SHOW",
+      overallStatus: "INCOMPLETE",
       sort: "name_desc",
       page: "3",
     });

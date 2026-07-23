@@ -9,7 +9,7 @@ import {
   parseAppointmentPage,
 } from "@/components/appointments/appointment-pagination";
 import {
-  appointmentResultStatusLabel,
+  operationalStatusLabel,
   overallStatusLabel,
   statusTone,
 } from "@/components/appointments/status-labels";
@@ -25,14 +25,14 @@ import {
 
 type AppointmentsSearchParams = Record<string, string | undefined>;
 
-const resultStatuses = ["PENDING_UPLOAD", "COMPLETED", "REQUIRES_FOLLOW_UP", "NOT_APPLICABLE"];
-const overallStatuses: OverallStatus[] = ["FOLLOW_UP", "INCOMPLETE", "COMPLETE"];
+const attendanceStatuses = ["UNSCHEDULED", "PENDING", "COMPLETED", "NO_SHOW", "RESCHEDULED", "CANCELLED"] as const;
+const overallStatuses: OverallStatus[] = ["INCOMPLETE", "COMPLETE"];
 const sortOptions = [
   ["upcoming_asc", "Upcoming schedule: soonest first"],
   ["upcoming_desc", "Upcoming schedule: latest first"],
   ["name_asc", "Student name: A-Z"],
   ["name_desc", "Student name: Z-A"],
-  ["attention_first", "Needs attention first"],
+  ["attention_first", "Incomplete students first"],
   ["completed_first", "Fully completed first"],
 ] as const;
 
@@ -112,8 +112,8 @@ export default async function AppointmentsPage({
             <span>Laboratory status</span>
             <Select name="laboratoryStatus" defaultValue={params.laboratoryStatus}>
               <option value="">Any laboratory status</option>
-              {resultStatuses.map((status) => (
-                <option key={status} value={status}>{appointmentResultStatusLabel(status)}</option>
+              {attendanceStatuses.map((status) => (
+                <option key={status} value={status}>{operationalStatusLabel(status)}</option>
               ))}
             </Select>
           </label>
@@ -121,8 +121,8 @@ export default async function AppointmentsPage({
             <span>Physical exam status</span>
             <Select name="physicalExamStatus" defaultValue={params.physicalExamStatus}>
               <option value="">Any physical exam status</option>
-              {resultStatuses.map((status) => (
-                <option key={status} value={status}>{appointmentResultStatusLabel(status)}</option>
+              {attendanceStatuses.map((status) => (
+                <option key={status} value={status}>{operationalStatusLabel(status)}</option>
               ))}
             </Select>
           </label>
@@ -171,12 +171,12 @@ export default async function AppointmentsPage({
                     </td>
                     <td className="px-5 py-4">
                       <Badge tone={statusTone(item.laboratoryStatus)}>
-                        {appointmentResultStatusLabel(item.laboratoryStatus)}
+                        {operationalStatusLabel(item.laboratoryStatus)}
                       </Badge>
                     </td>
                     <td className="px-5 py-4">
                       <Badge tone={statusTone(item.physicalExamStatus)}>
-                        {appointmentResultStatusLabel(item.physicalExamStatus)}
+                        {operationalStatusLabel(item.physicalExamStatus)}
                       </Badge>
                     </td>
                     <td className="px-5 py-4 text-center">

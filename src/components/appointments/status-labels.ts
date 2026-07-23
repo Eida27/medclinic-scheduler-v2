@@ -10,10 +10,10 @@ const appointmentResultStatusLabels: Record<string, string> = {
 const overallStatusLabels: Record<string, string> = {
   COMPLETE: "Complete",
   INCOMPLETE: "Incomplete",
-  FOLLOW_UP: "Needs follow-up",
 };
 
 const operationalStatusLabels: Record<string, string> = {
+  UNSCHEDULED: "Unscheduled",
   PENDING: "Pending",
   COMPLETED: "Completed",
   NO_SHOW: "No-show",
