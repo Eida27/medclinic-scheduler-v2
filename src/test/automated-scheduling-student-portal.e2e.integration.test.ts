@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { pool } from "@/server/db/pool";
+import { appointmentSummaryReport } from "@/server/repositories/appointment-summary.repository";
 import { getStudentPortalSchedule } from "@/server/repositories/student-portal.repository";
 import { authenticateStudent } from "@/server/services/student-auth.service";
 import { createClinicUnavailableDate } from "@/server/services/clinic-calendar.service";
@@ -14,10 +15,12 @@ import {
   addStudentResultFile,
   createAdminSubmissionZip,
   finalizeStudentResultSubmission,
+  getAdminStudentResultProfile,
   getAdminStudentResultFile,
   getStudentResultFile,
   getStudentResultSubmission,
   invalidateStudentResultSubmission,
+  listAdminStudentResultProfiles,
 } from "@/server/services/student-result-submissions.service";
 import { LocalResultStorage } from "@/server/storage/local-result-storage";
 import {
@@ -216,6 +219,18 @@ describe("automated academic-year scheduling and student results", () => {
 
     const laboratory = activePair.rows.find((row) => row.schedule_type === "LABORATORY")!;
     await updateAppointment(laboratory.id, { status: "COMPLETED" }, laboratoryStaff);
+    const afterLaboratoryAttendance = await appointmentSummaryReport({
+      search: "99-9003-03",
+      sort: "name_asc",
+      page: 1,
+      limit: 20,
+      offset: 0,
+    });
+    expect(afterLaboratoryAttendance.items[0]).toMatchObject({
+      laboratoryStatus: "COMPLETED",
+      physicalExamStatus: "PENDING",
+      overallStatus: "INCOMPLETE",
+    });
     const pendingResult = await pool.query(
       "SELECT result_status FROM laboratory_results WHERE appointment_id=$1",
       [laboratory.id],
@@ -235,6 +250,40 @@ describe("automated academic-year scheduling and student results", () => {
     }, storage);
     const finalized = await finalizeStudentResultSubmission("99-9003-03", laboratory.id, storage);
     expect(finalized).toMatchObject({ status: "FINALIZED", fileCount: 2 });
+    const partial = await listAdminStudentResultProfiles(admin, {
+      page: 1,
+      limit: 50,
+      offset: 0,
+    });
+    expect(partial.items.find((item) => item.studentNumber === "99-9003-03"))
+      .toMatchObject({ studentName: "E2E, Student1", progress: "PARTIALLY_SUBMITTED" });
+
+    const physical = activePair.rows.find((row) => row.schedule_type === "PHYSICAL_EXAM")!;
+    await updateAppointment(physical.id, { status: "COMPLETED" }, admin);
+    const afterPhysicalAttendance = await appointmentSummaryReport({
+      search: "99-9003-03",
+      sort: "name_asc",
+      page: 1,
+      limit: 20,
+      offset: 0,
+    });
+    expect(afterPhysicalAttendance.items[0]).toMatchObject({
+      laboratoryStatus: "COMPLETED",
+      physicalExamStatus: "COMPLETED",
+      overallStatus: "COMPLETE",
+    });
+    await addStudentResultFile("99-9003-03", physical.id, {
+      filename: "synthetic-physical-exam.pdf",
+      declaredMimeType: "application/pdf",
+      bytes: Buffer.from("%PDF-1.7\nnon-sensitive synthetic physical exam result"),
+    }, storage);
+    await finalizeStudentResultSubmission("99-9003-03", physical.id, storage);
+    const fullySubmitted = await getAdminStudentResultProfile("99-9003-03", admin);
+    expect(fullySubmitted).toMatchObject({
+      progress: "FULLY_SUBMITTED",
+      physicalExam: { state: "FINALIZED" },
+    });
+
     await expect(getStudentResultFile("99-9003-03", pdf.id, storage))
       .resolves.toMatchObject({ filename: "synthetic-laboratory.pdf" });
     await expect(getStudentResultFile("99-9001-01", pdf.id, storage))
@@ -245,6 +294,9 @@ describe("automated academic-year scheduling and student results", () => {
     expect(zip.subarray(0, 2).toString("ascii")).toBe("PK");
 
     await invalidateStudentResultSubmission(finalized.id, "Synthetic document replacement test", admin, storage);
+    const awaiting = await getAdminStudentResultProfile("99-9003-03", admin);
+    expect(awaiting).toMatchObject({ progress: "AWAITING_RESUBMISSION" });
+    expect(awaiting?.laboratory).toMatchObject({ state: "INVALIDATED" });
     const reopened = await getStudentResultSubmission("99-9003-03", laboratory.id);
     expect(reopened).toMatchObject({ status: "DRAFT", fileCount: 0 });
     await expect(addStudentResultFile("99-9003-03", laboratory.id, {
@@ -269,5 +321,53 @@ describe("automated academic-year scheduling and student results", () => {
       notification_count: expect.any(Number),
     });
     expect(finalState.rows[0].notification_count).toBeGreaterThanOrEqual(3);
+
+    const replacementFinalized = await finalizeStudentResultSubmission(
+      "99-9003-03",
+      laboratory.id,
+      storage,
+    );
+    const replaced = await getAdminStudentResultProfile("99-9003-03", admin);
+    expect(replaced).toMatchObject({ progress: "FULLY_SUBMITTED" });
+    expect(replaced?.laboratory).toMatchObject({ state: "FINALIZED" });
+    expect(replaced?.history.some((submission) => (
+      submission.id === finalized.id && submission.status === "INVALIDATED"
+    ))).toBe(true);
+
+    const newerLaboratory = await pool.query<{ id: string }>(
+      `INSERT INTO appointments (
+         clinic_id, student_number, schedule_type, appointment_date,
+         status, is_published, created_by, updated_by
+       ) SELECT clinic_id, student_number, schedule_type,
+                (appointment_date + INTERVAL '1 year')::date,
+                'PENDING', TRUE, $2, $2
+           FROM appointments
+          WHERE id=$1
+       RETURNING id`,
+      [laboratory.id, TEST_REFERENCE_IDS.adminUser],
+    );
+    const newerLaboratoryId = newerLaboratory.rows[0].id;
+    const newCycle = await getAdminStudentResultProfile("99-9003-03", admin);
+    expect(newCycle?.laboratory).toMatchObject({
+      appointment: { id: newerLaboratoryId, status: "PENDING" },
+      state: "NOT_SUBMITTED",
+      submission: null,
+    });
+    expect(newCycle?.progress).toBe("PARTIALLY_SUBMITTED");
+    expect(newCycle?.history.some((submission) => submission.id === replacementFinalized.id))
+      .toBe(true);
+
+    const afterNewLaboratoryCycle = await appointmentSummaryReport({
+      search: "99-9003-03",
+      sort: "name_asc",
+      page: 1,
+      limit: 20,
+      offset: 0,
+    });
+    expect(afterNewLaboratoryCycle.items[0]).toMatchObject({
+      laboratoryStatus: "PENDING",
+      physicalExamStatus: "COMPLETED",
+      overallStatus: "INCOMPLETE",
+    });
   }, 60000);
 });

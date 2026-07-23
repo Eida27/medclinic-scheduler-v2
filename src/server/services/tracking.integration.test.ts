@@ -45,7 +45,7 @@ afterAll(async () => {
 });
 
 describe("compliance tracking", () => {
-  it("summarizes both services by preferring pending appointments and deriving overall follow-up", async () => {
+  it("summarizes both services from the latest effective attendance appointments", async () => {
     const completedPhysical = await pool.query<{ id: string }>(
       `INSERT INTO appointments (
          clinic_id, student_number, schedule_type, appointment_date,
@@ -95,22 +95,22 @@ describe("compliance tracking", () => {
         studentNumber: summaryStudentNumber,
         appointmentStatus: "COMPLETED",
         physicalExamStatus: "COMPLETED",
-        laboratoryStatus: "REQUIRES_FOLLOW_UP",
-        physicalExamAppointmentId: pendingPhysical.rows[0].id,
-        physicalExamAppointmentDate: "2045-12-20",
-        physicalExamAppointmentStatus: "PENDING",
+        laboratoryStatus: "COMPLETED",
+        physicalExamAppointmentId: completedPhysical.rows[0].id,
+        physicalExamAppointmentDate: "2045-12-25",
+        physicalExamAppointmentStatus: "COMPLETED",
         laboratoryAppointmentId: completedLaboratory.rows[0].id,
         laboratoryAppointmentDate: "2045-12-19",
         laboratoryAppointmentStatus: "COMPLETED",
-        nextSchedule: "2045-12-20",
-        overallStatus: "FOLLOW_UP",
+        nextSchedule: null,
+        overallStatus: "COMPLETE",
       }),
     ]);
     expect(report.summary).toEqual({
       totalStudents: 1,
       physicalCompleted: 1,
-      laboratoryCompleted: 0,
-      pendingAny: 1,
+      laboratoryCompleted: 1,
+      pendingAny: 0,
     });
     expect(completedPhysical.rows[0].id).not.toBe(pendingPhysical.rows[0].id);
   });
@@ -140,7 +140,7 @@ describe("compliance tracking", () => {
     expect(beforePublication.items[0]).toMatchObject({
       studentNumber,
       appointmentStatus: "UNSCHEDULED",
-      laboratoryStatus: "PENDING_UPLOAD",
+      laboratoryStatus: "UNSCHEDULED",
     });
 
     const draftFilter = await complianceReport({
@@ -166,7 +166,7 @@ describe("compliance tracking", () => {
     expect(afterPublication.items[0]).toMatchObject({
       studentNumber,
       appointmentStatus: "PENDING",
-      laboratoryStatus: "COMPLETED",
+      laboratoryStatus: "PENDING",
     });
   });
 
