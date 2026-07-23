@@ -10,10 +10,12 @@ import type { ImportedStudentRow } from "@/server/services/student-import-csv";
 import { resolveSchedulingWindow } from "@/server/services/scheduling-window";
 import { generatePairedSchedule } from "@/server/rule-engine/generate-paired-schedule";
 import {
-  makeCapacityForPriorityBatch,
-  makePhysicalExamCapacityForPriorityBatch,
+  applyPriorityDisplacementsWithLockedScopes,
   nextDateAfter,
-  publishDisplacedRegularReplacements,
+  planCapacityForPriorityBatch,
+  planPhysicalExamCapacityForPriorityBatch,
+  priorityDisplacementScopes,
+  publishDisplacedRegularReplacementsWithLockedScopes,
 } from "@/server/services/priority-displacement.service";
 import { studentDisplayNameSql } from "@/server/students/student-display-name";
 
@@ -436,12 +438,11 @@ export async function createScheduleImport(
     ).length;
     const displacedPairCandidates = input.studentCategory === "REGULAR"
       ? []
-      : await makeCapacityForPriorityBatch({
+      : await planCapacityForPriorityBatch({
           scheduleCycleStart: input.academicYearStart,
           windowStart,
           windowEnd: preferredWindowEnd,
           neededPairCount: initialOverflowCount,
-          actorUserId,
         }, client);
     for (const candidate of displacedPairCandidates) {
       laboratoryLoad[candidate.laboratoryDate] = Math.max(
@@ -462,13 +463,15 @@ export async function createScheduleImport(
     );
     const displacedPhysicalExamCandidates = input.studentCategory === "REGULAR"
       ? []
-      : await makePhysicalExamCapacityForPriorityBatch({
+      : await planPhysicalExamCapacityForPriorityBatch({
           scheduleCycleStart: input.academicYearStart,
           windowEnd: preferredWindowEnd,
           physicalExamNotBeforeDates: physicalExamOnlyOverflow.map(
             (assignment) => nextDateAfter(assignment.laboratoryDate),
           ),
-          actorUserId,
+          excludedPhysicalExamIds: displacedPairCandidates.map(
+            (candidate) => candidate.physicalExamAppointmentId,
+          ),
         }, client);
     for (const candidate of displacedPhysicalExamCandidates) {
       physicalExamLoad[candidate.physicalExamDate] = Math.max(
@@ -507,6 +510,19 @@ export async function createScheduleImport(
         { students: assignments.unscheduledRequestIds },
       );
     }
+
+    await lockEffectiveAppointmentScopes(client, [
+      ...assignments.assignments.flatMap((assignment) => [
+        { studentNumber: assignment.studentNumber, scheduleType: "LABORATORY" },
+        { studentNumber: assignment.studentNumber, scheduleType: "PHYSICAL_EXAM" },
+      ]),
+      ...priorityDisplacementScopes(displacedCandidates),
+    ]);
+    await applyPriorityDisplacementsWithLockedScopes(
+      displacedCandidates,
+      actorUserId,
+      client,
+    );
 
     const collegeIds = new Set(schedulableRows.map((row) => row.collegeId));
     const programIds = new Set(schedulableRows.map((row) => row.programId));
@@ -593,11 +609,6 @@ export async function createScheduleImport(
       assignments.assignments.map((assignment) => assignment.physicalExamDate),
     );
 
-    await lockEffectiveAppointmentScopes(client, assignments.assignments.flatMap((assignment) => [
-      { studentNumber: assignment.studentNumber, scheduleType: "LABORATORY" },
-      { studentNumber: assignment.studentNumber, scheduleType: "PHYSICAL_EXAM" },
-    ]));
-
     const appointmentIds: string[] = [];
     const insertAppointments = async (
       batchId: string,
@@ -651,7 +662,7 @@ export async function createScheduleImport(
         [actorUserId, appointmentIds],
       );
     }
-    await publishDisplacedRegularReplacements({
+    await publishDisplacedRegularReplacementsWithLockedScopes({
       candidates: displacedCandidates,
       sourceImportGroupId: importId,
       actorUserId,

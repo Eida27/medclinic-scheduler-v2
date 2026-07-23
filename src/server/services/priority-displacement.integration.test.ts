@@ -1,14 +1,17 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { pool } from "@/server/db/pool";
+import { publishBatch } from "@/server/repositories/appointments.repository";
+import { getCurrentEffectiveAppointmentsForStudent } from "@/server/repositories/current-effective-appointments.repository";
 import {
   setupCapacityFixtureLock,
   teardownCapacityFixtureLock,
   type CapacityFixtureLock,
 } from "@/test/capacity-fixture-lifecycle";
-import { cleanupTestFixtures, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
+import { cleanupTestFixtures, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import type { SessionUser } from "@/types/roles";
 import { acceptAndScheduleImport } from "./schedule-imports.service";
+import { invalidateStudentResultSubmission } from "./student-result-submissions.service";
 
 const header = "Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth";
 const studentPattern = "99-94%";
@@ -63,6 +66,38 @@ async function cleanup() {
   await pool.query("DELETE FROM clinic_unavailable_dates WHERE reason LIKE 'TEST-DISPLACE%'");
 }
 
+async function waitForCoordinatorItemInsertWaiter() {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const waiter = await pool.query<{ pid: number }>(
+      `SELECT lock.pid
+         FROM pg_locks lock
+        WHERE lock.relation='coordinator_schedule_items'::regclass
+          AND lock.granted=FALSE
+        ORDER BY lock.pid
+        LIMIT 1`,
+    );
+    if (waiter.rows[0]) return waiter.rows[0].pid;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for atomic import to reach coordinator item insertion.");
+}
+
+async function waitForClientLock(clientPid: number) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const activity = await pool.query<{ waitEventType: string | null }>(
+      `SELECT wait_event_type AS "waitEventType"
+         FROM pg_stat_activity
+        WHERE pid=$1`,
+      [clientPid],
+    );
+    if (activity.rows[0]?.waitEventType === "Lock") return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for batch publication to block on the shared scope lock.");
+}
+
 beforeAll(async () => {
   capacityFixture = await setupCapacityFixtureLock(pool, cleanup);
 });
@@ -74,6 +109,174 @@ afterAll(async () => {
 });
 
 describe("priority displacement", () => {
+  it("acquires one canonical atomic-import scope union before concurrent batch publication", async () => {
+    const importedStudent = "99-9426-26";
+    const unaffectedRegularStudent = "99-9427-27";
+    const displacedStudent = "99-9428-28";
+    await pool.query(
+      `UPDATE clinic_capacity_settings
+          SET safe_daily_capacity=1, max_daily_capacity=1
+        WHERE id IN ($1,$2)`,
+      [
+        "40000000-0000-4000-8000-000000000001",
+        "40000000-0000-4000-8000-000000000002",
+      ],
+    );
+    await insertEndOfMonthClosures();
+    await insertTestStudent({
+      studentNumber: importedStudent,
+      firstName: "Imported",
+      lastName: "LockOrder",
+      yearLevel: 3,
+    });
+    const oldAppointment = await pool.query<{ id: string }>(
+      `INSERT INTO appointments (
+         clinic_id, student_number, schedule_type, appointment_date,
+         status, is_published, created_by, schedule_cycle_start
+       ) VALUES ($1,$2,'LABORATORY','2025-07-01','COMPLETED',TRUE,$3,2024)
+       RETURNING id`,
+      [TEST_REFERENCE_IDS.laboratoryClinic, importedStudent, TEST_REFERENCE_IDS.adminUser],
+    );
+    await pool.query(
+      `INSERT INTO laboratory_results (
+         student_number, appointment_id, result_status, completed_at, encoded_by
+       ) VALUES ($1,$2,'COMPLETED','2025-07-01',$3)`,
+      [importedStudent, oldAppointment.rows[0].id, TEST_REFERENCE_IDS.adminUser],
+    );
+    const oldSubmission = await pool.query<{ id: string }>(
+      `INSERT INTO student_result_submissions (
+         appointment_id, student_number, result_type, status, finalized_at
+       ) VALUES ($1,$2,'LABORATORY','FINALIZED',NOW())
+       RETURNING id`,
+      [oldAppointment.rows[0].id, importedStudent],
+    );
+    await pool.query(
+      `INSERT INTO student_result_files (
+         submission_id, storage_key, original_filename, detected_mime_type,
+         extension, byte_size, checksum_sha256
+       ) VALUES ($1,'TEST-DISPLACE/stale.pdf','stale.pdf','application/pdf',
+                 'pdf',32,$2)`,
+      [oldSubmission.rows[0].id, "a".repeat(64)],
+    );
+
+    await acceptAndScheduleImport(
+      input(
+        "TEST-DISPLACE-lock-order-regular.csv",
+        "REGULAR",
+        [unaffectedRegularStudent, displacedStudent],
+      ),
+      admin,
+    );
+    const batch = await pool.query<{ id: string }>(
+      `INSERT INTO schedule_batches (clinic_id, batch_name, status, created_by)
+       VALUES ($1,'REGULAR 2026-2027 - TEST-DISPLACE lock-order batch','GENERATED',$2)
+       RETURNING id`,
+      [TEST_REFERENCE_IDS.laboratoryClinic, TEST_REFERENCE_IDS.adminUser],
+    );
+    await pool.query(
+      `INSERT INTO appointments (
+         batch_id, clinic_id, student_number, schedule_type, appointment_date,
+         status, is_published, created_by, schedule_cycle_start
+       ) VALUES
+         ($1,$2,$3,'LABORATORY','2026-07-15','DRAFT',FALSE,$5,2025),
+         ($1,$2,$4,'LABORATORY','2026-07-16','DRAFT',FALSE,$5,2025)`,
+      [
+        batch.rows[0].id,
+        TEST_REFERENCE_IDS.laboratoryClinic,
+        importedStudent,
+        displacedStudent,
+        TEST_REFERENCE_IDS.adminUser,
+      ],
+    );
+
+    const blocker = await pool.connect();
+    const publisher = await pool.connect();
+    let blockerCommitted = false;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("LOCK TABLE coordinator_schedule_items IN SHARE MODE");
+      const importTask = acceptAndScheduleImport(
+        input("TEST-DISPLACE-lock-order-priority.csv", "OJT", [importedStudent]),
+        admin,
+      );
+      const importPid = await waitForCoordinatorItemInsertWaiter();
+      const importAdvisoryLocks = await pool.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count
+           FROM pg_locks
+          WHERE pid=$1 AND locktype='advisory' AND granted=TRUE`,
+        [importPid],
+      );
+      expect(importAdvisoryLocks.rows[0].count).toBe(5);
+
+      await publisher.query("BEGIN");
+      await publisher.query("SET LOCAL deadlock_timeout='100ms'");
+      const publisherPid = await publisher.query<{ pid: number }>("SELECT pg_backend_pid() AS pid");
+      const publicationTask = publishBatch(
+        batch.rows[0].id,
+        admin.userId,
+        publisher,
+      ).then(async (result) => {
+        await publisher.query("COMMIT");
+        return result;
+      }).catch(async (error) => {
+        await publisher.query("ROLLBACK").catch(() => undefined);
+        throw error;
+      });
+      await waitForClientLock(publisherPid.rows[0].pid);
+
+      await blocker.query("COMMIT");
+      blockerCommitted = true;
+      const [importOutcome, publicationOutcome] = await Promise.allSettled([
+        importTask,
+        publicationTask,
+      ]);
+
+      if (importOutcome.status === "rejected") throw importOutcome.reason;
+      if (publicationOutcome.status === "rejected") throw publicationOutcome.reason;
+      expect(importOutcome.value).toMatchObject({ displacementTotal: 1 });
+      expect(publicationOutcome.value).toEqual({ count: 2 });
+
+      const current = await getCurrentEffectiveAppointmentsForStudent(importedStudent);
+      expect(current.laboratory).toMatchObject({
+        studentNumber: importedStudent,
+        scheduleType: "LABORATORY",
+      });
+      expect(current.laboratory?.id).not.toBe(oldAppointment.rows[0].id);
+      let deleteCalls = 0;
+      await expect(invalidateStudentResultSubmission(
+        oldSubmission.rows[0].id,
+        "Reject stale concurrent submission",
+        admin,
+        {
+          write: async () => { throw new Error("Unexpected storage write."); },
+          read: async () => { throw new Error("Unexpected storage read."); },
+          delete: async () => { deleteCalls += 1; },
+        },
+      )).rejects.toMatchObject({ code: "RESULT_SUBMISSION_CONFLICT", status: 409 });
+      expect(deleteCalls).toBe(0);
+      const staleState = await pool.query<{
+        status: string;
+        storageDeletePending: boolean;
+      }>(
+        `SELECT submission.status,
+                file.storage_delete_pending AS "storageDeletePending"
+           FROM student_result_submissions submission
+           JOIN student_result_files file ON file.submission_id=submission.id
+          WHERE submission.id=$1`,
+        [oldSubmission.rows[0].id],
+      );
+      expect(staleState.rows).toEqual([{
+        status: "FINALIZED",
+        storageDeletePending: false,
+      }]);
+    } finally {
+      if (!blockerCommitted) await blocker.query("ROLLBACK").catch(() => undefined);
+      await publisher.query("ROLLBACK").catch(() => undefined);
+      blocker.release();
+      publisher.release();
+    }
+  }, 30000);
+
   it("keeps a priority candidate date eligible until maximum capacity is reached", async () => {
     await pool.query(
       `UPDATE clinic_capacity_settings

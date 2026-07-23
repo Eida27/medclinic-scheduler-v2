@@ -10,36 +10,40 @@ import {
 } from "@/server/repositories/priority-displacement.repository";
 import { createStudentNotification } from "@/server/services/student-notifications.service";
 
-export async function makeCapacityForPriorityBatch(
+export function priorityDisplacementScopes(candidates: DisplacementCandidate[]) {
+  return candidates.flatMap((candidate) => (
+    candidate.displacementType === "PAIR"
+      ? [
+          { studentNumber: candidate.studentNumber, scheduleType: "LABORATORY" },
+          { studentNumber: candidate.studentNumber, scheduleType: "PHYSICAL_EXAM" },
+        ]
+      : [{ studentNumber: candidate.studentNumber, scheduleType: "PHYSICAL_EXAM" }]
+  ));
+}
+
+export async function planCapacityForPriorityBatch(
   input: {
     scheduleCycleStart: number;
     windowStart: string;
     windowEnd: string;
     neededPairCount: number;
-    actorUserId: string;
   },
   client: PoolClient,
 ) {
-  const candidates = await lockEligibleRegularPairs(client, {
+  return lockEligibleRegularPairs(client, {
     scheduleCycleStart: input.scheduleCycleStart,
     windowStart: input.windowStart,
     windowEnd: input.windowEnd,
     limit: input.neededPairCount,
   });
-  await lockEffectiveAppointmentScopes(client, candidates.flatMap((candidate) => [
-    { studentNumber: candidate.studentNumber, scheduleType: "LABORATORY" },
-    { studentNumber: candidate.studentNumber, scheduleType: "PHYSICAL_EXAM" },
-  ]));
-  await markDisplacedAppointmentsRescheduled(client, candidates, input.actorUserId);
-  return candidates;
 }
 
-export async function makePhysicalExamCapacityForPriorityBatch(
+export async function planPhysicalExamCapacityForPriorityBatch(
   input: {
     scheduleCycleStart: number;
     windowEnd: string;
     physicalExamNotBeforeDates: string[];
-    actorUserId: string;
+    excludedPhysicalExamIds?: string[];
   },
   client: PoolClient,
 ) {
@@ -52,16 +56,53 @@ export async function makePhysicalExamCapacityForPriorityBatch(
       windowStart,
       windowEnd: input.windowEnd,
       limit: 1,
-      excludedPhysicalExamIds: candidates.map((candidate) => candidate.physicalExamAppointmentId),
+      excludedPhysicalExamIds: [
+        ...(input.excludedPhysicalExamIds ?? []),
+        ...candidates.map((candidate) => candidate.physicalExamAppointmentId),
+      ],
     });
     if (!candidate) continue;
     candidates.push(candidate);
   }
-  await lockEffectiveAppointmentScopes(client, candidates.map((candidate) => ({
-    studentNumber: candidate.studentNumber,
-    scheduleType: "PHYSICAL_EXAM",
-  })));
-  await markDisplacedAppointmentsRescheduled(client, candidates, input.actorUserId);
+  return candidates;
+}
+
+export async function applyPriorityDisplacementsWithLockedScopes(
+  candidates: DisplacementCandidate[],
+  actorUserId: string,
+  client: PoolClient,
+) {
+  await markDisplacedAppointmentsRescheduled(client, candidates, actorUserId);
+}
+
+export async function makeCapacityForPriorityBatch(
+  input: {
+    scheduleCycleStart: number;
+    windowStart: string;
+    windowEnd: string;
+    neededPairCount: number;
+    actorUserId: string;
+  },
+  client: PoolClient,
+) {
+  const candidates = await planCapacityForPriorityBatch(input, client);
+  await lockEffectiveAppointmentScopes(client, priorityDisplacementScopes(candidates));
+  await applyPriorityDisplacementsWithLockedScopes(candidates, input.actorUserId, client);
+  return candidates;
+}
+
+export async function makePhysicalExamCapacityForPriorityBatch(
+  input: {
+    scheduleCycleStart: number;
+    windowEnd: string;
+    physicalExamNotBeforeDates: string[];
+    actorUserId: string;
+  },
+  client: PoolClient,
+) {
+  const candidates = await planPhysicalExamCapacityForPriorityBatch(input, client);
+  await lockEffectiveAppointmentScopes(client, priorityDisplacementScopes(candidates));
+  await applyPriorityDisplacementsWithLockedScopes(candidates, input.actorUserId, client);
   return candidates;
 }
 
@@ -70,7 +111,7 @@ function addDays(date: string, days: number) {
   return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
 }
 
-export async function publishDisplacedRegularReplacements(
+export async function publishDisplacedRegularReplacementsWithLockedScopes(
   input: {
     candidates: DisplacementCandidate[];
     sourceImportGroupId: string;
@@ -81,14 +122,6 @@ export async function publishDisplacedRegularReplacements(
   client: PoolClient,
 ) {
   if (!input.candidates.length) return [];
-  await lockEffectiveAppointmentScopes(client, input.candidates.flatMap((candidate) => (
-    candidate.displacementType === "PAIR"
-      ? [
-          { studentNumber: candidate.studentNumber, scheduleType: "LABORATORY" },
-          { studentNumber: candidate.studentNumber, scheduleType: "PHYSICAL_EXAM" },
-        ]
-      : [{ studentNumber: candidate.studentNumber, scheduleType: "PHYSICAL_EXAM" }]
-  )));
   const pairCandidates = input.candidates.filter(
     (candidate) => candidate.displacementType === "PAIR",
   );
@@ -414,6 +447,20 @@ export async function publishDisplacedRegularReplacements(
       physicalExamDate,
     })),
   ];
+}
+
+export async function publishDisplacedRegularReplacements(
+  input: {
+    candidates: DisplacementCandidate[];
+    sourceImportGroupId: string;
+    actorUserId: string;
+    replacementWindowStart: string;
+    searchEndDate: string;
+  },
+  client: PoolClient,
+) {
+  await lockEffectiveAppointmentScopes(client, priorityDisplacementScopes(input.candidates));
+  return publishDisplacedRegularReplacementsWithLockedScopes(input, client);
 }
 
 export const nextDateAfter = (date: string) => addDays(date, 1);
