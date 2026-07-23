@@ -40,6 +40,29 @@ describe("database constraints", () => {
     await expect(tableExists("email_outbox")).resolves.toBe(true);
   });
 
+  it("creates current appointment and result submission read indexes", async () => {
+    const indexes = await pool.query<{ indexname: string; indexdef: string }>(
+      `SELECT indexname, indexdef
+         FROM pg_indexes
+        WHERE schemaname='public'
+          AND indexname IN (
+            'appointments_current_service_lookup_idx',
+            'student_result_submissions_admin_profile_idx'
+          )
+        ORDER BY indexname`,
+    );
+    expect(indexes.rows).toEqual([
+      expect.objectContaining({
+        indexname: "appointments_current_service_lookup_idx",
+        indexdef: expect.stringContaining("student_number, schedule_type, appointment_date DESC"),
+      }),
+      expect.objectContaining({
+        indexname: "student_result_submissions_admin_profile_idx",
+        indexdef: expect.stringContaining("student_number, appointment_id, last_activity_at DESC"),
+      }),
+    ]);
+  });
+
   it("creates schedule import groups with the required columns, defaults, and updated-at trigger", async () => {
     const columns = await pool.query<{
       column_name: string;
