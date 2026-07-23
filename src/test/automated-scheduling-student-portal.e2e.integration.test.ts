@@ -296,7 +296,15 @@ describe("automated academic-year scheduling and student results", () => {
     await invalidateStudentResultSubmission(finalized.id, "Synthetic document replacement test", admin, storage);
     const awaiting = await getAdminStudentResultProfile("99-9003-03", admin);
     expect(awaiting).toMatchObject({ progress: "AWAITING_RESUBMISSION" });
-    expect(awaiting?.laboratory).toMatchObject({ state: "INVALIDATED" });
+    expect(awaiting?.laboratory).toMatchObject({
+      state: "INVALIDATED",
+      submission: {
+        id: finalized.id,
+        status: "INVALIDATED",
+        invalidationReason: "Synthetic document replacement test",
+        invalidatedAt: expect.any(Date),
+      },
+    });
     const reopened = await getStudentResultSubmission("99-9003-03", laboratory.id);
     expect(reopened).toMatchObject({ status: "DRAFT", fileCount: 0 });
     await expect(addStudentResultFile("99-9003-03", laboratory.id, {
@@ -330,9 +338,13 @@ describe("automated academic-year scheduling and student results", () => {
     const replaced = await getAdminStudentResultProfile("99-9003-03", admin);
     expect(replaced).toMatchObject({ progress: "FULLY_SUBMITTED" });
     expect(replaced?.laboratory).toMatchObject({ state: "FINALIZED" });
-    expect(replaced?.history.some((submission) => (
-      submission.id === finalized.id && submission.status === "INVALIDATED"
-    ))).toBe(true);
+    const invalidatedHistory = replaced?.history.find((submission) => submission.id === finalized.id);
+    expect(invalidatedHistory).toMatchObject({
+      id: finalized.id,
+      status: "INVALIDATED",
+      invalidationReason: "Synthetic document replacement test",
+      invalidatedAt: expect.any(Date),
+    });
 
     const newerLaboratory = await pool.query<{ id: string }>(
       `INSERT INTO appointments (
