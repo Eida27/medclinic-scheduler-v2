@@ -14,11 +14,14 @@ import { transaction } from "@/server/db/pool";
 import {
   finalizeStudentResultDraft,
   getAccessibleStudentResultFileRow,
+  getAdminStudentResultProfileRow,
   getAdminStudentResultSubmissionRow,
   getFinalizedSubmissionFileRows,
+  getStudentNumberForSubmission,
   getStudentResultSubmissionRow,
   invalidateFinalizedSubmissionMetadata,
   insertStudentResultFile,
+  listAdminStudentResultProfileRows,
   listAdminStudentResultSubmissionRows,
   listDraftFilesForUpdate,
   lockFinalizedSubmissionForInvalidation,
@@ -197,6 +200,30 @@ function assertAdmin(actor: SessionUser) {
   if (actor.role !== "ADMIN") {
     throw new AppError("FORBIDDEN", "Only administrators can access student result documents.", 403);
   }
+}
+
+export async function listAdminStudentResultProfiles(
+  actor: SessionUser,
+  input: { page: number; limit: number; offset: number },
+) {
+  assertAdmin(actor);
+  return listAdminStudentResultProfileRows({ limit: input.limit, offset: input.offset });
+}
+
+export async function getAdminStudentResultProfile(
+  studentNumber: string,
+  actor: SessionUser,
+) {
+  assertAdmin(actor);
+  return getAdminStudentResultProfileRow(studentNumber);
+}
+
+export async function getAdminSubmissionStudentNumber(
+  submissionId: string,
+  actor: SessionUser,
+) {
+  assertAdmin(actor);
+  return getStudentNumberForSubmission(submissionId);
 }
 
 export async function getAdminStudentResultFile(

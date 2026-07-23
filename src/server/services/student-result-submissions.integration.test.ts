@@ -20,10 +20,13 @@ import {
   createAdminSubmissionZip,
   createAdminSubmissionZipStream,
   finalizeStudentResultSubmission,
+  getAdminStudentResultProfile,
   getAdminStudentResultFile,
+  getAdminSubmissionStudentNumber,
   getStudentResultFile,
   getStudentResultSubmission,
   invalidateStudentResultSubmission,
+  listAdminStudentResultProfiles,
   removeStudentResultFile,
 } from "./student-result-submissions.service";
 
@@ -274,6 +277,12 @@ describe("student result drafts", () => {
       .rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
     await expect(getAdminStudentResultFile(added.id, clinicStaff, storage))
       .rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+    await expect(listAdminStudentResultProfiles(coordinator, { page: 1, limit: 50, offset: 0 }))
+      .rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+    await expect(getAdminStudentResultProfile("99-9409-09", clinicStaff))
+      .rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+    await expect(getAdminSubmissionStudentNumber(finalized.id, admin))
+      .resolves.toBe("99-9409-09");
     await expect(getAdminStudentResultFile(added.id, admin, storage))
       .resolves.toMatchObject({ filename: "shared-name.pdf", bytes: file().bytes });
     const zip = await createAdminSubmissionZip(finalized.id, admin, storage);
