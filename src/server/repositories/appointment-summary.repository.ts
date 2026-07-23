@@ -5,6 +5,10 @@ import type {
 } from "@/components/appointments/appointment-summary";
 import type { ClinicCode } from "@/server/clinics";
 import { query } from "@/server/db/pool";
+import {
+  CURRENT_EFFECTIVE_APPOINTMENTS_CTE,
+  type AttendanceStatus,
+} from "@/server/repositories/current-effective-appointments.repository";
 import { studentDisplayNameSql } from "@/server/students/student-display-name";
 
 export type AppointmentSummaryItem = {
@@ -13,8 +17,8 @@ export type AppointmentSummaryItem = {
   collegeName: string;
   programName: string;
   appointmentStatus: string;
-  physicalExamStatus: string;
-  laboratoryStatus: string;
+  physicalExamStatus: AttendanceStatus;
+  laboratoryStatus: AttendanceStatus;
   physicalExamAppointmentId: string | null;
   physicalExamAppointmentDate: string | null;
   physicalExamAppointmentStatus: string | null;
@@ -22,7 +26,7 @@ export type AppointmentSummaryItem = {
   laboratoryAppointmentDate: string | null;
   laboratoryAppointmentStatus: string | null;
   nextSchedule: string | null;
-  overallStatus: OverallStatus;
+  overallStatus: "COMPLETE" | "INCOMPLETE";
 };
 
 export type AppointmentSummaryFilters = {
@@ -44,7 +48,8 @@ export type AppointmentSummaryFilters = {
 };
 
 const summaryRowsCte = `
-  WITH summary_rows AS (
+  WITH ${CURRENT_EFFECTIVE_APPOINTMENTS_CTE},
+  summary_rows AS (
     SELECT
       s.student_number AS "studentNumber",
       ${studentDisplayNameSql("s")} AS "studentName",
@@ -62,110 +67,41 @@ const summaryRowsCte = `
       latest_item.priority_group_id AS "priorityGroupId",
       COALESCE(latest_appointment.status, 'UNSCHEDULED') AS "appointmentStatus",
       latest_appointment.clinic_code AS "latestAppointmentClinicCode",
-      COALESCE(exam.result_status, 'PENDING_UPLOAD') AS "physicalExamStatus",
-      COALESCE(lab.result_status, 'PENDING_UPLOAD') AS "laboratoryStatus",
-      physical_appointment.id AS "physicalExamAppointmentId",
-      physical_appointment.appointment_date AS "physicalExamAppointmentDate",
-      physical_appointment.status AS "physicalExamAppointmentStatus",
-      physical_appointment.clinic_code AS "physicalExamClinicCode",
-      laboratory_appointment.id AS "laboratoryAppointmentId",
-      laboratory_appointment.appointment_date AS "laboratoryAppointmentDate",
-      laboratory_appointment.status AS "laboratoryAppointmentStatus",
-      laboratory_appointment.clinic_code AS "laboratoryClinicCode",
+      COALESCE(physical.status, 'UNSCHEDULED') AS "physicalExamStatus",
+      COALESCE(laboratory.status, 'UNSCHEDULED') AS "laboratoryStatus",
+      physical.id AS "physicalExamAppointmentId",
+      physical.appointment_date AS "physicalExamAppointmentDate",
+      physical.status AS "physicalExamAppointmentStatus",
+      laboratory.id AS "laboratoryAppointmentId",
+      laboratory.appointment_date AS "laboratoryAppointmentDate",
+      laboratory.status AS "laboratoryAppointmentStatus",
       LEAST(
-        CASE
-          WHEN physical_appointment.status='PENDING'
-            AND physical_appointment.appointment_date >= CURRENT_DATE
-          THEN physical_appointment.appointment_date
-        END,
-        CASE
-          WHEN laboratory_appointment.status='PENDING'
-            AND laboratory_appointment.appointment_date >= CURRENT_DATE
-          THEN laboratory_appointment.appointment_date
-        END
+        CASE WHEN physical.status='PENDING' AND physical.appointment_date >= CURRENT_DATE
+             THEN physical.appointment_date END,
+        CASE WHEN laboratory.status='PENDING' AND laboratory.appointment_date >= CURRENT_DATE
+             THEN laboratory.appointment_date END
       ) AS "nextSchedule",
       CASE
-        WHEN COALESCE(exam.result_status, 'PENDING_UPLOAD')='REQUIRES_FOLLOW_UP'
-          OR COALESCE(lab.result_status, 'PENDING_UPLOAD')='REQUIRES_FOLLOW_UP'
-        THEN 'FOLLOW_UP'
-        WHEN COALESCE(exam.result_status, 'PENDING_UPLOAD')='COMPLETED'
-          AND COALESCE(lab.result_status, 'PENDING_UPLOAD')='COMPLETED'
+        WHEN physical.status='COMPLETED' AND laboratory.status='COMPLETED'
         THEN 'COMPLETE'
         ELSE 'INCOMPLETE'
       END AS "overallStatus"
     FROM students s
     JOIN colleges c ON c.id=s.college_id
     JOIN programs p ON p.id=s.program_id
+    LEFT JOIN current_effective_appointments physical
+      ON physical."studentNumber"=s.student_number
+     AND physical."scheduleType"='PHYSICAL_EXAM'
+    LEFT JOIN current_effective_appointments laboratory
+      ON laboratory."studentNumber"=s.student_number
+     AND laboratory."scheduleType"='LABORATORY'
     LEFT JOIN LATERAL (
-      SELECT result.result_status
-      FROM exam_results result
-      LEFT JOIN appointments result_appointment ON result_appointment.id=result.appointment_id
-      WHERE result.student_number=s.student_number
-        AND (
-          result.appointment_id IS NULL
-          OR (
-            result_appointment.is_published=TRUE
-            AND result_appointment.status IN ('PENDING','COMPLETED','NO_SHOW')
-          )
-        )
-      ORDER BY result.updated_at DESC, result.created_at DESC, result.id
-      LIMIT 1
-    ) exam ON TRUE
-    LEFT JOIN LATERAL (
-      SELECT result.result_status
-      FROM laboratory_results result
-      LEFT JOIN appointments result_appointment ON result_appointment.id=result.appointment_id
-      WHERE result.student_number=s.student_number
-        AND (
-          result.appointment_id IS NULL
-          OR (
-            result_appointment.is_published=TRUE
-            AND result_appointment.status IN ('PENDING','COMPLETED','NO_SHOW')
-          )
-        )
-      ORDER BY result.updated_at DESC, result.created_at DESC, result.id
-      LIMIT 1
-    ) lab ON TRUE
-    LEFT JOIN LATERAL (
-      SELECT a.id, a.appointment_date, a.status, clinic.code AS clinic_code
-      FROM appointments a
-      JOIN clinics clinic ON clinic.id=a.clinic_id
-      WHERE a.student_number=s.student_number
-        AND a.schedule_type='PHYSICAL_EXAM'
-        AND a.is_published=TRUE
-        AND a.status IN ('PENDING','COMPLETED','NO_SHOW')
-      ORDER BY
-        CASE WHEN a.status='PENDING' THEN 0 ELSE 1 END,
-        CASE WHEN a.status='PENDING' THEN a.appointment_date END,
-        CASE WHEN a.status<>'PENDING' THEN a.appointment_date END DESC,
-        a.created_at DESC,
-        a.id
-      LIMIT 1
-    ) physical_appointment ON TRUE
-    LEFT JOIN LATERAL (
-      SELECT a.id, a.appointment_date, a.status, clinic.code AS clinic_code
-      FROM appointments a
-      JOIN clinics clinic ON clinic.id=a.clinic_id
-      WHERE a.student_number=s.student_number
-        AND a.schedule_type='LABORATORY'
-        AND a.is_published=TRUE
-        AND a.status IN ('PENDING','COMPLETED','NO_SHOW')
-      ORDER BY
-        CASE WHEN a.status='PENDING' THEN 0 ELSE 1 END,
-        CASE WHEN a.status='PENDING' THEN a.appointment_date END,
-        CASE WHEN a.status<>'PENDING' THEN a.appointment_date END DESC,
-        a.created_at DESC,
-        a.id
-      LIMIT 1
-    ) laboratory_appointment ON TRUE
-    LEFT JOIN LATERAL (
-      SELECT a.status, clinic.code AS clinic_code
-      FROM appointments a
-      JOIN clinics clinic ON clinic.id=a.clinic_id
-      WHERE a.student_number=s.student_number
-        AND a.is_published=TRUE
-        AND a.status NOT IN ('RESCHEDULED','CANCELLED')
-      ORDER BY a.appointment_date DESC, a.created_at DESC
+      SELECT resolved.status, clinic.code AS clinic_code
+      FROM current_effective_appointments resolved
+      JOIN appointments source_appointment ON source_appointment.id=resolved.id
+      JOIN clinics clinic ON clinic.id=source_appointment.clinic_id
+      WHERE resolved.id IN (physical.id, laboratory.id)
+      ORDER BY resolved.appointment_date DESC, resolved.created_at DESC, resolved.id DESC
       LIMIT 1
     ) latest_appointment ON TRUE
     LEFT JOIN LATERAL (
@@ -177,6 +113,7 @@ const summaryRowsCte = `
           FROM appointments item_appointment
           WHERE item_appointment.schedule_item_id=item.id
             AND item_appointment.is_published=TRUE
+            AND item_appointment.id IN (physical.id, laboratory.id)
         )
       ORDER BY item.created_at DESC
       LIMIT 1
@@ -208,7 +145,7 @@ const orderBy: Record<AppointmentSummarySort, string> = {
     summary_rows."lastName" ASC, summary_rows."firstName" ASC, summary_rows."studentNumber" ASC`,
   name_asc: `summary_rows."lastName" ASC, summary_rows."firstName" ASC, summary_rows."studentNumber" ASC`,
   name_desc: `summary_rows."lastName" DESC, summary_rows."firstName" DESC, summary_rows."studentNumber" DESC`,
-  attention_first: `CASE summary_rows."overallStatus" WHEN 'FOLLOW_UP' THEN 0 WHEN 'INCOMPLETE' THEN 1 ELSE 2 END,
+  attention_first: `CASE summary_rows."overallStatus" WHEN 'INCOMPLETE' THEN 0 ELSE 1 END,
     summary_rows."nextSchedule" ASC NULLS LAST,
     summary_rows."lastName" ASC, summary_rows."firstName" ASC, summary_rows."studentNumber" ASC`,
   completed_first: `CASE summary_rows."overallStatus" WHEN 'COMPLETE' THEN 0 WHEN 'INCOMPLETE' THEN 1 ELSE 2 END,
@@ -254,16 +191,10 @@ export async function appointmentSummaryReport(filters: AppointmentSummaryFilter
   if (filters.programId) add(`summary_rows."programId"=?::uuid`, filters.programId);
   if (filters.priorityGroupId) add(`summary_rows."priorityGroupId"=?::uuid`, filters.priorityGroupId);
   if (filters.physicalExamStatus) {
-    add(
-      `COALESCE(summary_rows."physicalExamStatus", 'PENDING_UPLOAD')=?`,
-      filters.physicalExamStatus,
-    );
+    add(`summary_rows."physicalExamStatus"=?`, filters.physicalExamStatus);
   }
   if (filters.laboratoryStatus) {
-    add(
-      `COALESCE(summary_rows."laboratoryStatus", 'PENDING_UPLOAD')=?`,
-      filters.laboratoryStatus,
-    );
+    add(`summary_rows."laboratoryStatus"=?`, filters.laboratoryStatus);
   }
   if (filters.overallStatus) add(`summary_rows."overallStatus"=?`, filters.overallStatus);
   if (filters.clinicCode) {
@@ -292,7 +223,7 @@ export async function appointmentSummaryReport(filters: AppointmentSummaryFilter
        SELECT COUNT(*)::int AS total,
          COUNT(*) FILTER (WHERE summary_rows."physicalExamStatus"='COMPLETED')::int AS physical_completed,
          COUNT(*) FILTER (WHERE summary_rows."laboratoryStatus"='COMPLETED')::int AS laboratory_completed,
-         COUNT(*) FILTER (WHERE summary_rows."overallStatus"<>'COMPLETE')::int AS pending_any
+         COUNT(*) FILTER (WHERE summary_rows."overallStatus"='INCOMPLETE')::int AS pending_any
        FROM summary_rows
        WHERE ${where}`,
       values,

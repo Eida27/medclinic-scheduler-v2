@@ -37,7 +37,7 @@ describe("appointmentSummaryReport", () => {
       programId: "22222222-2222-2222-2222-222222222222",
       priorityGroupId: "33333333-3333-3333-3333-333333333333",
       physicalExamStatus: "COMPLETED",
-      laboratoryStatus: "PENDING_UPLOAD",
+      laboratoryStatus: "UNSCHEDULED",
       overallStatus: "INCOMPLETE",
       sort: "name_desc",
       page: 2,
@@ -58,8 +58,9 @@ describe("appointmentSummaryReport", () => {
     expect(query).toHaveBeenCalledTimes(2);
 
     const itemSql = query.mock.calls[0][0] as string;
-    expect(itemSql).toContain("a.is_published=TRUE");
-    expect(itemSql).toContain("a.status IN ('PENDING','COMPLETED','NO_SHOW')");
+    expect(itemSql).toContain("current_effective_appointments");
+    expect(itemSql).not.toContain("FROM exam_results result");
+    expect(itemSql).not.toContain("FROM laboratory_results result");
     expect(itemSql).toContain("item_appointment.is_published=TRUE");
     expect(itemSql).toContain("summary_rows.\"overallStatus\"=$9");
     expect(itemSql).toContain(
@@ -73,18 +74,18 @@ describe("appointmentSummaryReport", () => {
       "22222222-2222-2222-2222-222222222222",
       "33333333-3333-3333-3333-333333333333",
       "COMPLETED",
-      "PENDING_UPLOAD",
+      "UNSCHEDULED",
       "INCOMPLETE",
       150,
       150,
     ]);
   });
 
-  it("uses equivalent completion-filter values for rows and metrics before pagination", async () => {
+  it("uses equivalent attendance-filter values for rows and metrics before pagination", async () => {
     await appointmentSummaryReport({
       physicalExamStatus: "COMPLETED",
-      laboratoryStatus: "PENDING_UPLOAD",
-      sort: "name_asc",
+      laboratoryStatus: "UNSCHEDULED",
+      sort: "attention_first",
       page: 3,
       limit: 20,
       offset: 40,
@@ -98,15 +99,14 @@ describe("appointmentSummaryReport", () => {
     const summaryWhere = summarySql.match(/FROM summary_rows\s+WHERE ([\s\S]+)$/)?.[1];
 
     expect(itemWhere).toBe(summaryWhere);
-    expect(itemWhere).toContain(
-      `COALESCE(summary_rows."physicalExamStatus", 'PENDING_UPLOAD')=$1`,
-    );
-    expect(itemWhere).toContain(
-      `COALESCE(summary_rows."laboratoryStatus", 'PENDING_UPLOAD')=$2`,
-    );
+    expect(itemWhere).toContain('summary_rows."physicalExamStatus"=$1');
+    expect(itemWhere).toContain('summary_rows."laboratoryStatus"=$2');
     expect(itemValues.slice(0, -2)).toEqual(summaryValues);
-    expect(summaryValues).toEqual(["COMPLETED", "PENDING_UPLOAD"]);
-    expect(itemValues).toEqual(["COMPLETED", "PENDING_UPLOAD", 20, 40]);
+    expect(summaryValues).toEqual(["COMPLETED", "UNSCHEDULED"]);
+    expect(itemValues).toEqual(["COMPLETED", "UNSCHEDULED", 20, 40]);
+    expect(itemSql).toContain(
+      "CASE summary_rows.\"overallStatus\" WHEN 'INCOMPLETE' THEN 0 ELSE 1 END",
+    );
   });
 
   it.each<[AppointmentSummarySort, string]>([
@@ -114,7 +114,7 @@ describe("appointmentSummaryReport", () => {
     ["upcoming_desc", 'summary_rows."nextSchedule" DESC NULLS LAST'],
     ["name_asc", 'summary_rows."lastName" ASC, summary_rows."firstName" ASC'],
     ["name_desc", 'summary_rows."lastName" DESC, summary_rows."firstName" DESC'],
-    ["attention_first", "CASE summary_rows.\"overallStatus\" WHEN 'FOLLOW_UP' THEN 0 WHEN 'INCOMPLETE' THEN 1 ELSE 2 END"],
+    ["attention_first", "CASE summary_rows.\"overallStatus\" WHEN 'INCOMPLETE' THEN 0 ELSE 1 END"],
     ["completed_first", "CASE summary_rows.\"overallStatus\" WHEN 'COMPLETE' THEN 0 WHEN 'INCOMPLETE' THEN 1 ELSE 2 END"],
   ])("uses the deterministic %s order", async (sort, expectedOrder) => {
     await appointmentSummaryReport({ page: 1, limit: 150, offset: 0, sort });

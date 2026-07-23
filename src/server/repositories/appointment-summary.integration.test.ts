@@ -19,12 +19,14 @@ const orderStudents = [
   ["TEST-ORDER-0006", "Inactive", "Zero"],
 ] as const;
 
-const completionStudents = [
-  ["TEST-COMPLETION-0001", "Both", "Completed"],
-  ["TEST-COMPLETION-0002", "Lab", "Pending"],
-  ["TEST-COMPLETION-0003", "Lab", "Followup"],
-  ["TEST-COMPLETION-0004", "Both", "Pending"],
+const attendanceCases = [
+  ["TEST-ATTENDANCE-0001", "COMPLETED", "COMPLETED", "COMPLETE"],
+  ["TEST-ATTENDANCE-0002", "COMPLETED", "PENDING", "INCOMPLETE"],
+  ["TEST-ATTENDANCE-0003", "NO_SHOW", "COMPLETED", "INCOMPLETE"],
+  ["TEST-ATTENDANCE-0004", null, "COMPLETED", "INCOMPLETE"],
 ] as const;
+
+let attendanceReplacementId: string;
 
 async function report(sort: Parameters<typeof appointmentSummaryReport>[0]["sort"]) {
   return appointmentSummaryReport({
@@ -39,7 +41,7 @@ async function report(sort: Parameters<typeof appointmentSummaryReport>[0]["sort
 beforeAll(async () => {
   await cleanupTestFixtures("TEST-ORDER-%", "TEST order fixture%");
   await cleanupTestFixtures("TEST-PAGE-%", "TEST page fixture%");
-  await cleanupTestFixtures("TEST-COMPLETION-%", "TEST completion fixture%");
+  await cleanupTestFixtures("TEST-ATTENDANCE-%", "TEST attendance fixture%");
 
   for (const [studentNumber, firstName, lastName] of orderStudents) {
     await insertTestStudent({ studentNumber, firstName, lastName, yearLevel: 4 });
@@ -51,8 +53,13 @@ beforeAll(async () => {
   );
   await pool.query("UPDATE students SET is_active=FALSE WHERE student_number='TEST-ORDER-0006'");
   await insertNumberedTestStudents("TEST-PAGE-", 151);
-  for (const [studentNumber, firstName, lastName] of completionStudents) {
-    await insertTestStudent({ studentNumber, firstName, lastName, yearLevel: 4 });
+  for (const [index, [studentNumber]] of attendanceCases.entries()) {
+    await insertTestStudent({
+      studentNumber,
+      firstName: "Attendance",
+      lastName: String(index + 1).padStart(4, "0"),
+      yearLevel: 4,
+    });
   }
 
   await pool.query(
@@ -71,50 +78,75 @@ beforeAll(async () => {
       TEST_REFERENCE_IDS.adminUser,
     ],
   );
-  const cancelled = await pool.query<{ id: string }>(
+  await pool.query(
     `INSERT INTO appointments (
        clinic_id, student_number, schedule_type, appointment_date,
        status, is_published, created_by, updated_by
-     ) VALUES ($1,'TEST-ORDER-0003','LABORATORY','2046-01-15','CANCELLED',TRUE,$2,$2)
-     RETURNING id`,
+     ) VALUES ($1,'TEST-ORDER-0003','LABORATORY','2046-01-15','CANCELLED',TRUE,$2,$2)`,
     [TEST_REFERENCE_IDS.laboratoryClinic, TEST_REFERENCE_IDS.adminUser],
   );
 
+  const attendanceAppointments = await pool.query<{
+    id: string;
+    student_number: string;
+    schedule_type: "LABORATORY" | "PHYSICAL_EXAM";
+  }>(
+    `INSERT INTO appointments (
+       clinic_id, student_number, schedule_type, appointment_date,
+       status, is_published, created_by, updated_by
+     ) VALUES
+       ($1,'TEST-ATTENDANCE-0001','LABORATORY','2046-04-01','COMPLETED',TRUE,$3,$3),
+       ($2,'TEST-ATTENDANCE-0001','PHYSICAL_EXAM','2046-04-08','COMPLETED',TRUE,$3,$3),
+       ($1,'TEST-ATTENDANCE-0002','LABORATORY','2046-04-01','COMPLETED',TRUE,$3,$3),
+       ($2,'TEST-ATTENDANCE-0002','PHYSICAL_EXAM','2046-04-08','PENDING',TRUE,$3,$3),
+       ($2,'TEST-ATTENDANCE-0003','PHYSICAL_EXAM','2046-04-08','COMPLETED',TRUE,$3,$3),
+       ($2,'TEST-ATTENDANCE-0004','PHYSICAL_EXAM','2046-04-08','COMPLETED',TRUE,$3,$3)
+     RETURNING id, student_number, schedule_type`,
+    [
+      TEST_REFERENCE_IDS.laboratoryClinic,
+      TEST_REFERENCE_IDS.physicalExamClinic,
+      TEST_REFERENCE_IDS.adminUser,
+    ],
+  );
+  const original = await pool.query<{ id: string }>(
+    `INSERT INTO appointments (
+       clinic_id, student_number, schedule_type, appointment_date,
+       status, is_published, created_by, updated_by
+     ) VALUES ($1,'TEST-ATTENDANCE-0003','LABORATORY','2046-04-01','RESCHEDULED',TRUE,$2,$2)
+     RETURNING id`,
+    [TEST_REFERENCE_IDS.laboratoryClinic, TEST_REFERENCE_IDS.adminUser],
+  );
+  const replacement = await pool.query<{ id: string }>(
+    `INSERT INTO appointments (
+       clinic_id, student_number, schedule_type, appointment_date,
+       status, is_published, rescheduled_from, created_by, updated_by
+     ) VALUES ($1,'TEST-ATTENDANCE-0003','LABORATORY','2046-04-15','NO_SHOW',TRUE,$2,$3,$3)
+     RETURNING id`,
+    [
+      TEST_REFERENCE_IDS.laboratoryClinic,
+      original.rows[0].id,
+      TEST_REFERENCE_IDS.adminUser,
+    ],
+  );
+  attendanceReplacementId = replacement.rows[0].id;
+
+  const conflictingPhysical = attendanceAppointments.rows.find(
+    (appointment) => appointment.student_number === "TEST-ATTENDANCE-0002"
+      && appointment.schedule_type === "PHYSICAL_EXAM",
+  );
+  if (!conflictingPhysical) {
+    throw new Error("Missing conflicting physical-exam appointment fixture");
+  }
   await pool.query(
     `INSERT INTO exam_results (
-       student_number, result_status, completed_at, encoded_by, created_at, updated_at
-     ) VALUES
-       ('TEST-ORDER-0002','COMPLETED','2045-12-01',$1,'2045-12-01','2045-12-01'),
-       ('TEST-ORDER-0003','COMPLETED','2046-01-01',$1,'2025-01-01','2025-01-01'),
-       ('TEST-ORDER-0003','REQUIRES_FOLLOW_UP',NULL,$1,'2026-01-01','2026-01-01')`,
-    [TEST_REFERENCE_IDS.adminUser],
+       student_number, appointment_id, result_status, completed_at, encoded_by
+     ) VALUES ('TEST-ATTENDANCE-0002',$1,'COMPLETED','2046-04-08',$2)`,
+    [conflictingPhysical.id, TEST_REFERENCE_IDS.adminUser],
   );
   await pool.query(
     `INSERT INTO laboratory_results (
-       student_number, appointment_id, result_status, completed_at,
-       encoded_by, created_at, updated_at
-     ) VALUES
-       ('TEST-ORDER-0002',NULL,'COMPLETED','2045-12-01',$1,'2045-12-01','2045-12-01'),
-       ('TEST-ORDER-0003',NULL,'COMPLETED','2045-12-15',$1,'2025-01-01','2025-01-01'),
-       ('TEST-ORDER-0003',$2,'REQUIRES_FOLLOW_UP','2046-01-15',$1,'2027-01-01','2027-01-01')`,
-    [TEST_REFERENCE_IDS.adminUser, cancelled.rows[0].id],
-  );
-  await pool.query(
-    `INSERT INTO exam_results (
        student_number, result_status, completed_at, encoded_by
-     ) VALUES
-       ('TEST-COMPLETION-0001','COMPLETED','2046-01-01',$1),
-       ('TEST-COMPLETION-0002','COMPLETED','2046-01-01',$1),
-       ('TEST-COMPLETION-0003','COMPLETED','2046-01-01',$1)`,
-    [TEST_REFERENCE_IDS.adminUser],
-  );
-  await pool.query(
-    `INSERT INTO laboratory_results (
-       student_number, result_status, completed_at, encoded_by
-     ) VALUES
-       ('TEST-COMPLETION-0001','COMPLETED','2046-01-01',$1),
-       ('TEST-COMPLETION-0002','PENDING_UPLOAD',NULL,$1),
-       ('TEST-COMPLETION-0003','REQUIRES_FOLLOW_UP',NULL,$1)`,
+     ) VALUES ('TEST-ATTENDANCE-0004','COMPLETED','2046-04-01',$1)`,
     [TEST_REFERENCE_IDS.adminUser],
   );
 });
@@ -122,31 +154,30 @@ beforeAll(async () => {
 afterAll(async () => {
   await cleanupTestFixtures("TEST-ORDER-%", "TEST order fixture%");
   await cleanupTestFixtures("TEST-PAGE-%", "TEST page fixture%");
-  await cleanupTestFixtures("TEST-COMPLETION-%", "TEST completion fixture%");
+  await cleanupTestFixtures("TEST-ATTENDANCE-%", "TEST attendance fixture%");
   await pool.end();
 });
 
-describe("appointment summary completion filters", () => {
+describe("appointment summary attendance", () => {
   const cases = [
-    [{ laboratoryStatus: "COMPLETED" }, ["TEST-COMPLETION-0001"]],
+    [{ laboratoryStatus: "COMPLETED" }, ["TEST-ATTENDANCE-0001", "TEST-ATTENDANCE-0002"]],
     [{ physicalExamStatus: "COMPLETED" }, [
-      "TEST-COMPLETION-0001",
-      "TEST-COMPLETION-0003",
-      "TEST-COMPLETION-0002",
+      "TEST-ATTENDANCE-0001",
+      "TEST-ATTENDANCE-0003",
+      "TEST-ATTENDANCE-0004",
     ]],
     [{ laboratoryStatus: "COMPLETED", physicalExamStatus: "COMPLETED" }, [
-      "TEST-COMPLETION-0001",
+      "TEST-ATTENDANCE-0001",
     ]],
-    [{ laboratoryStatus: "PENDING_UPLOAD", physicalExamStatus: "COMPLETED" }, [
-      "TEST-COMPLETION-0002",
+    [{ laboratoryStatus: "UNSCHEDULED", physicalExamStatus: "COMPLETED" }, [
+      "TEST-ATTENDANCE-0004",
     ]],
-    [{ overallStatus: "COMPLETE" }, ["TEST-COMPLETION-0001"]],
-    [{ overallStatus: "FOLLOW_UP" }, ["TEST-COMPLETION-0003"]],
+    [{ overallStatus: "COMPLETE" }, ["TEST-ATTENDANCE-0001"]],
   ] as const;
 
-  it.each(cases)("applies completion combination %o to rows and metrics", async (filters, expected) => {
+  it.each(cases)("applies attendance combination %o to rows and metrics", async (filters, expected) => {
     const result = await appointmentSummaryReport({
-      search: "TEST-COMPLETION-",
+      search: "TEST-ATTENDANCE-",
       ...filters,
       sort: "name_asc",
       page: 1,
@@ -159,58 +190,42 @@ describe("appointment summary completion filters", () => {
     expect(result.summary.totalStudents).toBe(expected.length);
   });
 
-  it("treats explicit placeholders and absent result rows as pending uploads", async () => {
+  it("derives attendance independently from conflicting result rows", async () => {
     const result = await appointmentSummaryReport({
-      search: "TEST-COMPLETION-",
-      laboratoryStatus: "PENDING_UPLOAD",
+      search: "TEST-ATTENDANCE-",
       sort: "name_asc",
       page: 1,
       limit: 20,
       offset: 0,
     });
 
-    expect(result.items.map((item) => item.studentNumber)).toEqual([
-      "TEST-COMPLETION-0004",
-      "TEST-COMPLETION-0002",
-    ]);
-    expect(result.total).toBe(2);
-    expect(result.summary.totalStudents).toBe(2);
+    const byStudent = new Map(result.items.map((item) => [item.studentNumber, item]));
+
+    for (const [studentNumber, laboratoryStatus, physicalExamStatus, overallStatus]
+      of attendanceCases) {
+      expect(byStudent.get(studentNumber)).toMatchObject({
+        laboratoryStatus: laboratoryStatus ?? "UNSCHEDULED",
+        physicalExamStatus,
+        overallStatus,
+      });
+    }
   });
 
-  it("returns only the laboratory follow-up and physical-completed student", async () => {
+  it("returns the replacement appointment from a reschedule chain", async () => {
     const result = await appointmentSummaryReport({
-      search: "TEST-COMPLETION-",
-      laboratoryStatus: "REQUIRES_FOLLOW_UP",
-      physicalExamStatus: "COMPLETED",
+      search: "TEST-ATTENDANCE-0003",
       sort: "name_asc",
       page: 1,
       limit: 20,
       offset: 0,
     });
 
-    expect(result.items.map((item) => item.studentNumber)).toEqual([
-      "TEST-COMPLETION-0003",
-    ]);
-    expect(result.total).toBe(1);
-    expect(result.summary.totalStudents).toBe(1);
-  });
-
-  it("returns only the student with both results pending", async () => {
-    const result = await appointmentSummaryReport({
-      search: "TEST-COMPLETION-",
-      laboratoryStatus: "PENDING_UPLOAD",
-      physicalExamStatus: "PENDING_UPLOAD",
-      sort: "name_asc",
-      page: 1,
-      limit: 20,
-      offset: 0,
+    expect(result.items[0]).toMatchObject({
+      laboratoryAppointmentId: attendanceReplacementId,
+      laboratoryAppointmentDate: "2046-04-15",
+      laboratoryAppointmentStatus: "NO_SHOW",
+      laboratoryStatus: "NO_SHOW",
     });
-
-    expect(result.items.map((item) => item.studentNumber)).toEqual([
-      "TEST-COMPLETION-0004",
-    ]);
-    expect(result.total).toBe(1);
-    expect(result.summary.totalStudents).toBe(1);
   });
 });
 
@@ -220,15 +235,15 @@ describe("appointment summary ordering and pagination", () => {
     ["upcoming_desc", ["TEST-ORDER-0002", "TEST-ORDER-0001", "TEST-ORDER-0004", "TEST-ORDER-0005", "TEST-ORDER-0003"]],
     ["name_asc", ["TEST-ORDER-0001", "TEST-ORDER-0002", "TEST-ORDER-0003", "TEST-ORDER-0004", "TEST-ORDER-0005"]],
     ["name_desc", ["TEST-ORDER-0005", "TEST-ORDER-0004", "TEST-ORDER-0003", "TEST-ORDER-0002", "TEST-ORDER-0001"]],
-    ["attention_first", ["TEST-ORDER-0003", "TEST-ORDER-0001", "TEST-ORDER-0004", "TEST-ORDER-0005", "TEST-ORDER-0002"]],
-    ["completed_first", ["TEST-ORDER-0002", "TEST-ORDER-0001", "TEST-ORDER-0004", "TEST-ORDER-0005", "TEST-ORDER-0003"]],
+    ["attention_first", ["TEST-ORDER-0001", "TEST-ORDER-0004", "TEST-ORDER-0005", "TEST-ORDER-0002", "TEST-ORDER-0003"]],
+    ["completed_first", ["TEST-ORDER-0001", "TEST-ORDER-0004", "TEST-ORDER-0005", "TEST-ORDER-0002", "TEST-ORDER-0003"]],
   ] as const)("returns the real %s order with nulls and stable ties", async (sort, expected) => {
     const result = await report(sort);
     expect(result.items.map((item) => item.studentNumber)).toEqual(expected);
     expect(result.items.find((item) => item.studentNumber === "TEST-ORDER-0001")?.studentName)
       .toBe("Alpha, Aaron M. (Jr.)");
     expect(result.items.find((item) => item.studentNumber === "TEST-ORDER-0001"))
-      .toMatchObject({ physicalExamStatus: "PENDING_UPLOAD", laboratoryStatus: "PENDING_UPLOAD" });
+      .toMatchObject({ physicalExamStatus: "COMPLETED", laboratoryStatus: "PENDING" });
   });
 
   it.each(["Alpha, Aaron", "Aaron Alpha"])(
@@ -246,14 +261,14 @@ describe("appointment summary ordering and pagination", () => {
     },
   );
 
-  it("uses the newest eligible results and excludes cancelled-linked results", async () => {
+  it("returns current attendance and excludes inactive students", async () => {
     const result = await report("name_asc");
-    const followUp = result.items.find((item) => item.studentNumber === "TEST-ORDER-0003");
+    const cancelled = result.items.find((item) => item.studentNumber === "TEST-ORDER-0003");
 
-    expect(followUp).toMatchObject({
-      physicalExamStatus: "REQUIRES_FOLLOW_UP",
-      laboratoryStatus: "COMPLETED",
-      overallStatus: "FOLLOW_UP",
+    expect(cancelled).toMatchObject({
+      physicalExamStatus: "UNSCHEDULED",
+      laboratoryStatus: "CANCELLED",
+      overallStatus: "INCOMPLETE",
       nextSchedule: null,
     });
     expect(result.items.some((item) => item.studentNumber === "TEST-ORDER-0006")).toBe(false);
@@ -261,7 +276,7 @@ describe("appointment summary ordering and pagination", () => {
 
   it("calculates metrics from the complete filtered result", async () => {
     const result = await appointmentSummaryReport({
-      search: "TEST-ORDER-",
+      search: "TEST-ATTENDANCE-",
       overallStatus: "COMPLETE",
       sort: "upcoming_asc",
       page: 1,
