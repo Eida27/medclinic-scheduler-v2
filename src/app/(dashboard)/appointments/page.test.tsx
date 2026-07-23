@@ -99,16 +99,26 @@ describe("AppointmentsPage", () => {
       expect(screen.queryByLabelText(removedLabel)).not.toBeInTheDocument();
     }
 
-    for (const name of ["Laboratory status", "Physical exam status"]) {
+    for (const [name, anyLabel] of [
+      ["Laboratory status", "Any laboratory status"],
+      ["Physical exam status", "Any physical exam status"],
+    ]) {
       const select = screen.getByRole("combobox", { name });
-      expect(within(select).getByRole("option", { name: "Unscheduled" })).toHaveValue("UNSCHEDULED");
-      expect(within(select).getByRole("option", { name: "Pending" })).toHaveValue("PENDING");
-      expect(within(select).getByRole("option", { name: "Completed" })).toHaveValue("COMPLETED");
-      expect(within(select).getByRole("option", { name: "No-show" })).toHaveValue("NO_SHOW");
-      expect(within(select).getByRole("option", { name: "Rescheduled" })).toHaveValue("RESCHEDULED");
-      expect(within(select).getByRole("option", { name: "Cancelled" })).toHaveValue("CANCELLED");
-      expect(within(select).queryByRole("option", { name: "Needs follow-up" })).not.toBeInTheDocument();
+      expect(within(select).getAllByRole("option").map((option) => ({
+        value: option.getAttribute("value"),
+        label: option.textContent,
+      }))).toEqual([
+        { value: "", label: anyLabel },
+        { value: "UNSCHEDULED", label: "Unscheduled" },
+        { value: "PENDING", label: "Pending" },
+        { value: "COMPLETED", label: "Completed" },
+        { value: "NO_SHOW", label: "No-show" },
+        { value: "RESCHEDULED", label: "Rescheduled" },
+        { value: "CANCELLED", label: "Cancelled" },
+      ]);
     }
+    expect(screen.getByRole("option", { name: "Incomplete students first" })).toHaveValue("attention_first");
+    expect(screen.queryByText("Needs follow-up")).not.toBeInTheDocument();
 
     const headers = screen.getAllByRole("columnheader");
     expect(headers).toHaveLength(4);
@@ -136,9 +146,9 @@ describe("AppointmentsPage", () => {
       "/students/23-8200-01",
     );
     expect(within(row).getAllByRole("link")).toEqual([studentLink]);
-    expect(within(row).getByText("No-show")).toBeVisible();
-    expect(within(row).getByText("Completed")).toBeVisible();
-    expect(within(row).getByText("Incomplete")).toBeVisible();
+    expect(within(row).getByText("No-show")).toHaveClass("bg-red-100");
+    expect(within(row).getByText("Completed")).toHaveClass("bg-emerald-100");
+    expect(within(row).getByText("Incomplete")).toHaveClass("bg-cpu-navy-soft");
     expect(within(row).queryByText("2026-07-29")).not.toBeInTheDocument();
     expect(within(row).queryByText("2026-07-30")).not.toBeInTheDocument();
     expect(within(row).queryByText("Result")).not.toBeInTheDocument();

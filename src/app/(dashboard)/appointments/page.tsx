@@ -2,7 +2,7 @@ import Link from "next/link";
 import { AppointmentPagination } from "@/components/appointments/AppointmentPagination";
 import {
   parseAppointmentSummarySort,
-  type OverallStatus,
+  type AppointmentsOverallStatus,
 } from "@/components/appointments/appointment-summary";
 import {
   APPOINTMENT_PAGE_SIZE,
@@ -26,7 +26,7 @@ import {
 type AppointmentsSearchParams = Record<string, string | undefined>;
 
 const attendanceStatuses = ["UNSCHEDULED", "PENDING", "COMPLETED", "NO_SHOW", "RESCHEDULED", "CANCELLED"] as const;
-const overallStatuses: OverallStatus[] = ["INCOMPLETE", "COMPLETE"];
+const overallStatuses: AppointmentsOverallStatus[] = ["INCOMPLETE", "COMPLETE"];
 const sortOptions = [
   ["upcoming_asc", "Upcoming schedule: soonest first"],
   ["upcoming_desc", "Upcoming schedule: latest first"],
@@ -36,8 +36,8 @@ const sortOptions = [
   ["completed_first", "Fully completed first"],
 ] as const;
 
-function isOverallStatus(value?: string): value is OverallStatus {
-  return overallStatuses.includes(value as OverallStatus);
+function isOverallStatus(value?: string): value is AppointmentsOverallStatus {
+  return overallStatuses.includes(value as AppointmentsOverallStatus);
 }
 
 export default async function AppointmentsPage({
