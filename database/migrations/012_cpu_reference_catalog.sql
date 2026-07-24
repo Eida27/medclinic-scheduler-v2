@@ -1,17 +1,10 @@
-INSERT INTO clinics (id, code, name)
-VALUES
-  ('60000000-0000-4000-8000-000000000001', 'KABALAKA_CLINIC', 'KABALAKA Clinic'),
-  ('60000000-0000-4000-8000-000000000002', 'CPU_CLINIC', 'CPU Clinic')
-ON CONFLICT (id) DO NOTHING;
+CREATE TEMP TABLE migration_012_colleges (
+  id UUID PRIMARY KEY,
+  code VARCHAR(30) NOT NULL,
+  name VARCHAR(150) NOT NULL
+) ON COMMIT DROP;
 
-INSERT INTO users (id, full_name, email, password_hash, role, clinic_id)
-VALUES
-  ('00000000-0000-4000-8000-000000000001', 'System Admin', 'admin@medclinic.local', crypt('Admin123!', gen_salt('bf', 12)), 'ADMIN', NULL),
-  ('00000000-0000-4000-8000-000000000002', 'Clinic Staff', 'staff@medclinic.local', crypt('Staff123!', gen_salt('bf', 12)), 'CLINIC_STAFF', '60000000-0000-4000-8000-000000000001'),
-  ('00000000-0000-4000-8000-000000000003', 'Schedule Coordinator', 'coordinator@medclinic.local', crypt('Coordinator123!', gen_salt('bf', 12)), 'COORDINATOR', NULL)
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO colleges (id, code, name)
+INSERT INTO migration_012_colleges (id, code, name)
 VALUES
   ('10000000-0000-4000-8000-000000000001', 'COEng', 'College of Engineering'),
   ('10000000-0000-4000-8000-000000000002', 'CON', 'College of Nursing'),
@@ -25,10 +18,16 @@ VALUES
   ('10000000-0000-4000-8000-000000000010', 'COP', 'College of Pharmacy'),
   ('10000000-0000-4000-8000-000000000011', 'COL', 'College of Law'),
   ('10000000-0000-4000-8000-000000000012', 'COM', 'College of Medicine'),
-  ('10000000-0000-4000-8000-000000000013', 'COT', 'College of Theology')
-ON CONFLICT (id) DO NOTHING;
+  ('10000000-0000-4000-8000-000000000013', 'COT', 'College of Theology');
 
-INSERT INTO programs (id, college_id, code, name)
+CREATE TEMP TABLE migration_012_programs (
+  id UUID PRIMARY KEY,
+  college_id UUID NOT NULL,
+  code VARCHAR(30) NOT NULL,
+  name VARCHAR(150) NOT NULL
+) ON COMMIT DROP;
+
+INSERT INTO migration_012_programs (id, college_id, code, name)
 VALUES
   ('20000000-0000-4000-8000-000000000004', '10000000-0000-4000-8000-000000000004', 'BSA', 'Bachelor of Science in Agriculture'),
   ('20000000-0000-4000-8000-000000000005', '10000000-0000-4000-8000-000000000004', 'BSEM', 'Bachelor of Science in Environmental Management'),
@@ -77,18 +76,110 @@ VALUES
   ('20000000-0000-4000-8000-000000000045', '10000000-0000-4000-8000-000000000011', 'JD', 'Juris Doctor'),
   ('20000000-0000-4000-8000-000000000046', '10000000-0000-4000-8000-000000000012', 'BSRT', 'Bachelor of Science in Respiratory Therapy'),
   ('20000000-0000-4000-8000-000000000047', '10000000-0000-4000-8000-000000000012', 'MD', 'Doctor of Medicine'),
-  ('20000000-0000-4000-8000-000000000048', '10000000-0000-4000-8000-000000000013', 'BTh', 'Bachelor of Theology')
-ON CONFLICT (id) DO NOTHING;
+  ('20000000-0000-4000-8000-000000000048', '10000000-0000-4000-8000-000000000013', 'BTh', 'Bachelor of Theology');
 
-INSERT INTO priority_groups (id, name, rank_order)
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+      FROM students student
+     WHERE NOT EXISTS (
+       SELECT 1
+         FROM migration_012_programs desired
+        WHERE desired.id = student.program_id
+          AND desired.college_id = student.college_id
+     )
+  ) OR EXISTS (
+    SELECT 1
+      FROM schedule_batches batch
+     WHERE (batch.college_id IS NOT NULL AND NOT EXISTS (
+              SELECT 1 FROM migration_012_colleges desired WHERE desired.id = batch.college_id
+           ))
+        OR (batch.program_id IS NOT NULL AND NOT EXISTS (
+              SELECT 1
+                FROM migration_012_programs desired
+               WHERE desired.id = batch.program_id
+                 AND desired.college_id = batch.college_id
+           ))
+  ) THEN
+    RAISE EXCEPTION 'Noncanonical college or program references remain. Run npm run db:reference-catalog-cleanup -- apply before migration.';
+  END IF;
+END
+$$;
+
+DELETE FROM programs existing
+ WHERE NOT EXISTS (
+   SELECT 1 FROM migration_012_programs desired WHERE desired.id = existing.id
+ );
+
+DELETE FROM colleges existing
+ WHERE NOT EXISTS (
+   SELECT 1 FROM migration_012_colleges desired WHERE desired.id = existing.id
+ );
+
+INSERT INTO colleges (id, code, name, is_active)
+SELECT id, code, name, TRUE FROM migration_012_colleges
+ON CONFLICT (id) DO UPDATE
+SET code = EXCLUDED.code,
+    name = EXCLUDED.name,
+    is_active = TRUE;
+
+INSERT INTO programs (id, college_id, code, name, is_active)
+SELECT id, college_id, code, name, TRUE FROM migration_012_programs
+ON CONFLICT (id) DO UPDATE
+SET college_id = EXCLUDED.college_id,
+    code = EXCLUDED.code,
+    name = EXCLUDED.name,
+    is_active = TRUE;
+
+UPDATE coordinator_schedule_items
+   SET priority_group_id = NULL
+ WHERE priority_group_id IN (
+   SELECT id
+     FROM priority_groups
+    WHERE id = '30000000-0000-4000-8000-000000000001'
+       OR name = 'Graduating'
+ );
+
+DELETE FROM priority_groups
+ WHERE id = '30000000-0000-4000-8000-000000000001'
+    OR name = 'Graduating';
+
+CREATE TEMP TABLE migration_012_priorities (
+  id UUID PRIMARY KEY,
+  name VARCHAR(80) NOT NULL,
+  rank_order INTEGER NOT NULL
+) ON COMMIT DROP;
+
+INSERT INTO migration_012_priorities (id, name, rank_order)
 VALUES
   ('30000000-0000-4000-8000-000000000002', 'OJT', 1),
   ('30000000-0000-4000-8000-000000000003', 'Tour', 2),
-  ('30000000-0000-4000-8000-000000000004', 'Regular', 3)
-ON CONFLICT (id) DO NOTHING;
+  ('30000000-0000-4000-8000-000000000004', 'Regular', 3);
 
-INSERT INTO clinic_capacity_settings (id, clinic_id, schedule_type, safe_daily_capacity, max_daily_capacity)
-VALUES
-  ('40000000-0000-4000-8000-000000000001', '60000000-0000-4000-8000-000000000002', 'PHYSICAL_EXAM', 150, 150),
-  ('40000000-0000-4000-8000-000000000002', '60000000-0000-4000-8000-000000000001', 'LABORATORY', 150, 150)
-ON CONFLICT (id) DO NOTHING;
+WITH base AS (
+  SELECT COALESCE(MAX(rank_order), 0) + 100 AS rank_order
+    FROM priority_groups
+)
+INSERT INTO priority_groups (id, name, rank_order, is_active)
+SELECT desired.id, desired.name, base.rank_order + desired.rank_order, TRUE
+  FROM migration_012_priorities desired
+ CROSS JOIN base
+ON CONFLICT (id) DO UPDATE
+SET name = EXCLUDED.name,
+    is_active = TRUE;
+
+WITH base AS (
+  SELECT COALESCE(MAX(rank_order), 0) + 100 AS rank_order
+    FROM priority_groups
+)
+UPDATE priority_groups existing
+   SET rank_order = base.rank_order + desired.rank_order
+  FROM migration_012_priorities desired
+ CROSS JOIN base
+ WHERE existing.id = desired.id;
+
+UPDATE priority_groups existing
+   SET rank_order = desired.rank_order
+  FROM migration_012_priorities desired
+ WHERE existing.id = desired.id;

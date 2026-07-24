@@ -247,38 +247,57 @@ describe("database constraints", () => {
       { full_name: "Schedule Coordinator", email: "coordinator@medclinic.local", role: "COORDINATOR", clinic_code: null },
     ]);
 
-    const programs = await pool.query<{ college_code: string; program_code: string }>(
+    const catalogCounts = await pool.query<{ colleges: number; programs: number }>(
+      `SELECT
+         (SELECT COUNT(*)::int FROM colleges) AS colleges,
+         (SELECT COUNT(*)::int FROM programs) AS programs`,
+    );
+    expect(catalogCounts.rows).toEqual([{ colleges: 13, programs: 48 }]);
+
+    const programs = await pool.query<{ college_code: string; program_code: string; program_name: string }>(
       `SELECT c.code AS college_code, p.code AS program_code
+              , p.name AS program_name
          FROM programs p JOIN colleges c ON c.id=p.college_id
-        WHERE p.id IN (
-          '20000000-0000-4000-8000-000000000001',
+         WHERE p.id IN (
+           '20000000-0000-4000-8000-000000000001',
           '20000000-0000-4000-8000-000000000002',
           '20000000-0000-4000-8000-000000000003'
         )
         ORDER BY c.code`,
     );
     expect(programs.rows).toEqual([
-      { college_code: "CCS", program_code: "BSIT" },
-      { college_code: "COE", program_code: "BSCE" },
-      { college_code: "CON", program_code: "BSN" },
+      { college_code: "CCS", program_code: "BSIT", program_name: "Bachelor of Science in Information Technology" },
+      { college_code: "COEng", program_code: "BSCE", program_name: "Bachelor of Science in Civil Engineering" },
+      { college_code: "CON", program_code: "BSN", program_name: "Bachelor of Science in Nursing" },
+    ]);
+
+    const duplicateScopedCode = await pool.query<{ college_code: string; program_name: string }>(
+      `SELECT c.code AS college_code, p.name AS program_name
+         FROM programs p JOIN colleges c ON c.id=p.college_id
+        WHERE p.code='BSA'
+        ORDER BY c.code`,
+    );
+    expect(duplicateScopedCode.rows).toEqual([
+      { college_code: "CARES", program_name: "Bachelor of Science in Agriculture" },
+      { college_code: "CBA", program_name: "Bachelor of Science in Accountancy" },
     ]);
 
     const priorities = await pool.query<{ name: string; rank_order: number }>(
       `SELECT name, rank_order FROM priority_groups
-        WHERE id IN (
-          '30000000-0000-4000-8000-000000000001',
-          '30000000-0000-4000-8000-000000000002',
-          '30000000-0000-4000-8000-000000000003',
+         WHERE id IN (
+           '30000000-0000-4000-8000-000000000002',
+           '30000000-0000-4000-8000-000000000003',
           '30000000-0000-4000-8000-000000000004'
         )
         ORDER BY rank_order`,
     );
     expect(priorities.rows).toEqual([
-      { name: "Graduating", rank_order: 1 },
-      { name: "OJT", rank_order: 2 },
-      { name: "Tour", rank_order: 3 },
-      { name: "Regular", rank_order: 4 },
+      { name: "OJT", rank_order: 1 },
+      { name: "Tour", rank_order: 2 },
+      { name: "Regular", rank_order: 3 },
     ]);
+    await expect(pool.query("SELECT 1 FROM priority_groups WHERE name='Graduating'"))
+      .resolves.toMatchObject({ rowCount: 0 });
   });
 
   it("keeps coordinator accounts global at the database boundary", async () => {
