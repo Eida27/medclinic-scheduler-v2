@@ -20,7 +20,7 @@ export function StudentResultSection({ section }: { section: AdminCurrentResultS
 
   return (
     <section aria-labelledby={headingId}>
-      <Card className="@container grid gap-4">
+      <Card className="@container grid gap-4" style={{ padding: "1rem" }}>
         <h2 id={headingId} className="text-xl font-bold text-ink">{label} results</h2>
         <p className="text-sm text-muted">
           Appointment: {section.appointment

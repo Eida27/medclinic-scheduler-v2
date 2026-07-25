@@ -102,6 +102,7 @@ describe("AdminStudentResultProfilePage", () => {
 
     const section = screen.getByRole("region", { name: "Laboratory results" });
     expect(section.firstElementChild).toHaveClass("@container");
+    expect(section.firstElementChild).toHaveStyle({ padding: "1rem" });
     expect(within(section).getByText("Appointment: Completed · 2026-08-18")).toBeVisible();
     expect(within(section).getByText("Finalized: Aug 19, 2026, 12:00 AM")).toBeVisible();
     expect(within(section).getByText("1 file · 2 KB")).toBeVisible();
