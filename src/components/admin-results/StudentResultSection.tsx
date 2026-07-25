@@ -60,7 +60,7 @@ export function StudentResultSection({ section }: { section: AdminCurrentResultS
                 <p>{submission.fileCount} {submission.fileCount === 1 ? "file" : "files"} · {formatResultBytes(submission.totalBytes)}</p>
               </div>
               {submission.files.map((file, fileIndex) => (
-                <Card key={file.id} className="grid min-w-0 gap-4 p-4 @sm:grid-cols-[minmax(0,1fr)_auto] @sm:items-center">
+                <Card key={file.id} className="grid min-w-0 gap-4 p-4 @sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] @sm:items-center">
                   <div className="min-w-0">
                     <p className="break-words font-semibold text-ink">{file.originalFilename}</p>
                     <p className="text-xs text-muted">{formatResultBytes(file.byteSize)}</p>
@@ -68,7 +68,7 @@ export function StudentResultSection({ section }: { section: AdminCurrentResultS
                   <a
                     href={`/api/admin/student-result-submissions/${submission.id}/files/${file.id}`}
                     aria-label={`Download ${label} file ${fileIndex + 1} for appointment ${submission.appointmentDate}: ${file.originalFilename}`}
-                    className="inline-flex h-11 max-w-full items-center justify-center whitespace-normal break-words rounded-xl border border-line px-4 text-center text-sm font-semibold"
+                    className="inline-flex h-auto min-h-11 min-w-0 w-full max-w-full items-center justify-center whitespace-normal break-all rounded-xl border border-line px-4 text-center text-sm font-semibold"
                   >
                     Download {file.originalFilename}
                   </a>

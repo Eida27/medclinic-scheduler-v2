@@ -39,6 +39,9 @@ describe("AdminSubmissionActions", () => {
     expect(within(actions).getByText("Reopen student upload")).toBeVisible();
     expect(within(actions).getByText("Invalidate and reopen upload")).toBeVisible();
     expect(actions).toHaveClass("min-w-0");
+    expect(within(actions).getByRole("button", {
+      name: "Invalidate Laboratory and reopen upload",
+    })).toHaveStyle({ whiteSpace: "normal" });
     expect(screen.getByRole("link", {
       name: "Download Laboratory ZIP for appointment 2026-08-18, submission 1",
     })).toHaveAttribute(

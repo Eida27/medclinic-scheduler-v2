@@ -98,6 +98,7 @@ export function AdminSubmissionActions({
             disabled={pending}
             aria-label={`Invalidate ${resultLabel} and reopen upload`}
             className="h-auto min-h-11 w-full whitespace-normal py-3 text-center leading-snug"
+            style={{ whiteSpace: "normal" }}
           >
             Invalidate and reopen upload
           </Button>

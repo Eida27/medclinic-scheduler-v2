@@ -127,6 +127,33 @@ describe("AdminStudentResultProfilePage", () => {
     expect(within(section).getByLabelText("Laboratory invalidation reason")).toBeVisible();
   });
 
+  it("keeps a maximum-length no-space filename in a bounded, wrapping download item", async () => {
+    const filename = `${"a".repeat(251)}.pdf`;
+    getAdminStudentResultProfile.mockResolvedValue({
+      ...baseProfile,
+      laboratory: {
+        ...baseProfile.laboratory,
+        submission: {
+          ...laboratorySubmission,
+          files: [{
+            ...laboratorySubmission.files[0],
+            originalFilename: filename,
+          }],
+        },
+      },
+    });
+
+    render(await AdminStudentResultProfilePage({
+      params: Promise.resolve({ studentNumber: "23%2F8200%2001" }),
+    }));
+
+    const link = screen.getByRole("link", {
+      name: `Download Laboratory file 1 for appointment 2026-08-18: ${filename}`,
+    });
+    expect(link).toHaveClass("h-auto", "min-h-11", "min-w-0", "w-full", "max-w-full", "break-all");
+    expect(link.parentElement).toHaveClass("@sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]");
+  });
+
   it("renders an unscheduled, not-submitted Physical Exam without file or mutation controls", async () => {
     render(await AdminStudentResultProfilePage({
       params: Promise.resolve({ studentNumber: "23%2F8200%2001" }),
