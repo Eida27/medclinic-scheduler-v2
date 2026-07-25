@@ -6,7 +6,7 @@ import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Field } from "@/components/ui/Field";
-import { Input } from "@/components/ui/Input";
+import { Textarea } from "@/components/ui/Textarea";
 
 type Props = {
   submissionId: string;
@@ -68,23 +68,41 @@ export function AdminSubmissionActions({
   }
 
   return (
-    <div className="grid gap-4">
+    <section
+      aria-label={`${resultLabel} submission actions`}
+      className="grid min-w-0 gap-4 rounded-2xl border border-line bg-canvas p-4"
+    >
       {error && !confirmOpen ? <Alert tone="danger">{error}</Alert> : null}
+      <div className="grid gap-1">
+        <h3 className="font-semibold text-ink">Submission actions</h3>
+        <p className="text-sm text-muted">
+          Download finalized files, or invalidate this submission to let the student upload a replacement.
+        </p>
+      </div>
       <a
         href={`/api/admin/student-result-submissions/${submissionId}/zip`}
         aria-label={`Download ${resultLabel} ZIP for appointment ${appointmentDate}, submission ${submissionIndex}`}
-        className="inline-flex h-11 items-center justify-center rounded-xl bg-cpu-navy px-4 text-sm font-semibold text-white"
+        className="inline-flex h-11 w-full max-w-full items-center justify-center whitespace-normal rounded-xl bg-cpu-navy px-4 text-center text-sm font-semibold text-white"
       >
-        Download {resultLabel} ZIP
+        Download all files (ZIP)
       </a>
-      <form onSubmit={reviewInvalidation} className="grid gap-3">
-        <Field label={`${resultLabel} invalidation reason`}>
-          <Input name="reason" minLength={3} maxLength={1000} required />
-        </Field>
-        <Button type="submit" variant="danger" disabled={pending}>
-          Invalidate {resultLabel} and reopen upload
-        </Button>
-      </form>
+      <div className="grid gap-3 rounded-xl border border-line p-3">
+        <h4 className="font-semibold text-ink">Reopen student upload</h4>
+        <form onSubmit={reviewInvalidation} className="grid gap-3">
+          <Field label={`${resultLabel} invalidation reason`}>
+            <Textarea name="reason" rows={4} minLength={3} maxLength={1000} required />
+          </Field>
+          <Button
+            type="submit"
+            variant="danger"
+            disabled={pending}
+            aria-label={`Invalidate ${resultLabel} and reopen upload`}
+            className="h-auto min-h-11 w-full whitespace-normal py-3 text-center leading-snug"
+          >
+            Invalidate and reopen upload
+          </Button>
+        </form>
+      </div>
       <ConfirmDialog
         open={confirmOpen}
         title={`Invalidate ${resultLabel} submission?`}
@@ -97,6 +115,6 @@ export function AdminSubmissionActions({
         onCancel={closeConfirmation}
         onConfirm={invalidate}
       />
-    </div>
+    </section>
   );
 }

@@ -101,9 +101,17 @@ describe("AdminStudentResultProfilePage", () => {
     }));
 
     const section = screen.getByRole("region", { name: "Laboratory results" });
+    expect(section.firstElementChild).toHaveClass("@container");
     expect(within(section).getByText("Appointment: Completed · 2026-08-18")).toBeVisible();
     expect(within(section).getByText("Finalized: Aug 19, 2026, 12:00 AM")).toBeVisible();
     expect(within(section).getByText("1 file · 2 KB")).toBeVisible();
+    expect(within(section).getByText("Finalized").parentElement).toHaveClass("justify-self-start");
+    expect(within(section).getByText("laboratory.pdf")).toHaveClass("break-words");
+    expect(within(section).getByRole("region", { name: "Laboratory submission actions" }))
+      .toHaveClass("min-w-0");
+    const content = within(section).getByTestId("current-result-content");
+    expect(content).toHaveClass("min-w-0");
+    expect(content).toHaveClass("@2xl:grid-cols-[minmax(0,1fr)_minmax(17rem,20rem)]");
     expect(within(section).getByRole("link", {
       name: "Download Laboratory file 1 for appointment 2026-08-18: laboratory.pdf",
     })).toHaveAttribute(
@@ -293,7 +301,8 @@ describe("AdminStudentResultProfilePage", () => {
       "Download Laboratory ZIP for appointment 2026-06-18, history submission 2",
     ]));
     expect(screen.getAllByText("Download duplicate.pdf")).toHaveLength(4);
-    expect(screen.getAllByText("Download Laboratory ZIP")).toHaveLength(3);
+    expect(screen.getByText("Download all files (ZIP)")).toBeVisible();
+    expect(screen.getAllByText("Download Laboratory ZIP")).toHaveLength(2);
   });
 
   it("renders the history empty state", async () => {

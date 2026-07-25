@@ -27,6 +27,18 @@ describe("AdminSubmissionActions", () => {
       appointmentDate="2026-08-18"
     />);
 
+    const actions = screen.getByRole("region", { name: "Laboratory submission actions" });
+    const reason = within(actions).getByLabelText("Laboratory invalidation reason");
+    expect(reason.tagName).toBe("TEXTAREA");
+    expect(reason).toHaveAttribute("rows", "4");
+    expect(reason).toHaveAttribute("minlength", "3");
+    expect(reason).toHaveAttribute("maxlength", "1000");
+    expect(reason).toBeRequired();
+    expect(within(actions).getByText("Submission actions")).toBeVisible();
+    expect(within(actions).getByText("Download all files (ZIP)")).toBeVisible();
+    expect(within(actions).getByText("Reopen student upload")).toBeVisible();
+    expect(within(actions).getByText("Invalidate and reopen upload")).toBeVisible();
+    expect(actions).toHaveClass("min-w-0");
     expect(screen.getByRole("link", {
       name: "Download Laboratory ZIP for appointment 2026-08-18, submission 1",
     })).toHaveAttribute(

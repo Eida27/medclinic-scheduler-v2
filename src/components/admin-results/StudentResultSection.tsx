@@ -20,7 +20,7 @@ export function StudentResultSection({ section }: { section: AdminCurrentResultS
 
   return (
     <section aria-labelledby={headingId}>
-      <Card className="grid gap-4">
+      <Card className="@container grid gap-4">
         <h2 id={headingId} className="text-xl font-bold text-ink">{label} results</h2>
         <p className="text-sm text-muted">
           Appointment: {section.appointment
@@ -28,9 +28,11 @@ export function StudentResultSection({ section }: { section: AdminCurrentResultS
             : "Unscheduled"}
         </p>
         {section.state !== "NOT_SUBMITTED" ? (
-          <Badge tone={section.state === "FINALIZED" ? "success" : "danger"}>
-            {currentSubmissionStateLabel(section.state)}
-          </Badge>
+          <div className="justify-self-start">
+            <Badge tone={section.state === "FINALIZED" ? "success" : "danger"}>
+              {currentSubmissionStateLabel(section.state)}
+            </Badge>
+          </div>
         ) : null}
 
         {section.state === "NOT_SUBMITTED" ? (
@@ -48,22 +50,25 @@ export function StudentResultSection({ section }: { section: AdminCurrentResultS
         ) : null}
 
         {section.state === "FINALIZED" && submission ? (
-          <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
-            <div className="grid gap-3">
+          <div
+            data-testid="current-result-content"
+            className="grid min-w-0 gap-5 @2xl:grid-cols-[minmax(0,1fr)_minmax(17rem,20rem)]"
+          >
+            <div className="grid min-w-0 gap-3">
               <div className="grid gap-1 text-sm text-muted">
                 <p>Finalized: {formatResultDateTime(submission.finalizedAt)}</p>
                 <p>{submission.fileCount} {submission.fileCount === 1 ? "file" : "files"} · {formatResultBytes(submission.totalBytes)}</p>
               </div>
               {submission.files.map((file, fileIndex) => (
-                <Card key={file.id} className="flex flex-wrap items-center justify-between gap-4 p-4">
-                  <div>
-                    <p className="font-semibold text-ink">{file.originalFilename}</p>
+                <Card key={file.id} className="grid min-w-0 gap-4 p-4 @sm:grid-cols-[minmax(0,1fr)_auto] @sm:items-center">
+                  <div className="min-w-0">
+                    <p className="break-words font-semibold text-ink">{file.originalFilename}</p>
                     <p className="text-xs text-muted">{formatResultBytes(file.byteSize)}</p>
                   </div>
                   <a
                     href={`/api/admin/student-result-submissions/${submission.id}/files/${file.id}`}
                     aria-label={`Download ${label} file ${fileIndex + 1} for appointment ${submission.appointmentDate}: ${file.originalFilename}`}
-                    className="inline-flex h-11 items-center rounded-xl border border-line px-4 text-sm font-semibold"
+                    className="inline-flex h-11 max-w-full items-center justify-center whitespace-normal break-words rounded-xl border border-line px-4 text-center text-sm font-semibold"
                   >
                     Download {file.originalFilename}
                   </a>
