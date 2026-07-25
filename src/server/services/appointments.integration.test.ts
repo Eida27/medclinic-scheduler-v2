@@ -218,10 +218,12 @@ describe("appointment lifecycle", () => {
     await generateBatchAppointments(batchId, admin);
     expect((await publicStudentSchedule(studentNumber))?.appointments).toHaveLength(0);
     await publishScheduleBatch(batchId, admin.userId);
-    expect(await publicStudentSchedule(studentNumber)).toMatchObject({
-      studentName: "Fixture, Appointment M. (Jr.)",
+    const publicSchedule = await publicStudentSchedule(studentNumber);
+    expect(publicSchedule).toMatchObject({
+      studentNumber,
       appointments: [expect.any(Object)],
     });
+    expect(publicSchedule).not.toHaveProperty("studentName");
 
     const current = await pool.query<{ id: string }>("SELECT id FROM appointments WHERE batch_id=$1", [batchId]);
     await expect(getPublishedAppointment(current.rows[0].id)).resolves.toMatchObject({

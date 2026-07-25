@@ -3,6 +3,24 @@ import { describe, expect, it, vi } from "vitest";
 import { StudentLookupForm } from "./StudentLookupForm";
 
 describe("StudentLookupForm", () => {
+  it("identifies a lookup result only by student number", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: {
+        studentNumber: "DEMO-0001",
+        studentName: "Private, Student N.",
+        appointments: [],
+        compliance: { physicalExam: "PENDING_UPLOAD", laboratory: "PENDING_UPLOAD" },
+      } }),
+    }));
+    render(<StudentLookupForm />);
+    fireEvent.change(screen.getByPlaceholderText("e.g. 23-1212-97"), { target: { value: "DEMO-0001" } });
+    fireEvent.click(screen.getByRole("button", { name: "Find schedule" }));
+
+    expect(await screen.findByRole("heading", { name: "DEMO-0001" })).toBeVisible();
+    expect(screen.queryByText("Private, Student N.")).not.toBeInTheDocument();
+  });
+
   it("explains when a known student has no published appointment", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: true,

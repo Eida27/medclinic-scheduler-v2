@@ -315,8 +315,8 @@ export async function publishBatch(batchId: string, actorUserId: string, client?
 }
 
 export async function publicStudentSchedule(studentNumber: string) {
-  const student = await query<{ student_number: string; student_name: string }>(
-    `SELECT s.student_number, ${studentDisplayNameSql("s")} AS student_name
+  const student = await query<{ student_number: string }>(
+    `SELECT s.student_number
      FROM students s WHERE s.student_number=$1 AND s.is_active=TRUE`, [studentNumber]);
   if (!student.rows[0]) return null;
   const appointments = await query(
@@ -347,7 +347,6 @@ export async function publicStudentSchedule(studentNumber: string) {
   );
   return {
     studentNumber: student.rows[0].student_number,
-    studentName: student.rows[0].student_name,
     appointments: appointments.rows,
     compliance: { physicalExam: compliance.rows[0].physical_exam, laboratory: compliance.rows[0].laboratory },
   };
