@@ -35,7 +35,12 @@ describe("clinic calendar presentation", () => {
     );
 
     expect(screen.queryByText("31", { selector: '[data-outside-month="true"]' })).not.toBeInTheDocument();
-    expect(screen.getAllByTestId("calendar-blank-cell")).toHaveLength(4);
+    const blankCells = screen.getAllByTestId("calendar-blank-cell");
+    expect(blankCells).toHaveLength(4);
+    for (const blankCell of blankCells) {
+      expect(blankCell).toHaveAttribute("aria-hidden", "true");
+      expect(blankCell.querySelectorAll("button, a, input, select, textarea, [tabindex]")).toHaveLength(0);
+    }
   });
 
   it("announces visible date states and toggles editable dates by keyboard", async () => {
@@ -215,5 +220,67 @@ describe("clinic calendar presentation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Confirm and save" }));
     fireEvent.click(screen.getByRole("button", { name: "Confirm and save" }));
     expect(onConfirm).toHaveBeenCalledOnce();
+  });
+
+  it("restores the save trigger when a successful confirmation closes the dialog", async () => {
+    const onConfirm = vi.fn();
+    const user = userEvent.setup();
+    function ClosingDialogHarness() {
+      const [open, setOpen] = useState(false);
+      const saveRef = useRef<HTMLButtonElement>(null);
+      return (
+        <>
+          <button ref={saveRef} type="button" onClick={() => setOpen(true)}>Save changes</button>
+          <CalendarSaveConfirmationDialog
+            open={open}
+            changes={[{ action: "BLOCK", clinicId: clinics[0].id, date: "2027-07-15", category: "HOLIDAY", reason: "Foundation day" }]}
+            clinics={clinics}
+            returnFocusRef={saveRef}
+            onCancel={() => setOpen(false)}
+            onConfirm={() => { onConfirm(); setOpen(false); }}
+          />
+        </>
+      );
+    }
+    render(<ClosingDialogHarness />);
+    const save = screen.getByRole("button", { name: "Save changes" });
+    await user.click(save);
+    await user.click(screen.getByRole("button", { name: "Confirm and save" }));
+
+    expect(onConfirm).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(save).toHaveFocus();
+  });
+
+  it("keeps Tab and Shift+Tab inside while a confirmed save remains pending", async () => {
+    const pendingSave = new Promise<void>(() => undefined);
+    const onConfirm = vi.fn(() => pendingSave);
+    const user = userEvent.setup();
+    function PendingDialogHarness() {
+      const [open, setOpen] = useState(false);
+      const saveRef = useRef<HTMLButtonElement>(null);
+      return (
+        <>
+          <button ref={saveRef} type="button" onClick={() => setOpen(true)}>Save changes</button>
+          <CalendarSaveConfirmationDialog
+            open={open}
+            changes={[{ action: "BLOCK", clinicId: clinics[0].id, date: "2027-07-15", category: "HOLIDAY", reason: "Foundation day" }]}
+            clinics={clinics}
+            returnFocusRef={saveRef}
+            onCancel={() => setOpen(false)}
+            onConfirm={onConfirm}
+          />
+        </>
+      );
+    }
+    render(<PendingDialogHarness />);
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Confirm and save" }));
+
+    expect(screen.getByRole("dialog")).toHaveAttribute("aria-busy", "true");
+    await user.keyboard("{Tab}");
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    await user.keyboard("{Shift>}{Tab}{/Shift}");
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
   });
 });

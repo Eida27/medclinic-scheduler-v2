@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { Button } from "@/components/ui/Button";
 import type { ClinicCalendarBatchChange } from "@/types/clinic-calendar";
 import { CalendarDraftSummary } from "./CalendarDraftSummary";
@@ -50,47 +50,46 @@ function CalendarSaveConfirmationDialogContent({
 }: CalendarSaveConfirmationDialogContentProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
-  const previousFocusRef = useRef<HTMLElement | null>(null);
   const [confirmed, setConfirmed] = useState(false);
 
   useEffect(() => {
-    previousFocusRef.current = returnFocusRef?.current ?? document.activeElement as HTMLElement | null;
+    const returnFocusTarget = returnFocusRef?.current ?? document.activeElement as HTMLElement | null;
     cancelButtonRef.current?.focus();
+    return () => returnFocusTarget?.focus();
   }, [returnFocusRef]);
 
-  const restoreFocus = useCallback(() => {
-    (returnFocusRef?.current ?? previousFocusRef.current)?.focus();
-  }, [returnFocusRef]);
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCancel();
+        return;
+      }
+      if (event.key !== "Tab" || !dialogRef.current) return;
+
+      const focusable = focusableElements(dialogRef.current);
+      if (focusable.length === 0) return;
+
+      event.preventDefault();
+      const activeIndex = focusable.indexOf(document.activeElement as HTMLElement);
+      const nextIndex = activeIndex === -1
+        ? event.shiftKey ? focusable.length - 1 : 0
+        : (activeIndex + (event.shiftKey ? -1 : 1) + focusable.length) % focusable.length;
+      focusable[nextIndex].focus();
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onCancel]);
 
   function cancel() {
     onCancel();
-    restoreFocus();
   }
 
   function confirm() {
     if (confirmed) return;
     setConfirmed(true);
     onConfirm();
-  }
-
-  function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      cancel();
-      return;
-    }
-    if (event.key !== "Tab" || !dialogRef.current) return;
-    const focusable = focusableElements(dialogRef.current);
-    if (focusable.length === 0) return;
-    const first = focusable[0];
-    const last = focusable.at(-1)!;
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
   }
 
   return (
@@ -101,7 +100,6 @@ function CalendarSaveConfirmationDialogContent({
         aria-modal="true"
         aria-labelledby="clinic-calendar-save-title"
         aria-busy={confirmed}
-        onKeyDown={handleKeyDown}
         className="w-full max-w-lg rounded-3xl border border-line bg-surface p-6 shadow-2xl"
       >
         <h2 id="clinic-calendar-save-title" className="text-xl font-bold text-ink">Save clinic calendar changes</h2>
