@@ -1,11 +1,20 @@
 import type { ClinicUnavailableDateRecord } from "@/server/repositories/clinic-unavailable-dates.repository";
 
-export type CalendarDay = {
+export type CalendarBlankCell = {
+  kind: "blank";
+  key: string;
+};
+
+export type CalendarDateCell = {
+  kind: "date";
+  key: string;
   date: string;
   dayOfMonth: number;
-  inCurrentMonth: boolean;
+  inCurrentMonth: true;
   isWeekend: boolean;
 };
+
+export type CalendarCell = CalendarBlankCell | CalendarDateCell;
 
 const DAY_IN_MILLISECONDS = 24 * 60 * 60 * 1000;
 
@@ -53,21 +62,37 @@ function parseDateOnly(value: string): Date {
   return date;
 }
 
-export function buildMonthGrid(month: string): CalendarDay[] {
+export function buildMonthGrid(month: string): CalendarCell[] {
   const { year, monthIndex } = parseMonth(month);
   const firstOfMonth = utcDate(year, monthIndex, 1);
-  const gridStart = addUtcDays(firstOfMonth, -firstOfMonth.getUTCDay());
+  const leadingBlankCount = firstOfMonth.getUTCDay();
+  const daysInMonth = utcDate(year, monthIndex + 1, 0).getUTCDate();
+  const totalCellCount = Math.ceil((leadingBlankCount + daysInMonth) / 7) * 7;
+  const trailingBlankCount = totalCellCount - leadingBlankCount - daysInMonth;
 
-  return Array.from({ length: 42 }, (_, index) => {
-    const date = addUtcDays(gridStart, index);
+  const leadingBlanks: CalendarBlankCell[] = Array.from({ length: leadingBlankCount }, (_, index) => ({
+    kind: "blank",
+    key: `${month}-leading-${index}`,
+  }));
+  const dates: CalendarDateCell[] = Array.from({ length: daysInMonth }, (_, index) => {
+    const date = utcDate(year, monthIndex, index + 1);
+    const dateOnly = formatDateOnly(date);
     const dayOfWeek = date.getUTCDay();
     return {
-      date: formatDateOnly(date),
-      dayOfMonth: date.getUTCDate(),
-      inCurrentMonth: date.getUTCFullYear() === year && date.getUTCMonth() === monthIndex,
+      kind: "date",
+      key: dateOnly,
+      date: dateOnly,
+      dayOfMonth: index + 1,
+      inCurrentMonth: true,
       isWeekend: dayOfWeek === 0 || dayOfWeek === 6,
     };
   });
+  const trailingBlanks: CalendarBlankCell[] = Array.from({ length: trailingBlankCount }, (_, index) => ({
+    kind: "blank",
+    key: `${month}-trailing-${index}`,
+  }));
+
+  return [...leadingBlanks, ...dates, ...trailingBlanks];
 }
 
 export function expandUnavailableRanges(

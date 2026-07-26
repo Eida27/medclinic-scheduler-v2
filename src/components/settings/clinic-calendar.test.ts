@@ -8,37 +8,42 @@ import {
 } from "./clinic-calendar";
 
 describe("buildMonthGrid", () => {
-  it("always returns a six-week grid", () => {
-    expect(buildMonthGrid("2026-08")).toHaveLength(42);
+  it("uses blank alignment cells without neighboring-month dates", () => {
+    const august = buildMonthGrid("2026-08");
+
+    expect(august).toHaveLength(42);
+    expect(august.slice(0, 6)).toEqual([
+      { kind: "blank", key: "2026-08-leading-0" },
+      { kind: "blank", key: "2026-08-leading-1" },
+      { kind: "blank", key: "2026-08-leading-2" },
+      { kind: "blank", key: "2026-08-leading-3" },
+      { kind: "blank", key: "2026-08-leading-4" },
+      { kind: "blank", key: "2026-08-leading-5" },
+    ]);
+    expect(august.filter((cell) => cell.kind === "date").map((cell) => cell.dayOfMonth))
+      .toEqual(Array.from({ length: 31 }, (_, index) => index + 1));
+    expect(august.some((cell) => cell.kind === "date" && !cell.inCurrentMonth)).toBe(false);
   });
 
-  it("includes the leading and trailing dates around the current month", () => {
-    const days = buildMonthGrid("2026-08");
-
-    expect(days.slice(0, 7).map((day) => day.date)).toEqual([
-      "2026-07-26",
-      "2026-07-27",
-      "2026-07-28",
-      "2026-07-29",
-      "2026-07-30",
-      "2026-07-31",
-      "2026-08-01",
-    ]);
-    expect(days.at(-1)?.date).toBe("2026-09-05");
-    expect(days[0].inCurrentMonth).toBe(false);
-    expect(days[6].inCurrentMonth).toBe(true);
-    expect(days.at(-1)?.inCurrentMonth).toBe(false);
+  it.each([
+    ["2026-01", 35], ["2026-02", 28], ["2026-03", 35], ["2026-04", 35],
+    ["2026-05", 42], ["2026-06", 35], ["2026-07", 35], ["2026-08", 42],
+    ["2026-09", 35], ["2026-10", 35], ["2026-11", 35], ["2026-12", 35],
+  ])("returns the smallest complete week grid for %s", (month, expectedCellCount) => {
+    expect(buildMonthGrid(month)).toHaveLength(expectedCellCount);
   });
 
   it("includes February 29 in a leap year", () => {
-    const currentMonthDays = buildMonthGrid("2024-02").filter((day) => day.inCurrentMonth);
+    const currentMonthDays = buildMonthGrid("2024-02").filter((day) => day.kind === "date");
 
     expect(currentMonthDays).toHaveLength(29);
     expect(currentMonthDays.at(-1)?.date).toBe("2024-02-29");
   });
 
   it("marks Saturdays and Sundays as weekends", () => {
-    const daysByDate = new Map(buildMonthGrid("2026-08").map((day) => [day.date, day]));
+    const daysByDate = new Map(buildMonthGrid("2026-08")
+      .filter((day) => day.kind === "date")
+      .map((day) => [day.date, day]));
 
     expect(daysByDate.get("2026-08-01")?.isWeekend).toBe(true);
     expect(daysByDate.get("2026-08-02")?.isWeekend).toBe(true);
@@ -84,6 +89,7 @@ describe("shiftMonth", () => {
 
   it("rolls January backward into December of the previous year", () => {
     expect(shiftMonth("2026-01", -1)).toBe("2025-12");
+    expect(shiftMonth("2026-01", -1) < "2026-01").toBe(true);
   });
 
   it("supports offsets spanning more than one year", () => {
