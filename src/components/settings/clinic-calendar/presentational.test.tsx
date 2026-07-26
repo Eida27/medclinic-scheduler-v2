@@ -255,6 +255,7 @@ describe("clinic calendar presentation", () => {
   it("keeps Tab and Shift+Tab inside while a confirmed save remains pending", async () => {
     const pendingSave = new Promise<void>(() => undefined);
     const onConfirm = vi.fn(() => pendingSave);
+    const onCancel = vi.fn();
     const user = userEvent.setup();
     function PendingDialogHarness() {
       const [open, setOpen] = useState(false);
@@ -267,7 +268,7 @@ describe("clinic calendar presentation", () => {
             changes={[{ action: "BLOCK", clinicId: clinics[0].id, date: "2027-07-15", category: "HOLIDAY", reason: "Foundation day" }]}
             clinics={clinics}
             returnFocusRef={saveRef}
-            onCancel={() => setOpen(false)}
+            onCancel={() => { onCancel(); setOpen(false); }}
             onConfirm={onConfirm}
           />
         </>
@@ -278,6 +279,12 @@ describe("clinic calendar presentation", () => {
     await user.click(screen.getByRole("button", { name: "Confirm and save" }));
 
     expect(screen.getByRole("dialog")).toHaveAttribute("aria-busy", "true");
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    expect(cancel).toHaveAttribute("aria-disabled", "true");
+    await user.click(cancel);
+    await user.keyboard("{Escape}");
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
     await user.keyboard("{Tab}");
     expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
     await user.keyboard("{Shift>}{Tab}{/Shift}");

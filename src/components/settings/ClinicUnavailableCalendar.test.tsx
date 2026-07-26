@@ -93,6 +93,26 @@ function UnsavedNavigationHarness({ navigate }: { navigate(href: string): void }
   );
 }
 
+function NavigationFilterHarness() {
+  const navigation = useUnsavedCalendarNavigation(true, vi.fn());
+  const preventBrowserNavigation = (event: React.MouseEvent<HTMLAnchorElement>) => event.preventDefault();
+  return (
+    <>
+      <Link href="/appointments" onClick={preventBrowserNavigation}>Modified navigation</Link>
+      <Link href="/appointments" target="_blank" onClick={preventBrowserNavigation}>New tab navigation</Link>
+      <Link href="/calendar.csv" download onClick={preventBrowserNavigation}>Download navigation</Link>
+      <Link href="https://example.com/settings" onClick={preventBrowserNavigation}>External navigation</Link>
+      <Link href="#calendar" onClick={preventBrowserNavigation}>Hash navigation</Link>
+      <p>{navigation.pendingHref ?? "No pending navigation"}</p>
+    </>
+  );
+}
+
+function UnsavedListenerHarness() {
+  useUnsavedCalendarNavigation(true, vi.fn());
+  return null;
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -117,6 +137,11 @@ describe("ClinicUnavailableCalendar draft sessions", () => {
     expect(screen.getByRole("button", { name: "July 14, 2026 — available" })).toBeEnabled();
     expect(screen.getByText("No unsaved changes")).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
+    const cleanSave = screen.getByRole("button", { name: "Save changes" });
+    expect(cleanSave).toBeEnabled();
+    expect(cleanSave).toHaveAttribute("aria-disabled", "true");
+    await user.click(cleanSave);
+    expect(screen.queryByRole("dialog", { name: "Save clinic calendar changes" })).not.toBeInTheDocument();
   });
 
   it("stages and cancels reopening a saved blocked weekday", async () => {
@@ -162,6 +187,14 @@ describe("ClinicUnavailableCalendar draft sessions", () => {
     expect(screen.getByRole("heading", { name: "July 2026" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "July 14, 2026 — will be blocked: Maintenance" })).toBeEnabled();
     expect(screen.getByText("2 unsaved changes")).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText("Year"), "2027");
+    expect(screen.getByRole("heading", { name: "July 2027" })).toBeInTheDocument();
+    expect(screen.getByText("2 unsaved changes")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Unsaved calendar changes" })).not.toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText("Year"), "2026");
+    expect(screen.getByRole("button", { name: "July 14, 2026 — will be blocked: Maintenance" })).toBeEnabled();
   });
 
   it("copies category and reason when each block is staged and sorts the one batch by date then clinic", async () => {
@@ -264,11 +297,17 @@ describe("ClinicUnavailableCalendar draft sessions", () => {
     await user.click(screen.getByRole("button", { name: "Save changes" }));
 
     const confirmButton = screen.getByRole("button", { name: "Confirm and save" });
+    const saveButton = screen.getByRole("button", { name: "Save changes" });
     await user.click(confirmButton);
     fireEvent.click(confirmButton);
 
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(confirmButton).toBeDisabled();
+    const pendingCancel = screen.getByRole("button", { name: "Cancel" });
+    expect(pendingCancel).toHaveAttribute("aria-disabled", "true");
+    await user.click(pendingCancel);
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog", { name: "Save clinic calendar changes" })).toBeInTheDocument();
     expect(screen.getByLabelText("Clinic")).toBeDisabled();
 
     const savedCpuRecord: ClinicUnavailableDateRecord = {
@@ -296,6 +335,9 @@ describe("ClinicUnavailableCalendar draft sessions", () => {
     expect(success).toHaveTextContent("1 student");
     expect(success).toHaveTextContent("2 appointments restored");
     expect(screen.getByText("No unsaved changes")).toBeInTheDocument();
+    expect(saveButton).toHaveFocus();
+    expect(saveButton).toHaveAttribute("aria-disabled", "true");
+    expect(saveButton).toBeEnabled();
     expect(screen.getByLabelText("Clinic")).toHaveValue(clinics[1].id);
     expect(screen.getByRole("heading", { name: "August 2026" })).toBeInTheDocument();
     const refreshedDate = screen.getByRole("button", {
@@ -348,7 +390,7 @@ describe("ClinicUnavailableCalendar draft sessions", () => {
 });
 
 describe("ClinicUnavailableCalendar unsaved navigation", () => {
-  it("prevents beforeunload only while drafts exist", async () => {
+  it("prevents beforeunload only while drafts exist and stops after discarding them", async () => {
     const user = userEvent.setup();
     renderCalendar();
 
@@ -361,6 +403,11 @@ describe("ClinicUnavailableCalendar unsaved navigation", () => {
     const dirtyEvent = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(dirtyEvent);
     expect(dirtyEvent.defaultPrevented).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "Discard changes" }));
+    const discardedEvent = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(discardedEvent);
+    expect(discardedEvent.defaultPrevented).toBe(false);
   });
 
   it("keeps same-origin navigation pending on Stay and restores focus to the intercepted link", async () => {
@@ -375,11 +422,23 @@ describe("ClinicUnavailableCalendar unsaved navigation", () => {
     const dialog = screen.getByRole("dialog", { name: "Unsaved calendar changes" });
     expect(dialog).toBeInTheDocument();
     expect(screen.getByText("1 unsaved change")).toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "Continue editing" }));
+    const continueEditing = within(dialog).getByRole("button", { name: "Continue editing" });
+    const discardAndLeave = within(dialog).getByRole("button", { name: "Discard and leave" });
+    expect(continueEditing).toHaveFocus();
+    await user.keyboard("{Shift>}{Tab}{/Shift}");
+    expect(discardAndLeave).toHaveFocus();
+    await user.keyboard("{Tab}");
+    expect(continueEditing).toHaveFocus();
+    await user.keyboard("{Escape}");
 
     expect(screen.queryByRole("dialog", { name: "Unsaved calendar changes" })).not.toBeInTheDocument();
     expect(link).toHaveFocus();
     expect(screen.getByText("1 unsaved change")).toBeInTheDocument();
+
+    await user.click(link);
+    await user.click(screen.getByRole("button", { name: "Continue editing" }));
+    expect(screen.queryByRole("dialog", { name: "Unsaved calendar changes" })).not.toBeInTheDocument();
+    expect(link).toHaveFocus();
   });
 
   it("discards drafts and performs the one pending same-origin navigation", async () => {
@@ -392,5 +451,46 @@ describe("ClinicUnavailableCalendar unsaved navigation", () => {
 
     expect(assign).toHaveBeenCalledOnce();
     expect(assign).toHaveBeenCalledWith("http://localhost:3000/appointments");
+  });
+
+  it("ignores modified, non-left, new-tab, download, external-origin, and hash-only links", () => {
+    render(<NavigationFilterHarness />);
+
+    const modified = screen.getByRole("link", { name: "Modified navigation" });
+    fireEvent.click(modified, { ctrlKey: true, button: 0 });
+    expect(screen.getByText("No pending navigation")).toBeInTheDocument();
+    fireEvent.click(modified, { button: 1 });
+    expect(screen.getByText("No pending navigation")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("link", { name: "New tab navigation" }), { button: 0 });
+    expect(screen.getByText("No pending navigation")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("link", { name: "Download navigation" }), { button: 0 });
+    expect(screen.getByText("No pending navigation")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("link", { name: "External navigation" }), { button: 0 });
+    expect(screen.getByText("No pending navigation")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("link", { name: "Hash navigation" }), { button: 0 });
+    expect(screen.getByText("No pending navigation")).toBeInTheDocument();
+  });
+
+  it("removes beforeunload and document-click interception when unmounted", () => {
+    const detachedLink = document.createElement("a");
+    detachedLink.href = "/appointments";
+    document.body.append(detachedLink);
+    const { unmount } = render(<UnsavedListenerHarness />);
+    unmount();
+
+    const unloadEvent = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(unloadEvent);
+    expect(unloadEvent.defaultPrevented).toBe(false);
+
+    let preventedBeforeBrowserFallback = true;
+    const preventBrowserFallback = (event: MouseEvent) => {
+      preventedBeforeBrowserFallback = event.defaultPrevented;
+      event.preventDefault();
+    };
+    detachedLink.addEventListener("click", preventBrowserFallback);
+    detachedLink.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    expect(preventedBeforeBrowserFallback).toBe(false);
+    detachedLink.removeEventListener("click", preventBrowserFallback);
+    detachedLink.remove();
   });
 });

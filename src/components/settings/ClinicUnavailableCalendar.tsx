@@ -270,8 +270,12 @@ export function ClinicUnavailableCalendar({
             </Button>
             <Button
               ref={saveButtonRef}
-              disabled={saving || draft.size === 0}
-              onClick={() => setConfirmationOpen(true)}
+              disabled={saving}
+              aria-disabled={saving || draft.size === 0}
+              className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+              onClick={() => {
+                if (!saving && draft.size > 0) setConfirmationOpen(true);
+              }}
             >
               Save changes
             </Button>

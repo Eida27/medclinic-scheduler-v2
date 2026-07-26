@@ -61,6 +61,7 @@ function CalendarSaveConfirmationDialogContent({
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        if (confirmed) return;
         event.preventDefault();
         onCancel();
         return;
@@ -80,9 +81,10 @@ function CalendarSaveConfirmationDialogContent({
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onCancel]);
+  }, [confirmed, onCancel]);
 
   function cancel() {
+    if (confirmed) return;
     onCancel();
   }
 
@@ -106,7 +108,15 @@ function CalendarSaveConfirmationDialogContent({
         <p className="mt-2 text-sm text-muted">Review these changes before saving them together.</p>
         <div className="mt-4"><CalendarDraftSummary clinics={clinics} changes={changes} /></div>
         <div className="mt-6 flex justify-end gap-3">
-          <Button ref={cancelButtonRef} variant="secondary" onClick={cancel}>Cancel</Button>
+          <Button
+            ref={cancelButtonRef}
+            variant="secondary"
+            aria-disabled={confirmed}
+            className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+            onClick={cancel}
+          >
+            Cancel
+          </Button>
           <Button onClick={confirm} disabled={confirmed}>Confirm and save</Button>
         </div>
       </div>
