@@ -2,8 +2,7 @@
 
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { Button } from "@/components/ui/Button";
-import type { ClinicCalendarBatchChange } from "@/types/clinic-calendar";
-import { CalendarDraftSummary } from "./CalendarDraftSummary";
+import type { ClinicCalendarBatchChange, ClinicCalendarCategory } from "@/types/clinic-calendar";
 
 type CalendarSaveConfirmationDialogProps = {
   open: boolean;
@@ -16,6 +15,24 @@ type CalendarSaveConfirmationDialogProps = {
 
 function focusableElements(container: HTMLElement) {
   return Array.from(container.querySelectorAll<HTMLElement>("button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])"));
+}
+
+const categoryLabels: Record<ClinicCalendarCategory, string> = {
+  HOLIDAY: "Holiday",
+  CLOSURE: "Closure",
+  MAINTENANCE: "Maintenance",
+  STAFF_UNAVAILABILITY: "Staff unavailability",
+};
+
+const reviewDateFormatter = new Intl.DateTimeFormat("en-US", {
+  month: "long",
+  day: "numeric",
+  year: "numeric",
+  timeZone: "UTC",
+});
+
+function formatReviewDate(date: string) {
+  return reviewDateFormatter.format(new Date(`${date}T00:00:00.000Z`));
 }
 
 export function CalendarSaveConfirmationDialog({
@@ -51,6 +68,15 @@ function CalendarSaveConfirmationDialogContent({
   const dialogRef = useRef<HTMLDivElement>(null);
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
   const [confirmed, setConfirmed] = useState(false);
+  const groupedChanges = clinics.flatMap((clinic) => {
+    const clinicChanges = changes.filter((change) => change.clinicId === clinic.id);
+    if (clinicChanges.length === 0) return [];
+    return [{
+      clinic,
+      blocks: clinicChanges.filter((change) => change.action === "BLOCK"),
+      unblocks: clinicChanges.filter((change) => change.action === "UNBLOCK"),
+    }];
+  });
 
   useEffect(() => {
     const returnFocusTarget = returnFocusRef?.current ?? document.activeElement as HTMLElement | null;
@@ -95,29 +121,80 @@ function CalendarSaveConfirmationDialogContent({
   }
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-cpu-navy-dark/70 p-4 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-cpu-navy-dark/70 p-3 backdrop-blur-sm sm:p-4">
       <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="clinic-calendar-save-title"
         aria-busy={confirmed}
-        className="w-full max-w-lg rounded-3xl border border-line bg-surface p-6 shadow-2xl"
+        className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-2xl flex-col overflow-hidden rounded-3xl border border-line bg-surface shadow-2xl sm:max-h-[calc(100dvh-2rem)]"
       >
-        <h2 id="clinic-calendar-save-title" className="text-xl font-bold text-ink">Save clinic calendar changes</h2>
-        <p className="mt-2 text-sm text-muted">Review these changes before saving them together.</p>
-        <div className="mt-4"><CalendarDraftSummary clinics={clinics} changes={changes} /></div>
-        <div className="mt-6 flex justify-end gap-3">
+        <div className="shrink-0 border-b border-line px-5 py-4 sm:px-6">
+          <h2 id="clinic-calendar-save-title" className="text-xl font-bold text-ink">Save clinic calendar changes</h2>
+          <p className="mt-1 text-sm text-muted">Review these changes before saving them together.</p>
+          <p className="mt-2 text-sm font-semibold text-ink">
+            {groupedChanges.length} {groupedChanges.length === 1 ? "clinic" : "clinics"} · {changes.length} {changes.length === 1 ? "date" : "dates"}
+          </p>
+        </div>
+
+        <div className="grid min-h-0 gap-4 overflow-y-auto px-5 py-4 sm:px-6">
+          {groupedChanges.map(({ clinic, blocks, unblocks }, clinicIndex) => {
+            const headingId = `clinic-calendar-review-clinic-${clinicIndex}`;
+            return (
+              <section
+                key={clinic.id}
+                aria-labelledby={headingId}
+                className="min-w-0 rounded-2xl border border-line bg-canvas/50 p-4"
+              >
+                <h3 id={headingId} className="font-bold text-ink">{clinic.name}</h3>
+                <div className="mt-3 grid min-w-0 gap-4 sm:grid-cols-2">
+                  {blocks.length ? (
+                    <div className="min-w-0">
+                      <h4 className="text-sm font-semibold text-ink">Dates to block</h4>
+                      <ul className="mt-2 grid gap-2">
+                        {blocks.map((change) => (
+                          <li key={change.date} className="min-w-0 rounded-xl bg-surface p-3 text-sm">
+                            <time dateTime={change.date} className="font-semibold text-ink">{formatReviewDate(change.date)}</time>
+                            <p className="mt-1 text-muted">{categoryLabels[change.category]}</p>
+                            <p className="mt-1 break-words text-ink">{change.reason}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                  {unblocks.length ? (
+                    <div className="min-w-0">
+                      <h4 className="text-sm font-semibold text-ink">Dates to unblock</h4>
+                      <ul className="mt-2 grid gap-2">
+                        {unblocks.map((change) => (
+                          <li key={change.date} className="min-w-0 rounded-xl bg-surface p-3 text-sm">
+                            <time dateTime={change.date} className="font-semibold text-ink">{formatReviewDate(change.date)}</time>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </div>
+              </section>
+            );
+          })}
+          <p className="rounded-xl border border-cpu-gold/30 bg-cpu-gold/10 p-3 text-sm text-ink">
+            Blocking dates may reschedule appointments. Unblocking dates may restore eligible appointments.
+          </p>
+        </div>
+
+        <div className="flex shrink-0 flex-col-reverse gap-3 border-t border-line px-5 py-4 sm:flex-row sm:justify-end sm:px-6">
           <Button
             ref={cancelButtonRef}
             variant="secondary"
             aria-disabled={confirmed}
-            className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+            className="w-full aria-disabled:cursor-not-allowed aria-disabled:opacity-50 sm:w-auto"
             onClick={cancel}
           >
             Cancel
           </Button>
-          <Button onClick={confirm} disabled={confirmed}>Confirm and save</Button>
+          <Button className="w-full sm:w-auto" onClick={confirm} disabled={confirmed}>Confirm and save</Button>
         </div>
       </div>
     </div>

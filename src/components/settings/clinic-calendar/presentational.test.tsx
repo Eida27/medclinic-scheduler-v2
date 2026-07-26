@@ -180,6 +180,49 @@ describe("clinic calendar presentation", () => {
     expect(within(cpu).getByText("Block 1 date")).toBeInTheDocument();
   });
 
+  it("reviews every dated change with block details and movement consequences before one confirmation", () => {
+    const changes = [
+      { action: "BLOCK" as const, clinicId: clinics[0].id, date: "2027-07-15", category: "HOLIDAY" as const, reason: "Foundation day" },
+      { action: "UNBLOCK" as const, clinicId: clinics[0].id, date: "2027-07-16", unavailableDateId: "a", expectedUpdatedAt: "token-a" },
+      { action: "BLOCK" as const, clinicId: clinics[1].id, date: "2027-08-01", category: "STAFF_UNAVAILABILITY" as const, reason: "Annual training" },
+      { action: "UNBLOCK" as const, clinicId: clinics[1].id, date: "2027-08-02", unavailableDateId: "b", expectedUpdatedAt: "token-b" },
+    ];
+
+    render(
+      <CalendarSaveConfirmationDialog
+        open
+        changes={changes}
+        clinics={clinics}
+        onCancel={vi.fn()}
+        onConfirm={vi.fn()}
+      />,
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "Save clinic calendar changes" });
+    expect(within(dialog).getByText("2 clinics · 4 dates")).toBeInTheDocument();
+
+    const kabalaka = within(dialog).getByRole("region", { name: "KABALAKA Clinic" });
+    expect(within(kabalaka).getByRole("heading", { name: "Dates to block" })).toBeInTheDocument();
+    expect(within(kabalaka).getByText("July 15, 2027")).toBeInTheDocument();
+    expect(within(kabalaka).getByText("Holiday")).toBeInTheDocument();
+    expect(within(kabalaka).getByText("Foundation day")).toBeInTheDocument();
+    expect(within(kabalaka).getByRole("heading", { name: "Dates to unblock" })).toBeInTheDocument();
+    expect(within(kabalaka).getByText("July 16, 2027")).toBeInTheDocument();
+
+    const cpu = within(dialog).getByRole("region", { name: "CPU Clinic" });
+    expect(within(cpu).getByText("August 1, 2027")).toBeInTheDocument();
+    expect(within(cpu).getByText("Staff unavailability")).toBeInTheDocument();
+    expect(within(cpu).getByText("Annual training")).toBeInTheDocument();
+    expect(within(cpu).getByText("August 2, 2027")).toBeInTheDocument();
+
+    expect(within(dialog).getByText(
+      "Blocking dates may reschedule appointments. Unblocking dates may restore eligible appointments.",
+    )).toBeInTheDocument();
+    expect(within(dialog).getAllByRole("button")).toHaveLength(2);
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Confirm and save" })).toBeInTheDocument();
+  });
+
   it("traps focus, cancels on Escape, restores the save trigger, and confirms only once", async () => {
     const onCancel = vi.fn();
     const onConfirm = vi.fn();
