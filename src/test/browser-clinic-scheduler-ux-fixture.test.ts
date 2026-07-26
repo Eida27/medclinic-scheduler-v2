@@ -18,6 +18,7 @@ import {
   runGuardedAcceptanceDatabaseOperation,
   runPersistedCleanup,
   assertZeroCleanupResidue,
+  validateCalendarAcceptanceFixture,
   validatePublishedImport,
   type CleanupManifest,
   type CleanupProgress,
@@ -290,6 +291,56 @@ describe("browser clinic scheduler UX fixture helpers", () => {
       publishedAppointmentCount: 559,
       pairedStudentCount: 279,
     })).toThrow(/560 appointments/i);
+  });
+
+  it("requires cross-clinic, cross-month drafts and disjoint safe and protected restorations", () => {
+    const calendar = {
+      draftBlocks: [{
+        clinicId: "60000000-0000-4000-8000-000000000001",
+        clinicName: "KABALAKA Clinic",
+        date: "2026-08-03",
+      }, {
+        clinicId: "60000000-0000-4000-8000-000000000002",
+        clinicName: "CPU Clinic",
+        date: "2026-09-01",
+      }],
+      safeRestoration: {
+        clinicId: "60000000-0000-4000-8000-000000000002",
+        clinicName: "CPU Clinic",
+        date: "2026-08-10",
+        unavailableDateId: "safe-block",
+        expectedUpdatedAt: "2026-07-26T12:34:56.123456Z",
+        originalAppointmentIds: ["safe-original"],
+        replacementAppointmentIds: ["safe-replacement"],
+      },
+      protectedRestoration: {
+        clinicId: "60000000-0000-4000-8000-000000000002",
+        clinicName: "CPU Clinic",
+        date: "2026-08-11",
+        unavailableDateId: "protected-block",
+        expectedUpdatedAt: "2026-07-26T12:34:56.654321Z",
+        originalAppointmentIds: ["protected-original"],
+        replacementAppointmentIds: ["protected-replacement"],
+        protectedAppointmentId: "protected-replacement",
+      },
+    };
+
+    expect(validateCalendarAcceptanceFixture(calendar)).toEqual(calendar);
+    expect(() => validateCalendarAcceptanceFixture({
+      ...calendar,
+      draftBlocks: [calendar.draftBlocks[0], {
+        ...calendar.draftBlocks[1],
+        date: "2026-08-20",
+      }],
+    })).toThrow(/different months/i);
+    expect(() => validateCalendarAcceptanceFixture({
+      ...calendar,
+      protectedRestoration: {
+        ...calendar.protectedRestoration,
+        replacementAppointmentIds: ["safe-replacement"],
+        protectedAppointmentId: "safe-replacement",
+      },
+    })).toThrow(/disjoint/i);
   });
 
   it("retries private-file cleanup from persisted paths after database rows are gone", async () => {

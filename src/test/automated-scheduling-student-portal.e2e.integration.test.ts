@@ -7,7 +7,10 @@ import { pool } from "@/server/db/pool";
 import { appointmentSummaryReport } from "@/server/repositories/appointment-summary.repository";
 import { getStudentPortalSchedule } from "@/server/repositories/student-portal.repository";
 import { authenticateStudent } from "@/server/services/student-auth.service";
-import { createClinicUnavailableDate } from "@/server/services/clinic-calendar.service";
+import {
+  createClinicUnavailableDate,
+  saveClinicCalendarChanges,
+} from "@/server/services/clinic-calendar.service";
 import { acceptAndScheduleImport } from "@/server/services/schedule-imports.service";
 import { resolveSchedulingWindow } from "@/server/services/scheduling-window";
 import { updateAppointment } from "@/server/services/appointments.service";
@@ -77,6 +80,7 @@ function importInput(
 
 async function cleanup() {
   await cleanupTestFixtures(studentPattern, importPattern, importPattern);
+  // This fixture owns both active and soft-unblocked rows identified by its reason prefix.
   await pool.query("DELETE FROM clinic_unavailable_dates WHERE reason LIKE 'TEST-E2E%'");
   if (storageRoot) {
     await rm(storageRoot, { recursive: true, force: true });
@@ -131,12 +135,27 @@ describe("automated academic-year scheduling and student results", () => {
         "40000000-0000-4000-8000-000000000002",
       ],
     );
+    const preImportBlockedDate = "2026-08-04";
+    const preImportBlock = await saveClinicCalendarChanges({
+      changes: [{
+        action: "BLOCK",
+        clinicId: TEST_REFERENCE_IDS.laboratoryClinic,
+        date: preImportBlockedDate,
+        category: "MAINTENANCE",
+        reason: "TEST-E2E import calendar block",
+      }],
+    }, admin);
+    expect(preImportBlock).toMatchObject({
+      blockedDateCount: 1,
+      movedStudentCount: 0,
+      movedAppointmentCount: 0,
+    });
     await pool.query(
       `INSERT INTO clinic_unavailable_dates (
-         clinic_id, start_date, end_date, category, reason, created_by
+         clinic_id, start_date, end_date, category, reason, created_by, created_batch_id
        )
        SELECT closure.clinic_id, blocked_date::date, blocked_date::date,
-              'CLOSURE', closure.reason, $3
+              'CLOSURE', closure.reason, $3, gen_random_uuid()
          FROM (VALUES
            ($1::uuid, 'TEST-E2E capacity laboratory'),
            ($2::uuid, 'TEST-E2E capacity physical')
@@ -169,6 +188,13 @@ describe("automated academic-year scheduling and student results", () => {
     });
     expect(regular.generatedRange!.startDate >= earliest).toBe(true);
     expect(regular.generatedRange!.startDate.startsWith("2026-08-")).toBe(true);
+    const appointmentsOnPreImportBlock = await pool.query(
+      `SELECT id FROM appointments
+        WHERE student_number LIKE $1 AND clinic_id=$2 AND appointment_date=$3::date
+          AND status NOT IN ('RESCHEDULED','CANCELLED')`,
+      [studentPattern, TEST_REFERENCE_IDS.laboratoryClinic, preImportBlockedDate],
+    );
+    expect(appointmentsOnPreImportBlock.rows).toHaveLength(0);
 
     const priority = await acceptAndScheduleImport(
       importInput("TEST-E2E-priority.csv", "OJT", ["99-9003-03"]),
@@ -203,17 +229,85 @@ describe("automated academic-year scheduling and student results", () => {
       .not.toBe(physicalBefore.id);
 
     const laboratoryBefore = afterCpu.rows.find((row) => row.schedule_type === "LABORATORY")!;
-    const kabalakaClosure = await createClinicUnavailableDate({
-      clinicId: TEST_REFERENCE_IDS.laboratoryClinic,
-      startDate: laboratoryBefore.appointment_date,
-      endDate: laboratoryBefore.appointment_date,
-      category: "MAINTENANCE",
-      reason: "TEST-E2E KABALAKA closure",
+    const kabalakaClosure = await saveClinicCalendarChanges({
+      changes: [{
+        action: "BLOCK",
+        clinicId: TEST_REFERENCE_IDS.laboratoryClinic,
+        date: laboratoryBefore.appointment_date,
+        category: "MAINTENANCE",
+        reason: "TEST-E2E KABALAKA closure",
+      }],
     }, admin);
     expect(kabalakaClosure).toMatchObject({ movedStudentCount: 1, movedAppointmentCount: 2 });
+    const movedPair = await currentPair();
+    expect(movedPair.rows).toHaveLength(2);
+    expect(movedPair.rows.some((row) => row.id === laboratoryBefore.id)).toBe(false);
+    const activeKabalakaBlock = kabalakaClosure.activeUnavailableDates.find((record) => (
+      record.clinicId === TEST_REFERENCE_IDS.laboratoryClinic
+      && record.startDate === laboratoryBefore.appointment_date
+    ));
+    expect(activeKabalakaBlock).toBeDefined();
+
+    const restored = await saveClinicCalendarChanges({
+      changes: [{
+        action: "UNBLOCK",
+        clinicId: TEST_REFERENCE_IDS.laboratoryClinic,
+        date: laboratoryBefore.appointment_date,
+        unavailableDateId: activeKabalakaBlock!.id,
+        expectedUpdatedAt: activeKabalakaBlock!.updatedAt,
+      }],
+    }, admin);
+    expect(restored).toMatchObject({
+      unblockedDateCount: 1,
+      restoredStudentCount: 1,
+      restoredAppointmentCount: 2,
+    });
+    expect(restored.activeUnavailableDates).not.toContainEqual(expect.objectContaining({
+      id: activeKabalakaBlock!.id,
+    }));
+
     const activePair = await currentPair();
-    expect(activePair.rows).toHaveLength(2);
-    expect(activePair.rows.some((row) => row.id === laboratoryBefore.id)).toBe(false);
+    expect(activePair.rows.map((appointment) => appointment.id).sort()).toEqual(
+      afterCpu.rows.map((appointment) => appointment.id).sort(),
+    );
+    const lifecycleAppointments = await pool.query<{
+      id: string;
+      status: string;
+      is_published: boolean;
+      rescheduled_from: string | null;
+    }>(
+      `SELECT id::text, status, is_published, rescheduled_from::text
+         FROM appointments
+        WHERE id=ANY($1::uuid[])
+        ORDER BY id`,
+      [[...afterCpu.rows, ...movedPair.rows].map((appointment) => appointment.id)],
+    );
+    for (const original of afterCpu.rows) {
+      expect(lifecycleAppointments.rows.find((row) => row.id === original.id)).toMatchObject({
+        status: "PENDING",
+        is_published: true,
+      });
+    }
+    for (const replacement of movedPair.rows) {
+      expect(lifecycleAppointments.rows.find((row) => row.id === replacement.id)).toMatchObject({
+        status: "RESCHEDULED",
+        is_published: false,
+        rescheduled_from: expect.any(String),
+      });
+      expect(afterCpu.rows.map((appointment) => appointment.id)).toContain(
+        lifecycleAppointments.rows.find((row) => row.id === replacement.id)?.rescheduled_from,
+      );
+    }
+    const restorationNotifications = await pool.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count
+         FROM student_portal_notifications
+        WHERE student_number='99-9003-03'
+          AND notification_type='SCHEDULE_RESCHEDULED'
+          AND metadata->>'batchId'=$1
+          AND metadata->>'restored'='true'`,
+      [restored.batchId],
+    );
+    expect(restorationNotifications.rows[0].count).toBe(1);
 
     await expect(authenticateStudent({
       studentNumber: " 99-9003-03 ",
@@ -387,6 +481,139 @@ describe("automated academic-year scheduling and student results", () => {
       laboratoryStatus: "PENDING",
       physicalExamStatus: "COMPLETED",
       overallStatus: "INCOMPLETE",
+    });
+  }, 60000);
+
+  it("rejects a protected CPU restoration without applying another clinic block", async () => {
+    const protectedImport = await acceptAndScheduleImport(
+      importInput("TEST-E2E-protected-restoration.csv", "OJT", ["99-9004-04"]),
+      admin,
+    );
+    expect(protectedImport.status).toBe("PUBLISHED");
+
+    const originals = await pool.query<{
+      id: string;
+      schedule_type: "LABORATORY" | "PHYSICAL_EXAM";
+      appointment_date: string;
+    }>(
+      `SELECT id::text, schedule_type, appointment_date::text
+         FROM appointments
+        WHERE student_number='99-9004-04' AND status='PENDING' AND is_published=TRUE
+        ORDER BY schedule_type`,
+    );
+    expect(originals.rows).toHaveLength(2);
+    const originalLaboratory = originals.rows.find((row) => row.schedule_type === "LABORATORY")!;
+    const originalPhysical = originals.rows.find((row) => row.schedule_type === "PHYSICAL_EXAM")!;
+    const blocked = await saveClinicCalendarChanges({
+      changes: [{
+        action: "BLOCK",
+        clinicId: TEST_REFERENCE_IDS.physicalExamClinic,
+        date: originalPhysical.appointment_date,
+        category: "CLOSURE",
+        reason: "TEST-E2E protected restoration",
+      }],
+    }, admin);
+    expect(blocked).toMatchObject({ movedStudentCount: 1, movedAppointmentCount: 1 });
+    const activeBlock = blocked.activeUnavailableDates.find((record) => (
+      record.clinicId === TEST_REFERENCE_IDS.physicalExamClinic
+      && record.startDate === originalPhysical.appointment_date
+    ));
+    expect(activeBlock).toBeDefined();
+
+    const replacement = await pool.query<{
+      id: string;
+      schedule_type: "LABORATORY" | "PHYSICAL_EXAM";
+      rescheduled_from: string;
+    }>(
+      `SELECT id::text, schedule_type, rescheduled_from::text
+         FROM appointments
+        WHERE rescheduled_from=$1 AND status='PENDING' AND is_published=TRUE`,
+      [originalPhysical.id],
+    );
+    expect(replacement.rows).toEqual([expect.objectContaining({
+      schedule_type: "PHYSICAL_EXAM",
+      rescheduled_from: originalPhysical.id,
+    })]);
+    const currentLaboratory = await pool.query<{ id: string }>(
+      `SELECT id::text FROM appointments
+        WHERE student_number='99-9004-04' AND schedule_type='LABORATORY'
+          AND status='PENDING' AND is_published=TRUE`,
+    );
+    expect(currentLaboratory.rows).toEqual([{ id: originalLaboratory.id }]);
+    const protectedPhysical = replacement.rows[0];
+    await pool.query(
+      `INSERT INTO exam_results (student_number, appointment_id, result_status, encoded_by)
+       VALUES ('99-9004-04',$1,'REQUIRES_FOLLOW_UP',$2)`,
+      [protectedPhysical.id, admin.userId],
+    );
+
+    const atomicBlockCandidate = await pool.query<{ date: string }>(
+      `SELECT candidate::date::text AS date
+         FROM generate_series(DATE '2026-10-01', DATE '2026-12-31', INTERVAL '1 day') candidate
+        WHERE EXTRACT(ISODOW FROM candidate) BETWEEN 1 AND 5
+          AND NOT EXISTS (
+            SELECT 1 FROM clinic_unavailable_dates unavailable
+             WHERE unavailable.clinic_id=$1
+               AND unavailable.unblocked_at IS NULL
+               AND candidate::date BETWEEN unavailable.start_date AND unavailable.end_date
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM appointments appointment
+             WHERE appointment.clinic_id=$1
+               AND appointment.appointment_date=candidate::date
+               AND appointment.status NOT IN ('RESCHEDULED','CANCELLED')
+          )
+        ORDER BY candidate
+        LIMIT 1`,
+      [TEST_REFERENCE_IDS.laboratoryClinic],
+    );
+    expect(atomicBlockCandidate.rows).toHaveLength(1);
+
+    await expect(saveClinicCalendarChanges({
+      changes: [{
+        action: "UNBLOCK",
+        clinicId: TEST_REFERENCE_IDS.physicalExamClinic,
+        date: originalPhysical.appointment_date,
+        unavailableDateId: activeBlock!.id,
+        expectedUpdatedAt: activeBlock!.updatedAt,
+      }, {
+        action: "BLOCK",
+        clinicId: TEST_REFERENCE_IDS.laboratoryClinic,
+        date: atomicBlockCandidate.rows[0].date,
+        category: "MAINTENANCE",
+        reason: "TEST-E2E atomic rollback companion",
+      }],
+    }, admin)).rejects.toMatchObject({
+      code: "CLINIC_CALENDAR_BATCH_REJECTED",
+      status: 409,
+      details: { issues: [expect.objectContaining({ code: "PROTECTED_REPLACEMENT" })] },
+    });
+
+    const retainedBlock = await pool.query<{ unblocked_at: Date | null }>(
+      "SELECT unblocked_at FROM clinic_unavailable_dates WHERE id=$1",
+      [activeBlock!.id],
+    );
+    expect(retainedBlock.rows).toEqual([{ unblocked_at: null }]);
+    const companionBlock = await pool.query(
+      `SELECT id FROM clinic_unavailable_dates
+        WHERE clinic_id=$1 AND start_date=$2::date AND unblocked_at IS NULL`,
+      [TEST_REFERENCE_IDS.laboratoryClinic, atomicBlockCandidate.rows[0].date],
+    );
+    expect(companionBlock.rows).toHaveLength(0);
+    const retainedAppointments = await pool.query<{ id: string; status: string; is_published: boolean }>(
+      `SELECT id::text, status, is_published
+         FROM appointments
+        WHERE id=ANY($1::uuid[])
+        ORDER BY id`,
+      [[originalPhysical.id, protectedPhysical.id]],
+    );
+    expect(retainedAppointments.rows.find((row) => row.id === originalPhysical.id)).toMatchObject({
+      status: "RESCHEDULED",
+      is_published: true,
+    });
+    expect(retainedAppointments.rows.find((row) => row.id === protectedPhysical.id)).toMatchObject({
+      status: "PENDING",
+      is_published: true,
     });
   }, 60000);
 });

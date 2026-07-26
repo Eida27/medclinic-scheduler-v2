@@ -21,6 +21,7 @@ const STATE_FILE = resolve(FIXTURE_DIRECTORY, "state.json");
 const RESULT_STORAGE_ROOT = resolve(process.env.RESULT_UPLOAD_ROOT ?? ".data/private-result-uploads");
 const ADMIN_USER_ID = "00000000-0000-4000-8000-000000000001";
 const LABORATORY_CLINIC_ID = "60000000-0000-4000-8000-000000000001";
+const PHYSICAL_EXAM_CLINIC_ID = "60000000-0000-4000-8000-000000000002";
 const LOOPBACK_DATABASE_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 
 export type AcceptanceDatabaseIdentity = {
@@ -139,8 +140,64 @@ type TemporaryProgram = {
   code: string;
   name: string;
 };
+export type CalendarAcceptanceFixture = {
+  draftBlocks: Array<{
+    clinicId: string;
+    clinicName: string;
+    date: string;
+  }>;
+  safeRestoration: {
+    clinicId: string;
+    clinicName: string;
+    date: string;
+    unavailableDateId: string;
+    expectedUpdatedAt: string;
+    originalAppointmentIds: string[];
+    replacementAppointmentIds: string[];
+  };
+  protectedRestoration: {
+    clinicId: string;
+    clinicName: string;
+    date: string;
+    unavailableDateId: string;
+    expectedUpdatedAt: string;
+    originalAppointmentIds: string[];
+    replacementAppointmentIds: string[];
+    protectedAppointmentId: string;
+  };
+};
+
+export function validateCalendarAcceptanceFixture<T extends CalendarAcceptanceFixture>(fixture: T): T {
+  if (fixture.draftBlocks.length !== 2) {
+    throw new Error("Calendar acceptance requires exactly two draft block dates.");
+  }
+  if (new Set(fixture.draftBlocks.map((block) => block.clinicId)).size !== 2) {
+    throw new Error("Calendar acceptance draft dates must cover both clinics.");
+  }
+  if (new Set(fixture.draftBlocks.map((block) => block.date.slice(0, 7))).size !== 2) {
+    throw new Error("Calendar acceptance draft dates must use different months.");
+  }
+  const safeIds = new Set([
+    ...fixture.safeRestoration.originalAppointmentIds,
+    ...fixture.safeRestoration.replacementAppointmentIds,
+  ]);
+  const protectedIds = [
+    ...fixture.protectedRestoration.originalAppointmentIds,
+    ...fixture.protectedRestoration.replacementAppointmentIds,
+  ];
+  if (protectedIds.some((id) => safeIds.has(id))) {
+    throw new Error("Safe and protected restoration appointment fixtures must be disjoint.");
+  }
+  if (!fixture.protectedRestoration.replacementAppointmentIds.includes(
+    fixture.protectedRestoration.protectedAppointmentId,
+  )) {
+    throw new Error("The protected appointment must be one of the generated replacements.");
+  }
+  return fixture;
+}
+
 type FixtureState = {
-  version: 2;
+  version: 3;
   runId: string;
   phase: "PREPARING" | "PREPARED" | "IMPORTED" | "STAGED";
   startedAt: string;
@@ -184,6 +241,7 @@ type FixtureState = {
     clinicContextStudentNumber: string;
     successCalendarDate: string;
     failureCalendarDate: string;
+    calendar?: CalendarAcceptanceFixture;
   };
   cleanup?: CleanupProgress;
 };
@@ -369,6 +427,7 @@ async function captureBaselineIds(client: PoolClient, studentNumbers: string[]):
     loginAttempts: await idRows(client, "SELECT id::text AS id FROM student_login_attempts WHERE student_number=ANY($1::varchar[])", [studentNumbers]),
     outbox: await idRows(client, "SELECT id::text AS id FROM email_outbox WHERE student_number=ANY($1::varchar[])", [studentNumbers]),
     rescheduleEvents: await idRows(client, "SELECT id::text AS id FROM appointment_reschedule_events WHERE student_number=ANY($1::varchar[])", [studentNumbers]),
+    // Baseline ownership must include active and historical soft-unblocked rows.
     closures: await idRows(client, "SELECT id::text AS id FROM clinic_unavailable_dates"),
     audits: await idRows(client, "SELECT id::text AS id FROM audit_logs"),
   };
@@ -431,7 +490,7 @@ async function prepare(pool: Pool, databaseIdentity: AcceptanceDatabaseIdentity)
       });
     }
     state = {
-      version: 2,
+      version: 3,
       runId,
       phase: "PREPARING",
       startedAt: new Date().toISOString(),
@@ -648,7 +707,18 @@ function manilaDate(offsetDays: number) {
   return date.toISOString().slice(0, 10);
 }
 
-async function findEmptyFutureWeekday(client: PoolClient) {
+function addIsoDays(date: string, days: number) {
+  const shifted = new Date(`${date}T00:00:00.000Z`);
+  shifted.setUTCDate(shifted.getUTCDate() + days);
+  return shifted.toISOString().slice(0, 10);
+}
+
+async function findEmptyFutureWeekday(
+  client: PoolClient,
+  clinicId = LABORATORY_CLINIC_ID,
+  startDate = manilaDate(1),
+  endDate = manilaDate(120),
+) {
   const result = await client.query<{ date: string }>(
     `SELECT candidate::date::text AS date
        FROM generate_series($1::date, $2::date, interval '1 day') candidate
@@ -664,10 +734,116 @@ async function findEmptyFutureWeekday(client: PoolClient) {
              AND appointment.status NOT IN ('RESCHEDULED','CANCELLED')
         )
       ORDER BY candidate LIMIT 1`,
-    [manilaDate(1), manilaDate(62), LABORATORY_CLINIC_ID],
+    [startDate, endDate, clinicId],
   );
-  if (!result.rows[0]) throw new Error("No empty future Laboratory weekday is available in the next 62 days.");
+  if (!result.rows[0]) {
+    throw new Error(`No empty future clinic weekday is available from ${startDate} through ${endDate}.`);
+  }
   return result.rows[0].date;
+}
+
+function monthBounds(offset: number) {
+  const today = new Date(`${manilaDate(0)}T00:00:00.000Z`);
+  const first = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + offset, 1));
+  const last = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + offset + 1, 0));
+  return {
+    startDate: first.toISOString().slice(0, 10),
+    endDate: last.toISOString().slice(0, 10),
+  };
+}
+
+async function seedCpuRestorationFixture(
+  client: PoolClient,
+  state: FixtureState,
+  pair: {
+    studentNumber: string;
+    laboratoryDate: string;
+    physicalId: string;
+    physicalDate: string;
+  },
+  kind: "safe" | "protected",
+) {
+  const blockBatchId = randomUUID();
+  const block = await client.query<{ id: string; updatedAt: string }>(
+    `INSERT INTO clinic_unavailable_dates (
+       clinic_id, start_date, end_date, category, reason, created_by, created_batch_id
+     ) VALUES ($1,$2,$2,'MAINTENANCE',$3,$4,$5)
+     RETURNING id::text,
+               to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "updatedAt"`,
+    [
+      PHYSICAL_EXAM_CLINIC_ID,
+      pair.physicalDate,
+      `${state.fixtureReason} ${kind} restoration`,
+      ADMIN_USER_ID,
+      blockBatchId,
+    ],
+  );
+  const replacementDate = await findEmptyFutureWeekday(
+    client,
+    PHYSICAL_EXAM_CLINIC_ID,
+    addIsoDays(pair.laboratoryDate, 1),
+    addIsoDays(pair.laboratoryDate, 180),
+  );
+  const retired = await client.query(
+    `UPDATE appointments SET status='RESCHEDULED', updated_by=$2, updated_at=NOW()
+      WHERE id=$1 AND status='PENDING' AND is_published=TRUE`,
+    [pair.physicalId, ADMIN_USER_ID],
+  );
+  if (retired.rowCount !== 1) {
+    throw new Error(`Expected one pending Physical Examination original for ${kind} restoration.`);
+  }
+  const replacement = await client.query<{ id: string }>(
+    `INSERT INTO appointments (
+       clinic_id, student_number, schedule_type, appointment_date, status,
+       is_published, notes, rescheduled_from, created_by, updated_by,
+       schedule_pair_id, schedule_cycle_start
+     ) SELECT clinic_id, student_number, schedule_type, $2::date, 'PENDING',
+              TRUE, $3, id, $4, $4, schedule_pair_id, schedule_cycle_start
+         FROM appointments WHERE id=$1
+     RETURNING id::text`,
+    [
+      pair.physicalId,
+      replacementDate,
+      `${state.fixtureReason} ${kind} restoration replacement`,
+      ADMIN_USER_ID,
+    ],
+  );
+  await client.query(
+    `INSERT INTO appointment_status_logs (appointment_id, old_status, new_status, notes, changed_by)
+     VALUES ($1,'PENDING','RESCHEDULED',$3,$2), ($4,NULL,'PENDING',$3,$2)`,
+    [
+      pair.physicalId,
+      ADMIN_USER_ID,
+      `${state.fixtureReason} ${kind} restoration setup`,
+      replacement.rows[0].id,
+    ],
+  );
+  await client.query(
+    `INSERT INTO appointment_reschedule_events (
+       student_number, schedule_pair_id, cause, clinic_unavailable_date_id,
+       old_physical_exam_appointment_id, new_physical_exam_appointment_id,
+       actor_user_id, block_batch_id
+     ) SELECT student_number, schedule_pair_id, 'CLINIC_CLOSURE', $2, id, $3, $4, $5
+         FROM appointments WHERE id=$1`,
+    [pair.physicalId, block.rows[0].id, replacement.rows[0].id, ADMIN_USER_ID, blockBatchId],
+  );
+  if (kind === "protected") {
+    await client.query(
+      `INSERT INTO exam_results (student_number, appointment_id, result_status, remarks, encoded_by)
+       VALUES ($1,$2,'REQUIRES_FOLLOW_UP',$3,$4)`,
+      [pair.studentNumber, replacement.rows[0].id, state.fixtureReason, ADMIN_USER_ID],
+    );
+  }
+  return {
+    clinicId: PHYSICAL_EXAM_CLINIC_ID,
+    clinicName: "CPU Clinic",
+    date: pair.physicalDate,
+    unavailableDateId: block.rows[0].id,
+    expectedUpdatedAt: block.rows[0].updatedAt,
+    originalAppointmentIds: [pair.physicalId],
+    replacementAppointmentIds: [replacement.rows[0].id],
+    ...(kind === "protected" ? { protectedAppointmentId: replacement.rows[0].id } : {}),
+  };
 }
 
 async function stage(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
@@ -770,11 +946,11 @@ async function stage(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
        HAVING COUNT(*) FILTER (WHERE appointment.schedule_type='LABORATORY')=1
           AND COUNT(*) FILTER (WHERE appointment.schedule_type='PHYSICAL_EXAM')=1
         ORDER BY appointment.student_number
-        LIMIT 4`,
+        LIMIT 6`,
       [imported.batchIds],
     );
-    if (pairs.rows.length < 4) throw new Error(`Expected at least four published appointment pairs; found ${pairs.rows.length}.`);
-    const [correction, complete, mixed, clinicContext] = pairs.rows;
+    if (pairs.rows.length < 6) throw new Error(`Expected at least six published appointment pairs; found ${pairs.rows.length}.`);
+    const [correction, complete, mixed, clinicContext, safeRestorationPair, protectedRestorationPair] = pairs.rows;
     const appointmentIds = [
       correction.laboratoryId,
       complete.laboratoryId,
@@ -813,7 +989,70 @@ async function stage(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
         mixed.studentNumber, mixed.physicalId, ADMIN_USER_ID,
       ],
     );
-    const successCalendarDate = await findEmptyFutureWeekday(client);
+    const safeRestorationMonth = monthBounds(3);
+    const protectedRestorationMonth = monthBounds(4);
+    safeRestorationPair.physicalDate = await findEmptyFutureWeekday(
+      client,
+      PHYSICAL_EXAM_CLINIC_ID,
+      safeRestorationMonth.startDate,
+      safeRestorationMonth.endDate,
+    );
+    await client.query(
+      "UPDATE appointments SET appointment_date=$2::date, updated_by=$3, updated_at=NOW() WHERE id=$1",
+      [safeRestorationPair.physicalId, safeRestorationPair.physicalDate, ADMIN_USER_ID],
+    );
+    protectedRestorationPair.physicalDate = await findEmptyFutureWeekday(
+      client,
+      PHYSICAL_EXAM_CLINIC_ID,
+      protectedRestorationMonth.startDate,
+      protectedRestorationMonth.endDate,
+    );
+    await client.query(
+      "UPDATE appointments SET appointment_date=$2::date, updated_by=$3, updated_at=NOW() WHERE id=$1",
+      [protectedRestorationPair.physicalId, protectedRestorationPair.physicalDate, ADMIN_USER_ID],
+    );
+    const safeRestoration = await seedCpuRestorationFixture(
+      client,
+      state,
+      safeRestorationPair,
+      "safe",
+    );
+    const protectedRestoration = await seedCpuRestorationFixture(
+      client,
+      state,
+      protectedRestorationPair,
+      "protected",
+    );
+    const firstDraftMonth = monthBounds(1);
+    const secondDraftMonth = monthBounds(2);
+    const draftBlocks = [{
+      clinicId: LABORATORY_CLINIC_ID,
+      clinicName: "KABALAKA Clinic",
+      date: await findEmptyFutureWeekday(
+        client,
+        LABORATORY_CLINIC_ID,
+        firstDraftMonth.startDate,
+        firstDraftMonth.endDate,
+      ),
+    }, {
+      clinicId: PHYSICAL_EXAM_CLINIC_ID,
+      clinicName: "CPU Clinic",
+      date: await findEmptyFutureWeekday(
+        client,
+        PHYSICAL_EXAM_CLINIC_ID,
+        secondDraftMonth.startDate,
+        secondDraftMonth.endDate,
+      ),
+    }];
+    const calendar = validateCalendarAcceptanceFixture({
+      draftBlocks,
+      safeRestoration,
+      protectedRestoration: {
+        ...protectedRestoration,
+        protectedAppointmentId: protectedRestoration.protectedAppointmentId!,
+      },
+    });
+    const successCalendarDate = draftBlocks[0].date;
     state.phase = "STAGED";
     state.staged = {
       correction: {
@@ -833,7 +1072,8 @@ async function stage(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
       },
       clinicContextStudentNumber: clinicContext.studentNumber,
       successCalendarDate,
-      failureCalendarDate: complete.laboratoryDate,
+      failureCalendarDate: protectedRestoration.date,
+      calendar,
     };
     await client.query("COMMIT");
     await writeState(state);
@@ -872,11 +1112,36 @@ async function status(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
       `SELECT id::text, safe_daily_capacity AS "safeDailyCapacity", max_daily_capacity AS "maxDailyCapacity"
          FROM clinic_capacity_settings ORDER BY id`,
     );
-    const closures = await idRows(
-      client,
-      "SELECT id::text AS id FROM clinic_unavailable_dates WHERE reason=$1 AND created_at >= $2::timestamptz ORDER BY id",
-      [state.fixtureReason, state.startedAt],
-    );
+    // Status deliberately includes fixture-owned active and historical soft-unblocked rows.
+    const calendarRows = (await client.query<{
+      id: string;
+      unblockedAt: Date | null;
+      createdBatchId: string | null;
+      unblockedBatchId: string | null;
+    }>(
+      `SELECT id::text, unblocked_at AS "unblockedAt",
+              created_batch_id::text AS "createdBatchId",
+              unblocked_batch_id::text AS "unblockedBatchId"
+         FROM clinic_unavailable_dates
+        WHERE reason LIKE $1 AND created_at >= $2::timestamptz
+        ORDER BY id`,
+      [`${state.fixtureReason}%`, state.startedAt],
+    )).rows;
+    const eventProvenance = (await client.query<{
+      id: string;
+      blockBatchId: string | null;
+      restorationBatchId: string | null;
+      restoredAt: Date | null;
+    }>(
+      `SELECT event.id::text, event.block_batch_id::text AS "blockBatchId",
+              event.restoration_batch_id::text AS "restorationBatchId",
+              event.restored_at AS "restoredAt"
+         FROM appointment_reschedule_events event
+         JOIN clinic_unavailable_dates unavailable ON unavailable.id=event.clinic_unavailable_date_id
+        WHERE unavailable.reason LIKE $1 AND unavailable.created_at >= $2::timestamptz
+        ORDER BY event.id`,
+      [`${state.fixtureReason}%`, state.startedAt],
+    )).rows;
     await writeState(state);
     return {
       mode: "status",
@@ -888,7 +1153,21 @@ async function status(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
       imported: importSummary(imported),
       peñaStudent: await peñaStudent(client, state),
       staged: state.staged,
-      fixtureClosures: closures,
+      fixtureClosures: calendarRows.map((row) => row.id),
+      calendarProof: {
+        rowCount: calendarRows.length,
+        activeCount: calendarRows.filter((row) => row.unblockedAt === null).length,
+        unblockedCount: calendarRows.filter((row) => row.unblockedAt !== null).length,
+        allRowsHaveCreationProvenance: calendarRows.every((row) => Boolean(row.createdBatchId)),
+        allUnblockedRowsHaveRestorationProvenance: calendarRows
+          .filter((row) => row.unblockedAt !== null)
+          .every((row) => Boolean(row.unblockedBatchId)),
+        eventCount: eventProvenance.length,
+        allEventsHaveBlockProvenance: eventProvenance.every((event) => Boolean(event.blockBatchId)),
+        restoredEventsHaveRestorationProvenance: eventProvenance
+          .filter((event) => event.restoredAt !== null)
+          .every((event) => Boolean(event.restorationBatchId)),
+      },
       capacities: capacities.rows,
       fixtureReason: state.fixtureReason,
     };
@@ -1020,8 +1299,9 @@ export async function collectCleanupManifest(
   const closures = differenceIds(
     await idRows(
       client,
-      "SELECT id::text AS id FROM clinic_unavailable_dates WHERE reason=$1 AND created_at >= $2::timestamptz",
-      [state.fixtureReason, state.startedAt],
+      // Cleanup owns both active and historical soft-unblocked records for this tagged run.
+      "SELECT id::text AS id FROM clinic_unavailable_dates WHERE reason LIKE $1 AND created_at >= $2::timestamptz",
+      [`${state.fixtureReason}%`, state.startedAt],
     ),
     state.baseline.ids.closures,
   );

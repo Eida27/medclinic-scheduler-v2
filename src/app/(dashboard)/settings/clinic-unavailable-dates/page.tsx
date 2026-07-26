@@ -18,13 +18,14 @@ export default async function ClinicUnavailableDatesPage() {
     <>
       <PageHeader
         title="Clinic unavailable dates"
-        description="Block future clinic dates and atomically move affected schedules."
+        description="Configure clinic availability before imports, review all changes, and save once."
       />
       <ClinicUnavailableCalendar
         clinics={clinics}
         unavailableDates={unavailableDates}
         initialMonth={today.slice(0, 7)}
         today={today}
+        maxYear={2100}
       />
     </>
   );

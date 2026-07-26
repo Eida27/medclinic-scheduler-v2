@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClinicUnavailableDateRecord } from "@/server/repositories/clinic-unavailable-dates.repository";
 
@@ -50,20 +50,17 @@ describe("ClinicUnavailableDatesPage", () => {
     expect(requireUser).toHaveBeenCalledWith(["ADMIN"]);
     expect(listClinicOptions).toHaveBeenCalledOnce();
     expect(listClinicUnavailableDateRecords).toHaveBeenCalledOnce();
+    expect(screen.getByText(
+      "Configure clinic availability before imports, review all changes, and save once.",
+    )).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "August 2026" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Year")).toHaveValue("2026");
+    expect(screen.getByRole("option", { name: "2100" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "KABALAKA Clinic" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /September 1, 2026/ })).not.toBeInTheDocument();
     const unavailableDate = screen.getByRole("button", {
-      name: "August 19, 2026 — unavailable: Maintenance, Generator testing",
+      name: "August 19, 2026 — blocked: Maintenance, Generator testing",
     });
     expect(unavailableDate).toBeEnabled();
-
-    fireEvent.click(unavailableDate);
-
-    const details = screen.getByRole("region", { name: "Unavailable date details" });
-    expect(unavailableDate).toHaveAttribute("aria-pressed", "true");
-    expect(within(details).getByText("KABALAKA Clinic")).toBeInTheDocument();
-    expect(within(details).getByText("Maintenance")).toBeInTheDocument();
-    expect(within(details).getByText("Generator testing")).toBeInTheDocument();
-    expect(within(details).getByText("August 19, 2026 to August 19, 2026")).toBeInTheDocument();
   });
 });
