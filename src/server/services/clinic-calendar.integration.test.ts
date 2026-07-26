@@ -2167,6 +2167,56 @@ describe("clinic calendar closures", () => {
     expect(lab.appointment_date < pe.appointment_date).toBe(true);
   });
 
+  it("rejects a KABALAKA pair with mismatched schedule cycles without mutating the batch", async () => {
+    const studentNumber = "99-9549-49";
+    const reason = "TEST-CALENDAR mismatched KABALAKA cycle";
+    await acceptAndScheduleImport(
+      importInput("TEST-CALENDAR-kabalaka-cycle-mismatch.csv", studentNumber),
+      admin,
+    );
+    const appointments = await pool.query<{
+      id: string;
+      appointment_date: string;
+      schedule_type: string;
+      schedule_cycle_start: number;
+    }>(
+      `SELECT id::text, appointment_date::text, schedule_type, schedule_cycle_start
+         FROM appointments
+        WHERE student_number=$1
+        ORDER BY schedule_type`,
+      [studentNumber],
+    );
+    const laboratory = appointments.rows.find((row) => row.schedule_type === "LABORATORY")!;
+    const physicalExam = appointments.rows.find((row) => row.schedule_type === "PHYSICAL_EXAM")!;
+    await pool.query(
+      "UPDATE appointments SET schedule_cycle_start=$2 WHERE id=$1",
+      [physicalExam.id, laboratory.schedule_cycle_start + 1],
+    );
+    const before = await readFailedBlockState(studentNumber);
+
+    await expect(saveClinicCalendarChanges({
+      changes: [{
+        action: "BLOCK",
+        clinicId: TEST_REFERENCE_IDS.laboratoryClinic,
+        date: laboratory.appointment_date,
+        category: "CLOSURE",
+        reason,
+      }],
+    }, admin)).rejects.toMatchObject({
+      code: "CLINIC_CALENDAR_BATCH_REJECTED",
+      status: 409,
+      details: {
+        issues: [expect.objectContaining({
+          clinicId: TEST_REFERENCE_IDS.laboratoryClinic,
+          date: laboratory.appointment_date,
+          action: "BLOCK",
+          code: "PAIR_INTEGRITY_FAILURE",
+        })],
+      },
+    });
+    expect(await readFailedBlockState(studentNumber)).toEqual(before);
+  });
+
   it("reports protected appointments and rolls back the block", async () => {
     await acceptAndScheduleImport(importInput("TEST-CALENDAR-protected.csv", "99-9503-03"), admin);
     const pe = await pool.query<{ id: string; appointment_date: string }>(

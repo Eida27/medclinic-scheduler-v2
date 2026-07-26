@@ -464,6 +464,7 @@ export async function planClinicBlock(
       laboratory.length !== 1
       || physical.length !== 1
       || laboratory[0].studentNumber !== physical[0].studentNumber
+      || laboratory[0].scheduleCycleStart !== physical[0].scheduleCycleStart
     ) {
       pairIntegrityFailure(change, members);
     }
