@@ -176,7 +176,8 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
          INTERVAL '1 day'
        ) AS blocked(date)
       WHERE unavailable.end_date >= $1::date
-        AND unavailable.start_date <= $2::date`,
+        AND unavailable.start_date <= $2::date
+        AND unavailable.unblocked_at IS NULL`,
     [input.replacementWindowStart, input.searchEndDate],
   );
   const blockedLaboratoryDates = blocked.rows

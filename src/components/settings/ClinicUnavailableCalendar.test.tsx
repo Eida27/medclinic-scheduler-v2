@@ -21,6 +21,7 @@ const unavailableDates: ClinicUnavailableDateRecord[] = [
     reason: "Generator testing",
     createdByName: "Clinic Admin",
     createdAt: "2026-07-01T00:00:00.000Z",
+    updatedAt: "2026-07-01T00:00:00.000000Z",
   },
   {
     id: "unavailable-past",
@@ -33,6 +34,7 @@ const unavailableDates: ClinicUnavailableDateRecord[] = [
     reason: "Storm cleanup",
     createdByName: "Clinic Admin",
     createdAt: "2026-07-01T00:00:00.000Z",
+    updatedAt: "2026-07-01T00:00:00.000000Z",
   },
   {
     id: "unavailable-weekend",
@@ -45,6 +47,7 @@ const unavailableDates: ClinicUnavailableDateRecord[] = [
     reason: "Staff retreat",
     createdByName: "Clinic Admin",
     createdAt: "2026-07-01T00:00:00.000Z",
+    updatedAt: "2026-07-01T00:00:00.000000Z",
   },
 ];
 
@@ -243,7 +246,12 @@ describe("ClinicUnavailableCalendar", () => {
     });
 
     response.resolve(new Response(JSON.stringify({
-      data: { id: "unavailable-new", movedStudentCount: 2, movedAppointmentCount: 4 },
+      data: {
+        id: "unavailable-new",
+        updatedAt: "2026-08-18T09:10:11.123456Z",
+        movedStudentCount: 2,
+        movedAppointmentCount: 4,
+      },
     }), { status: 201, headers: { "content-type": "application/json" } }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("2 students");

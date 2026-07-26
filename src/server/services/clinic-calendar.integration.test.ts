@@ -157,6 +157,31 @@ afterAll(async () => {
 });
 
 describe("clinic calendar closures", () => {
+  it("returns the database's exact optimistic token for a newly created block", async () => {
+    const result = await createClinicUnavailableDate({
+      clinicId: TEST_REFERENCE_IDS.laboratoryClinic,
+      startDate: "2048-07-20",
+      endDate: "2048-07-20",
+      category: "CLOSURE",
+      reason: "TEST-CALENDAR precise optimistic token",
+    }, admin) as Awaited<ReturnType<typeof createClinicUnavailableDate>> & { updatedAt?: string };
+
+    const stored = await pool.query<{ updated_at: string }>(
+      `SELECT to_char(
+          updated_at AT TIME ZONE 'UTC',
+          'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+        ) AS updated_at
+         FROM clinic_unavailable_dates
+        WHERE id=$1`,
+      [result.id],
+    );
+
+    expect(result.updatedAt).toEqual(expect.stringMatching(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/,
+    ));
+    expect(result.updatedAt).toBe(stored.rows[0].updated_at);
+  });
+
   it("fills a replacement date to maximum capacity before moving later", async () => {
     await acceptAndScheduleImport(importInput("TEST-CALENDAR-maximum-existing.csv", "99-9506-06"), admin);
     await acceptAndScheduleImport(importInput("TEST-CALENDAR-maximum-moved.csv", "99-9507-07"), admin);

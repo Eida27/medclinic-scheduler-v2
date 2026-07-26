@@ -24,6 +24,7 @@ describe("/api/clinic-unavailable-dates", () => {
     listClinicUnavailableDates.mockResolvedValue([]);
     createClinicUnavailableDate.mockResolvedValue({
       id: "block-id",
+      updatedAt: "2026-08-10T09:10:11.123456Z",
       movedStudentCount: 2,
       movedAppointmentCount: 4,
     });
@@ -51,7 +52,12 @@ describe("/api/clinic-unavailable-dates", () => {
     }));
     expect(response.status).toBe(201);
     await expect(response.json()).resolves.toEqual({
-      data: { id: "block-id", movedStudentCount: 2, movedAppointmentCount: 4 },
+      data: {
+        id: "block-id",
+        updatedAt: "2026-08-10T09:10:11.123456Z",
+        movedStudentCount: 2,
+        movedAppointmentCount: 4,
+      },
     });
     expect(createClinicUnavailableDate).toHaveBeenCalledWith(body, admin);
   });
@@ -73,7 +79,12 @@ describe("/api/clinic-unavailable-dates", () => {
 
     expect(response.status).toBe(201);
     await expect(response.json()).resolves.toEqual({
-      data: { id: "block-id", movedStudentCount: 2, movedAppointmentCount: 4 },
+      data: {
+        id: "block-id",
+        updatedAt: "2026-08-10T09:10:11.123456Z",
+        movedStudentCount: 2,
+        movedAppointmentCount: 4,
+      },
     });
     expect(createClinicUnavailableDate).toHaveBeenCalledWith(body, admin);
   });

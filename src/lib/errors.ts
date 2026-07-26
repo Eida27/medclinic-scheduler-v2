@@ -4,6 +4,7 @@ export class AppError extends Error {
     message: string,
     public readonly status = 400,
     public readonly fields?: Record<string, string[]>,
+    public readonly details?: unknown,
   ) {
     super(message);
     this.name = "AppError";

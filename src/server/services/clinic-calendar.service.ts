@@ -310,7 +310,9 @@ export async function createClinicUnavailableDate(raw: unknown, actor: SessionUs
       `SELECT clinic.code AS clinic_code, unavailable.start_date::text, unavailable.end_date::text
          FROM clinic_unavailable_dates unavailable
          JOIN clinics clinic ON clinic.id=unavailable.clinic_id
-        WHERE unavailable.end_date >= $1::date AND unavailable.start_date <= $2::date`,
+        WHERE unavailable.end_date >= $1::date
+          AND unavailable.start_date <= $2::date
+          AND unavailable.unblocked_at IS NULL`,
       [searchStartDate, searchEndDate],
     );
     const blockedLaboratory = new Set(existingBlocked.rows
@@ -414,7 +416,8 @@ export async function createClinicUnavailableDate(raw: unknown, actor: SessionUs
       }
     }
 
-    const blockId = await insertClinicUnavailableDateRecord(client, input, actor.userId);
+    const block = await insertClinicUnavailableDateRecord(client, input, actor.userId);
+    const blockId = block.id;
     const movedIds = appointmentsToMove.map((appointment) => appointment.id);
     if (movedIds.length) {
       await client.query(
@@ -513,6 +516,7 @@ export async function createClinicUnavailableDate(raw: unknown, actor: SessionUs
     );
     return {
       id: blockId,
+      updatedAt: block.updatedAt,
       movedStudentCount: new Set(replacements.map((replacement) => replacement.studentNumber)).size,
       movedAppointmentCount: appointmentsToMove.length,
     };

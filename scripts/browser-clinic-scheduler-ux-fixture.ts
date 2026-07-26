@@ -656,6 +656,7 @@ async function findEmptyFutureWeekday(client: PoolClient) {
         AND NOT EXISTS (
           SELECT 1 FROM clinic_unavailable_dates unavailable
            WHERE unavailable.clinic_id=$3 AND candidate::date BETWEEN unavailable.start_date AND unavailable.end_date
+             AND unavailable.unblocked_at IS NULL
         )
         AND NOT EXISTS (
           SELECT 1 FROM appointments appointment

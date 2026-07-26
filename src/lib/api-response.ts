@@ -9,7 +9,14 @@ export function dataResponse<T>(data: T, init?: ResponseInit): NextResponse<{ da
 export function errorResponse(error: unknown): NextResponse {
   if (error instanceof AppError) {
     return NextResponse.json(
-      { error: { code: error.code, message: error.message, fields: error.fields } },
+      {
+        error: {
+          code: error.code,
+          message: error.message,
+          fields: error.fields,
+          details: error.details,
+        },
+      },
       { status: error.status },
     );
   }

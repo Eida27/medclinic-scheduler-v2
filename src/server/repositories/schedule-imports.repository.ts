@@ -395,9 +395,10 @@ export async function createScheduleImport(
            GREATEST(unavailable.start_date, $1::date),
            LEAST(unavailable.end_date, $2::date),
            INTERVAL '1 day'
-         ) AS blocked(date)
+        ) AS blocked(date)
         WHERE unavailable.end_date >= $1::date
-          AND unavailable.start_date <= $2::date`,
+          AND unavailable.start_date <= $2::date
+          AND unavailable.unblocked_at IS NULL`,
       [windowStart, searchEndDate],
     );
     const preferredWindowEnd = input.studentCategory === "REGULAR"

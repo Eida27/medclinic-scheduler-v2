@@ -103,7 +103,7 @@ export function ClinicUnavailableCalendar({
         }),
       });
       const payload = await response.json() as {
-        data?: { id: string } & Impact;
+        data?: { id: string; updatedAt: string } & Impact;
         error?: ApiError;
       };
 
@@ -125,6 +125,7 @@ export function ClinicUnavailableCalendar({
           reason: trimmedReason,
           createdByName: "",
           createdAt: new Date().toISOString(),
+          updatedAt: payload.data!.updatedAt,
         },
       ]);
       setSuccess({
