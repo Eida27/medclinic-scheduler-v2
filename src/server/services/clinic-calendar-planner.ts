@@ -965,8 +965,11 @@ export async function applyClinicRestorationPlan(
   if (replacementIds.length) {
     const retired = await client.query(
       `UPDATE appointments
-          SET status='RESCHEDULED', updated_by=$2, updated_at=NOW()
-        WHERE id=ANY($1::uuid[]) AND status='PENDING'`,
+          SET status='RESCHEDULED', is_published=FALSE,
+              updated_by=$2, updated_at=NOW()
+        WHERE id=ANY($1::uuid[])
+          AND status='PENDING'
+          AND is_published=TRUE`,
       [replacementIds, actor.userId],
     );
     assertMutationCount(plan, "retiring generated replacements", retired.rowCount, replacementIds.length);

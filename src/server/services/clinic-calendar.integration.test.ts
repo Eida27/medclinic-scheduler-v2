@@ -1,6 +1,9 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { pool, transaction } from "@/server/db/pool";
+import { appointmentSummaryReport } from "@/server/repositories/appointment-summary.repository";
+import { getCurrentEffectiveAppointmentsForStudent } from "@/server/repositories/current-effective-appointments.repository";
+import { getAdminStudentResultProfileRow } from "@/server/repositories/student-result-submissions.repository";
 import {
   cleanupAndRestoreCapacitySettings,
   setupCapacityFixtureLock,
@@ -395,9 +398,10 @@ describe("clinic calendar closures", () => {
     const appointments = await pool.query<{
       id: string;
       status: string;
+      is_published: boolean;
       rescheduled_from: string | null;
     }>(
-      `SELECT id::text, status, rescheduled_from::text
+      `SELECT id::text, status, is_published, rescheduled_from::text
          FROM appointments
         WHERE id=ANY($1::uuid[])
         ORDER BY id`,
@@ -412,7 +416,10 @@ describe("clinic calendar closures", () => {
       fixture.event.newPhysicalExamAppointmentId,
     ].filter((id): id is string => Boolean(id));
     expect(appointments.rows.filter((appointment) => originalIds.includes(appointment.id)))
-      .toEqual(expect.arrayContaining(originalIds.map((id) => expect.objectContaining({ id, status: "PENDING" }))));
+      .toEqual(expect.arrayContaining(originalIds.map((id) => expect.objectContaining({
+        id,
+        status: "PENDING",
+      }))));
     expect(appointments.rows.filter((appointment) => replacementIds.includes(appointment.id)))
       .toEqual(expect.arrayContaining(replacementIds.map((id) => expect.objectContaining({
         id,
@@ -426,6 +433,59 @@ describe("clinic calendar closures", () => {
       expect(originalIds).toHaveLength(2);
       expect(replacementIds).toHaveLength(2);
     }
+
+    const current = await getCurrentEffectiveAppointmentsForStudent(studentNumber);
+    expect(current.physicalExam).toMatchObject({
+      id: fixture.event.oldPhysicalExamAppointmentId,
+      status: "PENDING",
+    });
+    if (clinicCode === "KABALAKA_CLINIC") {
+      expect(current.laboratory).toMatchObject({
+        id: fixture.event.oldLaboratoryAppointmentId,
+        status: "PENDING",
+      });
+    }
+
+    const summary = await appointmentSummaryReport({
+      search: studentNumber,
+      sort: "name_asc",
+      page: 1,
+      limit: 20,
+      offset: 0,
+    });
+    expect(summary.items).toHaveLength(1);
+    expect(summary.items[0]).toMatchObject({
+      physicalExamAppointmentId: fixture.event.oldPhysicalExamAppointmentId,
+      physicalExamAppointmentStatus: "PENDING",
+      ...(clinicCode === "KABALAKA_CLINIC"
+        ? {
+            laboratoryAppointmentId: fixture.event.oldLaboratoryAppointmentId,
+            laboratoryAppointmentStatus: "PENDING",
+          }
+        : {}),
+    });
+
+    const resultProfile = await getAdminStudentResultProfileRow(studentNumber);
+    expect(resultProfile?.physicalExam.appointment).toMatchObject({
+      id: fixture.event.oldPhysicalExamAppointmentId,
+      status: "PENDING",
+    });
+    if (clinicCode === "KABALAKA_CLINIC") {
+      expect(resultProfile?.laboratory.appointment).toMatchObject({
+        id: fixture.event.oldLaboratoryAppointmentId,
+        status: "PENDING",
+      });
+    }
+    expect(appointments.rows.filter((appointment) => originalIds.includes(appointment.id)))
+      .toEqual(expect.arrayContaining(originalIds.map((id) => expect.objectContaining({
+        id,
+        is_published: true,
+      }))));
+    expect(appointments.rows.filter((appointment) => replacementIds.includes(appointment.id)))
+      .toEqual(expect.arrayContaining(replacementIds.map((id) => expect.objectContaining({
+        id,
+        is_published: false,
+      }))));
 
     const logs = await pool.query<{ old_status: string; new_status: string; notes: string }>(
       `SELECT old_status, new_status, notes
