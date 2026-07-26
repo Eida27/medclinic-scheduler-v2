@@ -11,7 +11,7 @@ import { importStudentScheduleCsv } from "./schedule-imports.service";
 
 const header = "Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth";
 const studentPattern = "99-91%";
-const importPattern = "REGULAR 2026-2027 - TEST-AY%";
+const importPattern = "REGULAR % - TEST-AY%";
 const sourceFilename = "TEST-AY-students.csv";
 
 const admin: SessionUser = {
@@ -49,6 +49,7 @@ function input(contents: string, overrides: Record<string, unknown> = {}) {
 
 async function cleanup() {
   await cleanupTestFixtures(studentPattern, importPattern, importPattern);
+  await pool.query("DELETE FROM clinic_unavailable_dates WHERE reason LIKE 'TEST-AY%'");
 }
 
 beforeAll(cleanup);
@@ -187,5 +188,31 @@ describe("student scheduling imports", () => {
     await expect(importStudentScheduleCsv(input(contents, {
       preferredMonth: 9,
     }), admin)).rejects.toMatchObject({ name: "ZodError" });
+  });
+
+  it("uses a soft-unblocked Laboratory date for import allocation", async () => {
+    const studentNumber = "99-9105-05";
+    await pool.query(
+      `INSERT INTO clinic_unavailable_dates (
+         clinic_id, start_date, end_date, category, reason, created_by,
+         unblocked_at, unblocked_by, unblocked_batch_id
+       ) VALUES ($1,'2027-08-02','2027-08-02','CLOSURE',
+                 'TEST-AY soft-unblocked allocation',$2,NOW(),$2,gen_random_uuid())`,
+      [TEST_REFERENCE_IDS.laboratoryClinic, TEST_REFERENCE_IDS.adminUser],
+    );
+
+    await importStudentScheduleCsv(input(csv(
+      `${studentNumber},Unblocked,Import,,,College of Computer Studies,BSIT,3,05-06-2003`,
+    ), { academicYearStart: 2027 }), admin);
+
+    const laboratory = await pool.query<{ appointment_date: string }>(
+      `SELECT appointment_date::text
+         FROM appointments
+        WHERE student_number=$1
+          AND schedule_type='LABORATORY'
+          AND status='PENDING'`,
+      [studentNumber],
+    );
+    expect(laboratory.rows).toEqual([{ appointment_date: "2027-08-02" }]);
   });
 });

@@ -254,6 +254,47 @@ describe("clinic calendar closures", () => {
       ]);
   });
 
+  it("uses a soft-unblocked CPU Clinic date for replacement planning", async () => {
+    const studentNumber = "99-9508-08";
+    await acceptAndScheduleImport(importInput("TEST-CALENDAR-soft-unblocked-cpu.csv", studentNumber), admin);
+    await pool.query(
+      `UPDATE appointments
+          SET appointment_date=CASE schedule_type
+            WHEN 'LABORATORY' THEN '2027-06-07'::date
+            WHEN 'PHYSICAL_EXAM' THEN '2027-06-08'::date
+          END
+        WHERE student_number=$1`,
+      [studentNumber],
+    );
+    await pool.query(
+      `INSERT INTO clinic_unavailable_dates (
+         clinic_id, start_date, end_date, category, reason, created_by,
+         unblocked_at, unblocked_by, unblocked_batch_id
+       ) VALUES ($1,'2027-06-09','2027-06-09','CLOSURE',
+                 'TEST-CALENDAR soft-unblocked CPU replacement',$2,NOW(),$2,gen_random_uuid())`,
+      [TEST_REFERENCE_IDS.physicalExamClinic, TEST_REFERENCE_IDS.adminUser],
+    );
+
+    await createClinicUnavailableDate({
+      clinicId: TEST_REFERENCE_IDS.physicalExamClinic,
+      startDate: "2027-06-08",
+      endDate: "2027-06-08",
+      category: "CLOSURE",
+      reason: "TEST-CALENDAR CPU replacement source",
+    }, admin);
+
+    const replacement = await pool.query<{ appointment_date: string }>(
+      `SELECT appointment_date::text
+         FROM appointments
+        WHERE student_number=$1
+          AND schedule_type='PHYSICAL_EXAM'
+          AND status='PENDING'
+          AND rescheduled_from IS NOT NULL`,
+      [studentNumber],
+    );
+    expect(replacement.rows).toEqual([{ appointment_date: "2027-06-09" }]);
+  });
+
   it("does not move PE into an earlier existing CPU Clinic block", async () => {
     await acceptAndScheduleImport(importInput("TEST-CALENDAR-existing-block.csv", "99-9504-04"), admin);
     const pair = await pool.query<{ id: string; schedule_type: string; appointment_date: string }>(

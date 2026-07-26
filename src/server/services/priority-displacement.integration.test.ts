@@ -11,11 +11,12 @@ import {
 import { cleanupTestFixtures, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import type { SessionUser } from "@/types/roles";
 import { acceptAndScheduleImport } from "./schedule-imports.service";
+import { publishDisplacedRegularReplacements } from "./priority-displacement.service";
 import { invalidateStudentResultSubmission } from "./student-result-submissions.service";
 
 const header = "Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth";
 const studentPattern = "99-94%";
-const importPattern = "% 2026-2027 - TEST-DISPLACE%";
+const importPattern = "% - TEST-DISPLACE%";
 let capacityFixture: CapacityFixtureLock | null = null;
 
 const admin: SessionUser = {
@@ -29,7 +30,9 @@ function input(
   fileName: string,
   category: "REGULAR" | "OJT",
   studentNumbers: string[],
+  options: { academicYearStart?: number } = {},
 ) {
+  const academicYearStart = options.academicYearStart ?? 2026;
   const contents = [
     header,
     ...studentNumbers.map((studentNumber, index) => (
@@ -41,7 +44,7 @@ function input(
     fileSize: Buffer.byteLength(contents),
     contents,
     studentCategory: category,
-    academicYearStart: 2026,
+    academicYearStart,
     preferredMonth: category === "REGULAR" ? null : 8,
   };
 }
@@ -318,6 +321,83 @@ describe("priority displacement", () => {
       { appointment_date: laboratoryDates.rows[0].appointment_date },
       { appointment_date: laboratoryDates.rows[0].appointment_date },
     ]);
+  });
+
+  it("uses a soft-unblocked Laboratory date for priority displacement replacements", async () => {
+    const studentNumber = "99-9415-15";
+    const imported = await acceptAndScheduleImport(
+      input(
+        "TEST-DISPLACE-soft-unblocked-priority.csv",
+        "REGULAR",
+        [studentNumber],
+        { academicYearStart: 2027 },
+      ),
+      admin,
+    );
+    const original = await pool.query<{
+      id: string;
+      schedule_type: "LABORATORY" | "PHYSICAL_EXAM";
+      appointment_date: string;
+      schedule_pair_id: string;
+    }>(
+      `SELECT id::text, schedule_type, appointment_date::text, schedule_pair_id::text
+         FROM appointments
+        WHERE student_number=$1
+          AND status='PENDING'
+        ORDER BY schedule_type`,
+      [studentNumber],
+    );
+    const laboratory = original.rows.find((appointment) => appointment.schedule_type === "LABORATORY")!;
+    const physicalExam = original.rows.find((appointment) => appointment.schedule_type === "PHYSICAL_EXAM")!;
+    await pool.query(
+      `UPDATE appointments
+          SET status='RESCHEDULED', updated_by=$2, updated_at=NOW()
+        WHERE id = ANY($1::uuid[])`,
+      [[laboratory.id, physicalExam.id], TEST_REFERENCE_IDS.adminUser],
+    );
+    await pool.query(
+      `INSERT INTO clinic_unavailable_dates (
+         clinic_id, start_date, end_date, category, reason, created_by,
+         unblocked_at, unblocked_by, unblocked_batch_id
+       ) VALUES ($1,'2027-09-01','2027-09-01','CLOSURE',
+                 'TEST-DISPLACE soft-unblocked priority',$2,NOW(),$2,gen_random_uuid())`,
+      [TEST_REFERENCE_IDS.laboratoryClinic, TEST_REFERENCE_IDS.adminUser],
+    );
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const replacements = await publishDisplacedRegularReplacements({
+        candidates: [{
+          displacementType: "PAIR",
+          studentNumber,
+          schedulePairId: laboratory.schedule_pair_id,
+          laboratoryAppointmentId: laboratory.id,
+          laboratoryDate: laboratory.appointment_date,
+          physicalExamAppointmentId: physicalExam.id,
+          physicalExamDate: physicalExam.appointment_date,
+          acceptedAt: new Date("2026-07-26T00:00:00.000Z"),
+          sourceRowOrder: 0,
+          scheduleCycleStart: 2027,
+        }],
+        sourceImportGroupId: imported.importId,
+        actorUserId: TEST_REFERENCE_IDS.adminUser,
+        replacementWindowStart: "2027-09-01",
+        searchEndDate: "2027-09-30",
+      }, client);
+      await client.query("COMMIT");
+
+      expect(replacements).toEqual([
+        expect.objectContaining({
+          studentNumber,
+          laboratoryDate: "2027-09-01",
+          physicalExamDate: "2027-09-02",
+        }),
+      ]);
+    } finally {
+      await client.query("ROLLBACK").catch(() => undefined);
+      client.release();
+    }
   });
 
   it("moves only the later eligible Regular pair and keeps linked history", async () => {
