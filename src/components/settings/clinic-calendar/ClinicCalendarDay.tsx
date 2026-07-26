@@ -5,6 +5,7 @@ type ClinicCalendarDayProps = {
   cell: CalendarDateCell;
   state: CalendarDateState;
   disabled: boolean;
+  nonSchedulingDay?: boolean;
   highlighted?: boolean;
   onToggle(date: string): void;
 };
@@ -60,8 +61,21 @@ function describeState(state: CalendarDateState) {
   }
 }
 
-export function ClinicCalendarDay({ cell, state, disabled, highlighted = false, onToggle }: ClinicCalendarDayProps) {
-  const description = describeState(state);
+export function ClinicCalendarDay({
+  cell,
+  state,
+  disabled,
+  nonSchedulingDay = false,
+  highlighted = false,
+  onToggle,
+}: ClinicCalendarDayProps) {
+  const description = nonSchedulingDay
+    ? {
+        label: "non-scheduling day",
+        text: "Non-scheduling day",
+        className: "border-line bg-canvas text-muted",
+      }
+    : describeState(state);
   const dateLabel = formatDate(cell.date);
 
   return (

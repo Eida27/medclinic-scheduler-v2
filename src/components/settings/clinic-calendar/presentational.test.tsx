@@ -109,8 +109,28 @@ describe("clinic calendar presentation", () => {
 
     expect(screen.getByRole("button", { name: "July 14, 2027 — available" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "July 15, 2027 — available" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "July 17, 2027 — available" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "July 17, 2027 — non-scheduling day" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "July 19, 2027 — available" })).toBeEnabled();
+  });
+
+  it("presents weekends as non-scheduling days while future weekdays remain available", () => {
+    render(
+      <ClinicMonthGrid
+        cells={buildMonthGrid("2027-07")}
+        getState={() => ({ state: "AVAILABLE" })}
+        today="2027-07-15"
+        disabled={false}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    const weekend = screen.getByRole("button", { name: "July 17, 2027 — non-scheduling day" });
+    expect(weekend).toBeDisabled();
+    expect(within(weekend).getByText("Non-scheduling day")).toBeInTheDocument();
+
+    const weekday = screen.getByRole("button", { name: "July 19, 2027 — available" });
+    expect(weekday).toBeEnabled();
+    expect(within(weekday).getByText("Available")).toBeInTheDocument();
   });
 
   it("changes clinics and months with years through the configured maximum", async () => {

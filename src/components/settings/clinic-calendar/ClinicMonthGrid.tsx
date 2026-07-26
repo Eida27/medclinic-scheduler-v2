@@ -31,6 +31,7 @@ export function ClinicMonthGrid({ cells, getState, today, disabled, highlightedD
               cell={cell}
               state={getState(cell)}
               disabled={disabled || cell.date <= today || cell.isWeekend}
+              nonSchedulingDay={cell.isWeekend}
               highlighted={highlightedDates?.has(cell.date)}
               onToggle={onToggle}
             />
