@@ -5,6 +5,7 @@ type ClinicCalendarDayProps = {
   cell: CalendarDateCell;
   state: CalendarDateState;
   disabled: boolean;
+  highlighted?: boolean;
   onToggle(date: string): void;
 };
 
@@ -59,7 +60,7 @@ function describeState(state: CalendarDateState) {
   }
 }
 
-export function ClinicCalendarDay({ cell, state, disabled, onToggle }: ClinicCalendarDayProps) {
+export function ClinicCalendarDay({ cell, state, disabled, highlighted = false, onToggle }: ClinicCalendarDayProps) {
   const description = describeState(state);
   const dateLabel = formatDate(cell.date);
 
@@ -67,9 +68,10 @@ export function ClinicCalendarDay({ cell, state, disabled, onToggle }: ClinicCal
     <button
       type="button"
       disabled={disabled}
+      data-highlighted={highlighted ? true : undefined}
       aria-label={`${dateLabel} — ${description.label}`}
       onClick={() => onToggle(cell.date)}
-      className={`flex min-h-20 flex-col items-center justify-center gap-1 rounded-xl border px-2 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${description.className}`}
+      className={`flex min-h-20 flex-col items-center justify-center gap-1 rounded-xl border px-2 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${highlighted ? "ring-2 ring-cpu-gold ring-offset-2" : ""} ${description.className}`}
     >
       <span>{cell.dayOfMonth}</span>
       <span className="text-[0.65rem] font-bold uppercase tracking-wide">{description.text}</span>

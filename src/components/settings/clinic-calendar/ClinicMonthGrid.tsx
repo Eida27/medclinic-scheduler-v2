@@ -7,12 +7,13 @@ type ClinicMonthGridProps = {
   getState(cell: CalendarDateCell): CalendarDateState;
   today: string;
   disabled: boolean;
+  highlightedDates?: ReadonlySet<string>;
   onToggle(date: string): void;
 };
 
 const weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-export function ClinicMonthGrid({ cells, getState, today, disabled, onToggle }: ClinicMonthGridProps) {
+export function ClinicMonthGrid({ cells, getState, today, disabled, highlightedDates, onToggle }: ClinicMonthGridProps) {
   return (
     <section aria-label="Clinic availability calendar" className="min-w-[42rem]">
       <div className="grid grid-cols-7 gap-1">
@@ -30,6 +31,7 @@ export function ClinicMonthGrid({ cells, getState, today, disabled, onToggle }: 
               cell={cell}
               state={getState(cell)}
               disabled={disabled || cell.date <= today || cell.isWeekend}
+              highlighted={highlightedDates?.has(cell.date)}
               onToggle={onToggle}
             />
           );

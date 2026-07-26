@@ -1,34 +1,50 @@
 "use client";
 
-import { useId, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Card, CardTitle } from "@/components/ui/Card";
-import { Field } from "@/components/ui/Field";
-import { Select } from "@/components/ui/Select";
-import { Spinner } from "@/components/ui/Spinner";
-import { Textarea } from "@/components/ui/Textarea";
 import type { ClinicUnavailableDateRecord } from "@/server/repositories/clinic-unavailable-dates.repository";
-import { buildMonthGrid, expandUnavailableRanges, shiftMonth } from "./clinic-calendar";
+import type {
+  ClinicCalendarBatchChange,
+  ClinicCalendarBatchIssue,
+  ClinicCalendarBatchResult,
+  ClinicCalendarCategory,
+} from "@/types/clinic-calendar";
+import { buildMonthGrid, expandUnavailableRanges } from "./clinic-calendar";
+import {
+  calendarDraftKey,
+  resolveCalendarDateState,
+  summarizeCalendarDraft,
+  toggleCalendarDraft,
+} from "./clinic-calendar-draft";
+import { BlockConfigurationForm } from "./clinic-calendar/BlockConfigurationForm";
+import { CalendarDraftSummary } from "./clinic-calendar/CalendarDraftSummary";
+import { CalendarSaveConfirmationDialog } from "./clinic-calendar/CalendarSaveConfirmationDialog";
+import { ClinicCalendarToolbar } from "./clinic-calendar/ClinicCalendarToolbar";
+import { ClinicMonthGrid } from "./clinic-calendar/ClinicMonthGrid";
+import { UnsavedCalendarChangesDialog } from "./clinic-calendar/UnsavedCalendarChangesDialog";
+import { useUnsavedCalendarNavigation } from "./clinic-calendar/useUnsavedCalendarNavigation";
 
 type ClinicUnavailableCalendarProps = {
   clinics: Array<{ id: string; name: string }>;
   unavailableDates: ClinicUnavailableDateRecord[];
   initialMonth: string;
   today: string;
+  maxYear?: number;
 };
 
-type Category = ClinicUnavailableDateRecord["category"];
-type Impact = { movedStudentCount: number; movedAppointmentCount: number };
-type ApiError = { message: string; fields?: Record<string, string[]> };
+type BlockConfiguration = {
+  category: ClinicCalendarCategory;
+  reason: string;
+  valid: boolean;
+};
 
-const weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-
-const categoryLabels: Record<Category, string> = {
-  HOLIDAY: "Holiday",
-  CLOSURE: "Closure",
-  MAINTENANCE: "Maintenance",
-  STAFF_UNAVAILABILITY: "Staff unavailability",
+type ApiError = {
+  code?: string;
+  message: string;
+  fields?: Record<string, string[]>;
+  details?: { issues?: ClinicCalendarBatchIssue[] };
 };
 
 function formatMonth(month: string) {
@@ -39,13 +55,14 @@ function formatMonth(month: string) {
   }).format(new Date(`${month}-01T00:00:00.000Z`));
 }
 
-function formatDate(date: string) {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(`${date}T00:00:00.000Z`));
+function plural(count: number, singular: string, pluralForm = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : pluralForm}`;
+}
+
+function sortedChanges(draft: Map<string, ClinicCalendarBatchChange>) {
+  return [...draft.values()].sort((left, right) => (
+    left.date.localeCompare(right.date) || left.clinicId.localeCompare(right.clinicId)
+  ));
 }
 
 export function ClinicUnavailableCalendar({
@@ -53,105 +70,144 @@ export function ClinicUnavailableCalendar({
   unavailableDates,
   initialMonth,
   today,
+  maxYear = 2100,
 }: ClinicUnavailableCalendarProps) {
   const [selectedClinicId, setSelectedClinicId] = useState(clinics[0]?.id ?? "");
-  const [category, setCategory] = useState<Category>("CLOSURE");
-  const [reason, setReason] = useState("");
   const [month, setMonth] = useState(initialMonth);
-  const [pendingDate, setPendingDate] = useState<string>();
+  const [configuration, setConfiguration] = useState<BlockConfiguration>({
+    category: "CLOSURE",
+    reason: "",
+    valid: false,
+  });
   const [records, setRecords] = useState(unavailableDates);
-  const [success, setSuccess] = useState<Impact>();
+  const [draft, setDraft] = useState<Map<string, ClinicCalendarBatchChange>>(new Map());
+  const [conflicts, setConflicts] = useState<Map<string, string[]>>(new Map());
+  const [highlightedKeys, setHighlightedKeys] = useState<Set<string>>(new Set());
+  const [confirmationOpen, setConfirmationOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [success, setSuccess] = useState<ClinicCalendarBatchResult>();
   const [error, setError] = useState<ApiError>();
-  const [selectedUnavailableDate, setSelectedUnavailableDate] = useState<string>();
   const submitting = useRef(false);
-  const unavailableDetailsId = useId();
+  const saveButtonRef = useRef<HTMLButtonElement>(null);
 
-  const days = useMemo(() => buildMonthGrid(month), [month]);
-  const recordsForClinic = useMemo(
-    () => records.filter((record) => record.clinicId === selectedClinicId),
+  const cells = useMemo(() => buildMonthGrid(month), [month]);
+  const persistedByDate = useMemo(
+    () => expandUnavailableRanges(records.filter((record) => record.clinicId === selectedClinicId)),
     [records, selectedClinicId],
   );
-  const unavailableByDate = useMemo(
-    () => expandUnavailableRanges(recordsForClinic),
-    [recordsForClinic],
-  );
-  const selectedUnavailable = selectedUnavailableDate
-    ? unavailableByDate.get(selectedUnavailableDate)
-    : undefined;
-  const trimmedReason = reason.trim();
-  const formIsValid = Boolean(selectedClinicId) && trimmedReason.length >= 3 && trimmedReason.length <= 500;
+  const changes = useMemo(() => sortedChanges(draft), [draft]);
+  const summary = useMemo(() => summarizeCalendarDraft(draft), [draft]);
+  const highlightedDatesForClinic = useMemo(() => new Set(
+    [...highlightedKeys]
+      .filter((key) => key.startsWith(`${selectedClinicId}:`))
+      .map((key) => key.slice(selectedClinicId.length + 1)),
+  ), [highlightedKeys, selectedClinicId]);
+  const navigation = useUnsavedCalendarNavigation(draft.size > 0);
 
-  async function markUnavailable(date: string) {
-    if (!formIsValid || pendingDate || submitting.current || unavailableByDate.has(date)) return;
+  function toggleDate(date: string) {
+    const persisted = persistedByDate.get(date);
+    const key = calendarDraftKey(selectedClinicId, date);
+    const existingDraft = draft.get(key);
+    if (!existingDraft && !persisted && !configuration.valid) {
+      setError({ message: "Choose a category and enter a reason of at least 3 characters before blocking a date." });
+      return;
+    }
 
-    submitting.current = true;
-    setPendingDate(date);
+    setDraft((current) => toggleCalendarDraft(current, {
+      persisted,
+      clinicId: selectedClinicId,
+      date,
+      blockTemplate: {
+        category: configuration.category,
+        reason: configuration.reason,
+      },
+    }));
+    setConflicts((current) => {
+      if (!current.has(key)) return current;
+      const next = new Map(current);
+      next.delete(key);
+      return next;
+    });
+    setHighlightedKeys((current) => {
+      if (!current.has(key)) return current;
+      const next = new Set(current);
+      next.delete(key);
+      return next;
+    });
     setSuccess(undefined);
     setError(undefined);
-    const selectedClinic = clinics.find((clinic) => clinic.id === selectedClinicId);
+  }
+
+  function discardChanges() {
+    setDraft(new Map());
+    setConflicts(new Map());
+    setHighlightedKeys(new Set());
+    setConfirmationOpen(false);
+    setSuccess(undefined);
+    setError(undefined);
+  }
+
+  async function confirmSave() {
+    if (submitting.current || changes.length === 0) return;
+    submitting.current = true;
+    setSaving(true);
+    setSuccess(undefined);
+    setError(undefined);
+    const submittedChanges = changes;
 
     try {
       const response = await fetch("/api/clinic-unavailable-dates", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          clinicId: selectedClinicId,
-          startDate: date,
-          endDate: date,
-          category,
-          reason: trimmedReason,
-        }),
+        body: JSON.stringify({ changes: submittedChanges }),
       });
-      const payload = await response.json() as {
-        data?: { id: string; updatedAt: string } & Impact;
-        error?: ApiError;
-      };
+      const payload = await response.json() as { data?: ClinicCalendarBatchResult; error?: ApiError };
 
       if (!response.ok || !payload.data) {
-        setError(payload.error ?? { message: "Unable to create the clinic block." });
+        const responseError = payload.error ?? { message: "Unable to save the clinic calendar changes." };
+        const nextConflicts = new Map<string, string[]>();
+        for (const issue of responseError.details?.issues ?? []) {
+          const key = calendarDraftKey(issue.clinicId, issue.date);
+          nextConflicts.set(key, [...(nextConflicts.get(key) ?? []), issue.message]);
+        }
+        setConflicts(nextConflicts);
+        setHighlightedKeys(new Set(nextConflicts.keys()));
+        setError(responseError);
+        setConfirmationOpen(false);
         return;
       }
 
-      setRecords((current) => [
-        ...current,
-        {
-          id: payload.data!.id,
-          clinicId: selectedClinicId,
-          clinicCode: "",
-          clinicName: selectedClinic?.name ?? "",
-          startDate: date,
-          endDate: date,
-          category,
-          reason: trimmedReason,
-          createdByName: "",
-          createdAt: new Date().toISOString(),
-          updatedAt: payload.data!.updatedAt,
-        },
-      ]);
-      setSuccess({
-        movedStudentCount: payload.data.movedStudentCount,
-        movedAppointmentCount: payload.data.movedAppointmentCount,
-      });
+      setRecords(payload.data.activeUnavailableDates);
+      setDraft(new Map());
+      setConflicts(new Map());
+      setHighlightedKeys(new Set(submittedChanges.map((change) => calendarDraftKey(change.clinicId, change.date))));
+      setSuccess(payload.data);
+      setConfirmationOpen(false);
     } catch {
-      setError({ message: "Unable to create the clinic block." });
+      setError({ message: "Unable to save the clinic calendar changes." });
+      setConfirmationOpen(false);
     } finally {
       submitting.current = false;
-      setPendingDate(undefined);
+      setSaving(false);
     }
   }
+
+  const currentYear = Number(today.slice(0, 4));
 
   return (
     <Card className="grid gap-5">
       <div>
         <CardTitle>Unavailable-date calendar</CardTitle>
         <p className="mt-1 text-sm text-muted">
-          Choose a clinic and reason, then select a future weekday to block it and reschedule affected appointments.
+          Stage changes across clinics and months, review them together, and save once.
         </p>
       </div>
 
       {success ? (
         <Alert tone="success">
-          Clinic date marked unavailable. {success.movedStudentCount} students and {success.movedAppointmentCount} appointments were moved.
+          {plural(success.blockedDateCount, "date")} blocked and {plural(success.unblockedDateCount, "date")} reopened. {" "}
+          {plural(success.movedStudentCount, "student")} and {plural(success.movedAppointmentCount, "appointment")} moved. {" "}
+          {plural(success.restoredStudentCount, "student")} and {plural(success.restoredAppointmentCount, "appointment")} restored.
         </Alert>
       ) : null}
       {error ? (
@@ -162,186 +218,92 @@ export function ClinicUnavailableCalendar({
               {Object.values(error.fields).flat().map((message) => <li key={message}>{message}</li>)}
             </ul>
           ) : null}
+          {error.details?.issues?.length ? (
+            <ul className="mt-2 list-disc pl-5 font-normal">
+              {error.details.issues.map((issue) => (
+                <li key={`${issue.clinicId}:${issue.date}:${issue.code}`}>{issue.date}: {issue.message}</li>
+              ))}
+            </ul>
+          ) : null}
         </Alert>
       ) : null}
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,2fr)]">
-        <Field label="Clinic">
-          <Select
-            value={selectedClinicId}
-            disabled={Boolean(pendingDate)}
-            onChange={(event) => {
-              setSelectedClinicId(event.target.value);
-              setSelectedUnavailableDate(undefined);
-              setSuccess(undefined);
-              setError(undefined);
-            }}
-          >
-            {clinics.length === 0 ? <option value="">No clinics available</option> : null}
-            {clinics.map((clinic) => <option key={clinic.id} value={clinic.id}>{clinic.name}</option>)}
-          </Select>
-        </Field>
-        <Field label="Category">
-          <Select
-            value={category}
-            disabled={Boolean(pendingDate)}
-            onChange={(event) => setCategory(event.target.value as Category)}
-          >
-            {Object.entries(categoryLabels).map(([value, label]) => (
-              <option key={value} value={value}>{label}</option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Reason">
-          <Textarea
-            value={reason}
-            required
-            minLength={3}
-            maxLength={500}
-            disabled={Boolean(pendingDate)}
-            onChange={(event) => setReason(event.target.value)}
-          />
-        </Field>
-      </div>
+      <ClinicCalendarToolbar
+        clinics={clinics}
+        selectedClinicId={selectedClinicId}
+        month={month}
+        currentYear={currentYear}
+        maxYear={maxYear}
+        disabled={saving}
+        onClinicChange={setSelectedClinicId}
+        onMonthChange={setMonth}
+      />
 
-      <div className="flex items-center justify-between gap-3">
-        <Button
-          variant="secondary"
-          size="sm"
-          aria-label="Previous month"
-          disabled={Boolean(pendingDate)}
-          onClick={() => {
-            setSelectedUnavailableDate(undefined);
-            setMonth((current) => shiftMonth(current, -1));
-          }}
-        >
-          Previous
-        </Button>
-        <h2 className="text-lg font-bold text-ink">{formatMonth(month)}</h2>
-        <Button
-          variant="secondary"
-          size="sm"
-          aria-label="Next month"
-          disabled={Boolean(pendingDate)}
-          onClick={() => {
-            setSelectedUnavailableDate(undefined);
-            setMonth((current) => shiftMonth(current, 1));
-          }}
-        >
-          Next
-        </Button>
-      </div>
+      <BlockConfigurationForm disabled={saving} onChange={setConfiguration} />
 
+      <h2 className="text-lg font-bold text-ink">{formatMonth(month)}</h2>
       <div className="overflow-x-auto">
-        <section aria-label={`${formatMonth(month)} clinic availability`} className="min-w-[42rem]">
-          <div className="grid grid-cols-7 gap-1">
-            {weekdays.map((weekday) => (
-              <div key={weekday} className="px-2 py-1 text-center text-xs font-bold text-muted">
-                {weekday}
-              </div>
-            ))}
-          </div>
-          <div className="mt-1 grid grid-cols-7 gap-1">
-            {days.map((day) => {
-              if (day.kind === "blank") {
-                return (
-                  <div
-                    key={day.key}
-                    aria-hidden="true"
-                    className="min-h-20 rounded-xl border border-transparent bg-canvas/40"
-                  />
-                );
-              }
-
-              const unavailable = unavailableByDate.get(day.date);
-              const dateLabel = formatDate(day.date);
-              const isToday = day.date === today;
-              const isPast = day.date < today;
-              const isSaving = pendingDate === day.date;
-              const isOutsideMonth = !day.inCurrentMonth;
-              let stateLabel = "available";
-              if (unavailable) {
-                stateLabel = `unavailable: ${categoryLabels[unavailable.category]}, ${unavailable.reason}`;
-              } else if (isSaving) {
-                stateLabel = "saving";
-              } else if (isToday) {
-                stateLabel = "today";
-              } else if (isPast) {
-                stateLabel = "past";
-              } else if (day.isWeekend) {
-                stateLabel = "weekend";
-              } else if (isOutsideMonth) {
-                stateLabel = "outside current month";
-              }
-              const disabled = Boolean(
-                isOutsideMonth
-                || pendingDate
-                || (!unavailable && (isToday || isPast || day.isWeekend || !formIsValid)),
-              );
-              const isSelectedUnavailable = Boolean(
-                unavailable && selectedUnavailableDate === day.date,
-              );
-
-              return (
-                <button
-                  key={day.key}
-                  type="button"
-                  aria-label={`${dateLabel} — ${stateLabel}`}
-                  aria-pressed={unavailable ? isSelectedUnavailable : undefined}
-                  aria-controls={isSelectedUnavailable ? unavailableDetailsId : undefined}
-                  aria-describedby={isSelectedUnavailable ? unavailableDetailsId : undefined}
-                  disabled={disabled}
-                  onClick={() => {
-                    if (unavailable) {
-                      setSelectedUnavailableDate(day.date);
-                      return;
-                    }
-                    void markUnavailable(day.date);
-                  }}
-                  className="flex min-h-20 flex-col items-center justify-center gap-1 rounded-xl border border-line bg-surface px-2 py-3 text-sm font-semibold text-ink transition hover:border-cpu-navy/30 hover:bg-cpu-navy-soft aria-pressed:border-cpu-navy aria-pressed:ring-2 aria-pressed:ring-cpu-navy/20 disabled:cursor-not-allowed disabled:bg-canvas disabled:text-muted"
-                >
-                  <span>{day.dayOfMonth}</span>
-                  {isSaving ? <Spinner size="sm" label={`Saving ${dateLabel}`} /> : null}
-                  {unavailable ? <span className="text-[0.65rem] font-bold uppercase tracking-wide">Unavailable</span> : null}
-                </button>
-              );
-            })}
-          </div>
-        </section>
+        <ClinicMonthGrid
+          cells={cells}
+          getState={(cell) => resolveCalendarDateState({
+            clinicId: selectedClinicId,
+            date: cell.date,
+            persisted: persistedByDate.get(cell.date),
+            draft,
+            conflictMessages: conflicts.get(calendarDraftKey(selectedClinicId, cell.date)),
+          })}
+          today={today}
+          disabled={saving || !selectedClinicId}
+          highlightedDates={highlightedDatesForClinic}
+          onToggle={toggleDate}
+        />
       </div>
 
-      {selectedUnavailable ? (
-        <section
-          id={unavailableDetailsId}
-          role="region"
-          aria-labelledby={`${unavailableDetailsId}-title`}
-          className="rounded-xl border border-line bg-canvas/60 p-4"
-        >
-          <h3 id={`${unavailableDetailsId}-title`} className="font-bold text-ink">
-            Unavailable date details
-          </h3>
-          <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
-            <div>
-              <dt className="font-semibold text-muted">Clinic</dt>
-              <dd className="text-ink">{selectedUnavailable.clinicName}</dd>
-            </div>
-            <div>
-              <dt className="font-semibold text-muted">Category</dt>
-              <dd className="text-ink">{categoryLabels[selectedUnavailable.category]}</dd>
-            </div>
-            <div>
-              <dt className="font-semibold text-muted">Reason</dt>
-              <dd className="text-ink">{selectedUnavailable.reason}</dd>
-            </div>
-            <div>
-              <dt className="font-semibold text-muted">Original date range</dt>
-              <dd className="text-ink">
-                {formatDate(selectedUnavailable.startDate)} to {formatDate(selectedUnavailable.endDate)}
-              </dd>
-            </div>
-          </dl>
-        </section>
-      ) : null}
+      <div className="grid gap-4 rounded-2xl border border-line bg-canvas/50 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="font-semibold text-ink">
+            {draft.size === 0 ? "No unsaved changes" : plural(draft.size, "unsaved change")}
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <Button variant="secondary" disabled={saving || draft.size === 0} onClick={discardChanges}>
+              Discard changes
+            </Button>
+            <Button
+              ref={saveButtonRef}
+              disabled={saving || draft.size === 0}
+              onClick={() => setConfirmationOpen(true)}
+            >
+              Save changes
+            </Button>
+          </div>
+        </div>
+        {draft.size > 0 ? <CalendarDraftSummary clinics={clinics} changes={changes} /> : null}
+        {draft.size > 0 ? (
+          <p className="text-xs text-muted">
+            {summary.blockedDateCount} to block · {summary.unblockedDateCount} to reopen
+          </p>
+        ) : null}
+      </div>
+
+      <CalendarSaveConfirmationDialog
+        open={confirmationOpen}
+        changes={changes}
+        clinics={clinics}
+        onCancel={() => {
+          if (!saving) setConfirmationOpen(false);
+        }}
+        onConfirm={() => { void confirmSave(); }}
+        returnFocusRef={saveButtonRef}
+      />
+
+      <UnsavedCalendarChangesDialog
+        open={Boolean(navigation.pendingHref)}
+        onContinueEditing={navigation.continueEditing}
+        onDiscardAndLeave={() => {
+          discardChanges();
+          navigation.discardAndLeave();
+        }}
+      />
     </Card>
   );
 }
