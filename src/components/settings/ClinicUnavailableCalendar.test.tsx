@@ -84,7 +84,7 @@ afterEach(() => {
 
 describe("ClinicUnavailableCalendar", () => {
   it("disables invalid and non-working dates while keeping unavailable weekdays focusable", async () => {
-    renderCalendar();
+    const { container } = renderCalendar();
 
     expect(screen.getByRole("heading", { name: "August 2026" })).toBeInTheDocument();
     for (const weekday of ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]) {
@@ -96,7 +96,8 @@ describe("ClinicUnavailableCalendar", () => {
     expect(screen.getByRole("button", { name: "August 13, 2026 — past" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "August 17, 2026 — today" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "August 29, 2026 — weekend" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "September 1, 2026 — outside current month" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "September 1, 2026 — outside current month" })).not.toBeInTheDocument();
+    expect(container.querySelectorAll('[aria-hidden="true"]')).toHaveLength(11);
 
     const unavailableDate = screen.getByRole("button", {
       name: "August 19, 2026 — unavailable: Maintenance, Generator testing",

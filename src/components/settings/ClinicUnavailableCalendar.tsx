@@ -243,6 +243,16 @@ export function ClinicUnavailableCalendar({
           </div>
           <div className="mt-1 grid grid-cols-7 gap-1">
             {days.map((day) => {
+              if (day.kind === "blank") {
+                return (
+                  <div
+                    key={day.key}
+                    aria-hidden="true"
+                    className="min-h-20 rounded-xl border border-transparent bg-canvas/40"
+                  />
+                );
+              }
+
               const unavailable = unavailableByDate.get(day.date);
               const dateLabel = formatDate(day.date);
               const isToday = day.date === today;
@@ -274,7 +284,7 @@ export function ClinicUnavailableCalendar({
 
               return (
                 <button
-                  key={day.date}
+                  key={day.key}
                   type="button"
                   aria-label={`${dateLabel} — ${stateLabel}`}
                   aria-pressed={unavailable ? isSelectedUnavailable : undefined}

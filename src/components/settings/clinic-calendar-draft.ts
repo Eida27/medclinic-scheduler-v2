@@ -1,6 +1,6 @@
 import type { ClinicUnavailableDateRecord } from "@/server/repositories/clinic-unavailable-dates.repository";
 import type {
-  CalendarDraftChange,
+  ClinicCalendarDraftChange,
   ClinicCalendarBlockChange,
   ClinicCalendarCategory,
   ClinicCalendarUnblockChange,
@@ -29,7 +29,7 @@ type ResolveCalendarDateStateInput = {
   clinicId: string;
   date: string;
   persisted: ClinicUnavailableDateRecord | undefined;
-  draft: Map<string, CalendarDraftChange>;
+  draft: Map<string, ClinicCalendarDraftChange>;
   conflictMessages?: string[];
 };
 
@@ -38,9 +38,9 @@ export function calendarDraftKey(clinicId: string, date: string) {
 }
 
 export function toggleCalendarDraft(
-  draft: Map<string, CalendarDraftChange>,
+  draft: Map<string, ClinicCalendarDraftChange>,
   { persisted, clinicId, date, blockTemplate }: ToggleCalendarDraftInput,
-): Map<string, CalendarDraftChange> {
+): Map<string, ClinicCalendarDraftChange> {
   const key = calendarDraftKey(clinicId, date);
   const next = new Map(draft);
 
@@ -70,7 +70,7 @@ export function toggleCalendarDraft(
   return next;
 }
 
-export function summarizeCalendarDraft(draft: Map<string, CalendarDraftChange>) {
+export function summarizeCalendarDraft(draft: Map<string, ClinicCalendarDraftChange>) {
   let blockedDateCount = 0;
   let unblockedDateCount = 0;
 

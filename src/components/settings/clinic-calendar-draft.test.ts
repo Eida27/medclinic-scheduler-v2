@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ClinicUnavailableDateRecord } from "@/server/repositories/clinic-unavailable-dates.repository";
-import type { CalendarDraftChange, ClinicCalendarCategory } from "@/types/clinic-calendar";
+import type { ClinicCalendarDraftChange, ClinicCalendarCategory } from "@/types/clinic-calendar";
 import {
   calendarDraftKey,
   resolveCalendarDateState,
@@ -24,7 +24,7 @@ const savedBlock: ClinicUnavailableDateRecord = {
 
 describe("toggleCalendarDraft", () => {
   it("stages a new block and cancels it on a second click", () => {
-    let draft = new Map<string, CalendarDraftChange>();
+    let draft = new Map<string, ClinicCalendarDraftChange>();
     draft = toggleCalendarDraft(draft, {
       persisted: undefined,
       clinicId: "clinic-a",
@@ -94,7 +94,7 @@ describe("toggleCalendarDraft", () => {
 
 describe("calendar draft summary and displayed state", () => {
   it("keeps cross-clinic staged changes distinct in the summary", () => {
-    const draft = new Map<string, CalendarDraftChange>([
+    const draft = new Map<string, ClinicCalendarDraftChange>([
       [calendarDraftKey("clinic-a", "2027-07-15"), {
         action: "BLOCK", clinicId: "clinic-a", date: "2027-07-15", category: "CLOSURE", reason: "Audit",
       }],
@@ -113,7 +113,7 @@ describe("calendar draft summary and displayed state", () => {
   });
 
   it("derives conflict, staged, saved, and available states without modifying the draft", () => {
-    const draft = new Map<string, CalendarDraftChange>([
+    const draft = new Map<string, ClinicCalendarDraftChange>([
       [calendarDraftKey("clinic-a", "2027-07-15"), {
         action: "BLOCK", clinicId: "clinic-a", date: "2027-07-15", category: "CLOSURE", reason: "Audit",
       }],
