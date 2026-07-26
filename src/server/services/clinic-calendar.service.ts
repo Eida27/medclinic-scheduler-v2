@@ -4,19 +4,23 @@ import type { PoolClient } from "pg";
 import { z } from "zod";
 import { AppError } from "@/lib/errors";
 import { query, transaction } from "@/server/db/pool";
+import { lockRestorationBundles } from "@/server/repositories/clinic-calendar-restoration.repository";
 import { listClinicUnavailableDateRecords } from "@/server/repositories/clinic-unavailable-dates.repository";
+import { createStudentNotification } from "@/server/services/student-notifications.service";
 import type {
+  ClinicCalendarBatchChange,
   ClinicCalendarBatchIssue,
   ClinicCalendarBatchResult,
-  ClinicCalendarBlockChange,
   ClinicUnavailableDateDto,
 } from "@/types/clinic-calendar";
 import type { SessionUser } from "@/types/roles";
 import {
   addCalendarDays,
   applyClinicBlockPlan,
+  applyClinicRestorationPlan,
   createPlanningContext,
   planClinicBlock,
+  planClinicRestoration,
   sortClinicCalendarChanges,
 } from "./clinic-calendar-planner";
 
@@ -35,7 +39,15 @@ const blockChangeSchema = z.object({
   reason: z.string().trim().min(3).max(500),
 });
 
-const changeSchema = z.discriminatedUnion("action", [blockChangeSchema]);
+const unblockChangeSchema = z.object({
+  action: z.literal("UNBLOCK"),
+  clinicId: z.string().uuid(),
+  date: z.iso.date(),
+  unavailableDateId: z.string().uuid(),
+  expectedUpdatedAt: z.string().trim().min(1).max(64),
+});
+
+const changeSchema = z.discriminatedUnion("action", [blockChangeSchema, unblockChangeSchema]);
 
 const batchSchema = z.object({
   changes: z.array(changeSchema).min(1).max(366),
@@ -237,7 +249,7 @@ async function listActiveRecordsWithClient(client: PoolClient): Promise<ClinicUn
 }
 
 function issueForChange(
-  change: ClinicCalendarBlockChange,
+  change: ClinicCalendarBatchChange,
   code: ClinicCalendarBatchIssue["code"],
   message: string,
 ): ClinicCalendarBatchIssue {
@@ -312,7 +324,7 @@ export async function saveClinicCalendarChanges(
           ));
           continue;
         }
-        if (activeRecords.some((record) => (
+        if (change.action === "BLOCK" && activeRecords.some((record) => (
           record.clinicId === change.clinicId
           && record.startDate <= change.date
           && record.endDate >= change.date
@@ -327,39 +339,142 @@ export async function saveClinicCalendarChanges(
       if (validationIssues.length) throw batchRejected(validationIssues);
 
       const context = await createPlanningContext(client, activeRecords, changes);
-      const plans = [];
-      for (const change of changes) plans.push(await planClinicBlock(client, change, context));
+      const restorationBundles = await lockRestorationBundles(
+        client,
+        changes.flatMap((change) => (
+          change.action === "UNBLOCK" ? [change.unavailableDateId] : []
+        )),
+      );
+      const restorationBundleById = new Map(
+        restorationBundles.map((bundle) => [bundle.block.id, bundle]),
+      );
+      const blockPlans = [];
+      const restorationPlans = [];
+      for (const change of changes) {
+        if (change.action === "BLOCK") {
+          blockPlans.push(await planClinicBlock(client, change, context));
+          continue;
+        }
+        const bundle = restorationBundleById.get(change.unavailableDateId);
+        if (!bundle) {
+          throw batchRejected([issueForChange(
+            change,
+            "STALE_BLOCK",
+            "The clinic block changed or is no longer active. Refresh the calendar and try again.",
+          )]);
+        }
+        restorationPlans.push(planClinicRestoration(bundle, { ...context, change }));
+      }
 
-      const impacts = [];
-      for (const plan of plans) impacts.push(await applyClinicBlockPlan(client, plan, actor, batchId));
-      const movedStudentNumbers = new Set(impacts.flatMap((impact) => impact.studentNumbers));
-      const movedAppointmentCount = impacts.reduce(
+      // Every plan above is complete before the first database mutation below.
+      const restorationImpacts = [];
+      for (const plan of restorationPlans) {
+        restorationImpacts.push(await applyClinicRestorationPlan(client, plan, actor, batchId));
+      }
+      const blockImpacts = [];
+      for (const plan of blockPlans) {
+        blockImpacts.push(await applyClinicBlockPlan(client, plan, actor, batchId));
+      }
+
+      const restorationMovesByStudent = new Map<
+        string,
+        Array<(typeof restorationImpacts)[number]["moves"][number]>
+      >();
+      for (const move of restorationImpacts.flatMap((impact) => impact.moves)) {
+        restorationMovesByStudent.set(move.studentNumber, [
+          ...(restorationMovesByStudent.get(move.studentNumber) ?? []),
+          move,
+        ]);
+      }
+      for (const [studentNumber, moves] of [...restorationMovesByStudent].sort()) {
+        const blockIds = [...new Set(moves.map((move) => move.clinicUnavailableDateId))].sort();
+        const notificationMoves = moves.map((move) => ({
+          eventId: move.eventId,
+          clinicUnavailableDateId: move.clinicUnavailableDateId,
+          schedulePairId: move.schedulePairId,
+          scheduleCycleStart: move.scheduleCycleStart,
+          scheduleType: move.scheduleType,
+          replacementDate: move.replacementDate,
+          restoredDate: move.originalDate,
+        }));
+        await createStudentNotification(client, {
+          studentNumber,
+          notificationType: "SCHEDULE_RESCHEDULED",
+          title: "Clinic schedule restored",
+          message: "A clinic unavailable date was reversed. Review your restored original schedule.",
+          metadata: {
+            batchId,
+            restored: true,
+            clinicUnavailableDateId: blockIds[0],
+            clinicUnavailableDateIds: blockIds,
+            replacementDates: notificationMoves.map((move) => ({
+              eventId: move.eventId,
+              clinicUnavailableDateId: move.clinicUnavailableDateId,
+              schedulePairId: move.schedulePairId,
+              scheduleCycleStart: move.scheduleCycleStart,
+              scheduleType: move.scheduleType,
+              date: move.replacementDate,
+            })),
+            restoredDates: notificationMoves.map((move) => ({
+              eventId: move.eventId,
+              clinicUnavailableDateId: move.clinicUnavailableDateId,
+              schedulePairId: move.schedulePairId,
+              scheduleCycleStart: move.scheduleCycleStart,
+              scheduleType: move.scheduleType,
+              date: move.restoredDate,
+            })),
+            moves: notificationMoves,
+          },
+        });
+      }
+
+      const movedStudentNumbers = new Set(blockImpacts.flatMap((impact) => impact.studentNumbers));
+      const movedAppointmentCount = blockImpacts.reduce(
         (total, impact) => total + impact.movedAppointmentCount,
         0,
       );
-      await client.query(
+      const restoredStudentNumbers = new Set(
+        restorationImpacts.flatMap((impact) => impact.studentNumbers),
+      );
+      const restoredAppointmentCount = restorationImpacts.reduce(
+        (total, impact) => total + impact.restoredAppointmentCount,
+        0,
+      );
+      const batchAudit = await client.query(
         `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
          VALUES ($1,'CLINIC_CALENDAR_BATCH_UPDATED','clinic_calendar_batch',$2::text,
                  jsonb_build_object(
                    'batchId',$2::text,
                    'blockedDateCount',$3::int,
-                   'unblockedDateCount',0,
-                   'movedStudentCount',$4::int,
-                   'movedAppointmentCount',$5::int,
-                   'restoredStudentCount',0,
-                   'restoredAppointmentCount',0
+                   'unblockedDateCount',$4::int,
+                   'movedStudentCount',$5::int,
+                   'movedAppointmentCount',$6::int,
+                   'restoredStudentCount',$7::int,
+                   'restoredAppointmentCount',$8::int
                  ))`,
-        [actor.userId, batchId, changes.length, movedStudentNumbers.size, movedAppointmentCount],
+        [
+          actor.userId,
+          batchId,
+          blockPlans.length,
+          restorationPlans.length,
+          movedStudentNumbers.size,
+          movedAppointmentCount,
+          restoredStudentNumbers.size,
+          restoredAppointmentCount,
+        ],
       );
+      if (batchAudit.rowCount !== 1) {
+        throw new AppError("CLINIC_CALENDAR_AUDIT_FAILED", "The calendar batch audit was not saved.", 500);
+      }
       return {
         batchId,
         activeUnavailableDates: await listActiveRecordsWithClient(client),
-        blockedDateCount: changes.length,
-        unblockedDateCount: 0,
+        blockedDateCount: blockPlans.length,
+        unblockedDateCount: restorationPlans.length,
         movedStudentCount: movedStudentNumbers.size,
         movedAppointmentCount,
-        restoredStudentCount: 0,
-        restoredAppointmentCount: 0,
+        restoredStudentCount: restoredStudentNumbers.size,
+        restoredAppointmentCount,
       };
     });
   } catch (error) {

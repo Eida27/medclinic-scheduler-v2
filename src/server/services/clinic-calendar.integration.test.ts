@@ -55,10 +55,24 @@ function addCalendarDays(date: string, amount: number) {
 
 async function readFailedBlockState(studentNumber: string | string[]) {
   const studentNumbers = Array.isArray(studentNumber) ? studentNumber : [studentNumber];
-  const [appointments, blocks, statusLogs, rescheduleEvents, notifications, audits] = await Promise.all([
+  const [
+    appointments,
+    blocks,
+    statusLogs,
+    rescheduleEvents,
+    notifications,
+    audits,
+    submissions,
+    laboratoryResults,
+    examResults,
+    emailOutbox,
+  ] = await Promise.all([
     pool.query(
-      `SELECT id::text, schedule_type, appointment_date::text, status,
-              rescheduled_from::text, updated_by::text, updated_at::text
+      `SELECT id::text, clinic_id::text, schedule_type, appointment_date::text,
+              status, is_published, rescheduled_from::text,
+              schedule_pair_id::text, schedule_cycle_start,
+              is_manually_locked, locked_by::text, locked_at::text, lock_reason,
+              updated_by::text, updated_at::text
          FROM appointments
         WHERE student_number=ANY($1::varchar[])
         ORDER BY id`,
@@ -66,32 +80,55 @@ async function readFailedBlockState(studentNumber: string | string[]) {
     ),
     pool.query(
       `SELECT id::text, clinic_id::text, start_date::text, end_date::text,
-              category, reason, created_by::text, created_at::text, updated_at::text
+              category, reason, created_by::text, created_batch_id::text,
+              unblocked_at::text, unblocked_by::text, unblocked_batch_id::text,
+              created_at::text, updated_at::text
          FROM clinic_unavailable_dates
         WHERE reason LIKE 'TEST-CALENDAR%'
         ORDER BY id`,
     ),
     pool.query(
-      `SELECT COUNT(*)::int AS count
+      `SELECT log.id::text, log.appointment_id::text, log.old_status,
+              log.new_status, log.notes, log.changed_by::text, log.created_at::text
          FROM appointment_status_logs log
          JOIN appointments appointment ON appointment.id=log.appointment_id
-        WHERE appointment.student_number=ANY($1::varchar[])`,
+        WHERE appointment.student_number=ANY($1::varchar[])
+        ORDER BY log.id`,
       [studentNumbers],
     ),
     pool.query(
-      "SELECT COUNT(*)::int AS count FROM appointment_reschedule_events WHERE student_number=ANY($1::varchar[])",
+      `SELECT id::text, student_number, schedule_pair_id::text, cause,
+              clinic_unavailable_date_id::text,
+              old_laboratory_appointment_id::text,
+              new_laboratory_appointment_id::text,
+              old_physical_exam_appointment_id::text,
+              new_physical_exam_appointment_id::text,
+              actor_user_id::text, block_batch_id::text,
+              restored_at::text, restored_by::text, restoration_batch_id::text,
+              created_at::text
+         FROM appointment_reschedule_events
+        WHERE student_number=ANY($1::varchar[])
+        ORDER BY id`,
       [studentNumbers],
     ),
     pool.query(
-      `SELECT COUNT(*)::int AS count
+      `SELECT id::text, student_number, notification_type, title, message,
+              metadata::text, read_at::text, created_at::text
          FROM student_portal_notifications
-        WHERE student_number=ANY($1::varchar[]) AND notification_type='SCHEDULE_RESCHEDULED'`,
+        WHERE student_number=ANY($1::varchar[])
+          AND notification_type='SCHEDULE_RESCHEDULED'
+        ORDER BY id`,
       [studentNumbers],
     ),
     pool.query(
       `SELECT id::text, entity_id, metadata::text, created_at::text
          FROM audit_logs
-        WHERE action IN ('CLINIC_UNAVAILABLE_DATE_CREATED','CLINIC_CALENDAR_BATCH_UPDATED')
+        WHERE action IN (
+          'CLINIC_UNAVAILABLE_DATE_CREATED',
+          'CLINIC_UNAVAILABLE_DATE_UNBLOCKED',
+          'CLINIC_BLOCK_APPOINTMENTS_RESTORED',
+          'CLINIC_CALENDAR_BATCH_UPDATED'
+        )
           AND actor_user_id=$1
           AND (
             created_at >= $2
@@ -104,15 +141,166 @@ async function readFailedBlockState(studentNumber: string | string[]) {
         ORDER BY id`,
       [TEST_REFERENCE_IDS.adminUser, suiteStartedAt],
     ),
+    pool.query(
+      `SELECT id::text, appointment_id::text, student_number, result_type,
+              status, finalized_at::text, invalidated_at::text,
+              invalidated_by::text, invalidation_reason,
+              last_activity_at::text, created_at::text, updated_at::text
+         FROM student_result_submissions
+        WHERE student_number=ANY($1::varchar[])
+        ORDER BY id`,
+      [studentNumbers],
+    ),
+    pool.query(
+      `SELECT id::text, appointment_id::text, student_number, result_status,
+              completed_at::text, remarks, encoded_by::text,
+              created_at::text, updated_at::text
+         FROM laboratory_results
+        WHERE student_number=ANY($1::varchar[])
+        ORDER BY id`,
+      [studentNumbers],
+    ),
+    pool.query(
+      `SELECT id::text, appointment_id::text, student_number, result_status,
+              completed_at::text, remarks, encoded_by::text,
+              created_at::text, updated_at::text
+         FROM exam_results
+        WHERE student_number=ANY($1::varchar[])
+        ORDER BY id`,
+      [studentNumbers],
+    ),
+    pool.query(
+      `SELECT id::text, student_number, to_email, subject, text_body, html_body,
+              status, attempts, next_attempt_at::text, locked_at::text,
+              last_error, sent_at::text, created_at::text, updated_at::text
+         FROM email_outbox
+        WHERE student_number=ANY($1::varchar[])
+        ORDER BY id`,
+      [studentNumbers],
+    ),
   ]);
 
   return {
     appointments: appointments.rows,
     calendarBlocks: blocks.rows,
-    statusLogCount: statusLogs.rows[0].count,
-    rescheduleEventCount: rescheduleEvents.rows[0].count,
-    notificationCount: notifications.rows[0].count,
+    statusLogs: statusLogs.rows,
+    rescheduleEvents: rescheduleEvents.rows,
+    notifications: notifications.rows,
     audits: audits.rows,
+    submissions: submissions.rows,
+    laboratoryResults: laboratoryResults.rows,
+    examResults: examResults.rows,
+    emailOutbox: emailOutbox.rows,
+  };
+}
+
+type RestorationFixture = {
+  studentNumber: string;
+  clinicCode: "KABALAKA_CLINIC" | "CPU_CLINIC";
+  blockResultBatchId: string;
+  block: {
+    id: string;
+    clinicId: string;
+    startDate: string;
+    updatedAt: string;
+  };
+  event: {
+    id: string;
+    oldLaboratoryAppointmentId: string | null;
+    newLaboratoryAppointmentId: string | null;
+    oldPhysicalExamAppointmentId: string | null;
+    newPhysicalExamAppointmentId: string | null;
+  };
+  unblockRequest: {
+    changes: Array<{
+      action: "UNBLOCK";
+      clinicId: string;
+      date: string;
+      unavailableDateId: string;
+      expectedUpdatedAt: string;
+    }>;
+  };
+};
+
+async function createRestorationFixture(input: {
+  studentNumber: string;
+  clinicCode: RestorationFixture["clinicCode"];
+  blockDate?: string;
+}): Promise<RestorationFixture> {
+  const blockDate = input.blockDate ?? "2028-03-07";
+  await acceptAndScheduleImport(
+    importInput(`TEST-CALENDAR-restore-${input.studentNumber}.csv`, input.studentNumber),
+    admin,
+  );
+  await pool.query(
+    `UPDATE appointments
+        SET appointment_date=CASE schedule_type
+          WHEN 'LABORATORY' THEN $2::date
+          WHEN 'PHYSICAL_EXAM' THEN $3::date
+        END
+      WHERE student_number=$1`,
+    [
+      input.studentNumber,
+      input.clinicCode === "KABALAKA_CLINIC" ? blockDate : addCalendarDays(blockDate, -1),
+      input.clinicCode === "KABALAKA_CLINIC" ? addCalendarDays(blockDate, 1) : blockDate,
+    ],
+  );
+  const clinicId = input.clinicCode === "KABALAKA_CLINIC"
+    ? TEST_REFERENCE_IDS.laboratoryClinic
+    : TEST_REFERENCE_IDS.physicalExamClinic;
+  const blocked = await saveClinicCalendarChanges({
+    changes: [{
+      action: "BLOCK",
+      clinicId,
+      date: blockDate,
+      category: "CLOSURE",
+      reason: `TEST-CALENDAR restore ${input.studentNumber}`,
+    }],
+  }, admin);
+  const block = blocked.activeUnavailableDates.find((record) => (
+    record.clinicId === clinicId && record.startDate === blockDate
+  ));
+  if (!block) throw new Error("Expected the restoration fixture block to be active.");
+  const event = await pool.query<{
+    id: string;
+    old_laboratory_appointment_id: string | null;
+    new_laboratory_appointment_id: string | null;
+    old_physical_exam_appointment_id: string | null;
+    new_physical_exam_appointment_id: string | null;
+  }>(
+    `SELECT id::text, old_laboratory_appointment_id::text,
+            new_laboratory_appointment_id::text,
+            old_physical_exam_appointment_id::text,
+            new_physical_exam_appointment_id::text
+       FROM appointment_reschedule_events
+      WHERE student_number=$1 AND clinic_unavailable_date_id=$2
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1`,
+    [input.studentNumber, block.id],
+  );
+  if (!event.rowCount) throw new Error("Expected the restoration fixture reschedule event.");
+  const row = event.rows[0];
+  return {
+    studentNumber: input.studentNumber,
+    clinicCode: input.clinicCode,
+    blockResultBatchId: blocked.batchId,
+    block,
+    event: {
+      id: row.id,
+      oldLaboratoryAppointmentId: row.old_laboratory_appointment_id,
+      newLaboratoryAppointmentId: row.new_laboratory_appointment_id,
+      oldPhysicalExamAppointmentId: row.old_physical_exam_appointment_id,
+      newPhysicalExamAppointmentId: row.new_physical_exam_appointment_id,
+    },
+    unblockRequest: {
+      changes: [{
+        action: "UNBLOCK",
+        clinicId,
+        date: blockDate,
+        unavailableDateId: block.id,
+        expectedUpdatedAt: block.updatedAt,
+      }],
+    },
   };
 }
 
@@ -127,7 +315,12 @@ async function cleanup() {
       `DELETE FROM audit_logs
         WHERE actor_user_id=$1
           AND created_at >= $2
-          AND action IN ('CLINIC_UNAVAILABLE_DATE_CREATED','CLINIC_CALENDAR_BATCH_UPDATED')`,
+           AND action IN (
+             'CLINIC_UNAVAILABLE_DATE_CREATED',
+             'CLINIC_UNAVAILABLE_DATE_UNBLOCKED',
+             'CLINIC_BLOCK_APPOINTMENTS_RESTORED',
+             'CLINIC_CALENDAR_BATCH_UPDATED'
+           )`,
       [TEST_REFERENCE_IDS.adminUser, suiteStartedAt],
     );
     if (!blockIds.length) return;
@@ -139,7 +332,12 @@ async function cleanup() {
   const auditResidue = await pool.query(
     `SELECT id::text
        FROM audit_logs
-      WHERE action IN ('CLINIC_UNAVAILABLE_DATE_CREATED','CLINIC_CALENDAR_BATCH_UPDATED')
+      WHERE action IN (
+        'CLINIC_UNAVAILABLE_DATE_CREATED',
+        'CLINIC_UNAVAILABLE_DATE_UNBLOCKED',
+        'CLINIC_BLOCK_APPOINTMENTS_RESTORED',
+        'CLINIC_CALENDAR_BATCH_UPDATED'
+      )
         AND actor_user_id=$1
         AND created_at >= $2`,
     [TEST_REFERENCE_IDS.adminUser, suiteStartedAt],
@@ -164,6 +362,540 @@ afterAll(async () => {
 });
 
 describe("clinic calendar closures", () => {
+  it.each([
+    ["CPU Clinic Physical Examination", "CPU_CLINIC" as const, "99-9520-20", 1],
+    ["KABALAKA Laboratory and Physical Examination pair", "KABALAKA_CLINIC" as const, "99-9521-21", 2],
+  ])("immediately restores the original %s and retires generated replacements", async (
+    _label,
+    clinicCode,
+    studentNumber,
+    expectedAppointmentCount,
+  ) => {
+    const fixture = await createRestorationFixture({ studentNumber, clinicCode });
+
+    const restored = await saveClinicCalendarChanges(fixture.unblockRequest, admin);
+
+    expect(restored).toMatchObject({
+      batchId: expect.any(String),
+      blockedDateCount: 0,
+      unblockedDateCount: 1,
+      movedStudentCount: 0,
+      movedAppointmentCount: 0,
+      restoredStudentCount: 1,
+      restoredAppointmentCount: expectedAppointmentCount,
+    });
+    expect(restored.activeUnavailableDates.some((record) => record.id === fixture.block.id)).toBe(false);
+
+    const appointmentIds = [
+      fixture.event.oldLaboratoryAppointmentId,
+      fixture.event.newLaboratoryAppointmentId,
+      fixture.event.oldPhysicalExamAppointmentId,
+      fixture.event.newPhysicalExamAppointmentId,
+    ].filter((id): id is string => Boolean(id));
+    const appointments = await pool.query<{
+      id: string;
+      status: string;
+      rescheduled_from: string | null;
+    }>(
+      `SELECT id::text, status, rescheduled_from::text
+         FROM appointments
+        WHERE id=ANY($1::uuid[])
+        ORDER BY id`,
+      [appointmentIds],
+    );
+    const originalIds = [
+      fixture.event.oldLaboratoryAppointmentId,
+      fixture.event.oldPhysicalExamAppointmentId,
+    ].filter((id): id is string => Boolean(id));
+    const replacementIds = [
+      fixture.event.newLaboratoryAppointmentId,
+      fixture.event.newPhysicalExamAppointmentId,
+    ].filter((id): id is string => Boolean(id));
+    expect(appointments.rows.filter((appointment) => originalIds.includes(appointment.id)))
+      .toEqual(expect.arrayContaining(originalIds.map((id) => expect.objectContaining({ id, status: "PENDING" }))));
+    expect(appointments.rows.filter((appointment) => replacementIds.includes(appointment.id)))
+      .toEqual(expect.arrayContaining(replacementIds.map((id) => expect.objectContaining({
+        id,
+        status: "RESCHEDULED",
+        rescheduled_from: expect.any(String),
+      }))));
+    if (clinicCode === "CPU_CLINIC") {
+      expect(fixture.event.oldLaboratoryAppointmentId).toBeNull();
+      expect(fixture.event.newLaboratoryAppointmentId).toBeNull();
+    } else {
+      expect(originalIds).toHaveLength(2);
+      expect(replacementIds).toHaveLength(2);
+    }
+
+    const logs = await pool.query<{ old_status: string; new_status: string; notes: string }>(
+      `SELECT old_status, new_status, notes
+         FROM appointment_status_logs
+        WHERE appointment_id=ANY($1::uuid[])
+          AND notes LIKE '%' || $2::text || '%'
+          AND notes LIKE '%Clinic unavailable date reversed.%'
+        ORDER BY appointment_id`,
+      [appointmentIds, restored.batchId],
+    );
+    expect(logs.rows.filter((log) => log.old_status === "RESCHEDULED" && log.new_status === "PENDING"))
+      .toHaveLength(expectedAppointmentCount);
+    expect(logs.rows.filter((log) => log.old_status === "PENDING" && log.new_status === "RESCHEDULED"))
+      .toHaveLength(expectedAppointmentCount);
+
+    const provenance = await pool.query<{
+      restored_at: Date;
+      restored_by: string;
+      restoration_batch_id: string;
+      block_batch_id: string;
+      created_batch_id: string;
+      unblocked_at: Date;
+      unblocked_by: string;
+      unblocked_batch_id: string;
+    }>(
+      `SELECT event.restored_at, event.restored_by::text,
+              event.restoration_batch_id::text, event.block_batch_id::text,
+              unavailable.created_batch_id::text, unavailable.unblocked_at,
+              unavailable.unblocked_by::text, unavailable.unblocked_batch_id::text
+         FROM appointment_reschedule_events event
+         JOIN clinic_unavailable_dates unavailable
+           ON unavailable.id=event.clinic_unavailable_date_id
+        WHERE event.id=$1`,
+      [fixture.event.id],
+    );
+    expect(provenance.rows[0]).toMatchObject({
+      restored_at: expect.any(Date),
+      restored_by: admin.userId,
+      restoration_batch_id: restored.batchId,
+      block_batch_id: fixture.blockResultBatchId,
+      created_batch_id: fixture.blockResultBatchId,
+      unblocked_at: expect.any(Date),
+      unblocked_by: admin.userId,
+      unblocked_batch_id: restored.batchId,
+    });
+
+    const notifications = await pool.query<{ metadata: Record<string, unknown> }>(
+      `SELECT metadata
+         FROM student_portal_notifications
+        WHERE student_number=$1
+          AND notification_type='SCHEDULE_RESCHEDULED'
+          AND metadata->>'batchId'=$2::text`,
+      [studentNumber, restored.batchId],
+    );
+    expect(notifications.rows).toEqual([{ metadata: expect.objectContaining({
+      batchId: restored.batchId,
+      restored: true,
+      clinicUnavailableDateId: fixture.block.id,
+      replacementDates: expect.anything(),
+      restoredDates: expect.anything(),
+    }) }]);
+
+    const audits = await pool.query<{ action: string; metadata: Record<string, unknown> }>(
+      `SELECT action, metadata
+         FROM audit_logs
+        WHERE metadata->>'batchId'=$1::text
+          AND action IN (
+            'CLINIC_UNAVAILABLE_DATE_UNBLOCKED',
+            'CLINIC_BLOCK_APPOINTMENTS_RESTORED'
+          )
+        ORDER BY action`,
+      [restored.batchId],
+    );
+    expect(audits.rows.map((audit) => audit.action)).toEqual([
+      "CLINIC_BLOCK_APPOINTMENTS_RESTORED",
+      "CLINIC_UNAVAILABLE_DATE_UNBLOCKED",
+    ]);
+  });
+
+  it("soft-unblocks a date with no reschedule events and sends no student notification", async () => {
+    const blocked = await saveClinicCalendarChanges({
+      changes: [{
+        action: "BLOCK",
+        clinicId: TEST_REFERENCE_IDS.physicalExamClinic,
+        date: "2028-03-14",
+        category: "MAINTENANCE",
+        reason: "TEST-CALENDAR empty restoration",
+      }],
+    }, admin);
+    const block = blocked.activeUnavailableDates.find((record) => record.startDate === "2028-03-14")!;
+
+    const restored = await saveClinicCalendarChanges({
+      changes: [{
+        action: "UNBLOCK",
+        clinicId: block.clinicId,
+        date: block.startDate,
+        unavailableDateId: block.id,
+        expectedUpdatedAt: block.updatedAt,
+      }],
+    }, admin);
+
+    expect(restored).toMatchObject({
+      unblockedDateCount: 1,
+      restoredStudentCount: 0,
+      restoredAppointmentCount: 0,
+    });
+    const notifications = await pool.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count
+         FROM student_portal_notifications
+        WHERE metadata->>'batchId'=$1::text`,
+      [restored.batchId],
+    );
+    expect(notifications.rows[0].count).toBe(0);
+  });
+
+  it("restores multiple cycles for one student with one provenance-rich notification", async () => {
+    const studentNumber = "99-9522-22";
+    await acceptAndScheduleImport(importInput(
+      "TEST-CALENDAR-restore-cycles-2026.csv",
+      studentNumber,
+      { academicYearStart: 2026 },
+    ), admin);
+    await acceptAndScheduleImport(importInput(
+      "TEST-CALENDAR-restore-cycles-2027.csv",
+      studentNumber,
+      { academicYearStart: 2027 },
+    ), admin);
+    await pool.query(
+      `UPDATE appointments
+          SET appointment_date=CASE schedule_type
+            WHEN 'LABORATORY' THEN '2028-03-21'::date
+            WHEN 'PHYSICAL_EXAM' THEN '2028-03-22'::date
+          END
+        WHERE student_number=$1`,
+      [studentNumber],
+    );
+    const blocked = await saveClinicCalendarChanges({
+      changes: [{
+        action: "BLOCK",
+        clinicId: TEST_REFERENCE_IDS.laboratoryClinic,
+        date: "2028-03-21",
+        category: "CLOSURE",
+        reason: "TEST-CALENDAR multi-cycle restoration",
+      }],
+    }, admin);
+    const block = blocked.activeUnavailableDates.find((record) => record.startDate === "2028-03-21")!;
+
+    const restored = await saveClinicCalendarChanges({
+      changes: [{
+        action: "UNBLOCK",
+        clinicId: block.clinicId,
+        date: block.startDate,
+        unavailableDateId: block.id,
+        expectedUpdatedAt: block.updatedAt,
+      }],
+    }, admin);
+
+    expect(restored).toMatchObject({
+      restoredStudentCount: 1,
+      restoredAppointmentCount: 4,
+    });
+    const notification = await pool.query<{
+      metadata: { moves: Array<{ eventId: string; scheduleCycleStart: number }> };
+    }>(
+      `SELECT metadata
+         FROM student_portal_notifications
+        WHERE student_number=$1
+          AND notification_type='SCHEDULE_RESCHEDULED'
+          AND metadata->>'batchId'=$2::text`,
+      [studentNumber, restored.batchId],
+    );
+    expect(notification.rows).toHaveLength(1);
+    expect(notification.rows[0].metadata.moves).toHaveLength(4);
+    expect(new Set(notification.rows[0].metadata.moves.map((move) => move.eventId)).size).toBe(2);
+  });
+
+  it.each([
+    ["completed", "COMPLETED"],
+    ["no-show", "NO_SHOW"],
+    ["cancelled", "CANCELLED"],
+  ])("rejects a %s generated replacement without partial restoration", async (_label, status) => {
+    const fixture = await createRestorationFixture({
+      studentNumber: "99-9523-23",
+      clinicCode: "CPU_CLINIC",
+    });
+    await pool.query(
+      "UPDATE appointments SET status=$2 WHERE id=$1",
+      [fixture.event.newPhysicalExamAppointmentId, status],
+    );
+    const before = await readFailedBlockState(fixture.studentNumber);
+
+    await expect(saveClinicCalendarChanges(fixture.unblockRequest, admin)).rejects.toMatchObject({
+      code: "CLINIC_CALENDAR_BATCH_REJECTED",
+      details: { issues: [expect.objectContaining({ code: "PROTECTED_REPLACEMENT" })] },
+    });
+    expect(await readFailedBlockState(fixture.studentNumber)).toEqual(before);
+  });
+
+  it("rejects a manually locked generated replacement without partial restoration", async () => {
+    const fixture = await createRestorationFixture({
+      studentNumber: "99-9524-24",
+      clinicCode: "CPU_CLINIC",
+    });
+    await pool.query(
+      `UPDATE appointments
+          SET is_manually_locked=TRUE, locked_by=$2, locked_at=NOW(),
+              lock_reason='TEST restoration protection'
+        WHERE id=$1`,
+      [fixture.event.newPhysicalExamAppointmentId, admin.userId],
+    );
+    const before = await readFailedBlockState(fixture.studentNumber);
+
+    await expect(saveClinicCalendarChanges(fixture.unblockRequest, admin)).rejects.toMatchObject({
+      code: "CLINIC_CALENDAR_BATCH_REJECTED",
+      details: { issues: [expect.objectContaining({ code: "PROTECTED_REPLACEMENT" })] },
+    });
+    expect(await readFailedBlockState(fixture.studentNumber)).toEqual(before);
+  });
+
+  it("rejects an unpublished generated replacement without partial restoration", async () => {
+    const fixture = await createRestorationFixture({
+      studentNumber: "99-9525-25",
+      clinicCode: "CPU_CLINIC",
+    });
+    await pool.query(
+      "UPDATE appointments SET is_published=FALSE WHERE id=$1",
+      [fixture.event.newPhysicalExamAppointmentId],
+    );
+    const before = await readFailedBlockState(fixture.studentNumber);
+
+    await expect(saveClinicCalendarChanges(fixture.unblockRequest, admin)).rejects.toMatchObject({
+      code: "CLINIC_CALENDAR_BATCH_REJECTED",
+      details: { issues: [expect.objectContaining({ code: "PROTECTED_REPLACEMENT" })] },
+    });
+    expect(await readFailedBlockState(fixture.studentNumber)).toEqual(before);
+  });
+
+  it("rejects a generated replacement with a finalized result submission", async () => {
+    const fixture = await createRestorationFixture({
+      studentNumber: "99-9526-26",
+      clinicCode: "CPU_CLINIC",
+    });
+    await pool.query(
+      `INSERT INTO student_result_submissions (
+         appointment_id, student_number, result_type, status, finalized_at
+       ) VALUES ($1,$2,'PHYSICAL_EXAM','FINALIZED',NOW())`,
+      [fixture.event.newPhysicalExamAppointmentId, fixture.studentNumber],
+    );
+    const before = await readFailedBlockState(fixture.studentNumber);
+
+    await expect(saveClinicCalendarChanges(fixture.unblockRequest, admin)).rejects.toMatchObject({
+      code: "CLINIC_CALENDAR_BATCH_REJECTED",
+      details: { issues: [expect.objectContaining({ code: "PROTECTED_REPLACEMENT" })] },
+    });
+    expect(await readFailedBlockState(fixture.studentNumber)).toEqual(before);
+  });
+
+  it("rejects a generated Physical Examination replacement with a protected result", async () => {
+    const fixture = await createRestorationFixture({
+      studentNumber: "99-9527-27",
+      clinicCode: "CPU_CLINIC",
+    });
+    await pool.query(
+      `INSERT INTO exam_results (student_number, appointment_id, result_status, encoded_by)
+       VALUES ($1,$2,'REQUIRES_FOLLOW_UP',$3)`,
+      [fixture.studentNumber, fixture.event.newPhysicalExamAppointmentId, admin.userId],
+    );
+    const before = await readFailedBlockState(fixture.studentNumber);
+
+    await expect(saveClinicCalendarChanges(fixture.unblockRequest, admin)).rejects.toMatchObject({
+      code: "CLINIC_CALENDAR_BATCH_REJECTED",
+      details: { issues: [expect.objectContaining({ code: "PROTECTED_REPLACEMENT" })] },
+    });
+    expect(await readFailedBlockState(fixture.studentNumber)).toEqual(before);
+  });
+
+  it("rejects a KABALAKA pair when its Laboratory replacement has a protected result", async () => {
+    const fixture = await createRestorationFixture({
+      studentNumber: "99-9528-28",
+      clinicCode: "KABALAKA_CLINIC",
+    });
+    await pool.query(
+      `INSERT INTO laboratory_results (student_number, appointment_id, result_status, encoded_by)
+       VALUES ($1,$2,'REQUIRES_FOLLOW_UP',$3)`,
+      [fixture.studentNumber, fixture.event.newLaboratoryAppointmentId, admin.userId],
+    );
+    const before = await readFailedBlockState(fixture.studentNumber);
+
+    await expect(saveClinicCalendarChanges(fixture.unblockRequest, admin)).rejects.toMatchObject({
+      code: "CLINIC_CALENDAR_BATCH_REJECTED",
+      details: { issues: [expect.objectContaining({ code: "PAIR_INTEGRITY_FAILURE" })] },
+    });
+    expect(await readFailedBlockState(fixture.studentNumber)).toEqual(before);
+  });
+
+  it("rejects a generated replacement that already has a published child", async () => {
+    const fixture = await createRestorationFixture({
+      studentNumber: "99-9529-29",
+      clinicCode: "CPU_CLINIC",
+    });
+    const replacement = await pool.query<{
+      clinic_id: string;
+      appointment_date: string;
+      schedule_pair_id: string;
+      schedule_cycle_start: number;
+    }>(
+      `SELECT clinic_id::text, appointment_date::text, schedule_pair_id::text,
+              schedule_cycle_start
+         FROM appointments
+        WHERE id=$1`,
+      [fixture.event.newPhysicalExamAppointmentId],
+    );
+    const row = replacement.rows[0];
+    await pool.query(
+      `INSERT INTO appointments (
+         clinic_id, student_number, schedule_type, appointment_date, status,
+         is_published, rescheduled_from, created_by, updated_by,
+         schedule_pair_id, schedule_cycle_start
+       ) VALUES ($1,$2,'PHYSICAL_EXAM',$3,'RESCHEDULED',TRUE,$4,$5,$5,$6,$7)`,
+      [
+        row.clinic_id,
+        fixture.studentNumber,
+        addCalendarDays(row.appointment_date, 1),
+        fixture.event.newPhysicalExamAppointmentId,
+        admin.userId,
+        row.schedule_pair_id,
+        row.schedule_cycle_start,
+      ],
+    );
+    const before = await readFailedBlockState(fixture.studentNumber);
+
+    await expect(saveClinicCalendarChanges(fixture.unblockRequest, admin)).rejects.toMatchObject({
+      code: "CLINIC_CALENDAR_BATCH_REJECTED",
+      details: { issues: [expect.objectContaining({ code: "PROTECTED_REPLACEMENT" })] },
+    });
+    expect(await readFailedBlockState(fixture.studentNumber)).toEqual(before);
+  });
+
+  it("rejects a missing original event member without partial restoration", async () => {
+    const fixture = await createRestorationFixture({
+      studentNumber: "99-9530-30",
+      clinicCode: "CPU_CLINIC",
+    });
+    const laboratory = await pool.query<{ id: string }>(
+      `SELECT id::text
+         FROM appointments
+        WHERE student_number=$1 AND schedule_type='LABORATORY' AND status='PENDING'`,
+      [fixture.studentNumber],
+    );
+    await pool.query(
+      `UPDATE appointment_reschedule_events
+          SET old_laboratory_appointment_id=$2,
+              old_physical_exam_appointment_id=NULL
+        WHERE id=$1`,
+      [fixture.event.id, laboratory.rows[0].id],
+    );
+    const before = await readFailedBlockState(fixture.studentNumber);
+
+    await expect(saveClinicCalendarChanges(fixture.unblockRequest, admin)).rejects.toMatchObject({
+      code: "CLINIC_CALENDAR_BATCH_REJECTED",
+      details: { issues: [expect.objectContaining({ code: "MISSING_ORIGINAL" })] },
+    });
+    expect(await readFailedBlockState(fixture.studentNumber)).toEqual(before);
+  });
+
+  it("rejects a replacement whose rescheduled-from lineage no longer names the original", async () => {
+    const fixture = await createRestorationFixture({
+      studentNumber: "99-9531-31",
+      clinicCode: "CPU_CLINIC",
+    });
+    await pool.query(
+      "UPDATE appointments SET rescheduled_from=NULL WHERE id=$1",
+      [fixture.event.newPhysicalExamAppointmentId],
+    );
+    const before = await readFailedBlockState(fixture.studentNumber);
+
+    await expect(saveClinicCalendarChanges(fixture.unblockRequest, admin)).rejects.toMatchObject({
+      code: "CLINIC_CALENDAR_BATCH_REJECTED",
+      details: { issues: [expect.objectContaining({ code: "PAIR_INTEGRITY_FAILURE" })] },
+    });
+    expect(await readFailedBlockState(fixture.studentNumber)).toEqual(before);
+  });
+
+  it("rejects restoration when the original date is already at capacity", async () => {
+    const fixture = await createRestorationFixture({
+      studentNumber: "99-9532-32",
+      clinicCode: "CPU_CLINIC",
+    });
+    const fillerStudent = "99-9533-33";
+    await acceptAndScheduleImport(importInput("TEST-CALENDAR-restore-capacity.csv", fillerStudent), admin);
+    await pool.query(
+      `UPDATE appointments
+          SET appointment_date=CASE schedule_type
+            WHEN 'LABORATORY' THEN '2028-03-06'::date
+            WHEN 'PHYSICAL_EXAM' THEN '2028-03-07'::date
+          END
+        WHERE student_number=$1`,
+      [fillerStudent],
+    );
+    await pool.query(
+      `UPDATE clinic_capacity_settings
+          SET safe_daily_capacity=1, max_daily_capacity=1
+        WHERE clinic_id=$1 AND schedule_type='PHYSICAL_EXAM'`,
+      [TEST_REFERENCE_IDS.physicalExamClinic],
+    );
+    const before = await readFailedBlockState([fixture.studentNumber, fillerStudent]);
+
+    await expect(saveClinicCalendarChanges(fixture.unblockRequest, admin)).rejects.toMatchObject({
+      code: "CLINIC_CALENDAR_BATCH_REJECTED",
+      details: { issues: [expect.objectContaining({ code: "CAPACITY_CONFLICT" })] },
+    });
+    expect(await readFailedBlockState([fixture.studentNumber, fillerStudent])).toEqual(before);
+  });
+
+  it("rejects a stale optimistic token without partial restoration", async () => {
+    const fixture = await createRestorationFixture({
+      studentNumber: "99-9534-34",
+      clinicCode: "CPU_CLINIC",
+    });
+    fixture.unblockRequest.changes[0].expectedUpdatedAt = "2000-01-01T00:00:00.000000Z";
+    const before = await readFailedBlockState(fixture.studentNumber);
+
+    await expect(saveClinicCalendarChanges(fixture.unblockRequest, admin)).rejects.toMatchObject({
+      code: "CLINIC_CALENDAR_BATCH_REJECTED",
+      details: { issues: [expect.objectContaining({ code: "STALE_BLOCK" })] },
+    });
+    expect(await readFailedBlockState(fixture.studentNumber)).toEqual(before);
+  });
+
+  it("rejects an unblock whose clinic/date identity does not match the locked block", async () => {
+    const fixture = await createRestorationFixture({
+      studentNumber: "99-9535-35",
+      clinicCode: "CPU_CLINIC",
+    });
+    fixture.unblockRequest.changes[0].date = "2028-03-08";
+    const before = await readFailedBlockState(fixture.studentNumber);
+
+    await expect(saveClinicCalendarChanges(fixture.unblockRequest, admin)).rejects.toMatchObject({
+      code: "CLINIC_CALENDAR_BATCH_REJECTED",
+      details: { issues: [expect.objectContaining({ code: "STALE_BLOCK" })] },
+    });
+    expect(await readFailedBlockState(fixture.studentNumber)).toEqual(before);
+  });
+
+  it("rejects all restorations before mutation when one unblock token is stale", async () => {
+    const first = await createRestorationFixture({
+      studentNumber: "99-9536-36",
+      clinicCode: "CPU_CLINIC",
+      blockDate: "2028-03-07",
+    });
+    const second = await createRestorationFixture({
+      studentNumber: "99-9537-37",
+      clinicCode: "CPU_CLINIC",
+      blockDate: "2028-03-14",
+    });
+    second.unblockRequest.changes[0].expectedUpdatedAt = "2000-01-01T00:00:00.000000Z";
+    const before = await readFailedBlockState([first.studentNumber, second.studentNumber]);
+
+    await expect(saveClinicCalendarChanges({
+      changes: [
+        first.unblockRequest.changes[0],
+        second.unblockRequest.changes[0],
+      ],
+    }, admin)).rejects.toMatchObject({
+      code: "CLINIC_CALENDAR_BATCH_REJECTED",
+      details: { issues: [expect.objectContaining({ code: "STALE_BLOCK" })] },
+    });
+    expect(await readFailedBlockState([first.studentNumber, second.studentNumber])).toEqual(before);
+  });
+
   it("saves two empty future blocks atomically and import allocation skips both", async () => {
     const result = await saveClinicCalendarChanges({
       changes: [
@@ -598,18 +1330,6 @@ describe("clinic calendar closures", () => {
           date: "2101-01-03",
           category: "CLOSURE",
           reason: "TEST-CALENDAR out of range year",
-        }],
-      },
-    ],
-    [
-      "an unblock before restoration support is added",
-      {
-        changes: [{
-          action: "UNBLOCK",
-          clinicId: TEST_REFERENCE_IDS.laboratoryClinic,
-          date: "2027-07-15",
-          unavailableDateId: "70000000-0000-4000-8000-000000000001",
-          expectedUpdatedAt: "2027-07-01T00:00:00.000000Z",
         }],
       },
     ],
