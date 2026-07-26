@@ -1011,6 +1011,24 @@ export async function applyClinicRestorationPlan(
     assertMutationCount(plan, "marking reschedule events restored", events.rowCount, plan.eventIds.length);
   }
 
+  const studentNumbers = [...new Set(plan.moves.map((move) => move.studentNumber))].sort();
+  return {
+    blockId: plan.blockId,
+    studentNumbers,
+    restoredStudentCount: studentNumbers.length,
+    restoredAppointmentCount: plan.moves.length,
+    moves: plan.moves,
+  };
+}
+
+export async function finalizeClinicRestorationPlan(
+  client: PoolClient,
+  plan: ClinicRestorationPlan,
+  actor: SessionUser,
+  batchId: string,
+) {
+  const studentNumbers = [...new Set(plan.moves.map((move) => move.studentNumber))].sort();
+
   const unblocked = await softUnblockClinicUnavailableDate(client, {
     id: plan.blockId,
     expectedUpdatedAt: plan.change.expectedUpdatedAt,
@@ -1019,7 +1037,6 @@ export async function applyClinicRestorationPlan(
   });
   assertMutationCount(plan, "soft-unblocking the clinic date", unblocked ? 1 : 0, 1);
 
-  const studentNumbers = [...new Set(plan.moves.map((move) => move.studentNumber))].sort();
   const unblockAudit = await client.query(
     `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
      VALUES ($1,'CLINIC_UNAVAILABLE_DATE_UNBLOCKED','clinic_unavailable_date',$2,
@@ -1060,14 +1077,6 @@ export async function applyClinicRestorationPlan(
     ],
   );
   assertMutationCount(plan, "auditing restored appointments", restorationAudit.rowCount, 1);
-
-  return {
-    blockId: plan.blockId,
-    studentNumbers,
-    restoredStudentCount: studentNumbers.length,
-    restoredAppointmentCount: plan.moves.length,
-    moves: plan.moves,
-  };
 }
 
 export async function applyClinicBlockPlan(

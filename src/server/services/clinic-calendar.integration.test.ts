@@ -956,6 +956,261 @@ describe("clinic calendar closures", () => {
     expect(await readFailedBlockState([first.studentNumber, second.studentNumber])).toEqual(before);
   });
 
+  it("applies new blocks before soft-unblocking restoration source rows", async () => {
+    const studentNumber = "99-9544-44";
+    const fixture = await createRestorationFixture({
+      studentNumber,
+      clinicCode: "CPU_CLINIC",
+      blockDate: "2028-04-24",
+    });
+    await pool.query(
+      `DROP TRIGGER IF EXISTS test_calendar_batch_apply_order_trigger
+         ON clinic_unavailable_dates;
+       CREATE OR REPLACE FUNCTION test_calendar_batch_apply_order()
+       RETURNS trigger LANGUAGE plpgsql AS $$
+       BEGIN
+         IF NEW.reason='TEST-CALENDAR mixed apply-order target'
+            AND NOT EXISTS (
+              SELECT 1 FROM clinic_unavailable_dates source
+               WHERE source.reason=$test$TEST-CALENDAR restore 99-9544-44$test$
+                 AND source.unblocked_at IS NULL
+            ) THEN
+           RAISE EXCEPTION 'calendar unblock was applied before the new block';
+         END IF;
+         RETURN NEW;
+       END;
+       $$;
+       CREATE TRIGGER test_calendar_batch_apply_order_trigger
+       BEFORE INSERT ON clinic_unavailable_dates
+       FOR EACH ROW EXECUTE FUNCTION test_calendar_batch_apply_order()`,
+    );
+    try {
+      const result = await saveClinicCalendarChanges({
+        changes: [
+          fixture.unblockRequest.changes[0],
+          {
+            action: "BLOCK",
+            clinicId: TEST_REFERENCE_IDS.laboratoryClinic,
+            date: "2028-06-12",
+            category: "CLOSURE",
+            reason: "TEST-CALENDAR mixed apply-order target",
+          },
+        ],
+      }, admin);
+
+      expect(result).toMatchObject({ blockedDateCount: 1, unblockedDateCount: 1 });
+    } finally {
+      await pool.query(
+        `DROP TRIGGER IF EXISTS test_calendar_batch_apply_order_trigger
+           ON clinic_unavailable_dates;
+         DROP FUNCTION IF EXISTS test_calendar_batch_apply_order()`,
+      );
+    }
+  });
+
+  it("maps an active-day unique violation to the block change that caused it", async () => {
+    const fixture = await createRestorationFixture({
+      studentNumber: "99-9545-45",
+      clinicCode: "CPU_CLINIC",
+      blockDate: "2028-04-17",
+    });
+    await pool.query(
+      `DROP TRIGGER IF EXISTS test_calendar_active_day_conflict_trigger
+         ON clinic_unavailable_dates;
+       CREATE OR REPLACE FUNCTION test_calendar_active_day_conflict()
+       RETURNS trigger LANGUAGE plpgsql AS $$
+       BEGIN
+         IF NEW.reason='TEST-CALENDAR simulated concurrent active day' THEN
+           RAISE EXCEPTION USING
+             ERRCODE='23505',
+             CONSTRAINT='clinic_unavailable_dates_one_active_day_idx',
+             MESSAGE='simulated concurrent active clinic day';
+         END IF;
+         RETURN NEW;
+       END;
+       $$;
+       CREATE TRIGGER test_calendar_active_day_conflict_trigger
+       BEFORE INSERT ON clinic_unavailable_dates
+       FOR EACH ROW EXECUTE FUNCTION test_calendar_active_day_conflict()`,
+    );
+    try {
+      const blockChange = {
+        action: "BLOCK" as const,
+        clinicId: TEST_REFERENCE_IDS.laboratoryClinic,
+        date: "2028-06-19",
+        category: "CLOSURE" as const,
+        reason: "TEST-CALENDAR simulated concurrent active day",
+      };
+
+      await expect(saveClinicCalendarChanges({
+        changes: [fixture.unblockRequest.changes[0], blockChange],
+      }, admin)).rejects.toMatchObject({
+        code: "CLINIC_CALENDAR_BATCH_REJECTED",
+        status: 409,
+        details: {
+          issues: [expect.objectContaining({
+            clinicId: blockChange.clinicId,
+            date: blockChange.date,
+            action: "BLOCK",
+            code: "ACTIVE_BLOCK_CONFLICT",
+          })],
+        },
+      });
+    } finally {
+      await pool.query(
+        `DROP TRIGGER IF EXISTS test_calendar_active_day_conflict_trigger
+           ON clinic_unavailable_dates;
+         DROP FUNCTION IF EXISTS test_calendar_active_day_conflict()`,
+      );
+    }
+  });
+
+  it("unblocks one clinic and blocks another clinic atomically in one batch", async () => {
+    const fixture = await createRestorationFixture({
+      studentNumber: "99-9540-40",
+      clinicCode: "CPU_CLINIC",
+      blockDate: "2028-05-08",
+    });
+
+    const result = await saveClinicCalendarChanges({
+      changes: [
+        {
+          action: "BLOCK",
+          clinicId: TEST_REFERENCE_IDS.laboratoryClinic,
+          date: "2028-06-05",
+          category: "MAINTENANCE",
+          reason: "TEST-CALENDAR mixed cross-clinic block",
+        },
+        fixture.unblockRequest.changes[0],
+      ],
+    }, admin);
+
+    expect(result).toMatchObject({
+      blockedDateCount: 1,
+      unblockedDateCount: 1,
+      movedStudentCount: 0,
+      movedAppointmentCount: 0,
+      restoredStudentCount: 1,
+      restoredAppointmentCount: 1,
+    });
+    expect(result.activeUnavailableDates).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        clinicId: TEST_REFERENCE_IDS.laboratoryClinic,
+        startDate: "2028-06-05",
+      }),
+    ]));
+    expect(result.activeUnavailableDates.some((record) => record.id === fixture.block.id)).toBe(false);
+
+    const restored = await pool.query<{ status: string; is_published: boolean }>(
+      "SELECT status, is_published FROM appointments WHERE id=$1",
+      [fixture.event.oldPhysicalExamAppointmentId],
+    );
+    expect(restored.rows).toEqual([{ status: "PENDING", is_published: true }]);
+  });
+
+  it("rejects a KABALAKA restoration when its original Physical Examination date is newly blocked", async () => {
+    const fixture = await createRestorationFixture({
+      studentNumber: "99-9541-41",
+      clinicCode: "KABALAKA_CLINIC",
+      blockDate: "2028-05-15",
+    });
+    const before = await readFailedBlockState(fixture.studentNumber);
+
+    await expect(saveClinicCalendarChanges({
+      changes: [
+        fixture.unblockRequest.changes[0],
+        {
+          action: "BLOCK",
+          clinicId: TEST_REFERENCE_IDS.physicalExamClinic,
+          date: "2028-05-16",
+          category: "CLOSURE",
+          reason: "TEST-CALENDAR mixed restored pair conflict",
+        },
+      ],
+    }, admin)).rejects.toMatchObject({
+      code: "CLINIC_CALENDAR_BATCH_REJECTED",
+      status: 409,
+      details: {
+        issues: [expect.objectContaining({
+          clinicId: TEST_REFERENCE_IDS.laboratoryClinic,
+          date: "2028-05-15",
+          action: "UNBLOCK",
+          code: "PAIR_INTEGRITY_FAILURE",
+        })],
+      },
+    });
+    expect(await readFailedBlockState(fixture.studentNumber)).toEqual(before);
+  });
+
+  it("rolls back a valid block when a mixed unblock has a stale optimistic token", async () => {
+    const fixture = await createRestorationFixture({
+      studentNumber: "99-9542-42",
+      clinicCode: "CPU_CLINIC",
+      blockDate: "2028-05-22",
+    });
+    const staleUnblock = {
+      ...fixture.unblockRequest.changes[0],
+      expectedUpdatedAt: "2000-01-01T00:00:00.000000Z",
+    };
+    const before = await readFailedBlockState(fixture.studentNumber);
+
+    await expect(saveClinicCalendarChanges({
+      changes: [
+        {
+          action: "BLOCK",
+          clinicId: TEST_REFERENCE_IDS.laboratoryClinic,
+          date: "2028-05-08",
+          category: "CLOSURE",
+          reason: "TEST-CALENDAR mixed valid block rolled back",
+        },
+        staleUnblock,
+      ],
+    }, admin)).rejects.toMatchObject({
+      code: "CLINIC_CALENDAR_BATCH_REJECTED",
+      status: 409,
+      details: { issues: [expect.objectContaining({ code: "STALE_BLOCK" })] },
+    });
+    expect(await readFailedBlockState(fixture.studentNumber)).toEqual(before);
+  });
+
+  it("serializes two unblocks using the same exact optimistic token", async () => {
+    const fixture = await createRestorationFixture({
+      studentNumber: "99-9543-43",
+      clinicCode: "CPU_CLINIC",
+      blockDate: "2028-05-29",
+    });
+
+    const outcomes = await Promise.allSettled([
+      saveClinicCalendarChanges(fixture.unblockRequest, admin),
+      saveClinicCalendarChanges(fixture.unblockRequest, admin),
+    ]);
+    const fulfilled = outcomes.filter((outcome) => outcome.status === "fulfilled");
+    const rejected = outcomes.filter((outcome) => outcome.status === "rejected");
+
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]).toMatchObject({
+      status: "rejected",
+      reason: {
+        code: "CLINIC_CALENDAR_BATCH_REJECTED",
+        details: { issues: [expect.objectContaining({ code: "STALE_BLOCK" })] },
+      },
+    });
+    const state = await pool.query<{ block_active: boolean; restored_count: number }>(
+      `SELECT
+         EXISTS (
+           SELECT 1 FROM clinic_unavailable_dates
+            WHERE id=$1 AND unblocked_at IS NULL
+         ) AS block_active,
+         (
+           SELECT COUNT(*)::int FROM appointment_reschedule_events
+            WHERE clinic_unavailable_date_id=$1 AND restored_at IS NOT NULL
+         ) AS restored_count`,
+      [fixture.block.id],
+    );
+    expect(state.rows).toEqual([{ block_active: false, restored_count: 1 }]);
+  });
+
   it("saves two empty future blocks atomically and import allocation skips both", async () => {
     const result = await saveClinicCalendarChanges({
       changes: [
@@ -1395,7 +1650,7 @@ describe("clinic calendar closures", () => {
     ],
   ])("rejects %s with structured invalid-change details", async (_label, raw) => {
     await expect(saveClinicCalendarChanges(raw, admin)).rejects.toMatchObject({
-      code: "CLINIC_CALENDAR_BATCH_REJECTED",
+      code: "VALIDATION_ERROR",
       status: 422,
       details: { issues: [expect.objectContaining({ code: "INVALID_CHANGE" })] },
     });
@@ -1411,7 +1666,7 @@ describe("clinic calendar closures", () => {
     }));
 
     await expect(saveClinicCalendarChanges({ changes }, admin)).rejects.toMatchObject({
-      code: "CLINIC_CALENDAR_BATCH_REJECTED",
+      code: "VALIDATION_ERROR",
       status: 422,
       details: { issues: [expect.objectContaining({ code: "INVALID_CHANGE" })] },
     });
@@ -1432,7 +1687,7 @@ describe("clinic calendar closures", () => {
       }],
     }, admin)).rejects.toMatchObject({
       code: "CLINIC_CALENDAR_BATCH_REJECTED",
-      status: 422,
+      status: 409,
       details: { issues: [expect.objectContaining({ code: "INVALID_CHANGE" })] },
     });
     expect(await readFailedBlockState([])).toEqual(before);
@@ -1751,23 +2006,29 @@ describe("clinic calendar closures", () => {
     expect(replacement.rows[0].appointment_date > today).toBe(true);
   });
 
-  it("waits for the shared scheduling allocation lock before creating a block", async () => {
+  it("makes no calendar changes while a mixed batch waits for the shared scheduling lock", async () => {
     const blocker = await pool.connect();
     try {
       await blocker.query("BEGIN");
       await blocker.query("SELECT pg_advisory_xact_lock(hashtext('medclinic:schedule-import-queue'))");
-      const pending = createClinicUnavailableDate({
-        clinicId: TEST_REFERENCE_IDS.physicalExamClinic,
-        startDate: "2027-06-01",
-        endDate: "2027-06-01",
-        category: "CLOSURE",
-        reason: "TEST-CALENDAR serialized closure",
-      }, admin);
+      let completed = false;
+      const pending = saveClinicCalendarChanges({
+        changes: [{
+          action: "BLOCK",
+          clinicId: TEST_REFERENCE_IDS.physicalExamClinic,
+          date: "2027-06-01",
+          category: "CLOSURE",
+          reason: "TEST-CALENDAR serialized closure",
+        }],
+      }, admin).finally(() => {
+        completed = true;
+      });
       await new Promise((resolve) => setTimeout(resolve, 100));
       const beforeRelease = await pool.query(
         "SELECT 1 FROM clinic_unavailable_dates WHERE reason='TEST-CALENDAR serialized closure'",
       );
       expect(beforeRelease.rowCount).toBe(0);
+      expect(completed).toBe(false);
       await blocker.query("COMMIT");
       await pending;
     } finally {

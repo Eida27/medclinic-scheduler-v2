@@ -19,6 +19,7 @@ import {
   applyClinicBlockPlan,
   applyClinicRestorationPlan,
   createPlanningContext,
+  finalizeClinicRestorationPlan,
   planClinicBlock,
   planClinicRestoration,
   sortClinicCalendarChanges,
@@ -127,6 +128,16 @@ function batchRejected(issues: ClinicCalendarBatchIssue[], status = 409) {
   );
 }
 
+function validationRejected(issues: ClinicCalendarBatchIssue[]) {
+  return new AppError(
+    "VALIDATION_ERROR",
+    "Please correct the highlighted fields.",
+    422,
+    undefined,
+    { issues },
+  );
+}
+
 function rawChangeAt(raw: unknown, path: PropertyKey[]) {
   if (typeof raw !== "object" || raw === null || !("changes" in raw)) return undefined;
   const changes = (raw as { changes?: unknown }).changes;
@@ -150,13 +161,13 @@ function parseBatch(raw: unknown) {
       message: zodIssue.message,
     };
   });
-  throw batchRejected(issues.length ? issues : [{
+  throw validationRejected(issues.length ? issues : [{
     clinicId: "",
     date: "",
     action: "BLOCK",
     code: "INVALID_CHANGE",
     message: "The calendar batch is invalid.",
-  }], 422);
+  }]);
 }
 
 async function lockActiveRecords(client: PoolClient): Promise<ClinicUnavailableDateDto[]> {
@@ -248,6 +259,28 @@ async function listActiveRecordsWithClient(client: PoolClient): Promise<ClinicUn
   }));
 }
 
+async function lockAppointmentsOnBlockDates(
+  client: PoolClient,
+  changes: Extract<ClinicCalendarBatchChange, { action: "BLOCK" }>[],
+) {
+  if (!changes.length) return;
+  await client.query(
+    `SELECT appointment.id
+       FROM appointments appointment
+       JOIN UNNEST($1::uuid[], $2::date[]) AS target(clinic_id, date)
+         ON target.clinic_id=appointment.clinic_id
+        AND target.date=appointment.appointment_date
+      WHERE appointment.is_published=TRUE
+        AND appointment.status NOT IN ('RESCHEDULED','CANCELLED')
+      ORDER BY appointment.id
+      FOR UPDATE OF appointment`,
+    [
+      changes.map((change) => change.clinicId),
+      changes.map((change) => change.date),
+    ],
+  );
+}
+
 function issueForChange(
   change: ClinicCalendarBatchChange,
   code: ClinicCalendarBatchIssue["code"],
@@ -299,9 +332,19 @@ export async function saveClinicCalendarChanges(
     }
     return [];
   });
-  if (temporalIssues.length) throw batchRejected(temporalIssues, 422);
+  if (temporalIssues.length) throw batchRejected(temporalIssues);
 
   const changes = sortClinicCalendarChanges(input.changes);
+  const unblockChanges = changes.filter(
+    (change): change is Extract<ClinicCalendarBatchChange, { action: "UNBLOCK" }> => (
+      change.action === "UNBLOCK"
+    ),
+  );
+  const blockChanges = changes.filter(
+    (change): change is Extract<ClinicCalendarBatchChange, { action: "BLOCK" }> => (
+      change.action === "BLOCK"
+    ),
+  );
   const batchId = randomUUID();
   try {
     return await transaction(async (client) => {
@@ -341,20 +384,13 @@ export async function saveClinicCalendarChanges(
       const context = await createPlanningContext(client, activeRecords, changes);
       const restorationBundles = await lockRestorationBundles(
         client,
-        changes.flatMap((change) => (
-          change.action === "UNBLOCK" ? [change.unavailableDateId] : []
-        )),
+        unblockChanges.map((change) => change.unavailableDateId),
       );
       const restorationBundleById = new Map(
         restorationBundles.map((bundle) => [bundle.block.id, bundle]),
       );
-      const blockPlans = [];
       const restorationPlans = [];
-      for (const change of changes) {
-        if (change.action === "BLOCK") {
-          blockPlans.push(await planClinicBlock(client, change, context));
-          continue;
-        }
+      for (const change of unblockChanges) {
         const bundle = restorationBundleById.get(change.unavailableDateId);
         if (!bundle) {
           throw batchRejected([issueForChange(
@@ -365,6 +401,11 @@ export async function saveClinicCalendarChanges(
         }
         restorationPlans.push(planClinicRestoration(bundle, { ...context, change }));
       }
+      await lockAppointmentsOnBlockDates(client, blockChanges);
+      const blockPlans = [];
+      for (const change of blockChanges) {
+        blockPlans.push(await planClinicBlock(client, change, context));
+      }
 
       // Every plan above is complete before the first database mutation below.
       const restorationImpacts = [];
@@ -373,7 +414,23 @@ export async function saveClinicCalendarChanges(
       }
       const blockImpacts = [];
       for (const plan of blockPlans) {
-        blockImpacts.push(await applyClinicBlockPlan(client, plan, actor, batchId));
+        try {
+          blockImpacts.push(await applyClinicBlockPlan(client, plan, actor, batchId));
+        } catch (error) {
+          if (isCalendarActiveDateUniqueViolation(error)) {
+            throw batchRejected([
+              issueForChange(
+                plan.change,
+                "ACTIVE_BLOCK_CONFLICT",
+                "This clinic date was blocked by another calendar update.",
+              ),
+            ]);
+          }
+          throw error;
+        }
+      }
+      for (const plan of restorationPlans) {
+        await finalizeClinicRestorationPlan(client, plan, actor, batchId);
       }
 
       const restorationMovesByStudent = new Map<
@@ -479,9 +536,10 @@ export async function saveClinicCalendarChanges(
     });
   } catch (error) {
     if (isCalendarActiveDateUniqueViolation(error)) {
+      const conflictingChange = blockChanges[0] ?? changes[0];
       throw batchRejected([
         issueForChange(
-          changes[0],
+          conflictingChange,
           "ACTIVE_BLOCK_CONFLICT",
           "This clinic date was blocked by another calendar update.",
         ),
