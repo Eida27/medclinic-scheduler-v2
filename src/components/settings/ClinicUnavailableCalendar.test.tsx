@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Link from "next/link";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClinicUnavailableDateRecord } from "@/server/repositories/clinic-unavailable-dates.repository";
 import type { ClinicCalendarBatchResult } from "@/types/clinic-calendar";
@@ -82,12 +83,21 @@ function deferred<T>() {
 }
 
 function UnsavedNavigationHarness({ navigate }: { navigate(href: string): void }) {
-  const navigation = useUnsavedCalendarNavigation(true, navigate);
+  const [hasChanges, setHasChanges] = useState(true);
+  const navigation = useUnsavedCalendarNavigation(hasChanges, navigate);
   return (
     <>
       <Link href="/appointments">Harness appointments</Link>
       {navigation.pendingHref ? (
-        <button type="button" onClick={navigation.discardAndLeave}>Harness discard and leave</button>
+        <button
+          type="button"
+          onClick={() => {
+            setHasChanges(false);
+            navigation.discardAndLeave();
+          }}
+        >
+          Harness discard and leave
+        </button>
       ) : null}
     </>
   );
@@ -441,16 +451,21 @@ describe("ClinicUnavailableCalendar unsaved navigation", () => {
     expect(link).toHaveFocus();
   });
 
-  it("discards drafts and performs the one pending same-origin navigation", async () => {
-    const assign = vi.fn();
+  it("releases the unload guard before performing the authorized navigation", async () => {
+    const completedNavigation = vi.fn();
+    const navigate = (href: string) => {
+      const unloadEvent = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(unloadEvent);
+      if (!unloadEvent.defaultPrevented) completedNavigation(href);
+    };
     const user = userEvent.setup();
-    render(<UnsavedNavigationHarness navigate={assign} />);
+    render(<UnsavedNavigationHarness navigate={navigate} />);
     await user.click(screen.getByRole("link", { name: "Harness appointments" }));
 
     await user.click(screen.getByRole("button", { name: "Harness discard and leave" }));
 
-    expect(assign).toHaveBeenCalledOnce();
-    expect(assign).toHaveBeenCalledWith("http://localhost:3000/appointments");
+    expect(completedNavigation).toHaveBeenCalledOnce();
+    expect(completedNavigation).toHaveBeenCalledWith("http://localhost:3000/appointments");
   });
 
   it("ignores modified, non-left, new-tab, download, external-origin, and hash-only links", () => {

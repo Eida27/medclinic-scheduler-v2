@@ -14,6 +14,7 @@ export function useUnsavedCalendarNavigation(
 ) {
   const [pendingHref, setPendingHref] = useState<string>();
   const interruptedLinkRef = useRef<HTMLAnchorElement | null>(null);
+  const authorizedHrefRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     function handleBeforeUnload(event: BeforeUnloadEvent) {
@@ -66,6 +67,13 @@ export function useUnsavedCalendarNavigation(
     };
   }, [hasChanges]);
 
+  useEffect(() => {
+    const href = authorizedHrefRef.current;
+    if (hasChanges || !href) return;
+    authorizedHrefRef.current = undefined;
+    navigate(href);
+  }, [hasChanges, navigate]);
+
   const continueEditing = useCallback(() => {
     setPendingHref(undefined);
     interruptedLinkRef.current?.focus();
@@ -76,8 +84,8 @@ export function useUnsavedCalendarNavigation(
     const href = pendingHref;
     setPendingHref(undefined);
     interruptedLinkRef.current = null;
-    if (href) navigate(href);
-  }, [navigate, pendingHref]);
+    authorizedHrefRef.current = href;
+  }, [pendingHref]);
 
   return { pendingHref, continueEditing, discardAndLeave };
 }
