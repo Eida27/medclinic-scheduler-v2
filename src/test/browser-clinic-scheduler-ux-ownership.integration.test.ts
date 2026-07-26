@@ -4,6 +4,7 @@ import { pool } from "@/server/db/pool";
 import { TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import {
   collectCleanupManifest,
+  countCleanupResidue,
   deleteDatabaseManifestWithClient,
 } from "../../scripts/browser-clinic-scheduler-ux-fixture";
 
@@ -21,6 +22,14 @@ const ids = {
   unrelatedAudit: "d2100000-0000-4000-8000-000000000050",
   linkedAudit: "d2100000-0000-4000-8000-000000000051",
   createdAudit: "d2100000-0000-4000-8000-000000000052",
+  closure: "d2100000-0000-4000-8000-000000000060",
+  blockBatch: "d2100000-0000-4000-8000-000000000061",
+  unblockBatch: "d2100000-0000-4000-8000-000000000062",
+  blockBatchAudit: "d2100000-0000-4000-8000-000000000063",
+  unblockBatchAudit: "d2100000-0000-4000-8000-000000000064",
+  unrelatedCalendarAudit: "d2100000-0000-4000-8000-000000000065",
+  unrelatedCalendarBatch: "d2100000-0000-4000-8000-000000000066",
+  lateCalendarAudit: "d2100000-0000-4000-8000-000000000067",
 } as const;
 const preExistingStudent = "T20-PRE-OWN";
 const createdStudent = "T20-NEW-OWN";
@@ -110,6 +119,36 @@ describe("browser clinic scheduler cleanup ownership", () => {
           ids.import,
         ],
       );
+      await client.query(
+        `INSERT INTO clinic_unavailable_dates (
+           id, clinic_id, start_date, end_date, category, reason, created_by,
+           created_batch_id, unblocked_at, unblocked_by, unblocked_batch_id
+         ) VALUES ($1,$2,'2027-02-01','2027-02-01','MAINTENANCE',$3,$4,$5,NOW(),$4,$6)`,
+        [
+          ids.closure,
+          TEST_REFERENCE_IDS.laboratoryClinic,
+          "T20-ownership-test calendar",
+          TEST_REFERENCE_IDS.adminUser,
+          ids.blockBatch,
+          ids.unblockBatch,
+        ],
+      );
+      await client.query(
+        `INSERT INTO audit_logs
+           (id, actor_user_id, action, entity_type, entity_id, metadata)
+         VALUES ($1,$6,'CLINIC_CALENDAR_BATCH_UPDATED','clinic_calendar_batch',$4,'{}'),
+                ($2,$6,'CLINIC_CALENDAR_BATCH_UPDATED','clinic_calendar_batch','metadata-only',jsonb_build_object('batchId',$5::text)),
+                ($3,$6,'CLINIC_CALENDAR_BATCH_UPDATED','clinic_calendar_batch',$7,'{}')`,
+        [
+          ids.blockBatchAudit,
+          ids.unblockBatchAudit,
+          ids.unrelatedCalendarAudit,
+          ids.blockBatch,
+          ids.unblockBatch,
+          TEST_REFERENCE_IDS.adminUser,
+          ids.unrelatedCalendarBatch,
+        ],
+      );
 
       const state = {
         version: 1,
@@ -149,7 +188,26 @@ describe("browser clinic scheduler cleanup ownership", () => {
       expect(manifest.loginAttempts).toEqual([ids.createdLogin]);
       expect(manifest.outbox).toEqual([ids.createdOutbox]);
       expect(manifest.audits).toEqual(expect.arrayContaining([ids.linkedAudit, ids.createdAudit]));
+      expect(manifest.calendarBatchIds).toEqual(expect.arrayContaining([
+        ids.blockBatch,
+        ids.unblockBatch,
+      ]));
+      expect(manifest.audits).toEqual(expect.arrayContaining([
+        ids.blockBatchAudit,
+        ids.unblockBatchAudit,
+      ]));
       expect(manifest.audits).not.toContain(ids.unrelatedAudit);
+      expect(manifest.audits).not.toContain(ids.unrelatedCalendarAudit);
+
+      await client.query(
+        `INSERT INTO audit_logs
+           (id, actor_user_id, action, entity_type, entity_id, metadata)
+         VALUES ($1,$2,'CLINIC_CALENDAR_BATCH_UPDATED','clinic_calendar_batch','late-audit',
+                 jsonb_build_object('batchId',$3::text))`,
+        [ids.lateCalendarAudit, TEST_REFERENCE_IDS.adminUser, ids.unblockBatch],
+      );
+      const residueBeforeDelete = await countCleanupResidue(client, manifest, []);
+      expect(residueBeforeDelete.audits).toBe(manifest.audits.length + 1);
 
       await deleteDatabaseManifestWithClient(client, state, manifest);
       const sentinels = await client.query<{ table_name: string; id: string }>(
@@ -168,6 +226,12 @@ describe("browser clinic scheduler cleanup ownership", () => {
         ],
       );
       expect(sentinels.rows).toHaveLength(5);
+      await expect(client.query(
+        "SELECT id::text FROM audit_logs WHERE id=$1",
+        [ids.unrelatedCalendarAudit],
+      )).resolves.toMatchObject({ rows: [{ id: ids.unrelatedCalendarAudit }] });
+      const cleanupResidue = await countCleanupResidue(client, manifest, []);
+      expect(cleanupResidue.audits).toBe(0);
       const ownedResidue = await client.query<{ count: number }>(
         `SELECT COUNT(*)::int AS count FROM (
            SELECT id FROM student_portal_notifications WHERE id=ANY($1::uuid[])

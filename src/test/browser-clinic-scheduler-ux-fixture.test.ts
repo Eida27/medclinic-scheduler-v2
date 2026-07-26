@@ -34,6 +34,7 @@ const csv = [
 const emptyManifest: CleanupManifest = {
   imports: ["import-id"],
   batches: ["batch-id"],
+  calendarBatchIds: [],
   coordinatorItems: ["item-id"],
   createdStudents: ["23-8200-01"],
   appointments: ["appointment-id"],

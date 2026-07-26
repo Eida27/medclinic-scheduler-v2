@@ -1179,6 +1179,7 @@ async function status(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
 export type CleanupManifest = {
   imports: string[];
   batches: string[];
+  calendarBatchIds: string[];
   coordinatorItems: string[];
   createdStudents: string[];
   appointments: string[];
@@ -1305,6 +1306,22 @@ export async function collectCleanupManifest(
     ),
     state.baseline.ids.closures,
   );
+  const calendarBatchIds = closures.length
+    ? await idRows(
+      client,
+      `SELECT batch_id::text AS id
+         FROM (
+           SELECT created_batch_id AS batch_id
+             FROM clinic_unavailable_dates WHERE id=ANY($1::uuid[])
+           UNION
+           SELECT unblocked_batch_id AS batch_id
+             FROM clinic_unavailable_dates WHERE id=ANY($1::uuid[])
+         ) fixture_batches
+        WHERE batch_id IS NOT NULL
+        ORDER BY batch_id`,
+      [closures],
+    )
+    : [];
   const submissions = appointments.length
     ? await idRows(client, "SELECT id::text AS id FROM student_result_submissions WHERE appointment_id=ANY($1::uuid[])", [appointments])
     : [];
@@ -1370,7 +1387,14 @@ export async function collectCleanupManifest(
          OR metadata->>'clinicUnavailableDateId'=ANY($4::text[])
          OR metadata->>'studentNumber'=ANY($5::text[])
          OR metadata->>'appointmentId'=ANY($3::text[])
-         OR metadata->>'submissionId'=ANY($7::text[])`,
+         OR metadata->>'submissionId'=ANY($7::text[])
+         OR (
+           entity_type='clinic_calendar_batch'
+           AND (
+             entity_id=ANY($8::text[])
+             OR metadata->>'batchId'=ANY($8::text[])
+           )
+         )`,
     [
       imports,
       batches,
@@ -1379,11 +1403,13 @@ export async function collectCleanupManifest(
       createdStudents,
       [...laboratoryResults, ...examResults, ...submissions, ...resultFiles.map((file) => file.id)],
       submissions,
+      calendarBatchIds,
     ],
   );
   return {
     imports,
     batches,
+    calendarBatchIds,
     appointments,
     coordinatorItems: batches.length
       ? await idRows(client, "SELECT id::text AS id FROM coordinator_schedule_items WHERE batch_id=ANY($1::uuid[])", [batches])
@@ -1508,6 +1534,38 @@ async function countIds(client: PoolClient, table: string, ids: string[]) {
   )).rows[0].count);
 }
 
+async function countOwnedAuditResidue(client: PoolClient, manifest: CleanupManifest) {
+  if (!manifest.audits.length && !manifest.calendarBatchIds.length) return 0;
+  return Number((await client.query(
+    `SELECT COUNT(*)::int AS count FROM audit_logs
+      WHERE id=ANY($1::uuid[])
+         OR (
+           entity_type='clinic_calendar_batch'
+           AND (
+             entity_id=ANY($2::text[])
+             OR metadata->>'batchId'=ANY($2::text[])
+           )
+         )`,
+    [manifest.audits, manifest.calendarBatchIds],
+  )).rows[0].count);
+}
+
+async function deleteOwnedAuditRows(client: PoolClient, manifest: CleanupManifest) {
+  if (!manifest.audits.length && !manifest.calendarBatchIds.length) return;
+  await client.query(
+    `DELETE FROM audit_logs
+      WHERE id=ANY($1::uuid[])
+         OR (
+           entity_type='clinic_calendar_batch'
+           AND (
+             entity_id=ANY($2::text[])
+             OR metadata->>'batchId'=ANY($2::text[])
+           )
+         )`,
+    [manifest.audits, manifest.calendarBatchIds],
+  );
+}
+
 export async function countCleanupResidue(
   client: PoolClient,
   manifest: CleanupManifest,
@@ -1532,7 +1590,7 @@ export async function countCleanupResidue(
     statusLogs: await countIds(client, "appointment_status_logs", manifest.statusLogs),
     events: await countIds(client, "appointment_reschedule_events", manifest.events),
     notifications: await countIds(client, "student_portal_notifications", manifest.notifications),
-    audits: await countIds(client, "audit_logs", manifest.audits),
+    audits: await countOwnedAuditResidue(client, manifest),
     verificationTokens: await countIds(client, "student_email_verifications", manifest.verificationTokens),
     loginAttempts: await countIds(client, "student_login_attempts", manifest.loginAttempts),
     outbox: await countIds(client, "email_outbox", manifest.outbox),
@@ -1546,7 +1604,7 @@ export async function deleteDatabaseManifestWithClient(
   state: FixtureState,
   manifest: CleanupManifest,
 ) {
-  await deleteByIds(client, "audit_logs", manifest.audits);
+  await deleteOwnedAuditRows(client, manifest);
   await deleteByIds(client, "student_portal_notifications", manifest.notifications);
   await deleteByIds(client, "appointment_reschedule_events", manifest.events);
   await deleteByIds(client, "student_result_files", manifest.resultFiles.map((file) => file.id));
