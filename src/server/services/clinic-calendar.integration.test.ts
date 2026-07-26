@@ -705,6 +705,62 @@ describe("clinic calendar closures", () => {
     expect(await readFailedBlockState(fixture.studentNumber)).toEqual(before);
   });
 
+  it("rejects a manually locked original KABALAKA pair without partial restoration", async () => {
+    const fixture = await createRestorationFixture({
+      studentNumber: "99-9550-50",
+      clinicCode: "KABALAKA_CLINIC",
+    });
+    await pool.query(
+      `UPDATE appointments
+          SET is_manually_locked=TRUE, locked_by=$2, locked_at=NOW(),
+              lock_reason='TEST original restoration protection'
+        WHERE id=$1`,
+      [fixture.event.oldLaboratoryAppointmentId, admin.userId],
+    );
+    const before = await readFailedBlockState(fixture.studentNumber);
+
+    await expect(saveClinicCalendarChanges(fixture.unblockRequest, admin)).rejects.toMatchObject({
+      code: "CLINIC_CALENDAR_BATCH_REJECTED",
+      details: { issues: [expect.objectContaining({ code: "PAIR_INTEGRITY_FAILURE" })] },
+    });
+    expect(await readFailedBlockState(fixture.studentNumber)).toEqual(before);
+  });
+
+  it.each([
+    ["finalized result submission", "99-9551-51", "FINALIZED_SUBMISSION" as const],
+    ["protected result", "99-9552-52", "PROTECTED_RESULT" as const],
+  ])("rejects an original CPU appointment with a %s without partial restoration", async (
+    _label,
+    studentNumber,
+    protection,
+  ) => {
+    const fixture = await createRestorationFixture({
+      studentNumber,
+      clinicCode: "CPU_CLINIC",
+    });
+    if (protection === "FINALIZED_SUBMISSION") {
+      await pool.query(
+        `INSERT INTO student_result_submissions (
+           appointment_id, student_number, result_type, status, finalized_at
+         ) VALUES ($1,$2,'PHYSICAL_EXAM','FINALIZED',NOW())`,
+        [fixture.event.oldPhysicalExamAppointmentId, fixture.studentNumber],
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO exam_results (student_number, appointment_id, result_status, encoded_by)
+         VALUES ($1,$2,'REQUIRES_FOLLOW_UP',$3)`,
+        [fixture.studentNumber, fixture.event.oldPhysicalExamAppointmentId, admin.userId],
+      );
+    }
+    const before = await readFailedBlockState(fixture.studentNumber);
+
+    await expect(saveClinicCalendarChanges(fixture.unblockRequest, admin)).rejects.toMatchObject({
+      code: "CLINIC_CALENDAR_BATCH_REJECTED",
+      details: { issues: [expect.objectContaining({ code: "PROTECTED_REPLACEMENT" })] },
+    });
+    expect(await readFailedBlockState(fixture.studentNumber)).toEqual(before);
+  });
+
   it("rejects an unpublished generated replacement without partial restoration", async () => {
     const fixture = await createRestorationFixture({
       studentNumber: "99-9525-25",

@@ -673,6 +673,17 @@ function assertRestorationMoveSafe(
       [original],
     );
   }
+  if (
+    original.isManuallyLocked
+    || original.hasFinalizedSubmission
+    || original.hasProtectedResult
+  ) {
+    fail(
+      "PROTECTED_REPLACEMENT",
+      "The original appointment is protected and requires manual resolution.",
+      [original],
+    );
+  }
   if (isUnsafeReplacement(replacement)) {
     fail(
       "PROTECTED_REPLACEMENT",
