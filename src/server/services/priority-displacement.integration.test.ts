@@ -50,9 +50,16 @@ async function insertEndOfMonthClosures() {
   await pool.query(
     `INSERT INTO clinic_unavailable_dates (
        clinic_id, start_date, end_date, category, reason, created_by
-     ) VALUES
-       ($1,'2026-08-05','2026-08-31','CLOSURE','TEST-DISPLACE laboratory',$3),
-       ($2,'2026-08-05','2026-08-31','CLOSURE','TEST-DISPLACE physical',$3)`,
+     )
+     SELECT closure.clinic_id, blocked_date::date, blocked_date::date,
+            'CLOSURE', closure.reason, $3
+       FROM (VALUES
+         ($1::uuid, 'TEST-DISPLACE laboratory'),
+         ($2::uuid, 'TEST-DISPLACE physical')
+       ) AS closure(clinic_id, reason)
+       CROSS JOIN generate_series(
+         DATE '2026-08-05', DATE '2026-08-31', INTERVAL '1 day'
+       ) AS blocked_date`,
     [
       TEST_REFERENCE_IDS.laboratoryClinic,
       TEST_REFERENCE_IDS.physicalExamClinic,
@@ -420,7 +427,12 @@ describe("priority displacement", () => {
     await pool.query(
       `INSERT INTO clinic_unavailable_dates (
          clinic_id, start_date, end_date, category, reason, created_by
-       ) VALUES ($1,'2026-08-05','2026-08-31','CLOSURE','TEST-DISPLACE physical-only',$2)`,
+       )
+       SELECT $1::uuid, blocked_date::date, blocked_date::date,
+              'CLOSURE', 'TEST-DISPLACE physical-only', $2
+         FROM generate_series(
+           DATE '2026-08-05', DATE '2026-08-31', INTERVAL '1 day'
+         ) AS blocked_date`,
       [TEST_REFERENCE_IDS.physicalExamClinic, TEST_REFERENCE_IDS.adminUser],
     );
     await acceptAndScheduleImport(
@@ -487,9 +499,18 @@ describe("priority displacement", () => {
     await pool.query(
       `INSERT INTO clinic_unavailable_dates (
          clinic_id, start_date, end_date, category, reason, created_by
-       ) VALUES
-         ($1,'2026-08-04','2026-08-14','CLOSURE','TEST-DISPLACE laboratory gap',$3),
-         ($2,'2026-08-06','2026-08-31','CLOSURE','TEST-DISPLACE physical gap',$3)`,
+       )
+       SELECT $1, blocked_date::date, blocked_date::date,
+              'CLOSURE', 'TEST-DISPLACE laboratory gap', $3::uuid
+         FROM generate_series(
+           DATE '2026-08-04', DATE '2026-08-14', INTERVAL '1 day'
+         ) AS blocked_date
+       UNION ALL
+       SELECT $2::uuid, blocked_date::date, blocked_date::date,
+              'CLOSURE', 'TEST-DISPLACE physical gap', $3::uuid
+         FROM generate_series(
+           DATE '2026-08-06', DATE '2026-08-31', INTERVAL '1 day'
+         ) AS blocked_date`,
       [
         TEST_REFERENCE_IDS.laboratoryClinic,
         TEST_REFERENCE_IDS.physicalExamClinic,

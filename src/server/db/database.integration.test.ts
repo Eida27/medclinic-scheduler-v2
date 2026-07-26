@@ -1,6 +1,10 @@
 // @vitest-environment node
+import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { pool, transaction } from "./pool";
+import { TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 
 afterAll(async () => {
   await pool.end();
@@ -61,6 +65,233 @@ describe("database constraints", () => {
         indexdef: expect.stringContaining("student_number, appointment_id, last_activity_at DESC"),
       }),
     ]);
+  });
+
+  it("creates reversible clinic-calendar history and active single-day invariants", async () => {
+    const columns = await pool.query<{ table_name: string; column_name: string; data_type: string }>(
+      `SELECT table_name, column_name, data_type
+         FROM information_schema.columns
+        WHERE table_schema='public'
+          AND (
+            (table_name='clinic_unavailable_dates' AND column_name IN (
+              'created_batch_id', 'unblocked_batch_id', 'unblocked_at', 'unblocked_by'
+            ))
+            OR
+            (table_name='appointment_reschedule_events' AND column_name IN (
+              'block_batch_id', 'restoration_batch_id', 'restored_at', 'restored_by'
+            ))
+          )`,
+    );
+    const columnNames = columns.rows.map((column) => `${column.table_name}.${column.column_name}`);
+    expect(columnNames).toEqual(expect.arrayContaining([
+      "clinic_unavailable_dates.created_batch_id",
+      "clinic_unavailable_dates.unblocked_batch_id",
+      "clinic_unavailable_dates.unblocked_at",
+      "clinic_unavailable_dates.unblocked_by",
+      "appointment_reschedule_events.block_batch_id",
+      "appointment_reschedule_events.restoration_batch_id",
+      "appointment_reschedule_events.restored_at",
+      "appointment_reschedule_events.restored_by",
+    ]));
+    const columnTypes = new Map(columns.rows.map((column) => [
+      `${column.table_name}.${column.column_name}`,
+      column.data_type,
+    ]));
+    expect(Object.fromEntries(columnTypes)).toMatchObject({
+      "clinic_unavailable_dates.created_batch_id": "uuid",
+      "clinic_unavailable_dates.unblocked_batch_id": "uuid",
+      "clinic_unavailable_dates.unblocked_at": "timestamp with time zone",
+      "clinic_unavailable_dates.unblocked_by": "uuid",
+      "appointment_reschedule_events.block_batch_id": "uuid",
+      "appointment_reschedule_events.restoration_batch_id": "uuid",
+      "appointment_reschedule_events.restored_at": "timestamp with time zone",
+      "appointment_reschedule_events.restored_by": "uuid",
+    });
+
+    const constraints = await pool.query<{ conname: string; definition: string }>(
+      `SELECT constraint_name AS conname, check_clause AS definition
+         FROM information_schema.check_constraints
+        WHERE constraint_schema='public'
+          AND constraint_name IN (
+            'clinic_unavailable_dates_unblock_complete',
+            'clinic_unavailable_dates_active_single_day',
+            'appointment_reschedule_events_restore_complete'
+          )`,
+    );
+    const constraintNames = constraints.rows.map((constraint) => constraint.conname);
+    expect(constraintNames).toEqual(expect.arrayContaining([
+      "clinic_unavailable_dates_unblock_complete",
+      "clinic_unavailable_dates_active_single_day",
+      "appointment_reschedule_events_restore_complete",
+    ]));
+    const definitions = new Map(constraints.rows.map((constraint) => [constraint.conname, constraint.definition]));
+    expect(definitions.get("clinic_unavailable_dates_unblock_complete"))
+      .toMatch(/unblocked_at.*unblocked_by.*unblocked_batch_id.*OR.*unblocked_at.*unblocked_by.*unblocked_batch_id/i);
+    expect(definitions.get("clinic_unavailable_dates_active_single_day"))
+      .toMatch(/unblocked_at.*start_date.*end_date/i);
+    expect(definitions.get("appointment_reschedule_events_restore_complete"))
+      .toMatch(/restored_at.*restored_by.*restoration_batch_id.*OR.*restored_at.*restored_by.*restoration_batch_id/i);
+
+    const indexes = await pool.query<{ indexname: string }>(
+      `SELECT indexname FROM pg_indexes
+        WHERE schemaname='public'
+          AND indexname='clinic_unavailable_dates_one_active_day_idx'`,
+    );
+    expect(indexes.rows.map((index) => index.indexname)).toContain("clinic_unavailable_dates_one_active_day_idx");
+
+    const activeRanges = await pool.query(
+      `SELECT id::text
+         FROM clinic_unavailable_dates
+        WHERE unblocked_at IS NULL
+          AND start_date <> end_date`,
+    );
+    expect(activeRanges.rows).toEqual([]);
+
+    await expect(pool.query(
+      `INSERT INTO clinic_unavailable_dates (
+         clinic_id, start_date, end_date, category, reason, created_by
+       ) VALUES ($1,'2047-07-15','2047-07-16','CLOSURE','TEST invalid active range',$2)`,
+      [TEST_REFERENCE_IDS.physicalExamClinic, TEST_REFERENCE_IDS.adminUser],
+    )).rejects.toMatchObject({ code: "23514" });
+
+    await expect(pool.query(
+      `INSERT INTO clinic_unavailable_dates (
+         clinic_id, start_date, end_date, category, reason, created_by,
+         unblocked_at, unblocked_by
+       ) VALUES ($1,'2047-07-17','2047-07-17','CLOSURE','TEST incomplete unblock',$2,NOW(),$2)`,
+      [TEST_REFERENCE_IDS.physicalExamClinic, TEST_REFERENCE_IDS.adminUser],
+    )).rejects.toMatchObject({ code: "23514" });
+
+    const completeUnblock = await pool.query<{ id: string }>(
+      `INSERT INTO clinic_unavailable_dates (
+         clinic_id, start_date, end_date, category, reason, created_by,
+         unblocked_at, unblocked_by, unblocked_batch_id
+       ) VALUES ($1,'2047-07-18','2047-07-18','CLOSURE','TEST complete unblock',$2,NOW(),$2,$3)
+       RETURNING id::text`,
+      [
+        TEST_REFERENCE_IDS.physicalExamClinic,
+        TEST_REFERENCE_IDS.adminUser,
+        "71000000-0000-4000-8000-000000000001",
+      ],
+    );
+    await pool.query("DELETE FROM clinic_unavailable_dates WHERE id=$1", [completeUnblock.rows[0].id]);
+  });
+
+  it("normalizes legacy active ranges and remaps their reschedule events", async () => {
+    const schemaName = `task_1_migration_${randomUUID().replaceAll("-", "_")}`;
+    const quotedSchema = `"${schemaName}"`;
+    const client = await pool.connect();
+    const sourceUnavailableDateId = "81000000-0000-4000-8000-000000000001";
+    const rescheduleEventId = "82000000-0000-4000-8000-000000000001";
+
+    try {
+      await client.query(`CREATE SCHEMA ${quotedSchema}`);
+      await client.query(`SET search_path TO ${quotedSchema}, public`);
+      await client.query(`
+        CREATE TABLE users (id UUID PRIMARY KEY);
+        CREATE TABLE clinics (id UUID PRIMARY KEY, code VARCHAR(40) NOT NULL);
+        CREATE TABLE clinic_unavailable_dates (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          clinic_id UUID NOT NULL REFERENCES clinics(id),
+          start_date DATE NOT NULL,
+          end_date DATE NOT NULL,
+          category VARCHAR(40) NOT NULL,
+          reason TEXT NOT NULL,
+          created_by UUID NOT NULL REFERENCES users(id),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE TABLE appointments (id UUID PRIMARY KEY, appointment_date DATE NOT NULL);
+        CREATE TABLE appointment_reschedule_events (
+          id UUID PRIMARY KEY,
+          clinic_unavailable_date_id UUID REFERENCES clinic_unavailable_dates(id),
+          old_laboratory_appointment_id UUID REFERENCES appointments(id),
+          old_physical_exam_appointment_id UUID REFERENCES appointments(id)
+        );
+      `);
+      await client.query("INSERT INTO users (id) VALUES ($1)", [TEST_REFERENCE_IDS.adminUser]);
+      await client.query("INSERT INTO clinics (id, code) VALUES ($1,'CPU_CLINIC')", [
+        TEST_REFERENCE_IDS.physicalExamClinic,
+      ]);
+      await client.query("INSERT INTO appointments (id, appointment_date) VALUES ($1,'2047-07-16')", [
+        "83000000-0000-4000-8000-000000000001",
+      ]);
+      await client.query(
+        `INSERT INTO clinic_unavailable_dates (
+           id, clinic_id, start_date, end_date, category, reason, created_by
+         ) VALUES ($1,$2,'2047-07-15','2047-07-17','CLOSURE','TEST legacy CPU range',$3)`,
+        [
+          sourceUnavailableDateId,
+          TEST_REFERENCE_IDS.physicalExamClinic,
+          TEST_REFERENCE_IDS.adminUser,
+        ],
+      );
+      await client.query(
+        `INSERT INTO appointment_reschedule_events (
+           id, clinic_unavailable_date_id, old_physical_exam_appointment_id
+         ) VALUES ($1,$2,$3)`,
+        [
+          rescheduleEventId,
+          sourceUnavailableDateId,
+          "83000000-0000-4000-8000-000000000001",
+        ],
+      );
+
+      const migrationSql = await readFile(
+        join(process.cwd(), "database", "migrations", "013_clinic_calendar_batch_editor.sql"),
+        "utf8",
+      );
+      await client.query("BEGIN");
+      try {
+        await client.query(migrationSql);
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      }
+
+      const splitDates = await client.query<{ start_date: string; end_date: string }>(
+        `SELECT start_date::text, end_date::text
+           FROM clinic_unavailable_dates
+          WHERE reason='TEST legacy CPU range'
+          ORDER BY start_date`,
+      );
+      expect(splitDates.rows).toEqual([
+        { start_date: "2047-07-15", end_date: "2047-07-15" },
+        { start_date: "2047-07-16", end_date: "2047-07-16" },
+        { start_date: "2047-07-17", end_date: "2047-07-17" },
+      ]);
+
+      const remappedEvent = await client.query<{ start_date: string; end_date: string }>(
+        `SELECT unavailable.start_date::text, unavailable.end_date::text
+           FROM appointment_reschedule_events event
+           JOIN clinic_unavailable_dates unavailable ON unavailable.id=event.clinic_unavailable_date_id
+          WHERE event.id=$1`,
+        [rescheduleEventId],
+      );
+      expect(remappedEvent.rows).toEqual([
+        { start_date: "2047-07-16", end_date: "2047-07-16" },
+      ]);
+
+      await expect(client.query(
+        "UPDATE appointment_reschedule_events SET restored_at=NOW() WHERE id=$1",
+        [rescheduleEventId],
+      )).rejects.toMatchObject({ code: "23514" });
+      await expect(client.query(
+        `UPDATE appointment_reschedule_events
+            SET restored_at=NOW(), restored_by=$2, restoration_batch_id=$3
+          WHERE id=$1`,
+        [
+          rescheduleEventId,
+          TEST_REFERENCE_IDS.adminUser,
+          "84000000-0000-4000-8000-000000000001",
+        ],
+      )).resolves.toMatchObject({ rowCount: 1 });
+    } finally {
+      await client.query("RESET search_path");
+      await client.query(`DROP SCHEMA IF EXISTS ${quotedSchema} CASCADE`);
+      client.release();
+    }
   });
 
   it("creates schedule import groups with the required columns, defaults, and updated-at trigger", async () => {

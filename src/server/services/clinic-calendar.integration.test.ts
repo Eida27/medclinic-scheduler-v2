@@ -244,7 +244,10 @@ describe("clinic calendar closures", () => {
     await pool.query(
       `INSERT INTO clinic_unavailable_dates (
          clinic_id, start_date, end_date, category, reason, created_by
-       ) VALUES ($1,$2,$3,'CLOSURE','TEST-CALENDAR earlier existing range',$4)`,
+       )
+       SELECT $1, blocked_date::date, blocked_date::date,
+              'CLOSURE', 'TEST-CALENDAR earlier existing range', $4
+         FROM generate_series($2::date, $3::date, INTERVAL '1 day') AS blocked_date`,
       [TEST_REFERENCE_IDS.physicalExamClinic, blockedStart, blockedEnd, TEST_REFERENCE_IDS.adminUser],
     );
 
@@ -432,7 +435,10 @@ describe("clinic calendar closures", () => {
     await pool.query(
       `INSERT INTO clinic_unavailable_dates (
          clinic_id, start_date, end_date, category, reason, created_by
-       ) VALUES ($1,$2,$3,'CLOSURE','TEST-CALENDAR replacement horizon blocked',$4)`,
+       )
+       SELECT $1, blocked_date::date, blocked_date::date,
+              'CLOSURE', 'TEST-CALENDAR replacement horizon blocked', $4
+         FROM generate_series($2::date, $3::date, INTERVAL '1 day') AS blocked_date`,
       [
         TEST_REFERENCE_IDS.physicalExamClinic,
         addCalendarDays(blockedDate, 1),

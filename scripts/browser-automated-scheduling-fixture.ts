@@ -193,9 +193,16 @@ async function setup() {
   await pool.query(
     `INSERT INTO clinic_unavailable_dates (
        clinic_id, start_date, end_date, category, reason, created_by
-     ) VALUES
-       ($1,'2026-08-05','2026-08-31','CLOSURE','BROWSER-AY capacity laboratory',$3),
-       ($2,'2026-08-05','2026-08-31','CLOSURE','BROWSER-AY capacity physical',$3)`,
+     )
+     SELECT closure.clinic_id, blocked_date::date, blocked_date::date,
+            'CLOSURE', closure.reason, $3
+       FROM (VALUES
+         ($1::uuid, 'BROWSER-AY capacity laboratory'),
+         ($2::uuid, 'BROWSER-AY capacity physical')
+       ) AS closure(clinic_id, reason)
+       CROSS JOIN generate_series(
+         DATE '2026-08-05', DATE '2026-08-31', INTERVAL '1 day'
+       ) AS blocked_date`,
     [
       TEST_REFERENCE_IDS.laboratoryClinic,
       TEST_REFERENCE_IDS.physicalExamClinic,
