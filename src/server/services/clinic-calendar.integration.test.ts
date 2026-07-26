@@ -1672,6 +1672,53 @@ describe("clinic calendar closures", () => {
     });
   });
 
+  it("reports every affected draft date when a clinic capacity setting is missing", async () => {
+    const changes = [
+      {
+        action: "BLOCK" as const,
+        clinicId: TEST_REFERENCE_IDS.laboratoryClinic,
+        date: "2028-07-03",
+        category: "CLOSURE" as const,
+        reason: "TEST-CALENDAR missing capacity Laboratory date",
+      },
+      {
+        action: "BLOCK" as const,
+        clinicId: TEST_REFERENCE_IDS.physicalExamClinic,
+        date: "2028-07-04",
+        category: "MAINTENANCE" as const,
+        reason: "TEST-CALENDAR missing capacity Physical date",
+      },
+    ];
+    await pool.query(
+      `UPDATE clinic_capacity_settings
+          SET schedule_type='LABORATORY'
+        WHERE id='40000000-0000-4000-8000-000000000001'`,
+    );
+    try {
+      const before = await readFailedBlockState([]);
+
+      await expect(saveClinicCalendarChanges({ changes }, admin)).rejects.toMatchObject({
+        code: "CLINIC_CALENDAR_BATCH_REJECTED",
+        status: 409,
+        details: {
+          issues: changes.map((change) => expect.objectContaining({
+            clinicId: change.clinicId,
+            date: change.date,
+            action: change.action,
+            code: "CAPACITY_CONFLICT",
+          })),
+        },
+      });
+      expect(await readFailedBlockState([])).toEqual(before);
+    } finally {
+      await pool.query(
+        `UPDATE clinic_capacity_settings
+            SET schedule_type='PHYSICAL_EXAM'
+          WHERE id='40000000-0000-4000-8000-000000000001'`,
+      );
+    }
+  });
+
   it.each([
     ["today or past dates", "2026-07-24"],
     ["weekends", "2027-07-17"],

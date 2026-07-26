@@ -195,6 +195,51 @@ describe("/api/clinic-unavailable-dates", () => {
     });
   });
 
+  it("returns every date-specific capacity issue in a rejected batch", async () => {
+    const capacityBody = {
+      changes: [
+        {
+          action: "BLOCK",
+          clinicId: laboratoryClinicId,
+          date: "2028-07-03",
+          category: "CLOSURE",
+          reason: "Laboratory capacity dependency",
+        },
+        {
+          action: "BLOCK",
+          clinicId: physicalClinicId,
+          date: "2028-07-04",
+          category: "MAINTENANCE",
+          reason: "Physical capacity dependency",
+        },
+      ],
+    };
+    const issues = capacityBody.changes.map((change) => ({
+      clinicId: change.clinicId,
+      date: change.date,
+      action: change.action,
+      code: "CAPACITY_CONFLICT",
+      message: "Both clinic capacity settings are required before editing the clinic calendar.",
+    }));
+    saveClinicCalendarChanges.mockRejectedValueOnce(new AppError(
+      "CLINIC_CALENDAR_BATCH_REJECTED",
+      "No calendar changes were saved.",
+      409,
+      undefined,
+      { issues },
+    ));
+
+    const response = await POST(postRequest(capacityBody));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        code: "CLINIC_CALENDAR_BATCH_REJECTED",
+        details: { issues },
+      },
+    });
+  });
+
   it("requires authentication for POST", async () => {
     requireUser.mockRejectedValueOnce(new AppError("UNAUTHORIZED", "Authentication required.", 401));
 

@@ -381,7 +381,19 @@ export async function saveClinicCalendarChanges(
       }
       if (validationIssues.length) throw batchRejected(validationIssues);
 
-      const context = await createPlanningContext(client, activeRecords, changes);
+      let context: Awaited<ReturnType<typeof createPlanningContext>>;
+      try {
+        context = await createPlanningContext(client, activeRecords, changes);
+      } catch (error) {
+        if (error instanceof AppError && error.code === "SCHEDULE_CAPACITY_NOT_CONFIGURED") {
+          throw batchRejected(changes.map((change) => issueForChange(
+            change,
+            "CAPACITY_CONFLICT",
+            error.message,
+          )));
+        }
+        throw error;
+      }
       const restorationBundles = await lockRestorationBundles(
         client,
         unblockChanges.map((change) => change.unavailableDateId),
