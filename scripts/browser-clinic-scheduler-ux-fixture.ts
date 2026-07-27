@@ -1301,7 +1301,10 @@ export async function collectCleanupManifest(
     await idRows(
       client,
       // Cleanup owns both active and historical soft-unblocked records for this tagged run.
-      "SELECT id::text AS id FROM clinic_unavailable_dates WHERE reason LIKE $1 AND created_at >= $2::timestamptz",
+      `SELECT unavailable.id::text AS id
+         FROM clinic_unavailable_dates unavailable
+         JOIN clinic_closure_groups closure ON closure.id=unavailable.closure_group_id
+        WHERE closure.reason LIKE $1 AND unavailable.created_at >= $2::timestamptz`,
       [`${state.fixtureReason}%`, state.startedAt],
     ),
     state.baseline.ids.closures,
@@ -1311,10 +1314,12 @@ export async function collectCleanupManifest(
       client,
       `SELECT batch_id::text AS id
          FROM (
-           SELECT created_batch_id AS batch_id
-             FROM clinic_unavailable_dates WHERE id=ANY($1::uuid[])
+           SELECT closure.creation_batch_id AS batch_id
+             FROM clinic_unavailable_dates unavailable
+             JOIN clinic_closure_groups closure ON closure.id=unavailable.closure_group_id
+            WHERE unavailable.id=ANY($1::uuid[])
            UNION
-           SELECT unblocked_batch_id AS batch_id
+           SELECT reopening_batch_id AS batch_id
              FROM clinic_unavailable_dates WHERE id=ANY($1::uuid[])
          ) fixture_batches
         WHERE batch_id IS NOT NULL
@@ -1345,7 +1350,10 @@ export async function collectCleanupManifest(
       client,
       `SELECT id::text AS id FROM appointment_reschedule_events
         WHERE source_import_group_id=ANY($1::uuid[])
-           OR clinic_unavailable_date_id=ANY($2::uuid[])
+           OR id IN (
+             SELECT event_id FROM appointment_reschedule_event_unavailable_dates
+              WHERE unavailable_date_id=ANY($2::uuid[])
+           )
            OR old_laboratory_appointment_id=ANY($3::uuid[])
            OR new_laboratory_appointment_id=ANY($3::uuid[])
            OR old_physical_exam_appointment_id=ANY($3::uuid[])
@@ -1617,6 +1625,15 @@ export async function deleteDatabaseManifestWithClient(
   await deleteByIds(client, "schedule_batches", manifest.batches);
   await deleteByIds(client, "schedule_import_groups", manifest.imports);
   await deleteByIds(client, "clinic_unavailable_dates", manifest.closures);
+  await client.query(
+    `DELETE FROM clinic_closure_groups closure
+      WHERE closure.reason LIKE $1
+        AND NOT EXISTS (
+          SELECT 1 FROM clinic_unavailable_dates unavailable
+           WHERE unavailable.closure_group_id=closure.id
+        )`,
+    [`${state.fixtureReason}%`],
+  );
   await deleteByIds(client, "student_email_verifications", manifest.verificationTokens);
   await deleteByIds(client, "student_login_attempts", manifest.loginAttempts);
   await deleteByIds(client, "email_outbox", manifest.outbox);

@@ -1,14 +1,21 @@
 // @vitest-environment node
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { pool } from "@/server/db/pool";
 import { publicStudentSchedule } from "@/server/repositories/appointments.repository";
 import { getStudentPortalSchedule } from "@/server/repositories/student-portal.repository";
 import { saveClinicCalendarChanges } from "@/server/services/clinic-calendar.service";
 import { acceptAndScheduleImport } from "@/server/services/schedule-imports.service";
 import { cleanupTestFixtures, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
+import {
+  cleanupAndRestoreCapacitySettings,
+  setupCapacityFixtureLock,
+  teardownCapacityFixtureLock,
+  type CapacityFixtureLock,
+} from "@/test/capacity-fixture-lifecycle";
 import type { SessionUser } from "@/types/roles";
 
 const studentNumber = "99-9801-01";
+let capacityFixture: CapacityFixtureLock | null = null;
 const importPattern = "REGULAR % - TEST-UNIFIED-E2E%";
 const requestIds = [
   "98000000-0000-4000-8000-000000000001",
@@ -34,10 +41,16 @@ async function cleanup() {
   await pool.query("DELETE FROM audit_logs WHERE metadata->>'requestId'=ANY($1::text[])", [requestIds]);
 }
 
-beforeAll(cleanup);
+beforeAll(async () => {
+  capacityFixture = await setupCapacityFixtureLock(pool, cleanup);
+});
+afterEach(async () => {
+  if (!capacityFixture) return;
+  await cleanupAndRestoreCapacitySettings(pool, capacityFixture.originalCapacities, cleanup);
+});
 afterAll(async () => {
-  await cleanup();
-  await pool.end();
+  if (!capacityFixture) return;
+  await teardownCapacityFixtureLock(pool, capacityFixture, cleanup);
 });
 
 describe("unified calendar scheduling and student flow", () => {

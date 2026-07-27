@@ -1,5 +1,4 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClinicUnavailableDateRecord } from "@/server/repositories/clinic-unavailable-dates.repository";
 import { ClinicUnavailableCalendar } from "./ClinicUnavailableCalendar";
@@ -64,12 +63,12 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
-async function stageAugust18() {
+function stageAugust18() {
   renderCalendar();
-  const user = userEvent.setup();
-  await user.type(screen.getByLabelText("Closure reason"), "Campus-wide maintenance");
-  await user.click(screen.getByRole("button", { name: /August 18, 2026: Available/ }));
-  return user;
+  fireEvent.change(screen.getByLabelText("Closure reason"), {
+    target: { value: "Campus-wide maintenance" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /August 18, 2026: Available/ }));
 }
 
 describe("ClinicUnavailableCalendar", () => {
@@ -98,12 +97,12 @@ describe("ClinicUnavailableCalendar", () => {
   });
 
   it("keeps date-only drafts while navigating between years", async () => {
-    const user = await stageAugust18();
+    stageAugust18();
     expect(screen.getByRole("button", { name: /August 18, 2026: Selected to block/ })).toHaveAttribute("aria-pressed", "true");
 
-    await user.selectOptions(screen.getByLabelText("Calendar year"), "2027");
+    fireEvent.change(screen.getByLabelText("Calendar year"), { target: { value: "2027" } });
     expect(screen.getByRole("heading", { name: "January" })).toBeVisible();
-    await user.selectOptions(screen.getByLabelText("Calendar year"), "2026");
+    fireEvent.change(screen.getByLabelText("Calendar year"), { target: { value: "2026" } });
 
     expect(screen.getByRole("button", { name: /August 18, 2026: Selected to block/ })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText("1 unsaved change")).toBeVisible();
@@ -114,14 +113,14 @@ describe("ClinicUnavailableCalendar", () => {
       .mockResolvedValueOnce(jsonResponse({ data: preview }))
       .mockResolvedValueOnce(jsonResponse({ data: operationResult }));
     vi.stubGlobal("fetch", fetchMock);
-    const user = await stageAugust18();
+    stageAugust18();
 
-    await user.click(screen.getByRole("button", { name: "Review impact" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review impact" }));
     expect(await screen.findByRole("dialog", { name: "Confirm clinic calendar impact" })).toBeVisible();
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/clinic-unavailable-dates/preview", expect.objectContaining({
       method: "POST",
     }));
-    await user.click(screen.getByRole("button", { name: "Confirm and save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm and save" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     const previewPayload = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
@@ -145,25 +144,24 @@ describe("ClinicUnavailableCalendar", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: preview }));
     vi.stubGlobal("fetch", fetchMock);
     renderCalendar();
-    const user = userEvent.setup();
     const todayButton = screen.getByRole("button", { name: /July 27, 2026: Available/ });
 
     expect(todayButton).toBeDisabled();
-    await user.selectOptions(screen.getByLabelText("Closure category"), "EMERGENCY_CLOSURE");
-    await user.type(screen.getByLabelText("Closure reason"), "Emergency water outage");
+    fireEvent.change(screen.getByLabelText("Closure category"), { target: { value: "EMERGENCY_CLOSURE" } });
+    fireEvent.change(screen.getByLabelText("Closure reason"), { target: { value: "Emergency water outage" } });
     expect(todayButton).toBeEnabled();
-    await user.click(todayButton);
-    await user.click(screen.getByRole("button", { name: "Review impact" }));
+    fireEvent.click(todayButton);
+    fireEvent.click(screen.getByRole("button", { name: "Review impact" }));
 
     const confirm = await screen.findByRole("button", { name: "Confirm and save" });
     expect(confirm).toBeDisabled();
-    await user.click(screen.getByRole("checkbox", { name: /acknowledge this same-day emergency closure/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /acknowledge this same-day emergency closure/i }));
     expect(confirm).toBeEnabled();
   });
 
   it("invalidates an impact preview whenever the draft configuration changes", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ data: preview })));
-    await stageAugust18();
+    stageAugust18();
     fireEvent.click(screen.getByRole("button", { name: "Review impact" }));
     expect(await screen.findByRole("dialog", { name: "Confirm clinic calendar impact" })).toBeVisible();
 

@@ -1,8 +1,14 @@
 // @vitest-environment node
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { pool, transaction } from "@/server/db/pool";
 import { TEST_REFERENCE_IDS, insertTestStudent } from "@/test/integration-fixtures";
+import {
+  cleanupAndRestoreCapacitySettings,
+  setupCapacityFixtureLock,
+  teardownCapacityFixtureLock,
+  type CapacityFixtureLock,
+} from "@/test/capacity-fixture-lifecycle";
 import type { SessionUser } from "@/types/roles";
 import {
   listClinicClosureManualCases,
@@ -13,6 +19,7 @@ import {
 } from "./clinic-calendar.service";
 
 const studentPattern = "UCAL-%";
+let capacityFixture: CapacityFixtureLock | null = null;
 const admin: SessionUser = {
   userId: TEST_REFERENCE_IDS.adminUser,
   fullName: "System Admin",
@@ -118,11 +125,16 @@ async function createPair(input: {
   );
 }
 
-beforeAll(cleanup);
-beforeEach(cleanup);
+beforeAll(async () => {
+  capacityFixture = await setupCapacityFixtureLock(pool, cleanup);
+});
+afterEach(async () => {
+  if (!capacityFixture) return;
+  await cleanupAndRestoreCapacitySettings(pool, capacityFixture.originalCapacities, cleanup);
+});
 afterAll(async () => {
-  await cleanup();
-  await pool.end();
+  if (!capacityFixture) return;
+  await teardownCapacityFixtureLock(pool, capacityFixture, cleanup);
 });
 
 describe("unified clinic calendar lifecycle", () => {

@@ -1,12 +1,19 @@
 // @vitest-environment node
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { pool } from "@/server/db/pool";
 import { cleanupTestFixtures, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
+import {
+  cleanupAndRestoreCapacitySettings,
+  setupCapacityFixtureLock,
+  teardownCapacityFixtureLock,
+  type CapacityFixtureLock,
+} from "@/test/capacity-fixture-lifecycle";
 import { publishDisplacedRegularReplacements } from "./priority-displacement.service";
 
 const studentPattern = "99-94%";
 const importPattern = "TEST-DISPLACE-UNIFIED%";
+let capacityFixture: CapacityFixtureLock | null = null;
 
 async function cleanup() {
   await cleanupTestFixtures(studentPattern, importPattern, importPattern);
@@ -108,10 +115,16 @@ async function publish(studentNumber: string) {
   }
 }
 
-beforeEach(cleanup);
+beforeAll(async () => {
+  capacityFixture = await setupCapacityFixtureLock(pool, cleanup);
+});
+afterEach(async () => {
+  if (!capacityFixture) return;
+  await cleanupAndRestoreCapacitySettings(pool, capacityFixture.originalCapacities, cleanup);
+});
 afterAll(async () => {
-  await cleanup();
-  await pool.end();
+  if (!capacityFixture) return;
+  await teardownCapacityFixtureLock(pool, capacityFixture, cleanup);
 });
 
 describe("priority displacement with the unified closure calendar", () => {

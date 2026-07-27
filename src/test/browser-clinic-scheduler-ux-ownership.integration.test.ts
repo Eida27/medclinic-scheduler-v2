@@ -23,6 +23,7 @@ const ids = {
   linkedAudit: "d2100000-0000-4000-8000-000000000051",
   createdAudit: "d2100000-0000-4000-8000-000000000052",
   closure: "d2100000-0000-4000-8000-000000000060",
+  closureGroup: "d2100000-0000-4000-8000-000000000068",
   blockBatch: "d2100000-0000-4000-8000-000000000061",
   unblockBatch: "d2100000-0000-4000-8000-000000000062",
   blockBatchAudit: "d2100000-0000-4000-8000-000000000063",
@@ -120,16 +121,24 @@ describe("browser clinic scheduler cleanup ownership", () => {
         ],
       );
       await client.query(
-        `INSERT INTO clinic_unavailable_dates (
-           id, clinic_id, start_date, end_date, category, reason, created_by,
-           created_batch_id, unblocked_at, unblocked_by, unblocked_batch_id
-         ) VALUES ($1,$2,'2027-02-01','2027-02-01','MAINTENANCE',$3,$4,$5,NOW(),$4,$6)`,
+        `INSERT INTO clinic_closure_groups (
+           id,start_date,end_date,category,reason,created_by,creation_batch_id
+         ) VALUES ($1,'2027-02-01','2027-02-01','MAINTENANCE',$2,$3,$4)`,
         [
-          ids.closure,
-          TEST_REFERENCE_IDS.laboratoryClinic,
+          ids.closureGroup,
           "T20-ownership-test calendar",
           TEST_REFERENCE_IDS.adminUser,
           ids.blockBatch,
+        ],
+      );
+      await client.query(
+        `INSERT INTO clinic_unavailable_dates (
+           id,closure_group_id,blocked_date,reopened_at,reopened_by,reopening_batch_id
+         ) VALUES ($1,$2,'2027-02-01',NOW(),$3,$4)`,
+        [
+          ids.closure,
+          ids.closureGroup,
+          TEST_REFERENCE_IDS.adminUser,
           ids.unblockBatch,
         ],
       );

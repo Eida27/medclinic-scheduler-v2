@@ -153,7 +153,7 @@ function CaseResolutionCard({ manualCase, onResolved }: {
                   aria-label={`Laboratory replacement date for ${manualCase.studentNumber}`}
                   type="date"
                   value={laboratoryDate}
-                  onChange={(event) => setLaboratoryDate(event.target.value)}
+                  onInput={(event) => setLaboratoryDate(event.currentTarget.value)}
                 />
               </label>
             ) : null}
@@ -164,7 +164,7 @@ function CaseResolutionCard({ manualCase, onResolved }: {
                   aria-label={`Physical Examination replacement date for ${manualCase.studentNumber}`}
                   type="date"
                   value={physicalExamDate}
-                  onChange={(event) => setPhysicalExamDate(event.target.value)}
+                  onInput={(event) => setPhysicalExamDate(event.currentTarget.value)}
                 />
               </label>
             ) : null}
@@ -250,7 +250,10 @@ export function ManualResolutionQueue() {
     }
   }, [filters, page]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => { void load(); }, 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [load]);
 
   function applyFilters(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

@@ -241,7 +241,7 @@ describe("coordinator scheduling workflow", () => {
         studentNumber: studentNumbers[179],
         scheduleType: "BOTH",
         priorityGroupId: TEST_REFERENCE_IDS.regularPriority,
-        targetDate: "2026-08-03",
+        targetDate: belowMaximumDate,
         targetWeekStart: null,
         targetWeekEnd: null,
         remarks: "",

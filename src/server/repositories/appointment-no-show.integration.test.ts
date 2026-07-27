@@ -285,7 +285,17 @@ describe("markOverdueAppointmentsNoShow", () => {
   });
 
   it("updates and logs one eligible appointment only once across concurrent sweeps", async () => {
-    const appointmentDate = "2045-01-05";
+    const isolatedDate = await pool.query<{ appointmentDate: string }>(
+      `SELECT COALESCE(
+                (MIN(appointment_date) - 2)::text,
+                '2045-01-05'
+              ) AS "appointmentDate"
+         FROM appointments
+        WHERE is_published=TRUE AND status='PENDING'
+          AND student_number NOT LIKE $1`,
+      [studentPattern],
+    );
+    const appointmentDate = isolatedDate.rows[0].appointmentDate;
     const appointmentId = await transaction((client) => insertFixtureAppointment(client, {
       studentNumber: "TEST-AUTO-NS-RACE",
       scheduleType: "PHYSICAL_EXAM",
