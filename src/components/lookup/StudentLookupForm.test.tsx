@@ -52,4 +52,21 @@ describe("StudentLookupForm", () => {
     expect(screen.queryByText("NO_SHOW")).not.toBeInTheDocument();
     expect(screen.queryByText("REQUIRES_FOLLOW_UP")).not.toBeInTheDocument();
   });
+
+  it("presents an unresolved appointment without exposing an invalid current date", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: {
+        studentNumber: "DEMO-0001",
+        appointments: [{ scheduleType: "LABORATORY", appointmentDate: null, status: "AWAITING_RESCHEDULE" }],
+        compliance: { physicalExam: "PENDING_UPLOAD", laboratory: "PENDING_UPLOAD" },
+      } }),
+    }));
+    render(<StudentLookupForm />);
+    fireEvent.change(screen.getByPlaceholderText("e.g. 23-1212-97"), { target: { value: "DEMO-0001" } });
+    fireEvent.click(screen.getByRole("button", { name: "Find schedule" }));
+
+    expect(await screen.findByText("Awaiting manual reschedule")).toBeVisible();
+    expect(screen.queryByText("null")).not.toBeInTheDocument();
+  });
 });

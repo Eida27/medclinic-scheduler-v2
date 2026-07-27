@@ -58,6 +58,10 @@ describe("Sidebar", () => {
     );
 
     expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Clinic calendar" })).toHaveAttribute(
+      "href",
+      "/settings/clinic-unavailable-dates",
+    );
 
     rerender(
       <Sidebar user={{ userId: "2", fullName: "Admin User", email: "admin@example.com", role: "ADMIN" }} />,
@@ -66,6 +70,10 @@ describe("Sidebar", () => {
     expect(screen.getByRole("link", { name: "Users" })).toBeVisible();
     expect(screen.getByRole("link", { name: "Reference data" })).toBeVisible();
     expect(screen.getByRole("link", { name: "Capacity" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Manual resolution" })).toHaveAttribute(
+      "href",
+      "/settings/clinic-unavailable-dates/manual-resolution",
+    );
     expect(screen.queryByRole("link", { name: "Results" })).not.toBeInTheDocument();
   });
 
@@ -86,5 +94,6 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("link", { name: "Appointments" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Results" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Clinic calendar" })).not.toBeInTheDocument();
   });
 });

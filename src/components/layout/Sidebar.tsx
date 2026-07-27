@@ -19,6 +19,7 @@ const adminLinks = [
   ["Reference data", "/settings/reference-data"],
   ["Capacity", "/settings/capacity"],
   ["Clinic calendar", "/settings/clinic-unavailable-dates"],
+  ["Manual resolution", "/settings/clinic-unavailable-dates/manual-resolution"],
   ["Student result submissions", "/settings/student-result-submissions"],
 ] as const;
 
@@ -53,6 +54,20 @@ export function Sidebar({ user }: { user: SessionUser }) {
             {label}
           </Link>
         ))}
+        {user.role === "CLINIC_STAFF" ? (
+          <Link
+            href="/settings/clinic-unavailable-dates"
+            aria-current={isActive("/settings/clinic-unavailable-dates") ? "page" : undefined}
+            className={cn(
+              "block whitespace-nowrap rounded-xl px-3 py-2.5 text-sm font-semibold transition duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cpu-gold",
+              isActive("/settings/clinic-unavailable-dates")
+                ? "bg-cpu-gold text-cpu-navy shadow-sm"
+                : "text-white/70 hover:bg-white/10 hover:text-white",
+            )}
+          >
+            Clinic calendar
+          </Link>
+        ) : null}
         {user.role === "ADMIN" ? (
           <>
             <p className="hidden px-3 pb-1 pt-5 text-xs font-bold uppercase tracking-[0.16em] text-white/60 lg:block">Administration</p>

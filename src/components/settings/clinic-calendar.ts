@@ -1,47 +1,29 @@
 import type { ClinicUnavailableDateRecord } from "@/server/repositories/clinic-unavailable-dates.repository";
 
-export type CalendarBlankCell = {
-  kind: "blank";
-  key: string;
-};
-
+export type CalendarBlankCell = { kind: "blank"; key: string };
 export type CalendarDateCell = {
   kind: "date";
   key: string;
   date: string;
   dayOfMonth: number;
-  inCurrentMonth: true;
   isWeekend: boolean;
 };
-
 export type CalendarCell = CalendarBlankCell | CalendarDateCell;
 
-const DAY_IN_MILLISECONDS = 24 * 60 * 60 * 1000;
-
-function parseMonth(month: string): { year: number; monthIndex: number } {
+function parseMonth(month: string) {
   const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(month);
-  if (!match) {
-    throw new RangeError(`Expected month in YYYY-MM format, received "${month}".`);
-  }
-
-  return {
-    year: Number(match[1]),
-    monthIndex: Number(match[2]) - 1,
-  };
+  if (!match) throw new RangeError(`Expected month in YYYY-MM format, received "${month}".`);
+  return { year: Number(match[1]), monthIndex: Number(match[2]) - 1 };
 }
 
-function utcDate(year: number, monthIndex: number, dayOfMonth: number): Date {
+function utcDate(year: number, monthIndex: number, day: number) {
   const date = new Date(0);
   date.setUTCHours(0, 0, 0, 0);
-  date.setUTCFullYear(year, monthIndex, dayOfMonth);
+  date.setUTCFullYear(year, monthIndex, day);
   return date;
 }
 
-function addUtcDays(date: Date, days: number): Date {
-  return new Date(date.getTime() + days * DAY_IN_MILLISECONDS);
-}
-
-function formatDateOnly(date: Date): string {
+function formatDateOnly(date: Date) {
   return [
     String(date.getUTCFullYear()).padStart(4, "0"),
     String(date.getUTCMonth() + 1).padStart(2, "0"),
@@ -49,84 +31,55 @@ function formatDateOnly(date: Date): string {
   ].join("-");
 }
 
-function parseDateOnly(value: string): Date {
-  const match = /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.exec(value);
-  if (!match) {
-    throw new RangeError(`Expected date in YYYY-MM-DD format, received "${value}".`);
-  }
-
-  const date = utcDate(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-  if (formatDateOnly(date) !== value) {
-    throw new RangeError(`Expected a valid date in YYYY-MM-DD format, received "${value}".`);
-  }
-  return date;
-}
-
 export function buildMonthGrid(month: string): CalendarCell[] {
   const { year, monthIndex } = parseMonth(month);
-  const firstOfMonth = utcDate(year, monthIndex, 1);
-  const leadingBlankCount = firstOfMonth.getUTCDay();
-  const daysInMonth = utcDate(year, monthIndex + 1, 0).getUTCDate();
-  const totalCellCount = Math.ceil((leadingBlankCount + daysInMonth) / 7) * 7;
-  const trailingBlankCount = totalCellCount - leadingBlankCount - daysInMonth;
-
-  const leadingBlanks: CalendarBlankCell[] = Array.from({ length: leadingBlankCount }, (_, index) => ({
-    kind: "blank",
-    key: `${month}-leading-${index}`,
-  }));
-  const dates: CalendarDateCell[] = Array.from({ length: daysInMonth }, (_, index) => {
-    const date = utcDate(year, monthIndex, index + 1);
-    const dateOnly = formatDateOnly(date);
-    const dayOfWeek = date.getUTCDay();
+  const leading = utcDate(year, monthIndex, 1).getUTCDay();
+  const days = utcDate(year, monthIndex + 1, 0).getUTCDate();
+  const total = Math.ceil((leading + days) / 7) * 7;
+  return Array.from({ length: total }, (_, index): CalendarCell => {
+    const day = index - leading + 1;
+    if (day < 1 || day > days) return { kind: "blank", key: `${month}-blank-${index}` };
+    const date = utcDate(year, monthIndex, day);
+    const value = formatDateOnly(date);
     return {
       kind: "date",
-      key: dateOnly,
-      date: dateOnly,
-      dayOfMonth: index + 1,
-      inCurrentMonth: true,
-      isWeekend: dayOfWeek === 0 || dayOfWeek === 6,
+      key: value,
+      date: value,
+      dayOfMonth: day,
+      isWeekend: date.getUTCDay() === 0 || date.getUTCDay() === 6,
     };
   });
-  const trailingBlanks: CalendarBlankCell[] = Array.from({ length: trailingBlankCount }, (_, index) => ({
-    kind: "blank",
-    key: `${month}-trailing-${index}`,
-  }));
-
-  return [...leadingBlanks, ...dates, ...trailingBlanks];
 }
 
-export function expandUnavailableRanges(
-  records: ClinicUnavailableDateRecord[],
-): Map<string, ClinicUnavailableDateRecord> {
-  const dates = new Map<string, ClinicUnavailableDateRecord>();
-
-  for (const record of records) {
-    const end = parseDateOnly(record.endDate);
-    for (
-      let current = parseDateOnly(record.startDate);
-      current.getTime() <= end.getTime();
-      current = addUtcDays(current, 1)
-    ) {
-      dates.set(formatDateOnly(current), record);
-    }
-  }
-
-  return dates;
+export function buildAnnualCalendar(year: number) {
+  if (!Number.isInteger(year) || year < 1 || year > 2100) throw new RangeError("Invalid calendar year.");
+  return Array.from({ length: 12 }, (_, monthIndex) => {
+    const month = `${year}-${String(monthIndex + 1).padStart(2, "0")}`;
+    return {
+      month,
+      name: new Intl.DateTimeFormat("en-US", { month: "long", timeZone: "UTC" })
+        .format(utcDate(year, monthIndex, 1)),
+      cells: buildMonthGrid(month),
+    };
+  });
 }
 
-export function shiftMonth(month: string, offset: number): string {
+export function expandUnavailableRanges(records: ClinicUnavailableDateRecord[]) {
+  return new Map(records.map((record) => [record.blockedDate, record]));
+}
+
+export function shiftMonth(month: string, offset: number) {
   const { year, monthIndex } = parseMonth(month);
-  const shifted = utcDate(year, monthIndex + offset, 1);
-  return formatDateOnly(shifted).slice(0, 7);
+  return formatDateOnly(utcDate(year, monthIndex + offset, 1)).slice(0, 7);
 }
 
-export function manilaToday(): string {
+export function manilaToday() {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "Asia/Manila",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
   }).formatToParts(new Date());
-  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${value.year}-${value.month}-${value.day}`;
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
 }

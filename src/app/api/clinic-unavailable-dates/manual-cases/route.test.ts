@@ -12,7 +12,7 @@ import { GET } from "./route";
 
 describe("manual-case API", () => {
   it("passes pagination and filters to the administrator service", async () => {
-    const response = await GET(new Request("http://local/api/clinic-unavailable-dates/manual-cases?page=2&pageSize=10&search=2026&reasonCode=NO_REPLACEMENT_CAPACITY"));
+    const response = await GET(new Request("http://local/api/clinic-unavailable-dates/manual-cases?page=2&pageSize=10&search=2026&reasonCode=NO_REPLACEMENT_CAPACITY&closureGroupId=81000000-0000-4000-8000-000000000001&date=2026-08-18&service=LABORATORY"));
     expect(response.status).toBe(200);
     expect(listClinicClosureManualCases).toHaveBeenCalledWith({
       page: 2,
@@ -20,6 +20,9 @@ describe("manual-case API", () => {
       search: "2026",
       reasonCode: "NO_REPLACEMENT_CAPACITY",
       status: undefined,
+      closureGroupId: "81000000-0000-4000-8000-000000000001",
+      date: "2026-08-18",
+      service: "LABORATORY",
     }, expect.objectContaining({ role: "ADMIN" }));
   });
 });

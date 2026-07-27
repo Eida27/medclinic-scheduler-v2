@@ -12,6 +12,9 @@ export async function GET(request: Request) {
       search: search.get("search") ?? undefined,
       reasonCode: search.get("reasonCode") ?? undefined,
       status: search.get("status") ?? undefined,
+      closureGroupId: search.get("closureGroupId") ?? undefined,
+      date: search.get("date") ?? undefined,
+      service: search.get("service") ?? undefined,
     }, actor));
   } catch (error) {
     return errorResponse(error);

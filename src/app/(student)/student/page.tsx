@@ -14,17 +14,33 @@ export default async function StudentSchedulePage() {
       {!portal.emailVerifiedAt ? <EmailVerificationReminder /> : null}
       <p className="text-sm font-semibold text-muted">{portal.studentNumber}</p>
       <h1 className="mt-1 text-3xl font-bold">{portal.studentName}</h1>
-      <h2 className="mt-8 text-xl font-bold">Schedule and history</h2>
+      <h2 className="mt-8 text-xl font-bold">Current schedule</h2>
       <div className="mt-4 grid gap-3">
         {portal.appointments.length ? portal.appointments.map((appointment) => (
           <Card key={appointment.id} className="flex flex-wrap items-center justify-between gap-4 p-5">
             <div>
               <p className="font-bold">{appointment.scheduleType === "LABORATORY" ? "Laboratory" : "Physical Examination"}</p>
-              <p className="text-sm text-muted">{appointment.appointmentDate}</p>
+              <p className="text-sm text-muted">
+                {appointment.appointmentDate ?? "No current date assigned"}
+              </p>
             </div>
             <span className="text-sm font-semibold">{operationalStatusLabel(appointment.status)}</span>
           </Card>
         )) : <Card className="p-5 text-sm text-muted">No published appointments yet.</Card>}
+      </div>
+      <h2 className="mt-8 text-xl font-bold">Schedule history</h2>
+      <div className="mt-4 grid gap-3">
+        {portal.history.length ? portal.history.map((appointment) => (
+          <Card key={`${appointment.id}-${appointment.originalDate}`} className="p-5">
+            <p className="font-bold">
+              {appointment.scheduleType === "LABORATORY" ? "Laboratory" : "Physical Examination"}
+            </p>
+            <p className="text-sm text-muted">Original date: {appointment.originalDate}</p>
+            {appointment.closureReason ? (
+              <p className="mt-1 text-sm text-muted">Closure: {appointment.closureReason}</p>
+            ) : null}
+          </Card>
+        )) : <Card className="p-5 text-sm text-muted">No schedule changes yet.</Card>}
       </div>
     </section>
   );

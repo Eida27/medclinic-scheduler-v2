@@ -228,8 +228,23 @@ describe("unified clinic calendar lifecycle", () => {
       "SELECT status FROM appointments WHERE student_number='UCAL-MANUAL' ORDER BY schedule_type",
     );
     expect(states.rows).toEqual([{ status: "AWAITING_RESCHEDULE" }, { status: "AWAITING_RESCHEDULE" }]);
-    const cases = await listClinicClosureManualCases({ page: 1, pageSize: 20, search: "UCAL-MANUAL" }, admin);
-    expect(cases).toMatchObject({ total: 1, items: [expect.objectContaining({ reasonCode: "APPOINTMENT_MANUALLY_LOCKED" })] });
+    const cases = await listClinicClosureManualCases({
+      page: 1,
+      pageSize: 20,
+      search: "UCAL-MANUAL",
+      date: "2049-08-12",
+      service: "LABORATORY",
+    }, admin);
+    expect(cases).toMatchObject({
+      total: 1,
+      items: [expect.objectContaining({
+        reasonCode: "APPOINTMENT_MANUALLY_LOCKED",
+        category: "CLOSURE",
+        closureReason: "TEST-UNIFIED manual",
+        laboratory: expect.objectContaining({ date: "2049-08-12", status: "AWAITING_RESCHEDULE" }),
+        physicalExam: expect.objectContaining({ date: "2049-08-13", status: "AWAITING_RESCHEDULE" }),
+      })],
+    });
 
     const caseId = cases.items[0].id;
     await pool.query(

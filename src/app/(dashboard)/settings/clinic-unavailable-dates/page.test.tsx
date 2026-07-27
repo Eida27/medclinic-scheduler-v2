@@ -2,28 +2,27 @@ import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClinicUnavailableDateRecord } from "@/server/repositories/clinic-unavailable-dates.repository";
 
-const { requireUser, listClinicOptions, listClinicUnavailableDateRecords } = vi.hoisted(() => ({
+const { requireUser, listClinicUnavailableDateRecords, listClinicClosureManualCases } = vi.hoisted(() => ({
   requireUser: vi.fn(),
-  listClinicOptions: vi.fn(),
   listClinicUnavailableDateRecords: vi.fn(),
+  listClinicClosureManualCases: vi.fn(),
 }));
 
 vi.mock("@/server/auth/current-user", () => ({ requireUser }));
 vi.mock("@/server/repositories/clinic-unavailable-dates.repository", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/repositories/clinic-unavailable-dates.repository")>();
-  return { ...actual, listClinicOptions, listClinicUnavailableDateRecords };
+  return { ...actual, listClinicUnavailableDateRecords };
 });
+vi.mock("@/server/services/clinic-calendar.service", () => ({ listClinicClosureManualCases }));
 
 import ClinicUnavailableDatesPage from "./page";
 
-const clinics = [{ id: "60000000-0000-4000-8000-000000000001", name: "KABALAKA Clinic" }];
 const unavailableDates: ClinicUnavailableDateRecord[] = [{
-  id: "unavailable-1",
-  clinicId: clinics[0].id,
-  clinicCode: "KABALAKA_CLINIC",
-  clinicName: clinics[0].name,
-  startDate: "2026-08-19",
-  endDate: "2026-08-19",
+  id: "70000000-0000-4000-8000-000000000001",
+  closureGroupId: "71000000-0000-4000-8000-000000000001",
+  blockedDate: "2026-08-19",
+  groupStartDate: "2026-08-19",
+  groupEndDate: "2026-08-19",
   category: "MAINTENANCE",
   reason: "Generator testing",
   createdByName: "Clinic Admin",
@@ -33,34 +32,39 @@ const unavailableDates: ClinicUnavailableDateRecord[] = [{
 
 describe("ClinicUnavailableDatesPage", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-17T04:00:00.000Z"));
-    requireUser.mockResolvedValue({ userId: "admin-id", role: "ADMIN" });
-    listClinicOptions.mockResolvedValue(clinics);
     listClinicUnavailableDateRecords.mockResolvedValue(unavailableDates);
+    listClinicClosureManualCases.mockResolvedValue({ total: 4, items: [] });
   });
 
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("passes Manila's current month, clinics, and unavailable records to the calendar", async () => {
+  it("renders the unified editable year and open-case count for administrators", async () => {
+    requireUser.mockResolvedValue({ userId: "admin-id", role: "ADMIN" });
     render(await ClinicUnavailableDatesPage());
 
-    expect(requireUser).toHaveBeenCalledWith(["ADMIN"]);
-    expect(listClinicOptions).toHaveBeenCalledOnce();
+    expect(requireUser).toHaveBeenCalledWith(["ADMIN", "CLINIC_STAFF"]);
     expect(listClinicUnavailableDateRecords).toHaveBeenCalledOnce();
-    expect(screen.getByText(
-      "Configure clinic availability before imports, review all changes, and save once.",
-    )).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "August 2026" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Year")).toHaveValue("2026");
-    expect(screen.getByRole("option", { name: "2100" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "KABALAKA Clinic" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /September 1, 2026/ })).not.toBeInTheDocument();
-    const unavailableDate = screen.getByRole("button", {
-      name: "August 19, 2026 — blocked: Maintenance, Generator testing",
-    });
-    expect(unavailableDate).toBeEnabled();
+    expect(listClinicClosureManualCases).toHaveBeenCalledWith(
+      { page: 1, pageSize: 1, status: "OPEN" },
+      expect.objectContaining({ role: "ADMIN" }),
+    );
+    expect(screen.getByText("4 open manual cases")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "August" })).toBeVisible();
+    expect(screen.getByLabelText("Calendar year")).toHaveValue("2026");
+    expect(screen.getByLabelText("Closure category")).toBeVisible();
+  });
+
+  it("renders the same route read-only for clinic staff", async () => {
+    requireUser.mockResolvedValue({ userId: "staff-id", role: "CLINIC_STAFF" });
+    render(await ClinicUnavailableDatesPage());
+
+    expect(listClinicClosureManualCases).not.toHaveBeenCalled();
+    expect(screen.getByText("This calendar is read-only for clinic staff.")).toBeVisible();
+    expect(screen.queryByLabelText("Closure category")).not.toBeInTheDocument();
   });
 });

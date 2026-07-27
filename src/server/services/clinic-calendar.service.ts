@@ -24,6 +24,7 @@ import type {
 } from "@/types/clinic-calendar";
 import type { SessionUser } from "@/types/roles";
 import { createStudentNotification } from "@/server/services/student-notifications.service";
+import { studentDisplayNameSql } from "@/server/students/student-display-name";
 import {
   allocateReplacementDates,
   classifyClinicCycle,
@@ -120,7 +121,10 @@ function manilaToday() {
   return `${values.year}-${values.month}-${values.day}`;
 }
 
-function parseRequest(raw: unknown): ClinicCalendarOperationRequest {
+function parseRequest(
+  raw: unknown,
+  options: { requireEmergencyAcknowledgement?: boolean } = {},
+): ClinicCalendarOperationRequest {
   const parsed = requestSchema.safeParse(raw);
   if (!parsed.success) throw validationError("Please correct the clinic calendar request.", parsed.error.flatten());
   const request = parsed.data as ClinicCalendarOperationRequest;
@@ -138,7 +142,11 @@ function parseRequest(raw: unknown): ClinicCalendarOperationRequest {
       if (change.date === today && change.category !== "EMERGENCY_CLOSURE") {
         throw validationError("Today may be blocked only as an Emergency Closure.");
       }
-      if (change.date === today && !request.emergencyAcknowledged) {
+      if (
+        change.date === today
+        && options.requireEmergencyAcknowledgement !== false
+        && !request.emergencyAcknowledged
+      ) {
         throw new AppError(
           "EMERGENCY_ACKNOWLEDGMENT_REQUIRED",
           "A same-day emergency closure requires explicit acknowledgment.",
@@ -752,7 +760,7 @@ export async function previewClinicCalendarChanges(
   actor: SessionUser,
 ): Promise<ClinicCalendarPreviewResult> {
   assertAdmin(actor);
-  const request = parseRequest(raw);
+  const request = parseRequest(raw, { requireEmergencyAcknowledgement: false });
   return transaction(async (client) => {
     const active = await listActiveUnavailableDatesWithClient(client);
     await validateCalendarState(active, request.changes);
@@ -1020,7 +1028,16 @@ export async function saveClinicCalendarChanges(
 }
 
 export async function listClinicClosureManualCases(
-  raw: { page?: number; pageSize?: number; search?: string; reasonCode?: string; status?: string },
+  raw: {
+    page?: number;
+    pageSize?: number;
+    search?: string;
+    reasonCode?: string;
+    status?: string;
+    closureGroupId?: string;
+    date?: string;
+    service?: string;
+  },
   actor: SessionUser,
 ) {
   assertAdmin(actor);
@@ -1029,6 +1046,9 @@ export async function listClinicClosureManualCases(
   const search = raw.search?.trim() || null;
   const reasonCode = raw.reasonCode?.trim() || null;
   const status = raw.status?.trim() || "OPEN";
+  const closureGroupId = raw.closureGroupId?.trim() || null;
+  const date = raw.date?.trim() || null;
+  const service = raw.service?.trim() || null;
   const result = await transaction(async (client) => client.query<{
     id: string;
     student_number: string;
@@ -1041,25 +1061,50 @@ export async function listClinicClosureManualCases(
     status: string;
     optimistic_token: string;
     created_at: Date;
+    resolved_at: Date | null;
+    resolution_action: string | null;
+    resolution_details: unknown;
+    category: string;
+    closure_reason: string;
+    laboratory_id: string | null;
+    laboratory_date: string | null;
+    laboratory_status: string | null;
+    physical_exam_id: string | null;
+    physical_exam_date: string | null;
+    physical_exam_status: string | null;
     total: number;
   }>(
     `SELECT manual_case.id::text,manual_case.student_number,
-            CONCAT_WS(' ',student.first_name,student.middle_name,student.last_name,student.suffix) AS student_name,
+            ${studentDisplayNameSql("student")} AS student_name,
             manual_case.closure_group_id::text,closure.start_date::text AS group_start_date,
             closure.end_date::text AS group_end_date,manual_case.reason_code,
             manual_case.reason_message,manual_case.status,
-            manual_case.optimistic_token::text,manual_case.created_at,
+            manual_case.optimistic_token::text,manual_case.created_at,manual_case.resolved_at,
+            manual_case.resolution_action,manual_case.resolution_details,
+            closure.category,closure.reason AS closure_reason,
+            laboratory.id::text AS laboratory_id,laboratory.appointment_date::text AS laboratory_date,
+            laboratory.status AS laboratory_status,
+            physical.id::text AS physical_exam_id,physical.appointment_date::text AS physical_exam_date,
+            physical.status AS physical_exam_status,
             COUNT(*) OVER()::int AS total
        FROM clinic_closure_manual_cases manual_case
        JOIN students student ON student.student_number=manual_case.student_number
        JOIN clinic_closure_groups closure ON closure.id=manual_case.closure_group_id
+       LEFT JOIN appointments laboratory ON laboratory.id=manual_case.affected_laboratory_appointment_id
+       LEFT JOIN appointments physical ON physical.id=manual_case.affected_physical_exam_appointment_id
       WHERE ($1::text IS NULL OR manual_case.student_number ILIKE '%'||$1||'%'
              OR student.first_name ILIKE '%'||$1||'%' OR student.last_name ILIKE '%'||$1||'%')
         AND ($2::text IS NULL OR manual_case.reason_code=$2)
         AND ($3::text IS NULL OR manual_case.status=$3)
+        AND ($4::uuid IS NULL OR manual_case.closure_group_id=$4)
+        AND ($5::date IS NULL OR $5 BETWEEN closure.start_date AND closure.end_date
+             OR laboratory.appointment_date=$5 OR physical.appointment_date=$5)
+        AND ($6::text IS NULL
+             OR ($6='LABORATORY' AND laboratory.id IS NOT NULL)
+             OR ($6='PHYSICAL_EXAM' AND physical.id IS NOT NULL))
       ORDER BY manual_case.created_at,manual_case.id
-      LIMIT $4 OFFSET $5`,
-    [search, reasonCode, status || null, pageSize, (page - 1) * pageSize],
+      LIMIT $7 OFFSET $8`,
+    [search, reasonCode, status || null, closureGroupId, date, service, pageSize, (page - 1) * pageSize],
   ));
   return {
     page,
@@ -1077,6 +1122,21 @@ export async function listClinicClosureManualCases(
       status: row.status,
       optimisticToken: row.optimistic_token,
       createdAt: row.created_at.toISOString(),
+      resolvedAt: row.resolved_at?.toISOString() ?? null,
+      resolutionAction: row.resolution_action,
+      resolutionDetails: row.resolution_details,
+      category: row.category,
+      closureReason: row.closure_reason,
+      laboratory: row.laboratory_id ? {
+        id: row.laboratory_id,
+        date: row.laboratory_date,
+        status: row.laboratory_status,
+      } : null,
+      physicalExam: row.physical_exam_id ? {
+        id: row.physical_exam_id,
+        date: row.physical_exam_date,
+        status: row.physical_exam_status,
+      } : null,
     })),
   };
 }
