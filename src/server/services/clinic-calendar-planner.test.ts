@@ -1,315 +1,122 @@
-// @vitest-environment node
 import { describe, expect, it } from "vitest";
-import type {
-  ClinicCalendarBatchChange,
-  ClinicUnavailableDateDto,
-} from "@/types/clinic-calendar";
-import type {
-  ClinicRestorationBundle,
-  LockedRestorationAppointment,
-} from "@/server/repositories/clinic-calendar-restoration.repository";
 import {
-  buildFinalBlockedSets,
-  planClinicRestoration,
-  reserveFirstAvailableDate,
-  sortClinicCalendarChanges,
-  type ClinicCalendarPlanningContext,
+  allocateReplacementDates,
+  classifyClinicCycle,
+  groupContiguousClosureChanges,
+  type ClinicCycleAppointment,
 } from "./clinic-calendar-planner";
 
-const laboratoryClinicId = "60000000-0000-4000-8000-000000000001";
-const physicalClinicId = "60000000-0000-4000-8000-000000000002";
-
-function activeRecord(overrides: Partial<ClinicUnavailableDateDto>): ClinicUnavailableDateDto {
+function appointment(
+  scheduleType: ClinicCycleAppointment["scheduleType"],
+  status: string,
+  overrides: Partial<ClinicCycleAppointment> = {},
+): ClinicCycleAppointment {
   return {
-    id: "70000000-0000-4000-8000-000000000001",
-    clinicId: physicalClinicId,
-    clinicCode: "CPU_CLINIC",
-    clinicName: "CPU Clinic",
-    startDate: "2027-07-15",
-    endDate: "2027-07-15",
-    category: "CLOSURE",
-    reason: "Existing maintenance",
-    createdByName: "System Admin",
-    createdAt: "2027-07-01T00:00:00.000Z",
-    updatedAt: "2027-07-01T00:00:00.000000Z",
-    ...overrides,
-  };
-}
-
-function planningContext(): ClinicCalendarPlanningContext {
-  return {
-    finalBlockedByClinicCode: new Map([
-      ["KABALAKA_CLINIC", new Set<string>()],
-      ["CPU_CLINIC", new Set<string>(["2027-07-17"])],
-    ]),
-    projectedLoadByClinicCode: new Map([
-      ["KABALAKA_CLINIC", new Map<string, number>()],
-      ["CPU_CLINIC", new Map<string, number>([["2027-07-15", 1]])],
-    ]),
-    maxCapacityByClinicCode: new Map([
-      ["KABALAKA_CLINIC", 2],
-      ["CPU_CLINIC", 2],
-    ]),
-    retiringReplacementIds: new Set(),
-    restoringOriginalIds: new Set(),
-    searchEndDate: "2027-07-20",
-  };
-}
-
-function restorationAppointment(
-  overrides: Partial<LockedRestorationAppointment>,
-): LockedRestorationAppointment {
-  return {
-    id: "80000000-0000-4000-8000-000000000001",
-    clinicId: physicalClinicId,
-    studentNumber: "99-9999-99",
-    scheduleType: "PHYSICAL_EXAM",
-    appointmentDate: "2027-07-15",
-    status: "RESCHEDULED",
+    id: `${scheduleType}-${status}`,
+    studentNumber: "2026-0001",
+    scheduleType,
+    appointmentDate: scheduleType === "LABORATORY" ? "2027-08-10" : "2027-08-11",
+    status,
     isPublished: true,
-    schedulePairId: "81000000-0000-4000-8000-000000000001",
-    scheduleCycleStart: 2027,
     isManuallyLocked: false,
-    hasFinalizedSubmission: false,
     hasProtectedResult: false,
-    rescheduledFrom: null,
-    hasPublishedReplacement: false,
-    publishedReplacementChildren: [],
-    activeConflictIds: [],
+    hasFinalizedSubmission: false,
+    schedulePairId: "10000000-0000-4000-8000-000000000001",
+    scheduleCycleStart: 2026,
     ...overrides,
   };
 }
 
-function cpuRestorationBundle(): ClinicRestorationBundle {
-  const original = restorationAppointment({});
-  const replacement = restorationAppointment({
-    id: "80000000-0000-4000-8000-000000000002",
-    appointmentDate: "2027-07-16",
-    status: "PENDING",
-    rescheduledFrom: original.id,
-  });
-  return {
-    block: {
-      id: "70000000-0000-4000-8000-000000000001",
-      clinicId: physicalClinicId,
-      startDate: "2027-07-15",
-      endDate: "2027-07-15",
-      category: "CLOSURE",
-      reason: "Existing maintenance",
-      createdBy: "90000000-0000-4000-8000-000000000001",
-      createdBatchId: "91000000-0000-4000-8000-000000000001",
-      updatedAt: "2027-07-01T00:00:00.000000Z",
-    },
-    clinicCode: "CPU_CLINIC",
-    events: [{
-      id: "82000000-0000-4000-8000-000000000001",
-      studentNumber: original.studentNumber,
-      schedulePairId: original.schedulePairId,
-      restoredAt: null,
-      oldLaboratory: null,
-      newLaboratory: null,
-      oldPhysicalExam: original,
-      newPhysicalExam: replacement,
-    }],
-  };
-}
-
-describe("clinic calendar block planning", () => {
-  it("computes final blocked dates after applying both unblock and block changes", () => {
-    const existing = activeRecord({});
-    const changes: ClinicCalendarBatchChange[] = [
+describe("unified clinic closure planning", () => {
+  it("groups only adjacent dates with matching category and normalized reason", () => {
+    expect(groupContiguousClosureChanges([
+      { action: "BLOCK", date: "2027-08-13", category: "CLOSURE", reason: "  Typhoon   signal  " },
+      { action: "BLOCK", date: "2027-08-11", category: "CLOSURE", reason: "Typhoon signal" },
+      { action: "BLOCK", date: "2027-08-12", category: "CLOSURE", reason: "Typhoon signal" },
+      { action: "BLOCK", date: "2027-08-14", category: "MAINTENANCE", reason: "Typhoon signal" },
+      { action: "BLOCK", date: "2027-08-16", category: "CLOSURE", reason: "Typhoon signal" },
+    ])).toEqual([
       {
-        action: "UNBLOCK",
-        clinicId: physicalClinicId,
-        date: "2027-07-15",
-        unavailableDateId: existing.id,
-        expectedUpdatedAt: existing.updatedAt,
-      },
-      {
-        action: "BLOCK",
-        clinicId: physicalClinicId,
-        date: "2027-07-18",
+        startDate: "2027-08-11",
+        endDate: "2027-08-13",
+        dates: ["2027-08-11", "2027-08-12", "2027-08-13"],
         category: "CLOSURE",
-        reason: "Maintenance",
-      },
-    ];
-
-    const sets = buildFinalBlockedSets([existing], changes);
-
-    expect(sets.get(physicalClinicId)).not.toContain("2027-07-15");
-    expect(sets.get(physicalClinicId)).toContain("2027-07-18");
-  });
-
-  it("orders changes deterministically by date and then clinic id", () => {
-    const changes: ClinicCalendarBatchChange[] = [
-      {
-        action: "BLOCK",
-        clinicId: physicalClinicId,
-        date: "2027-07-20",
-        category: "CLOSURE",
-        reason: "Third",
+        reason: "Typhoon signal",
       },
       {
-        action: "BLOCK",
-        clinicId: physicalClinicId,
-        date: "2027-07-19",
-        category: "CLOSURE",
-        reason: "Second",
+        startDate: "2027-08-14",
+        endDate: "2027-08-14",
+        dates: ["2027-08-14"],
+        category: "MAINTENANCE",
+        reason: "Typhoon signal",
       },
       {
-        action: "BLOCK",
-        clinicId: laboratoryClinicId,
-        date: "2027-07-19",
+        startDate: "2027-08-16",
+        endDate: "2027-08-16",
+        dates: ["2027-08-16"],
         category: "CLOSURE",
-        reason: "First",
+        reason: "Typhoon signal",
       },
-    ];
-
-    expect(sortClinicCalendarChanges(changes).map((change) => (
-      change.action === "BLOCK" ? change.reason : change.action
-    ))).toEqual([
-      "First",
-      "Second",
-      "Third",
     ]);
   });
 
-  it("reserves projected load so later moves cannot overbook the same date", () => {
-    const context = planningContext();
-
-    expect(reserveFirstAvailableDate(context, "CPU_CLINIC", "2027-07-15"))
-      .toBe("2027-07-15");
-    expect(reserveFirstAvailableDate(context, "CPU_CLINIC", "2027-07-15"))
-      .toBe("2027-07-16");
-    expect(context.projectedLoadByClinicCode.get("CPU_CLINIC")).toEqual(new Map([
-      ["2027-07-15", 2],
-      ["2027-07-16", 1],
-    ]));
+  it.each([
+    ["moves the complete unfinished pair", [appointment("LABORATORY", "PENDING"), appointment("PHYSICAL_EXAM", "PENDING")], "MOVE_COMPLETE_PAIR"],
+    ["moves only Physical when Laboratory is completed", [appointment("LABORATORY", "COMPLETED"), appointment("PHYSICAL_EXAM", "PENDING")], "MOVE_PHYSICAL_ONLY"],
+    ["preserves a completed pair", [appointment("LABORATORY", "COMPLETED"), appointment("PHYSICAL_EXAM", "COMPLETED")], "PRESERVE_COMPLETION"],
+    ["routes inverted completion to manual review", [appointment("LABORATORY", "PENDING"), appointment("PHYSICAL_EXAM", "COMPLETED")], "MANUAL_RESOLUTION_REQUIRED"],
+    ["routes a locked appointment to manual review", [appointment("LABORATORY", "PENDING", { isManuallyLocked: true }), appointment("PHYSICAL_EXAM", "PENDING")], "MANUAL_RESOLUTION_REQUIRED"],
+  ])("%s", (_name, appointments, expected) => {
+    expect(classifyClinicCycle(appointments as ClinicCycleAppointment[]).strategy).toBe(expected);
   });
 
-  it("plans CPU restoration by retiring the generated PE before restoring its original load", () => {
-    const context = planningContext();
-    context.projectedLoadByClinicCode.get("CPU_CLINIC")!.set("2027-07-16", 1);
-    const bundle = cpuRestorationBundle();
-
-    const plan = planClinicRestoration(bundle, {
-      ...context,
-      change: {
-        action: "UNBLOCK",
-        clinicId: physicalClinicId,
-        date: "2027-07-15",
-        unavailableDateId: bundle.block.id,
-        expectedUpdatedAt: bundle.block.updatedAt,
-      },
+  it("reports a specific reason for protected and inconsistent pairs", () => {
+    expect(classifyClinicCycle([
+      appointment("LABORATORY", "PENDING", { hasFinalizedSubmission: true }),
+      appointment("PHYSICAL_EXAM", "PENDING"),
+    ])).toMatchObject({
+      strategy: "MANUAL_RESOLUTION_REQUIRED",
+      reasonCode: "PROTECTED_RESULTS_EXIST",
     });
-
-    expect(plan.moves).toEqual([expect.objectContaining({
-      eventId: bundle.events[0].id,
-      scheduleType: "PHYSICAL_EXAM",
-      originalAppointmentId: bundle.events[0].oldPhysicalExam!.id,
-      replacementAppointmentId: bundle.events[0].newPhysicalExam!.id,
-    })]);
-    expect(context.retiringReplacementIds).toContain(bundle.events[0].newPhysicalExam!.id);
-    expect(context.restoringOriginalIds).toContain(bundle.events[0].oldPhysicalExam!.id);
-    expect(context.projectedLoadByClinicCode.get("CPU_CLINIC")).toEqual(new Map([
-      ["2027-07-15", 2],
-      ["2027-07-16", 0],
-    ]));
+    expect(classifyClinicCycle([appointment("LABORATORY", "PENDING")])).toMatchObject({
+      strategy: "MANUAL_RESOLUTION_REQUIRED",
+      reasonCode: "PAIR_MISSING_OR_INCONSISTENT",
+    });
   });
 
-  it("rejects an active uniqueness conflict without changing projected restoration state", () => {
-    const context = planningContext();
-    const bundle = cpuRestorationBundle();
-    bundle.events[0].oldPhysicalExam!.activeConflictIds = [
-      bundle.events[0].newPhysicalExam!.id,
-      "80000000-0000-4000-8000-000000000099",
-    ];
-    const beforeLoad = new Map(context.projectedLoadByClinicCode.get("CPU_CLINIC"));
-
-    expect(() => planClinicRestoration(bundle, {
-      ...context,
-      change: {
-        action: "UNBLOCK",
-        clinicId: physicalClinicId,
-        date: "2027-07-15",
-        unavailableDateId: bundle.block.id,
-        expectedUpdatedAt: bundle.block.updatedAt,
+  it("starts after the full closure period and skips weekends, closures, and full dates", () => {
+    expect(allocateReplacementDates({
+      strategy: "MOVE_COMPLETE_PAIR",
+      afterDate: "2027-08-13",
+      blockedDates: new Set(["2027-08-16"]),
+      usedCapacity: {
+        LABORATORY: new Map([["2027-08-17", 2]]),
+        PHYSICAL_EXAM: new Map([["2027-08-19", 2]]),
       },
-    })).toThrow(expect.objectContaining({
-      code: "CLINIC_CALENDAR_BATCH_REJECTED",
-      details: { issues: [expect.objectContaining({ code: "PROTECTED_REPLACEMENT" })] },
-    }));
-    expect(context.projectedLoadByClinicCode.get("CPU_CLINIC")).toEqual(beforeLoad);
-    expect(context.retiringReplacementIds.size).toBe(0);
-    expect(context.restoringOriginalIds.size).toBe(0);
+      capacity: { LABORATORY: 2, PHYSICAL_EXAM: 2 },
+    })).toEqual({ laboratoryDate: "2027-08-18", physicalExamDate: "2027-08-20" });
   });
 
-  it("rejects an original date that remains in the final blocked set", () => {
-    const context = planningContext();
-    const bundle = cpuRestorationBundle();
-    context.finalBlockedByClinicCode.get("CPU_CLINIC")!.add("2027-07-15");
-
-    expect(() => planClinicRestoration(bundle, {
-      ...context,
-      change: {
-        action: "UNBLOCK",
-        clinicId: physicalClinicId,
-        date: "2027-07-15",
-        unavailableDateId: bundle.block.id,
-        expectedUpdatedAt: bundle.block.updatedAt,
-      },
-    })).toThrow(expect.objectContaining({
-      code: "CLINIC_CALENDAR_BATCH_REJECTED",
-      details: { issues: [expect.objectContaining({ code: "PROTECTED_REPLACEMENT" })] },
-    }));
-    expect(context.retiringReplacementIds.size).toBe(0);
-    expect(context.restoringOriginalIds.size).toBe(0);
-  });
-
-  it("rejects appointment lineage that moves a generated PE into the wrong clinic", () => {
-    const context = planningContext();
-    const bundle = cpuRestorationBundle();
-    bundle.events[0].newPhysicalExam!.clinicId = laboratoryClinicId;
-
-    expect(() => planClinicRestoration(bundle, {
-      ...context,
-      change: {
-        action: "UNBLOCK",
-        clinicId: physicalClinicId,
-        date: "2027-07-15",
-        unavailableDateId: bundle.block.id,
-        expectedUpdatedAt: bundle.block.updatedAt,
-      },
-    })).toThrow(expect.objectContaining({
-      code: "CLINIC_CALENDAR_BATCH_REJECTED",
-      details: { issues: [expect.objectContaining({ code: "PAIR_INTEGRITY_FAILURE" })] },
-    }));
-    expect(context.retiringReplacementIds.size).toBe(0);
-    expect(context.restoringOriginalIds.size).toBe(0);
-  });
-
-  it("rejects duplicate event provenance before projected load is changed", () => {
-    const context = planningContext();
-    context.maxCapacityByClinicCode.set("CPU_CLINIC", 10);
-    const bundle = cpuRestorationBundle();
-    bundle.events.push({ ...bundle.events[0], id: "82000000-0000-4000-8000-000000000002" });
-    const beforeLoad = new Map(context.projectedLoadByClinicCode.get("CPU_CLINIC"));
-
-    expect(() => planClinicRestoration(bundle, {
-      ...context,
-      change: {
-        action: "UNBLOCK",
-        clinicId: physicalClinicId,
-        date: "2027-07-15",
-        unavailableDateId: bundle.block.id,
-        expectedUpdatedAt: bundle.block.updatedAt,
-      },
-    })).toThrow(expect.objectContaining({
-      code: "CLINIC_CALENDAR_BATCH_REJECTED",
-      details: { issues: [expect.objectContaining({ code: "PAIR_INTEGRITY_FAILURE" })] },
-    }));
-    expect(context.projectedLoadByClinicCode.get("CPU_CLINIC")).toEqual(beforeLoad);
-    expect(context.retiringReplacementIds.size).toBe(0);
-    expect(context.restoringOriginalIds.size).toBe(0);
+  it("allocates deterministically as callers process students in student-number order", () => {
+    const usedCapacity = {
+      LABORATORY: new Map<string, number>(),
+      PHYSICAL_EXAM: new Map<string, number>(),
+    };
+    const first = allocateReplacementDates({
+      strategy: "MOVE_PHYSICAL_ONLY",
+      afterDate: "2027-08-13",
+      blockedDates: new Set(),
+      usedCapacity,
+      capacity: { LABORATORY: 1, PHYSICAL_EXAM: 1 },
+    });
+    if (first.physicalExamDate) usedCapacity.PHYSICAL_EXAM.set(first.physicalExamDate, 1);
+    const second = allocateReplacementDates({
+      strategy: "MOVE_PHYSICAL_ONLY",
+      afterDate: "2027-08-13",
+      blockedDates: new Set(),
+      usedCapacity,
+      capacity: { LABORATORY: 1, PHYSICAL_EXAM: 1 },
+    });
+    expect([first.physicalExamDate, second.physicalExamDate]).toEqual(["2027-08-16", "2027-08-17"]);
   });
 });

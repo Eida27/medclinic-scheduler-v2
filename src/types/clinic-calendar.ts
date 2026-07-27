@@ -1,45 +1,43 @@
 export type ClinicCalendarCategory =
   | "HOLIDAY"
   | "CLOSURE"
+  | "EMERGENCY_CLOSURE"
   | "MAINTENANCE"
   | "STAFF_UNAVAILABILITY";
 
 export type ClinicCalendarBlockChange = {
   action: "BLOCK";
-  clinicId: string;
   date: string;
   category: ClinicCalendarCategory;
   reason: string;
 };
 
-export type ClinicCalendarUnblockChange = {
-  action: "UNBLOCK";
-  clinicId: string;
+export type ClinicCalendarReopenChange = {
+  action: "REOPEN";
   date: string;
   unavailableDateId: string;
   expectedUpdatedAt: string;
 };
 
-export type ClinicCalendarBatchChange =
-  | ClinicCalendarBlockChange
-  | ClinicCalendarUnblockChange;
+export type ClinicCalendarChange = ClinicCalendarBlockChange | ClinicCalendarReopenChange;
 
-export type ClinicCalendarBatchRequest = {
-  changes: ClinicCalendarBatchChange[];
+export type ClinicCalendarOperationRequest = {
+  requestId: string;
+  changes: ClinicCalendarChange[];
+  emergencyAcknowledged: boolean;
 };
 
-export type ClinicCalendarBatchIssue = {
-  clinicId: string;
+export type ClinicCalendarIssue = {
   date: string;
-  action: ClinicCalendarBatchChange["action"];
+  action: ClinicCalendarChange["action"];
   code:
     | "INVALID_CHANGE"
     | "ACTIVE_BLOCK_CONFLICT"
     | "STALE_BLOCK"
-    | "PROTECTED_REPLACEMENT"
-    | "MISSING_ORIGINAL"
-    | "CAPACITY_CONFLICT"
-    | "PAIR_INTEGRITY_FAILURE";
+    | "EMERGENCY_ACKNOWLEDGMENT_REQUIRED"
+    | "WEEKEND_NOT_EDITABLE"
+    | "PAST_DATE_NOT_EDITABLE"
+    | "MANUAL_RESOLUTION_REQUIRED";
   message: string;
   studentNumbers?: string[];
   appointmentIds?: string[];
@@ -47,11 +45,10 @@ export type ClinicCalendarBatchIssue = {
 
 export type ClinicUnavailableDateDto = {
   id: string;
-  clinicId: string;
-  clinicCode: string;
-  clinicName: string;
-  startDate: string;
-  endDate: string;
+  closureGroupId: string;
+  blockedDate: string;
+  groupStartDate: string;
+  groupEndDate: string;
   category: ClinicCalendarCategory;
   reason: string;
   createdByName: string;
@@ -59,15 +56,60 @@ export type ClinicUnavailableDateDto = {
   updatedAt: string;
 };
 
-export type ClinicCalendarDraftChange = ClinicCalendarBatchChange;
+export type ClinicCalendarClosureGroupPreview = {
+  startDate: string;
+  endDate: string;
+  dates: string[];
+  category: ClinicCalendarCategory;
+  reason: string;
+};
 
-export type ClinicCalendarBatchResult = {
+export type ClinicCalendarPreviewResult = {
+  requestId: string;
+  closureGroups: ClinicCalendarClosureGroupPreview[];
+  datesBeingReopened: string[];
+  affectedStudentCount: number;
+  completePairMoveCount: number;
+  physicalOnlyMoveCount: number;
+  preservedCompletionCount: number;
+  expectedManualCaseCount: number;
+  expectedRestorationCount: number;
+  retainedReplacementCount: number;
+};
+
+export type ClinicCalendarOperationResult = {
+  requestId: string;
   batchId: string;
   activeUnavailableDates: ClinicUnavailableDateDto[];
   blockedDateCount: number;
-  unblockedDateCount: number;
+  reopenedDateCount: number;
   movedStudentCount: number;
   movedAppointmentCount: number;
+  preservedCompletionCount: number;
+  manualCaseCount: number;
   restoredStudentCount: number;
   restoredAppointmentCount: number;
 };
+
+export type ClinicManualCaseReason =
+  | "PHYSICAL_COMPLETED_BEFORE_LABORATORY"
+  | "APPOINTMENT_MANUALLY_LOCKED"
+  | "PROTECTED_RESULTS_EXIST"
+  | "PAIR_MISSING_OR_INCONSISTENT"
+  | "NO_REPLACEMENT_CAPACITY"
+  | "CONCURRENT_APPOINTMENT_CHANGE"
+  | "UNSAFE_RESTORATION";
+
+export type ClinicManualCaseResolutionRequest =
+  | {
+      action: "ASSIGN_REPLACEMENT";
+      expectedOptimisticToken: string;
+      laboratoryDate?: string;
+      physicalExamDate?: string;
+      reason: string;
+    }
+  | {
+      action: "KEEP_CURRENT_REPLACEMENT";
+      expectedOptimisticToken: string;
+      reason: string;
+    };
