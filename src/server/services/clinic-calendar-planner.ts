@@ -20,7 +20,17 @@ export type ClinicCycleAppointment = {
 
 export type ClinicCycleClassification =
   | {
-      strategy: "MOVE_COMPLETE_PAIR" | "MOVE_PHYSICAL_ONLY" | "PRESERVE_COMPLETION";
+      strategy: "MOVE_COMPLETE_PAIR";
+      laboratory: ClinicCycleAppointment;
+      physicalExam: ClinicCycleAppointment;
+    }
+  | {
+      strategy: "MOVE_PHYSICAL_ONLY";
+      laboratory: ClinicCycleAppointment;
+      physicalExam: ClinicCycleAppointment;
+    }
+  | {
+      strategy: "PRESERVE_COMPLETION";
       laboratory: ClinicCycleAppointment;
       physicalExam: ClinicCycleAppointment;
     }

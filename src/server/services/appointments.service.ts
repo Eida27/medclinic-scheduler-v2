@@ -23,6 +23,7 @@ const transitions: Record<AppointmentStatus, AppointmentStatus[]> = {
   DRAFT: ["PENDING", "CANCELLED"],
   PENDING: ["COMPLETED", "RESCHEDULED", "CANCELLED"],
   COMPLETED: [], NO_SHOW: ["RESCHEDULED"], RESCHEDULED: [], CANCELLED: [],
+  AWAITING_RESCHEDULE: [],
 };
 
 export function assertStatusTransition(from: AppointmentStatus, to: AppointmentStatus) {

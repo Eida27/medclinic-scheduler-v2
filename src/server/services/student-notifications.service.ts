@@ -13,12 +13,14 @@ export async function createStudentNotification(
   input: StudentNotificationInput,
 ) {
   const inserted = await insertStudentNotification(client, input);
+  if (!inserted) return null;
   if (inserted.email) {
     await enqueueStudentEmail(client, {
       studentNumber: input.studentNumber,
       toEmail: inserted.email,
       subject: input.title,
       textBody: `${input.message}\n\nOpen the student portal to review the details.`,
+      eventKey: input.eventKey,
     });
   }
   return inserted.id;

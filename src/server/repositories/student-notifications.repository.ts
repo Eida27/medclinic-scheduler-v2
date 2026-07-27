@@ -8,6 +8,7 @@ export type StudentNotificationInput = {
   title: string;
   message: string;
   metadata?: Record<string, unknown>;
+  eventKey?: string;
 };
 
 export async function insertStudentNotification(
@@ -17,8 +18,9 @@ export async function insertStudentNotification(
   const result = await client.query<{ id: string; email: string | null }>(
     `WITH inserted AS (
        INSERT INTO student_portal_notifications (
-         student_number, notification_type, title, message, metadata
-       ) VALUES ($1,$2,$3,$4,$5::jsonb)
+         student_number, notification_type, title, message, metadata, event_key
+       ) VALUES ($1,$2,$3,$4,$5::jsonb,$6)
+       ON CONFLICT (event_key) WHERE event_key IS NOT NULL DO NOTHING
        RETURNING id, student_number
      )
      SELECT inserted.id,
@@ -31,6 +33,7 @@ export async function insertStudentNotification(
       input.title,
       input.message,
       JSON.stringify(input.metadata ?? {}),
+      input.eventKey ?? null,
     ],
   );
   return result.rows[0];
@@ -44,13 +47,22 @@ export async function enqueueStudentEmail(
     subject: string;
     textBody: string;
     htmlBody?: string | null;
+    eventKey?: string;
   },
 ) {
   await client.query(
     `INSERT INTO email_outbox (
-       student_number, to_email, subject, text_body, html_body
-     ) VALUES ($1,$2,$3,$4,$5)`,
-    [input.studentNumber, input.toEmail, input.subject, input.textBody, input.htmlBody ?? null],
+       student_number, to_email, subject, text_body, html_body, event_key
+     ) VALUES ($1,$2,$3,$4,$5,$6)
+     ON CONFLICT (event_key) WHERE event_key IS NOT NULL DO NOTHING`,
+    [
+      input.studentNumber,
+      input.toEmail,
+      input.subject,
+      input.textBody,
+      input.htmlBody ?? null,
+      input.eventKey ?? null,
+    ],
   );
 }
 

@@ -7,7 +7,8 @@ export type OperationalAttendanceStatus =
   | "COMPLETED"
   | "NO_SHOW"
   | "RESCHEDULED"
-  | "CANCELLED";
+  | "CANCELLED"
+  | "AWAITING_RESCHEDULE";
 export type AttendanceStatus = OperationalAttendanceStatus | "UNSCHEDULED";
 
 export type CurrentEffectiveAppointment = {

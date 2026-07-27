@@ -28,20 +28,42 @@ export async function getStudentPortalSchedule(studentNumber: string) {
     id: string;
     studentNumber: string;
     scheduleType: string;
-    appointmentDate: string;
+    appointmentDate: string | null;
     status: string;
     rescheduledFrom: string | null;
   }>(
     `SELECT appointment.id,
             appointment.student_number AS "studentNumber",
             appointment.schedule_type AS "scheduleType",
-            appointment.appointment_date::text AS "appointmentDate",
+            CASE WHEN appointment.status='AWAITING_RESCHEDULE'
+                 THEN NULL ELSE appointment.appointment_date::text END AS "appointmentDate",
             appointment.status,
             appointment.rescheduled_from AS "rescheduledFrom"
        FROM appointments appointment
       WHERE appointment.student_number=$1 AND appointment.is_published=TRUE
+        AND appointment.status NOT IN ('RESCHEDULED','CANCELLED')
       ORDER BY appointment.appointment_date, appointment.schedule_type, appointment.created_at`,
     [studentNumber],
   );
-  return { ...student, appointments: appointments.rows };
+  const history = await query<{
+    id: string;
+    scheduleType: string;
+    originalDate: string;
+    status: string;
+    closureReason: string | null;
+    strategy: string | null;
+  }>(
+    `SELECT appointment.id::text,appointment.schedule_type AS "scheduleType",
+            appointment.appointment_date::text AS "originalDate",appointment.status,
+            closure.reason AS "closureReason",event.strategy
+       FROM appointments appointment
+       LEFT JOIN appointment_reschedule_events event
+         ON appointment.id IN (event.old_laboratory_appointment_id,event.old_physical_exam_appointment_id)
+       LEFT JOIN clinic_closure_groups closure ON closure.id=event.closure_group_id
+      WHERE appointment.student_number=$1
+        AND (appointment.status IN ('RESCHEDULED','AWAITING_RESCHEDULE') OR event.id IS NOT NULL)
+      ORDER BY appointment.appointment_date,appointment.schedule_type,appointment.created_at`,
+    [studentNumber],
+  );
+  return { ...student, appointments: appointments.rows, history: history.rows };
 }

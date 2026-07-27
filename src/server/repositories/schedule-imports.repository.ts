@@ -387,18 +387,11 @@ export async function createScheduleImport(
     );
     const laboratoryLoad = loadFor("KABALAKA_CLINIC");
     const physicalExamLoad = loadFor("CPU_CLINIC");
-    const blockedDates = await client.query<{ clinic_code: ClinicCode; date: string }>(
-      `SELECT clinic.code AS clinic_code, blocked.date::date::text AS date
-         FROM clinic_unavailable_dates unavailable
-         JOIN clinics clinic ON clinic.id=unavailable.clinic_id
-         CROSS JOIN LATERAL generate_series(
-           GREATEST(unavailable.start_date, $1::date),
-           LEAST(unavailable.end_date, $2::date),
-           INTERVAL '1 day'
-        ) AS blocked(date)
-        WHERE unavailable.end_date >= $1::date
-          AND unavailable.start_date <= $2::date
-          AND unavailable.unblocked_at IS NULL`,
+    const blockedDates = await client.query<{ date: string }>(
+      `SELECT blocked_date::text AS date
+         FROM clinic_unavailable_dates
+        WHERE blocked_date BETWEEN $1::date AND $2::date
+          AND reopened_at IS NULL`,
       [windowStart, searchEndDate],
     );
     const preferredWindowEnd = input.studentCategory === "REGULAR"
@@ -425,12 +418,8 @@ export async function createScheduleImport(
       },
       existingLaboratoryLoad: laboratoryLoad,
       existingPhysicalExamLoad: physicalExamLoad,
-      blockedLaboratoryDates: blockedDates.rows
-        .filter((row) => row.clinic_code === "KABALAKA_CLINIC")
-        .map((row) => row.date),
-      blockedPhysicalExamDates: blockedDates.rows
-        .filter((row) => row.clinic_code === "CPU_CLINIC")
-        .map((row) => row.date),
+      blockedLaboratoryDates: blockedDates.rows.map((row) => row.date),
+      blockedPhysicalExamDates: blockedDates.rows.map((row) => row.date),
       searchEndDate,
     });
     let assignments = generatePairedSchedule(allocationInput());

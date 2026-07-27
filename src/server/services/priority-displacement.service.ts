@@ -166,26 +166,15 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
   );
   const laboratoryLoad = loadFor("KABALAKA_CLINIC");
   const physicalExamLoad = loadFor("CPU_CLINIC");
-  const blocked = await client.query<{ clinic_code: string; date: string }>(
-    `SELECT clinic.code AS clinic_code, blocked.date::date::text AS date
-       FROM clinic_unavailable_dates unavailable
-       JOIN clinics clinic ON clinic.id=unavailable.clinic_id
-       CROSS JOIN LATERAL generate_series(
-         GREATEST(unavailable.start_date, $1::date),
-         LEAST(unavailable.end_date, $2::date),
-         INTERVAL '1 day'
-       ) AS blocked(date)
-      WHERE unavailable.end_date >= $1::date
-        AND unavailable.start_date <= $2::date
-        AND unavailable.unblocked_at IS NULL`,
+  const blocked = await client.query<{ date: string }>(
+    `SELECT blocked_date::text AS date
+       FROM clinic_unavailable_dates
+      WHERE blocked_date BETWEEN $1::date AND $2::date
+        AND reopened_at IS NULL`,
     [input.replacementWindowStart, input.searchEndDate],
   );
-  const blockedLaboratoryDates = blocked.rows
-    .filter((row) => row.clinic_code === "KABALAKA_CLINIC")
-    .map((row) => row.date);
-  const blockedPhysicalExamDates = blocked.rows
-    .filter((row) => row.clinic_code === "CPU_CLINIC")
-    .map((row) => row.date);
+  const blockedLaboratoryDates = blocked.rows.map((row) => row.date);
+  const blockedPhysicalExamDates = blocked.rows.map((row) => row.date);
   const generated = generatePairedSchedule({
     requests: pairCandidates.map((candidate) => ({
       requestId: `displacement:${candidate.schedulePairId}`,

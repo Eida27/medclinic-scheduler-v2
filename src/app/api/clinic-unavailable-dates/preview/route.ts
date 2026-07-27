@@ -1,19 +1,7 @@
 import { dataResponse, errorResponse } from "@/lib/api-response";
 import { AppError } from "@/lib/errors";
 import { requireUser } from "@/server/auth/current-user";
-import {
-  listClinicUnavailableDates,
-  saveClinicCalendarChanges,
-} from "@/server/services/clinic-calendar.service";
-
-export async function GET() {
-  try {
-    const actor = await requireUser(["ADMIN", "CLINIC_STAFF"]);
-    return dataResponse(await listClinicUnavailableDates(actor));
-  } catch (error) {
-    return errorResponse(error);
-  }
-}
+import { previewClinicCalendarChanges } from "@/server/services/clinic-calendar.service";
 
 export async function POST(request: Request) {
   try {
@@ -24,7 +12,7 @@ export async function POST(request: Request) {
     } catch {
       throw new AppError("INVALID_JSON", "The request body must be valid JSON.", 400);
     }
-    return dataResponse(await saveClinicCalendarChanges(body, actor), { status: 200 });
+    return dataResponse(await previewClinicCalendarChanges(body, actor));
   } catch (error) {
     return errorResponse(error);
   }

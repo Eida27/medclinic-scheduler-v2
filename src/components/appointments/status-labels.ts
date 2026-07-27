@@ -19,6 +19,7 @@ const operationalStatusLabels: Record<string, string> = {
   NO_SHOW: "No-show",
   RESCHEDULED: "Rescheduled",
   CANCELLED: "Cancelled",
+  AWAITING_RESCHEDULE: "Awaiting manual reschedule",
 };
 
 function readableStatus(value: string): string {
@@ -45,6 +46,7 @@ export function statusTone(value: string): StatusTone {
     value === "FOLLOW_UP" ||
     value === "PENDING" ||
     value === "RESCHEDULED"
+    || value === "AWAITING_RESCHEDULE"
   ) {
     return "warning";
   }

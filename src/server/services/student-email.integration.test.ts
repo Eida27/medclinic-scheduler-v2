@@ -112,8 +112,8 @@ describe("student notifications and optional email", () => {
       message: "Review your new dates.",
     }));
     expect((await listStudentNotifications("99-9504-04")).unreadCount).toBe(1);
-    await expect(markStudentNotificationRead("99-9599-99", notificationId)).resolves.toBe(false);
-    await expect(markStudentNotificationRead("99-9504-04", notificationId)).resolves.toBe(true);
+    await expect(markStudentNotificationRead("99-9599-99", notificationId!)).resolves.toBe(false);
+    await expect(markStudentNotificationRead("99-9504-04", notificationId!)).resolves.toBe(true);
     expect((await listStudentNotifications("99-9504-04")).unreadCount).toBe(0);
   });
 });

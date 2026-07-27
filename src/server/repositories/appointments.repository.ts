@@ -8,7 +8,7 @@ import type { ClinicCode } from "@/server/clinics";
 import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import { studentDisplayNameSql } from "@/server/students/student-display-name";
 
-export type AppointmentStatus = "DRAFT" | "PENDING" | "COMPLETED" | "NO_SHOW" | "RESCHEDULED" | "CANCELLED";
+export type AppointmentStatus = "DRAFT" | "PENDING" | "COMPLETED" | "NO_SHOW" | "RESCHEDULED" | "CANCELLED" | "AWAITING_RESCHEDULE";
 type AppointmentDetail = {
   id: string; batchId: string | null; studentNumber: string; studentName: string; scheduleType: string;
   clinicId: string; clinicCode: string; clinicName: string;
@@ -48,7 +48,7 @@ export async function listAppointments(filters: {
   clinicCode?: ClinicCode; appointmentDate?: string; scheduleType?: string; status?: string; collegeId?: string; programId?: string;
   studentNumber?: string; isPublished?: true; sort?: AppointmentListSort; page: number; limit: number; offset: number;
 }) {
-  const clauses = ["a.is_published=TRUE"]; const values: unknown[] = [];
+  const clauses = ["a.is_published=TRUE", "a.status NOT IN ('RESCHEDULED','CANCELLED','AWAITING_RESCHEDULE')"]; const values: unknown[] = [];
   const add = (sql: string, value: unknown) => { values.push(value); clauses.push(sql.replaceAll("?", `$${values.length}`)); };
   if (filters.appointmentDate) add("a.appointment_date = ?::date", filters.appointmentDate);
   if (filters.clinicCode) add("cl.code = ?", filters.clinicCode);
@@ -105,7 +105,8 @@ export async function getPublishedAppointment(id: string) {
      FROM appointments a JOIN students s ON s.student_number=a.student_number
      JOIN clinics cl ON cl.id=a.clinic_id
      JOIN colleges c ON c.id=s.college_id JOIN programs p ON p.id=s.program_id
-     WHERE a.id=$1 AND a.is_published=TRUE`, [id]);
+     WHERE a.id=$1 AND a.is_published=TRUE
+       AND a.status NOT IN ('RESCHEDULED','CANCELLED','AWAITING_RESCHEDULE')`, [id]);
   if (!result.rows[0]) return null;
   const logs = await query<StatusLog>(
     `SELECT l.id, l.old_status AS "oldStatus", l.new_status AS "newStatus", l.notes,
@@ -320,7 +321,9 @@ export async function publicStudentSchedule(studentNumber: string) {
      FROM students s WHERE s.student_number=$1 AND s.is_active=TRUE`, [studentNumber]);
   if (!student.rows[0]) return null;
   const appointments = await query(
-    `SELECT schedule_type AS "scheduleType", appointment_date::text AS "appointmentDate", status
+    `SELECT schedule_type AS "scheduleType",
+            CASE WHEN status='AWAITING_RESCHEDULE' THEN NULL ELSE appointment_date::text END AS "appointmentDate",
+            status
      FROM appointments WHERE student_number=$1 AND is_published=TRUE
      AND status NOT IN ('RESCHEDULED','CANCELLED') ORDER BY appointment_date`, [studentNumber]);
   const compliance = await query<{

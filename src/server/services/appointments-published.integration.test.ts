@@ -7,6 +7,7 @@ import {
   publicStudentSchedule,
 } from "@/server/repositories/appointments.repository";
 import { studentHistory } from "@/server/repositories/students.repository";
+import { getStudentPortalSchedule } from "@/server/repositories/student-portal.repository";
 import {
   cleanupTestFixtures,
   insertTestStudent,
@@ -41,6 +42,54 @@ afterAll(async () => {
 });
 
 describe("published-only appointment access", () => {
+  it("keeps awaiting items out of clinic operations while exposing an unresolved student state", async () => {
+    await insertTestStudent({
+      studentNumber,
+      firstName: "Awaiting",
+      lastName: "Student",
+      yearLevel: 4,
+    });
+    const awaiting = await pool.query<{ id: string }>(
+      `INSERT INTO appointments (
+         clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+         schedule_cycle_start,created_by,updated_by
+       ) VALUES
+         ($1,$3,'LABORATORY','2047-08-05','AWAITING_RESCHEDULE',TRUE,2047,$4,$4),
+         ($2,$3,'PHYSICAL_EXAM','2047-08-06','NO_SHOW',TRUE,2047,$4,$4)
+       RETURNING id::text`,
+      [
+        TEST_REFERENCE_IDS.laboratoryClinic,
+        TEST_REFERENCE_IDS.physicalExamClinic,
+        studentNumber,
+        admin.userId,
+      ],
+    );
+    const operational = await listAppointments({
+      studentNumber,
+      page: 1,
+      limit: 20,
+      offset: 0,
+    });
+    expect(operational.items).toEqual([expect.objectContaining({ status: "NO_SHOW" })]);
+    await expect(getPublishedAppointment(awaiting.rows[0].id)).resolves.toBeNull();
+
+    const publicSchedule = await publicStudentSchedule(studentNumber);
+    expect(Object.keys(publicSchedule!).sort()).toEqual(["appointments", "compliance", "studentNumber"]);
+    expect(publicSchedule?.appointments).toEqual(expect.arrayContaining([
+      expect.objectContaining({ scheduleType: "LABORATORY", appointmentDate: null, status: "AWAITING_RESCHEDULE" }),
+      expect.objectContaining({ scheduleType: "PHYSICAL_EXAM", status: "NO_SHOW" }),
+    ]));
+    const portal = await getStudentPortalSchedule(studentNumber);
+    expect(portal).toMatchObject({
+      appointments: expect.arrayContaining([
+        expect.objectContaining({ appointmentDate: null, status: "AWAITING_RESCHEDULE" }),
+      ]),
+      history: expect.arrayContaining([
+        expect.objectContaining({ originalDate: "2047-08-05", status: "AWAITING_RESCHEDULE" }),
+      ]),
+    });
+  });
+
   it("hides historical drafts everywhere normal, then exposes and operates them after publication", async () => {
     await insertTestStudent({
       studentNumber,

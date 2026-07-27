@@ -49,7 +49,11 @@ function input(contents: string, overrides: Record<string, unknown> = {}) {
 
 async function cleanup() {
   await cleanupTestFixtures(studentPattern, importPattern, importPattern);
-  await pool.query("DELETE FROM clinic_unavailable_dates WHERE reason LIKE 'TEST-AY%'");
+  await pool.query(
+    `DELETE FROM clinic_unavailable_dates
+      WHERE closure_group_id IN (SELECT id FROM clinic_closure_groups WHERE reason LIKE 'TEST-AY%')`,
+  );
+  await pool.query("DELETE FROM clinic_closure_groups WHERE reason LIKE 'TEST-AY%'");
 }
 
 beforeAll(cleanup);
@@ -193,12 +197,17 @@ describe("student scheduling imports", () => {
   it("uses a soft-unblocked Laboratory date for import allocation", async () => {
     const studentNumber = "99-9105-05";
     await pool.query(
-      `INSERT INTO clinic_unavailable_dates (
-         clinic_id, start_date, end_date, category, reason, created_by,
-         unblocked_at, unblocked_by, unblocked_batch_id
-       ) VALUES ($1,'2027-08-02','2027-08-02','CLOSURE',
-                 'TEST-AY soft-unblocked allocation',$2,NOW(),$2,gen_random_uuid())`,
-      [TEST_REFERENCE_IDS.laboratoryClinic, TEST_REFERENCE_IDS.adminUser],
+      `WITH closure AS (
+         INSERT INTO clinic_closure_groups (
+           start_date,end_date,category,reason,created_by,creation_batch_id
+         ) VALUES ('2027-08-02','2027-08-02','CLOSURE',
+                   'TEST-AY soft-unblocked allocation',$1,gen_random_uuid())
+         RETURNING id
+       )
+       INSERT INTO clinic_unavailable_dates (
+         closure_group_id,blocked_date,reopened_at,reopened_by,reopening_batch_id
+       ) SELECT id,'2027-08-02',NOW(),$1,gen_random_uuid() FROM closure`,
+      [TEST_REFERENCE_IDS.adminUser],
     );
 
     await importStudentScheduleCsv(input(csv(
@@ -214,5 +223,34 @@ describe("student scheduling imports", () => {
       [studentNumber],
     );
     expect(laboratory.rows).toEqual([{ appointment_date: "2027-08-02" }]);
+  });
+
+  it("uses the unified active-date set for both clinic allocations", async () => {
+    const studentNumber = "99-9106-06";
+    await pool.query(
+      `WITH closure AS (
+         INSERT INTO clinic_closure_groups (
+           start_date,end_date,category,reason,created_by,creation_batch_id
+         ) VALUES ('2027-08-02','2027-08-02','CLOSURE',
+                   'TEST-AY unified active allocation',$1,gen_random_uuid())
+         RETURNING id
+       )
+       INSERT INTO clinic_unavailable_dates (closure_group_id,blocked_date)
+       SELECT id,'2027-08-02' FROM closure`,
+      [TEST_REFERENCE_IDS.adminUser],
+    );
+
+    await importStudentScheduleCsv(input(csv(
+      `${studentNumber},Blocked,Import,,,College of Computer Studies,BSIT,3,05-06-2003`,
+    ), { academicYearStart: 2027 }), admin);
+
+    const appointments = await pool.query<{ schedule_type: string; appointment_date: string }>(
+      `SELECT schedule_type,appointment_date::text
+         FROM appointments
+        WHERE student_number=$1 AND status='PENDING'
+        ORDER BY schedule_type`,
+      [studentNumber],
+    );
+    expect(appointments.rows.every((appointment) => appointment.appointment_date !== "2027-08-02")).toBe(true);
   });
 });

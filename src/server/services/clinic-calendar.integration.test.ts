@@ -30,6 +30,7 @@ const requestIds = {
   preview: "90000000-0000-4000-8000-000000000007",
   rollback: "90000000-0000-4000-8000-000000000008",
   keepBlock: "90000000-0000-4000-8000-000000000009",
+  concurrency: "90000000-0000-4000-8000-000000000010",
 } as const;
 
 async function cleanup() {
@@ -177,6 +178,14 @@ describe("unified clinic calendar lifecycle", () => {
       expect.objectContaining({ status: "PENDING", is_published: true, appointment_date: "2049-08-11", rescheduled_from: expect.any(String) }),
       expect.objectContaining({ status: "PENDING", is_published: true, appointment_date: "2049-08-12", rescheduled_from: expect.any(String) }),
     ]);
+    const notifications = await pool.query<{ notification_type: string; event_key: string }>(
+      `SELECT notification_type,event_key FROM student_portal_notifications
+        WHERE student_number='UCAL-PAIR'`,
+    );
+    expect(notifications.rows).toEqual([{
+      notification_type: "CLINIC_CLOSURE_RESCHEDULED",
+      event_key: expect.stringMatching(/^clinic-closure:.+:rescheduled$/),
+    }]);
     await expect(saveClinicCalendarChanges({
       ...request,
       changes: [request.changes[0]],
@@ -241,6 +250,14 @@ describe("unified clinic calendar lifecycle", () => {
       { schedule_type: "LABORATORY", appointment_date: "2049-08-16", status: "PENDING" },
       { schedule_type: "PHYSICAL_EXAM", appointment_date: "2049-08-17", status: "PENDING" },
     ]);
+    const notificationTypes = await pool.query<{ notification_type: string }>(
+      `SELECT notification_type FROM student_portal_notifications
+        WHERE student_number='UCAL-MANUAL' ORDER BY created_at,id`,
+    );
+    expect(notificationTypes.rows).toEqual([
+      { notification_type: "CLINIC_CLOSURE_AWAITING_RESCHEDULE" },
+      { notification_type: "CLINIC_CLOSURE_MANUALLY_RESOLVED" },
+    ]);
   });
 
   it("waits for complete reopening and then restores the original pair atomically", async () => {
@@ -279,6 +296,14 @@ describe("unified clinic calendar lifecycle", () => {
       { appointment_date: "2049-08-09", status: "PENDING" },
       { appointment_date: "2049-08-10", status: "PENDING" },
     ]);
+    const notificationTypes = await pool.query<{ notification_type: string }>(
+      `SELECT notification_type FROM student_portal_notifications
+        WHERE student_number='UCAL-RESTORE' ORDER BY created_at,id`,
+    );
+    expect(notificationTypes.rows).toEqual([
+      { notification_type: "CLINIC_CLOSURE_RESCHEDULED" },
+      { notification_type: "CLINIC_CLOSURE_SCHEDULE_RESTORED" },
+    ]);
   });
 
   it("allows clinic staff to read but not mutate the unified calendar", async () => {
@@ -295,6 +320,59 @@ describe("unified clinic calendar lifecycle", () => {
       emergencyAcknowledged: false,
       changes: [{ action: "BLOCK", date: "2049-08-09", category: "CLOSURE", reason: "TEST-UNIFIED forbidden" }],
     }, staff)).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+  });
+
+  it("does not retain compatibility for clinicId or UNBLOCK", async () => {
+    await expect(saveClinicCalendarChanges({
+      requestId: randomUUID(),
+      emergencyAcknowledged: false,
+      changes: [{
+        action: "BLOCK",
+        clinicId: TEST_REFERENCE_IDS.laboratoryClinic,
+        date: "2049-08-09",
+        category: "CLOSURE",
+        reason: "TEST-UNIFIED legacy clinic scope",
+      }],
+    }, admin)).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 422 });
+    await expect(saveClinicCalendarChanges({
+      requestId: randomUUID(),
+      emergencyAcknowledged: false,
+      changes: [{
+        action: "UNBLOCK",
+        date: "2049-08-09",
+        unavailableDateId: randomUUID(),
+        expectedUpdatedAt: new Date().toISOString(),
+      }],
+    }, admin)).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 422 });
+  });
+
+  it("serializes calendar saves with imports under the shared advisory lock", async () => {
+    await createPair({
+      studentNumber: "UCAL-LOCK",
+      laboratoryDate: "2049-08-12",
+      physicalExamDate: "2049-08-13",
+    });
+    const blocker = await pool.connect();
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT pg_advisory_xact_lock(hashtext('medclinic:schedule-import-queue'))");
+      let settled = false;
+      const pending = saveClinicCalendarChanges({
+        requestId: requestIds.concurrency,
+        emergencyAcknowledged: false,
+        changes: [{ action: "BLOCK", date: "2049-08-12", category: "CLOSURE", reason: "TEST-UNIFIED shared lock" }],
+      }, admin).finally(() => { settled = true; });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(settled).toBe(false);
+      await expect(pool.query(
+        "SELECT 1 FROM clinic_closure_groups WHERE reason='TEST-UNIFIED shared lock'",
+      )).resolves.toMatchObject({ rowCount: 0 });
+      await blocker.query("COMMIT");
+      await pending;
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      blocker.release();
+    }
   });
 
   it("rolls back the whole operation for an unexpected database failure", async () => {

@@ -70,10 +70,12 @@ const summaryRowsCte = `
       COALESCE(physical.status, 'UNSCHEDULED') AS "physicalExamStatus",
       COALESCE(laboratory.status, 'UNSCHEDULED') AS "laboratoryStatus",
       physical.id AS "physicalExamAppointmentId",
-      physical.appointment_date AS "physicalExamAppointmentDate",
+      CASE WHEN physical.status='AWAITING_RESCHEDULE' THEN NULL
+           ELSE physical.appointment_date END AS "physicalExamAppointmentDate",
       physical.status AS "physicalExamAppointmentStatus",
       laboratory.id AS "laboratoryAppointmentId",
-      laboratory.appointment_date AS "laboratoryAppointmentDate",
+      CASE WHEN laboratory.status='AWAITING_RESCHEDULE' THEN NULL
+           ELSE laboratory.appointment_date END AS "laboratoryAppointmentDate",
       laboratory.status AS "laboratoryAppointmentStatus",
       LEAST(
         CASE WHEN physical.status='PENDING' AND physical.appointment_date >= CURRENT_DATE

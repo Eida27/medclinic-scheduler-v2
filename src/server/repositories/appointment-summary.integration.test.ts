@@ -24,6 +24,7 @@ const attendanceCases = [
   ["TEST-ATTENDANCE-0002", "COMPLETED", "PENDING", "INCOMPLETE"],
   ["TEST-ATTENDANCE-0003", "NO_SHOW", "COMPLETED", "INCOMPLETE"],
   ["TEST-ATTENDANCE-0004", null, "COMPLETED", "INCOMPLETE"],
+  ["TEST-ATTENDANCE-0005", "AWAITING_RESCHEDULE", "COMPLETED", "INCOMPLETE"],
 ] as const;
 
 let attendanceReplacementId: string;
@@ -100,7 +101,9 @@ beforeAll(async () => {
        ($1,'TEST-ATTENDANCE-0002','LABORATORY','2046-04-01','COMPLETED',TRUE,$3,$3),
        ($2,'TEST-ATTENDANCE-0002','PHYSICAL_EXAM','2046-04-08','PENDING',TRUE,$3,$3),
        ($2,'TEST-ATTENDANCE-0003','PHYSICAL_EXAM','2046-04-08','COMPLETED',TRUE,$3,$3),
-       ($2,'TEST-ATTENDANCE-0004','PHYSICAL_EXAM','2046-04-08','COMPLETED',TRUE,$3,$3)
+       ($2,'TEST-ATTENDANCE-0004','PHYSICAL_EXAM','2046-04-08','COMPLETED',TRUE,$3,$3),
+       ($1,'TEST-ATTENDANCE-0005','LABORATORY','2046-04-01','AWAITING_RESCHEDULE',TRUE,$3,$3),
+       ($2,'TEST-ATTENDANCE-0005','PHYSICAL_EXAM','2046-04-08','COMPLETED',TRUE,$3,$3)
      RETURNING id, student_number, schedule_type`,
     [
       TEST_REFERENCE_IDS.laboratoryClinic,
@@ -165,6 +168,7 @@ describe("appointment summary attendance", () => {
       "TEST-ATTENDANCE-0001",
       "TEST-ATTENDANCE-0003",
       "TEST-ATTENDANCE-0004",
+      "TEST-ATTENDANCE-0005",
     ]],
     [{ laboratoryStatus: "COMPLETED", physicalExamStatus: "COMPLETED" }, [
       "TEST-ATTENDANCE-0001",
@@ -209,6 +213,25 @@ describe("appointment summary attendance", () => {
         overallStatus,
       });
     }
+  });
+
+  it("keeps awaiting rows in the combined summary without presenting the closed date as current", async () => {
+    const result = await appointmentSummaryReport({
+      search: "TEST-ATTENDANCE-0005",
+      sort: "name_asc",
+      page: 1,
+      limit: 20,
+      offset: 0,
+    });
+    expect(result).toMatchObject({
+      total: 1,
+      items: [expect.objectContaining({
+        laboratoryStatus: "AWAITING_RESCHEDULE",
+        laboratoryAppointmentDate: null,
+        nextSchedule: null,
+        overallStatus: "INCOMPLETE",
+      })],
+    });
   });
 
   it("returns the replacement appointment from a reschedule chain", async () => {

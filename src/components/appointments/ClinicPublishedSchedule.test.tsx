@@ -39,6 +39,9 @@ describe("ClinicPublishedSchedule", () => {
     expect(status).toHaveValue("PENDING");
     expect(within(status).queryByRole("option", { name: "DRAFT" })).not.toBeInTheDocument();
     expect(within(status).getByRole("option", { name: "No-show" })).toHaveValue("NO_SHOW");
+    expect(within(status).queryByRole("option", { name: "Rescheduled" })).not.toBeInTheDocument();
+    expect(within(status).queryByRole("option", { name: "Cancelled" })).not.toBeInTheDocument();
+    expect(within(status).queryByRole("option", { name: "Awaiting manual reschedule" })).not.toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: /visibility/i })).not.toBeInTheDocument();
 
     const sort = screen.getByRole("combobox", { name: "Sort" });

@@ -34,6 +34,7 @@ describe("operationalStatusLabel", () => {
     ["NO_SHOW", "No-show"],
     ["RESCHEDULED", "Rescheduled"],
     ["CANCELLED", "Cancelled"],
+    ["AWAITING_RESCHEDULE", "Awaiting manual reschedule"],
   ])("labels %s as %s", (value, expected) => {
     expect(operationalStatusLabel(value)).toBe(expected);
   });

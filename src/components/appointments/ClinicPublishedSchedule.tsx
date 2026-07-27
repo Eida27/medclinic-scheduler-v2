@@ -33,7 +33,7 @@ type ClinicPublishedScheduleProps = {
   appointments: ClinicAppointment[];
 };
 
-const operationalStatuses = ["PENDING", "COMPLETED", "NO_SHOW", "RESCHEDULED", "CANCELLED"];
+const operationalStatuses = ["PENDING", "COMPLETED", "NO_SHOW"];
 const sortOptions: Array<[AppointmentListSort, string]> = [
   ["surname_asc", "Surname A-Z"],
   ["surname_desc", "Surname Z-A"],

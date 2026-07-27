@@ -23,6 +23,7 @@ import type {
   ClinicManualCaseResolutionRequest,
 } from "@/types/clinic-calendar";
 import type { SessionUser } from "@/types/roles";
+import { createStudentNotification } from "@/server/services/student-notifications.service";
 import {
   allocateReplacementDates,
   classifyClinicCycle,
@@ -48,18 +49,18 @@ const blockSchema = z.object({
   date: z.iso.date(),
   category: categorySchema,
   reason: z.string().trim().min(3).max(500),
-});
+}).strict();
 const reopenSchema = z.object({
   action: z.literal("REOPEN"),
   date: z.iso.date(),
   unavailableDateId: z.string().uuid(),
   expectedUpdatedAt: z.string().trim().min(1).max(64),
-});
+}).strict();
 const requestSchema = z.object({
   requestId: z.string().uuid(),
   changes: z.array(z.discriminatedUnion("action", [blockSchema, reopenSchema])).min(1).max(366),
   emergencyAcknowledged: z.boolean(),
-});
+}).strict();
 const resolutionSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("ASSIGN_REPLACEMENT"),
@@ -492,7 +493,7 @@ async function applyAutomaticMove(
       input.actorUserId,
     );
   }
-  await insertClosureEvent(client, {
+  const eventId = await insertClosureEvent(client, {
     cycle: input.cycle,
     closureGroupId: input.group.closureGroupId,
     strategy: input.classification.strategy,
@@ -502,6 +503,20 @@ async function applyAutomaticMove(
     newLaboratoryId: replacementByType.LABORATORY,
     newPhysicalId: replacementByType.PHYSICAL_EXAM,
     unavailableDateIds: input.unavailableDateIds,
+  });
+  await createStudentNotification(client, {
+    studentNumber: input.cycle.studentNumber,
+    notificationType: "CLINIC_CLOSURE_RESCHEDULED",
+    title: "Clinic schedule updated",
+    message: "A clinic closure changed your schedule. Review your new appointment date or dates.",
+    eventKey: `clinic-closure:${eventId}:rescheduled`,
+    metadata: {
+      eventId,
+      closureGroupId: input.group.closureGroupId,
+      strategy: input.classification.strategy,
+      previousDates: Object.fromEntries(originals.map((appointment) => [appointment.scheduleType, appointment.appointmentDate])),
+      replacementDates: input.dates,
+    },
   });
   return originals.length;
 }
@@ -533,7 +548,7 @@ async function createManualFallback(
     closureGroupId: input.group.closureGroupId,
     actorUserId: input.actorUserId,
   });
-  await insertClosureEvent(client, {
+  const eventId = await insertClosureEvent(client, {
     cycle: input.cycle,
     closureGroupId: input.group.closureGroupId,
     strategy: "MANUAL_RESOLUTION_REQUIRED",
@@ -542,6 +557,18 @@ async function createManualFallback(
     actorUserId: input.actorUserId,
     manualCaseId,
     unavailableDateIds: input.unavailableDateIds,
+  });
+  await createStudentNotification(client, {
+    studentNumber: input.cycle.studentNumber,
+    notificationType: "CLINIC_CLOSURE_AWAITING_RESCHEDULE",
+    title: "Clinic schedule needs manual rescheduling",
+    message: "A clinic closure affected your schedule. An administrator will provide a safe replacement date.",
+    eventKey: `clinic-closure:${eventId}:awaiting`,
+    metadata: {
+      eventId,
+      closureGroupId: input.group.closureGroupId,
+      reasonCode: input.reasonCode,
+    },
   });
   return manualCaseId;
 }
@@ -701,6 +728,14 @@ async function restoreForReopenedDates(
         WHERE id=$1`,
       [eventId, actor.userId, batchId],
     );
+    await createStudentNotification(client, {
+      studentNumber: event.student_number,
+      notificationType: "CLINIC_CLOSURE_SCHEDULE_RESTORED",
+      title: "Original clinic schedule restored",
+      message: "The clinic date reopened and your original schedule was safely restored.",
+      eventKey: `clinic-closure:${eventId}:restored`,
+      metadata: { eventId, closureGroupId: event.closure_group_id },
+    });
     restoredStudents.add(event.student_number);
     restoredAppointments += originalIds.length;
   }
@@ -1274,6 +1309,16 @@ export async function resolveClinicClosureManualCase(
                jsonb_build_object('studentNumber',$3::text,'resolutionAction',$4::text,'reason',$5::text))`,
       [actor.userId, caseId, manualCase.student_number, request.action, request.reason],
     );
+    await createStudentNotification(client, {
+      studentNumber: manualCase.student_number,
+      notificationType: "CLINIC_CLOSURE_MANUALLY_RESOLVED",
+      title: "Clinic schedule resolved",
+      message: request.action === "ASSIGN_REPLACEMENT"
+        ? "An administrator assigned your replacement clinic schedule."
+        : "An administrator confirmed your current replacement clinic schedule.",
+      eventKey: `clinic-closure:manual-case:${caseId}:resolved`,
+      metadata: { manualCaseId: caseId, resolutionAction: request.action },
+    });
     return { caseId, status: "RESOLVED" as const, resolutionAction: request.action };
   });
 }
