@@ -17,8 +17,11 @@ type AppointmentDetail = {
   clinicId: string; clinicCode: string; clinicName: string;
   appointmentDate: string; status: AppointmentStatus; isPublished: boolean;
   notes: string | null; rescheduledFrom: string | null; collegeName: string; programName: string;
+  completedFromStatus: CompletionSourceStatus | null;
 };
 type StatusLog = { id: string; oldStatus: string | null; newStatus: string; notes: string | null; createdAt: Date; changedById: string | null; changedByName: string | null };
+
+export type CompletionSourceStatus = "PENDING" | "NO_SHOW";
 
 export type AppointmentMutationContext = {
   id: string;
@@ -34,6 +37,7 @@ export type AppointmentMutationContext = {
   isManuallyLocked: boolean;
   lockReason: string | null;
   latestLog: AutomaticNoShowLog | null;
+  completedFromStatus: CompletionSourceStatus | null;
 };
 
 type AppointmentMutationContextWithDate = AppointmentMutationContext & {
@@ -86,10 +90,22 @@ export async function listAppointments(filters: {
             ${studentDisplayNameSql("s")} AS "studentName", a.schedule_type AS "scheduleType",
             a.clinic_id AS "clinicId", cl.code AS "clinicCode", cl.name AS "clinicName",
             a.appointment_date::text AS "appointmentDate",
-            a.status, a.is_published AS "isPublished", c.name AS "collegeName", p.name AS "programName"
+            a.status, a.is_published AS "isPublished", c.name AS "collegeName", p.name AS "programName",
+            CASE
+              WHEN a.status='COMPLETED' AND completion.old_status IN ('PENDING','NO_SHOW')
+                THEN completion.old_status
+              ELSE NULL
+            END AS "completedFromStatus"
      FROM appointments a JOIN students s ON s.student_number=a.student_number
      JOIN clinics cl ON cl.id=a.clinic_id
      JOIN colleges c ON c.id=s.college_id JOIN programs p ON p.id=s.program_id
+     LEFT JOIN LATERAL (
+       SELECT old_status
+         FROM appointment_status_logs
+        WHERE appointment_id=a.id AND new_status='COMPLETED'
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+     ) completion ON TRUE
      WHERE ${where} ORDER BY ${orderBy}
      LIMIT $${values.length - 1} OFFSET $${values.length}`,
     values,
@@ -136,6 +152,7 @@ export async function getAppointmentMutationContext(id: string, client: PoolClie
     latestNewStatus: string | null;
     latestNotes: string | null;
     latestChangedById: string | null;
+    completedFromStatus: CompletionSourceStatus | null;
     schedulePairId: string | null;
     scheduleCycleStart: number;
     isManuallyLocked: boolean;
@@ -154,7 +171,12 @@ export async function getAppointmentMutationContext(id: string, client: PoolClie
             latest.old_status AS "latestOldStatus",
             latest.new_status AS "latestNewStatus",
             latest.notes AS "latestNotes",
-            latest.changed_by AS "latestChangedById"
+            latest.changed_by AS "latestChangedById",
+            CASE
+              WHEN appointment.status='COMPLETED' AND completion.old_status IN ('PENDING','NO_SHOW')
+                THEN completion.old_status
+              ELSE NULL
+            END AS "completedFromStatus"
        FROM appointments appointment
        JOIN clinics clinic ON clinic.id=appointment.clinic_id
        LEFT JOIN LATERAL (
@@ -164,6 +186,13 @@ export async function getAppointmentMutationContext(id: string, client: PoolClie
           ORDER BY created_at DESC, id DESC
           LIMIT 1
        ) latest ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT old_status
+           FROM appointment_status_logs
+          WHERE appointment_id=appointment.id AND new_status='COMPLETED'
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1
+       ) completion ON TRUE
       WHERE appointment.id=$1 AND appointment.is_published=TRUE
       FOR UPDATE OF appointment`,
     [id],
@@ -190,6 +219,7 @@ export async function getAppointmentMutationContext(id: string, client: PoolClie
       notes: row.latestNotes,
       changedById: row.latestChangedById,
     } : null,
+    completedFromStatus: row.completedFromStatus,
   } satisfies AppointmentMutationContextWithDate;
 }
 

@@ -104,4 +104,51 @@ describe("/api/appointments/[appointmentId]", () => {
       },
     });
   });
+
+  it("passes the semantic quick-status request through unchanged", async () => {
+    const request = {
+      quickStatusAction: "REVERT_COMPLETION",
+      expectedStatus: "COMPLETED",
+    };
+
+    const response = await PATCH(new Request(
+      `http://localhost/api/appointments/${appointmentId}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(request),
+      },
+    ), context);
+
+    expect(response.status).toBe(200);
+    expect(updateAppointment).toHaveBeenCalledWith(appointmentId, request, clinicStaff);
+  });
+
+  it("returns a quick-status conflict without rewriting its code or status", async () => {
+    updateAppointment.mockRejectedValue(new AppError(
+      "APPOINTMENT_STATUS_CONFLICT",
+      "The appointment status changed. Refresh and try again.",
+      409,
+    ));
+
+    const response = await PATCH(new Request(
+      `http://localhost/api/appointments/${appointmentId}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          quickStatusAction: "MARK_COMPLETED",
+          expectedStatus: "PENDING",
+        }),
+      },
+    ), context);
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "APPOINTMENT_STATUS_CONFLICT",
+        message: "The appointment status changed. Refresh and try again.",
+      },
+    });
+  });
 });

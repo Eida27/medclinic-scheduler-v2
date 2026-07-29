@@ -54,6 +54,13 @@ const correctionStudentNumbers = [
   "TEST-APPT-COORD",
   "TEST-APPT-FINAL",
   "TEST-APPT-DIRECT-NOS",
+  "TEST-APPT-Q-PEND",
+  "TEST-APPT-Q-NOSHOW",
+  "TEST-APPT-Q-MANUAL",
+  "TEST-APPT-Q-PROT",
+  "TEST-APPT-Q-CROSS",
+  "TEST-APPT-Q-CONC",
+  "TEST-APPT-Q-ROLL",
 ];
 const orderingFixtures = [
   { studentNumber: "TEST-APPT-SORT-ALPHA", firstName: "Zoe", lastName: "Alpha", appointmentDate: "2044-01-03" },
@@ -123,6 +130,26 @@ async function appointmentMutationSnapshot(appointmentId: string) {
     [appointmentId],
   );
   return { appointment: appointment.rows, history: history.rows, audit: audit.rows };
+}
+
+async function insertQuickPendingAppointment(
+  fixtureStudentNumber: string,
+  clinicId = TEST_REFERENCE_IDS.laboratoryClinic,
+) {
+  const result = await pool.query<{ id: string }>(
+    `INSERT INTO appointments (
+       clinic_id, student_number, schedule_type, appointment_date,
+       status, is_published, notes, created_by, updated_by
+     ) VALUES ($1,$2,$3,'2045-08-18','PENDING',TRUE,'Quick-status fixture',$4,$4)
+     RETURNING id`,
+    [
+      clinicId,
+      fixtureStudentNumber,
+      clinicId === TEST_REFERENCE_IDS.laboratoryClinic ? "LABORATORY" : "PHYSICAL_EXAM",
+      TEST_REFERENCE_IDS.adminUser,
+    ],
+  );
+  return result.rows[0].id;
 }
 
 beforeAll(async () => {
@@ -227,7 +254,7 @@ describe("appointment lifecycle", () => {
 
     const current = await pool.query<{ id: string }>("SELECT id FROM appointments WHERE batch_id=$1", [batchId]);
     await expect(getPublishedAppointment(current.rows[0].id)).resolves.toMatchObject({
-      studentName: "Fixture, Appointment M. (Jr.)",
+      studentName: "Fixture, Appointment Maria Angela (Jr.)",
     });
     for (const search of ["Fixture, Appointment", "Appointment Fixture"]) {
       const listed = await listAppointments({
@@ -239,7 +266,7 @@ describe("appointment lifecycle", () => {
       expect(listed.items).toEqual(expect.arrayContaining([
         expect.objectContaining({
           id: current.rows[0].id,
-          studentName: "Fixture, Appointment M. (Jr.)",
+          studentName: "Fixture, Appointment Maria Angela (Jr.)",
         }),
       ]));
     }
@@ -468,5 +495,229 @@ describe("appointment lifecycle", () => {
       "SELECT status FROM appointments WHERE id=$1",
       [appointmentId],
     )).resolves.toMatchObject({ rows: [{ status: "NO_SHOW" }] });
+  });
+
+  it("completes and reverts a future pending appointment atomically without changing its date", async () => {
+    const appointmentId = await insertQuickPendingAppointment("TEST-APPT-Q-PEND");
+
+    await expect(updateAppointment(appointmentId, {
+      quickStatusAction: "MARK_COMPLETED",
+      expectedStatus: "PENDING",
+    }, laboratoryStaff)).resolves.toMatchObject({
+      id: appointmentId,
+      status: "COMPLETED",
+      appointmentDate: "2045-08-18",
+    });
+
+    const completedList = await listAppointments({
+      studentNumber: "TEST-APPT-Q-PEND",
+      page: 1,
+      limit: 20,
+      offset: 0,
+    });
+    expect(completedList.items[0]).toMatchObject({
+      id: appointmentId,
+      status: "COMPLETED",
+      completedFromStatus: "PENDING",
+    });
+    await expect(pool.query(
+      "SELECT result_status FROM laboratory_results WHERE appointment_id=$1",
+      [appointmentId],
+    )).resolves.toMatchObject({ rows: [{ result_status: "PENDING_UPLOAD" }] });
+
+    await expect(updateAppointment(appointmentId, {
+      quickStatusAction: "REVERT_COMPLETION",
+      expectedStatus: "COMPLETED",
+    }, laboratoryStaff)).resolves.toMatchObject({
+      id: appointmentId,
+      status: "PENDING",
+      appointmentDate: "2045-08-18",
+    });
+
+    const snapshot = await appointmentMutationSnapshot(appointmentId);
+    expect(snapshot.history).toEqual([
+      {
+        oldStatus: "PENDING",
+        newStatus: "COMPLETED",
+        notes: "Marked completed through the clinic schedule.",
+        changedBy: laboratoryStaff.userId,
+      },
+      {
+        oldStatus: "COMPLETED",
+        newStatus: "PENDING",
+        notes: "Clinic schedule completion reverted to pending.",
+        changedBy: laboratoryStaff.userId,
+      },
+    ]);
+    expect(snapshot.audit).toEqual([
+      {
+        action: "APPOINTMENT_STATUS_CHANGED",
+        metadata: {
+          oldStatus: "PENDING",
+          newStatus: "COMPLETED",
+          quickStatusAction: "MARK_COMPLETED",
+          source: "CLINIC_SCHEDULE_QUICK_STATUS",
+        },
+      },
+      {
+        action: "APPOINTMENT_STATUS_CORRECTED",
+        metadata: {
+          oldStatus: "COMPLETED",
+          newStatus: "PENDING",
+          quickStatusAction: "REVERT_COMPLETION",
+          source: "CLINIC_SCHEDULE_QUICK_STATUS",
+        },
+      },
+    ]);
+    await expect(pool.query(
+      "SELECT id FROM laboratory_results WHERE appointment_id=$1",
+      [appointmentId],
+    )).resolves.toMatchObject({ rowCount: 0 });
+  });
+
+  it("corrects and restores an automatic no-show using only fixed server notes", async () => {
+    const appointmentId = await insertNoShowAppointment({ studentNumber: "TEST-APPT-Q-NOSHOW" });
+
+    await updateAppointment(appointmentId, {
+      quickStatusAction: "MARK_COMPLETED",
+      expectedStatus: "NO_SHOW",
+    }, admin);
+    const completedList = await listAppointments({
+      studentNumber: "TEST-APPT-Q-NOSHOW",
+      page: 1,
+      limit: 20,
+      offset: 0,
+    });
+    expect(completedList.items[0].completedFromStatus).toBe("NO_SHOW");
+
+    await updateAppointment(appointmentId, {
+      quickStatusAction: "REVERT_COMPLETION",
+      expectedStatus: "COMPLETED",
+    }, admin);
+
+    const snapshot = await appointmentMutationSnapshot(appointmentId);
+    expect(snapshot.appointment[0].status).toBe("NO_SHOW");
+    expect(snapshot.history.slice(-2)).toEqual([
+      expect.objectContaining({
+        oldStatus: "NO_SHOW",
+        newStatus: "COMPLETED",
+        notes: "Automatic no-show corrected to completed through the clinic schedule.",
+      }),
+      expect.objectContaining({
+        oldStatus: "COMPLETED",
+        newStatus: "NO_SHOW",
+        notes: "Clinic schedule completion reverted to the previous automatic no-show.",
+      }),
+    ]);
+    expect(snapshot.audit).toHaveLength(2);
+  });
+
+  it("rejects quick correction of a manual no-show without side effects", async () => {
+    const appointmentId = await insertNoShowAppointment({
+      studentNumber: "TEST-APPT-Q-MANUAL",
+      manualLatest: true,
+    });
+    const before = await appointmentMutationSnapshot(appointmentId);
+
+    await expect(updateAppointment(appointmentId, {
+      quickStatusAction: "MARK_COMPLETED",
+      expectedStatus: "NO_SHOW",
+    }, admin)).rejects.toMatchObject({ code: "NO_SHOW_CORRECTION_NOT_ALLOWED", status: 422 });
+
+    await expect(appointmentMutationSnapshot(appointmentId)).resolves.toEqual(before);
+  });
+
+  it("keeps a protected result completed and rolls back every attempted reversal side effect", async () => {
+    const appointmentId = await insertQuickPendingAppointment("TEST-APPT-Q-PROT");
+    await updateAppointment(appointmentId, {
+      quickStatusAction: "MARK_COMPLETED",
+      expectedStatus: "PENDING",
+    }, admin);
+    await pool.query(
+      `UPDATE laboratory_results
+          SET result_status='COMPLETED', completed_at='2045-08-18', encoded_by=$2
+        WHERE appointment_id=$1`,
+      [appointmentId, TEST_REFERENCE_IDS.clinicStaffUser],
+    );
+    const before = await appointmentMutationSnapshot(appointmentId);
+
+    await expect(updateAppointment(appointmentId, {
+      quickStatusAction: "REVERT_COMPLETION",
+      expectedStatus: "COMPLETED",
+    }, admin)).rejects.toMatchObject({
+      code: "APPOINTMENT_RESULT_PROTECTED",
+      message: "This appointment can no longer be reverted because protected result data is linked to it.",
+      status: 409,
+    });
+
+    await expect(appointmentMutationSnapshot(appointmentId)).resolves.toEqual(before);
+    await expect(pool.query(
+      "SELECT result_status FROM laboratory_results WHERE appointment_id=$1",
+      [appointmentId],
+    )).resolves.toMatchObject({ rows: [{ result_status: "COMPLETED" }] });
+  });
+
+  it("rejects cross-clinic staff before changing a quick-status appointment", async () => {
+    const appointmentId = await insertQuickPendingAppointment(
+      "TEST-APPT-Q-CROSS",
+      TEST_REFERENCE_IDS.physicalExamClinic,
+    );
+    const before = await appointmentMutationSnapshot(appointmentId);
+
+    await expect(updateAppointment(appointmentId, {
+      quickStatusAction: "MARK_COMPLETED",
+      expectedStatus: "PENDING",
+    }, laboratoryStaff)).rejects.toMatchObject({ code: "CLINIC_ACCESS_DENIED", status: 403 });
+
+    await expect(appointmentMutationSnapshot(appointmentId)).resolves.toEqual(before);
+  });
+
+  it("allows exactly one concurrent quick completion and rejects the stale request", async () => {
+    const appointmentId = await insertQuickPendingAppointment("TEST-APPT-Q-CONC");
+
+    const results = await Promise.allSettled([
+      updateAppointment(appointmentId, {
+        quickStatusAction: "MARK_COMPLETED",
+        expectedStatus: "PENDING",
+      }, admin),
+      updateAppointment(appointmentId, {
+        quickStatusAction: "MARK_COMPLETED",
+        expectedStatus: "PENDING",
+      }, admin),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toEqual([
+      expect.objectContaining({
+        reason: expect.objectContaining({ code: "APPOINTMENT_STATUS_CONFLICT", status: 409 }),
+      }),
+    ]);
+    const snapshot = await appointmentMutationSnapshot(appointmentId);
+    expect(snapshot.history).toHaveLength(1);
+    expect(snapshot.audit).toHaveLength(1);
+    await expect(pool.query(
+      "SELECT id FROM laboratory_results WHERE appointment_id=$1",
+      [appointmentId],
+    )).resolves.toMatchObject({ rowCount: 1 });
+  });
+
+  it("rolls back appointment state when a later quick-status write fails", async () => {
+    const appointmentId = await insertQuickPendingAppointment("TEST-APPT-Q-ROLL");
+    const invalidActor = { ...admin, userId: "99999999-9999-4999-8999-999999999999" };
+
+    await expect(updateAppointment(appointmentId, {
+      quickStatusAction: "MARK_COMPLETED",
+      expectedStatus: "PENDING",
+    }, invalidActor)).rejects.toMatchObject({ code: "23503" });
+
+    await expect(appointmentMutationSnapshot(appointmentId)).resolves.toMatchObject({
+      appointment: [expect.objectContaining({ status: "PENDING" })],
+      history: [],
+      audit: [],
+    });
+    await expect(pool.query(
+      "SELECT id FROM laboratory_results WHERE appointment_id=$1",
+      [appointmentId],
+    )).resolves.toMatchObject({ rowCount: 0 });
   });
 });

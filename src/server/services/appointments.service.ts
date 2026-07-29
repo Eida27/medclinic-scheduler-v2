@@ -50,6 +50,19 @@ export const appointmentUpdateSchema = z.object({
 
 type AppointmentUpdateInput = z.infer<typeof appointmentUpdateSchema>;
 
+export const appointmentQuickStatusSchema = z.object({
+  quickStatusAction: z.enum(["MARK_COMPLETED", "REVERT_COMPLETION"]),
+  expectedStatus: z.enum(["PENDING", "NO_SHOW", "COMPLETED"]),
+}).strict();
+
+export type AppointmentQuickStatusRequest = z.infer<typeof appointmentQuickStatusSchema>;
+
+function isQuickStatusRequestCandidate(raw: unknown): boolean {
+  return typeof raw === "object"
+    && raw !== null
+    && ("quickStatusAction" in raw || "expectedStatus" in raw);
+}
+
 function parseAppointmentUpdate(raw: unknown, currentStatus: AppointmentStatus): AppointmentUpdateInput {
   const parsed = appointmentUpdateSchema.safeParse(raw);
   if (parsed.success) return parsed.data;
@@ -203,7 +216,111 @@ async function correctCompletedAppointmentWithClient(
   );
 }
 
+async function applyQuickStatusWithClient(
+  id: string,
+  input: AppointmentQuickStatusRequest,
+  actor: SessionUser,
+  client: PoolClient,
+) {
+  const appointment = await getAppointmentMutationContext(id, client);
+  if (!appointment) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
+  assertAppointmentMutationAuthorized(actor, appointment);
+  if (appointment.status !== input.expectedStatus) {
+    throw new AppError(
+      "APPOINTMENT_STATUS_CONFLICT",
+      "The appointment status changed. Refresh and try again.",
+      409,
+    );
+  }
+
+  if (input.quickStatusAction === "MARK_COMPLETED") {
+    if (appointment.status !== "PENDING" && appointment.status !== "NO_SHOW") {
+      throw new AppError(
+        "APPOINTMENT_QUICK_STATUS_NOT_ALLOWED",
+        "Only pending or automatic no-show appointments can be marked completed from the clinic schedule.",
+        422,
+      );
+    }
+    if (appointment.status === "NO_SHOW" && !isAutomaticNoShowLog(appointment.latestLog)) {
+      throw new AppError(
+        "NO_SHOW_CORRECTION_NOT_ALLOWED",
+        "Only an automatic no-show can be corrected to completed.",
+        422,
+      );
+    }
+    const oldStatus = appointment.status;
+    const note = oldStatus === "PENDING"
+      ? "Marked completed through the clinic schedule."
+      : "Automatic no-show corrected to completed through the clinic schedule.";
+    await changeAppointmentStatusWithClient(client, id, oldStatus, "COMPLETED", note, actor.userId);
+    await ensurePendingUploadResult(client, appointment);
+    await writeAudit(
+      actor.userId,
+      oldStatus === "PENDING" ? "APPOINTMENT_STATUS_CHANGED" : "APPOINTMENT_STATUS_CORRECTED",
+      "appointment",
+      id,
+      {
+        oldStatus,
+        newStatus: "COMPLETED",
+        quickStatusAction: input.quickStatusAction,
+        source: "CLINIC_SCHEDULE_QUICK_STATUS",
+      },
+      client,
+    );
+    return;
+  }
+
+  if (appointment.status !== "COMPLETED") {
+    throw new AppError(
+      "APPOINTMENT_QUICK_STATUS_NOT_ALLOWED",
+      "Only completed appointments can be reverted from the clinic schedule.",
+      422,
+    );
+  }
+  const target = appointment.completedFromStatus;
+  if (target !== "PENDING" && target !== "NO_SHOW") {
+    throw new AppError(
+      "APPOINTMENT_COMPLETION_HISTORY_INVALID",
+      "The previous appointment status could not be determined. Open the appointment details to review its history.",
+      409,
+    );
+  }
+  const resultState = await getAppointmentResultCorrectionState(client, appointment);
+  if (resultState.type === "PROTECTED") {
+    throw new AppError(
+      "APPOINTMENT_RESULT_PROTECTED",
+      "This appointment can no longer be reverted because protected result data is linked to it.",
+      409,
+    );
+  }
+  if (resultState.type === "PENDING_PLACEHOLDER") {
+    await deletePendingResultPlaceholder(client, resultState);
+  }
+  const note = target === "PENDING"
+    ? "Clinic schedule completion reverted to pending."
+    : "Clinic schedule completion reverted to the previous automatic no-show.";
+  await changeAppointmentStatusWithClient(client, id, "COMPLETED", target, note, actor.userId);
+  await writeAudit(
+    actor.userId,
+    "APPOINTMENT_STATUS_CORRECTED",
+    "appointment",
+    id,
+    {
+      oldStatus: "COMPLETED",
+      newStatus: target,
+      quickStatusAction: input.quickStatusAction,
+      source: "CLINIC_SCHEDULE_QUICK_STATUS",
+    },
+    client,
+  );
+}
+
 export async function updateAppointment(id: string, raw: unknown, actor: SessionUser) {
+  if (isQuickStatusRequestCandidate(raw)) {
+    const input = appointmentQuickStatusSchema.parse(raw);
+    await transaction((client) => applyQuickStatusWithClient(id, input, actor, client));
+    return getPublishedAppointment(id);
+  }
   const current = await getPublishedAppointment(id);
   if (!current) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
   const input = parseAppointmentUpdate(raw, current.status);

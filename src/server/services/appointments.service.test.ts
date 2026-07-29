@@ -6,6 +6,7 @@ import type { SessionUser } from "@/types/roles";
 const {
   changeAppointmentStatusWithClient,
   deletePendingResultPlaceholder,
+  ensurePendingUploadResult,
   getAppointmentResultCorrectionState,
   getAppointmentMutationContext,
   getPublishedAppointment,
@@ -18,6 +19,7 @@ const {
 } = vi.hoisted(() => ({
   changeAppointmentStatusWithClient: vi.fn(),
   deletePendingResultPlaceholder: vi.fn(),
+  ensurePendingUploadResult: vi.fn(),
   getAppointmentResultCorrectionState: vi.fn(),
   getAppointmentMutationContext: vi.fn(),
   getPublishedAppointment: vi.fn(),
@@ -45,7 +47,7 @@ vi.mock("@/server/repositories/coordinator-schedules.repository", () => ({
 }));
 vi.mock("@/server/repositories/student-result-submissions.repository", () => ({
   deletePendingResultPlaceholder,
-  ensurePendingUploadResult: vi.fn(),
+  ensurePendingUploadResult,
   getAppointmentResultCorrectionState,
 }));
 
@@ -179,6 +181,7 @@ function mutationContext(
     changedById: string | null;
   } | null = null,
   appointmentDate = "2026-08-18",
+  completedFromStatus: "PENDING" | "NO_SHOW" | null = null,
 ) {
   return {
     id: appointmentId,
@@ -191,6 +194,7 @@ function mutationContext(
     clinicCode: clinicId === laboratoryClinicId ? "KABALAKA_CLINIC" : "CPU_CLINIC",
     isPublished: true,
     latestLog,
+    completedFromStatus,
   };
 }
 
@@ -236,6 +240,210 @@ describe("appointment mutation authorization and automatic no-show correction", 
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  describe("clinic schedule quick status", () => {
+    it("completes a future pending appointment with the server note and quick-status audit", async () => {
+      const locked = mutationContext("PENDING", laboratoryClinicId, null, "2045-08-18");
+      getAppointmentMutationContext.mockResolvedValue(locked);
+
+      await updateAppointment(appointmentId, {
+        quickStatusAction: "MARK_COMPLETED",
+        expectedStatus: "PENDING",
+      }, admin);
+
+      expect(changeAppointmentStatusWithClient).toHaveBeenCalledWith(
+        client,
+        appointmentId,
+        "PENDING",
+        "COMPLETED",
+        "Marked completed through the clinic schedule.",
+        admin.userId,
+      );
+      expect(ensurePendingUploadResult).toHaveBeenCalledWith(client, locked);
+      expect(writeAudit).toHaveBeenCalledWith(
+        admin.userId,
+        "APPOINTMENT_STATUS_CHANGED",
+        "appointment",
+        appointmentId,
+        {
+          oldStatus: "PENDING",
+          newStatus: "COMPLETED",
+          quickStatusAction: "MARK_COMPLETED",
+          source: "CLINIC_SCHEDULE_QUICK_STATUS",
+        },
+        client,
+      );
+    });
+
+    it("corrects only an automatic no-show using the fixed server note", async () => {
+      const locked = mutationContext("NO_SHOW", laboratoryClinicId, automaticNoShowLog);
+      getAppointmentMutationContext.mockResolvedValue(locked);
+
+      await updateAppointment(appointmentId, {
+        quickStatusAction: "MARK_COMPLETED",
+        expectedStatus: "NO_SHOW",
+      }, laboratoryStaff);
+
+      expect(changeAppointmentStatusWithClient).toHaveBeenCalledWith(
+        client,
+        appointmentId,
+        "NO_SHOW",
+        "COMPLETED",
+        "Automatic no-show corrected to completed through the clinic schedule.",
+        laboratoryStaff.userId,
+      );
+      expect(writeAudit).toHaveBeenCalledWith(
+        laboratoryStaff.userId,
+        "APPOINTMENT_STATUS_CORRECTED",
+        "appointment",
+        appointmentId,
+        expect.objectContaining({
+          oldStatus: "NO_SHOW",
+          newStatus: "COMPLETED",
+          source: "CLINIC_SCHEDULE_QUICK_STATUS",
+        }),
+        client,
+      );
+    });
+
+    it("restores the server-derived pending status and removes only its safe placeholder", async () => {
+      const locked = mutationContext("COMPLETED", laboratoryClinicId, null, "2045-08-18", "PENDING");
+      const placeholder = {
+        type: "PENDING_PLACEHOLDER" as const,
+        resultId: "44444444-4444-4444-8444-444444444444",
+        table: "laboratory_results" as const,
+      };
+      getAppointmentMutationContext.mockResolvedValue(locked);
+      getAppointmentResultCorrectionState.mockResolvedValue(placeholder);
+
+      await updateAppointment(appointmentId, {
+        quickStatusAction: "REVERT_COMPLETION",
+        expectedStatus: "COMPLETED",
+      }, admin);
+
+      expect(deletePendingResultPlaceholder).toHaveBeenCalledWith(client, placeholder);
+      expect(changeAppointmentStatusWithClient).toHaveBeenCalledWith(
+        client,
+        appointmentId,
+        "COMPLETED",
+        "PENDING",
+        "Clinic schedule completion reverted to pending.",
+        admin.userId,
+      );
+      expect(writeAudit).toHaveBeenCalledWith(
+        admin.userId,
+        "APPOINTMENT_STATUS_CORRECTED",
+        "appointment",
+        appointmentId,
+        {
+          oldStatus: "COMPLETED",
+          newStatus: "PENDING",
+          quickStatusAction: "REVERT_COMPLETION",
+          source: "CLINIC_SCHEDULE_QUICK_STATUS",
+        },
+        client,
+      );
+    });
+
+    it("restores the server-derived automatic no-show without re-evaluating the appointment date", async () => {
+      const locked = mutationContext("COMPLETED", laboratoryClinicId, null, "2045-08-18", "NO_SHOW");
+      getAppointmentMutationContext.mockResolvedValue(locked);
+
+      await updateAppointment(appointmentId, {
+        quickStatusAction: "REVERT_COMPLETION",
+        expectedStatus: "COMPLETED",
+      }, admin);
+
+      expect(changeAppointmentStatusWithClient).toHaveBeenCalledWith(
+        client,
+        appointmentId,
+        "COMPLETED",
+        "NO_SHOW",
+        "Clinic schedule completion reverted to the previous automatic no-show.",
+        admin.userId,
+      );
+    });
+
+    it("rejects a stale expected status before result inspection or mutation", async () => {
+      getAppointmentMutationContext.mockResolvedValue(mutationContext("COMPLETED", laboratoryClinicId, null, "2045-08-18", "PENDING"));
+
+      await expect(updateAppointment(appointmentId, {
+        quickStatusAction: "MARK_COMPLETED",
+        expectedStatus: "PENDING",
+      }, admin)).rejects.toMatchObject({ code: "APPOINTMENT_STATUS_CONFLICT", status: 409 });
+
+      expect(getAppointmentResultCorrectionState).not.toHaveBeenCalled();
+      expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
+      expect(writeAudit).not.toHaveBeenCalled();
+    });
+
+    it("rejects a manual or legacy no-show", async () => {
+      getAppointmentMutationContext.mockResolvedValue(mutationContext("NO_SHOW"));
+
+      await expect(updateAppointment(appointmentId, {
+        quickStatusAction: "MARK_COMPLETED",
+        expectedStatus: "NO_SHOW",
+      }, admin)).rejects.toMatchObject({ code: "NO_SHOW_CORRECTION_NOT_ALLOWED", status: 422 });
+
+      expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
+    });
+
+    it("rejects a completed appointment whose completion source cannot be established", async () => {
+      getAppointmentMutationContext.mockResolvedValue(mutationContext("COMPLETED"));
+
+      await expect(updateAppointment(appointmentId, {
+        quickStatusAction: "REVERT_COMPLETION",
+        expectedStatus: "COMPLETED",
+      }, admin)).rejects.toMatchObject({
+        code: "APPOINTMENT_COMPLETION_HISTORY_INVALID",
+        status: 409,
+      });
+
+      expect(getAppointmentResultCorrectionState).not.toHaveBeenCalled();
+    });
+
+    it("uses the protected-result quick-status message and leaves the appointment untouched", async () => {
+      getAppointmentMutationContext.mockResolvedValue(
+        mutationContext("COMPLETED", laboratoryClinicId, null, "2045-08-18", "PENDING"),
+      );
+      getAppointmentResultCorrectionState.mockResolvedValue({ type: "PROTECTED", reason: "FINALIZED_SUBMISSION" });
+
+      await expect(updateAppointment(appointmentId, {
+        quickStatusAction: "REVERT_COMPLETION",
+        expectedStatus: "COMPLETED",
+      }, admin)).rejects.toMatchObject({
+        code: "APPOINTMENT_RESULT_PROTECTED",
+        message: "This appointment can no longer be reverted because protected result data is linked to it.",
+        status: 409,
+      });
+
+      expect(deletePendingResultPlaceholder).not.toHaveBeenCalled();
+      expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
+      expect(writeAudit).not.toHaveBeenCalled();
+    });
+
+    it("rejects cross-clinic staff before any quick-status side effect", async () => {
+      getAppointmentMutationContext.mockResolvedValue(mutationContext("PENDING", physicalExamClinicId));
+
+      await expect(updateAppointment(appointmentId, {
+        quickStatusAction: "MARK_COMPLETED",
+        expectedStatus: "PENDING",
+      }, laboratoryStaff)).rejects.toMatchObject({ code: "CLINIC_ACCESS_DENIED", status: 403 });
+
+      expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
+      expect(writeAudit).not.toHaveBeenCalled();
+    });
+
+    it("rejects mixed quick-status and legacy mutation fields", async () => {
+      await expect(updateAppointment(appointmentId, {
+        quickStatusAction: "MARK_COMPLETED",
+        expectedStatus: "PENDING",
+        status: "COMPLETED",
+      }, admin)).rejects.toMatchObject({ name: "ZodError" });
+
+      expect(transaction).not.toHaveBeenCalled();
+    });
   });
 
   it.each([
