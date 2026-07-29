@@ -10,11 +10,11 @@ import {
 } from "../src/server/services/student-import-csv";
 
 export const APPROVED_CSV_PATH =
-  "C:\\endless_refinement\\microsoft_docs\\Physical_Laboratory_Scheduling_Completed.csv";
+  "C:\\endless_refinement\\microsoft_docs\\Physical_Laboratory_Scheduling.csv";
 export const EXPECTED_APPROVED_ROWS = 280;
-export const EXPECTED_APPROVED_BYTE_LENGTH = 23_834;
+export const EXPECTED_APPROVED_BYTE_LENGTH = 25_176;
 export const EXPECTED_APPROVED_SHA256 =
-  "fa01469d107bd0401444b9f95f555ffaf68a4c116b4600af8142c15dca5d3c17";
+  "a8324f7ccf2d7000ddf1ce873c57eb92d7f4557b1e016f494c4b4a1a53bd0e15";
 
 const FIXTURE_DIRECTORY = resolve(".data/browser-clinic-scheduler-ux");
 const STATE_FILE = resolve(FIXTURE_DIRECTORY, "state.json");
@@ -377,7 +377,7 @@ export function createWindows1252Variant(
       row.studentNumber,
       index === 0 ? "Peña" : row.surname,
       row.firstName,
-      row.middleInitial,
+      row.middleName,
       row.suffix,
       row.collegeName,
       row.courseCode,
@@ -441,7 +441,7 @@ async function prepare(pool: Pool, databaseIdentity: AcceptanceDatabaseIdentity)
   const inspection = inspectApprovedCsv(sourceBytes);
   const variant = createWindows1252Variant(sourceBytes);
   const runId = randomUUID();
-  const filename = `BROWSER-UX-${runId}-Physical_Laboratory_Scheduling_Completed-windows1252.csv`;
+    const filename = `BROWSER-UX-${runId}-Physical_Laboratory_Scheduling-windows1252.csv`;
   const temporaryPath = resolve(FIXTURE_DIRECTORY, filename);
   const client = await pool.connect();
   let state: FixtureState;

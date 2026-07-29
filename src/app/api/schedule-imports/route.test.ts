@@ -52,7 +52,7 @@ describe("/api/schedule-imports", () => {
 
   it("passes the academic-year metadata and CSV bytes to atomic scheduling", async () => {
     const contents = [
-      "Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth",
+      "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth",
       "23-0001-01,Santos,Maria,,,College of Computer Studies,BSIT,3,05-06-2003",
     ].join("\n");
     const form = new FormData();

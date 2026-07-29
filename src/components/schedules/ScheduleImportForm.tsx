@@ -12,7 +12,7 @@ import { Select } from "@/components/ui/Select";
 type StudentCategory = "REGULAR" | "OJT" | "TOUR" | "SPECIALIZED";
 type ImportError = { message: string; fields?: Record<string, string[]> };
 
-const REQUIRED_HEADERS = "Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth";
+const REQUIRED_HEADERS = "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth";
 const categoryLabels: Record<StudentCategory, string> = {
   REGULAR: "Regular",
   OJT: "OJT",

@@ -9,7 +9,10 @@ import {
   CURRENT_EFFECTIVE_APPOINTMENTS_CTE,
   type AttendanceStatus,
 } from "@/server/repositories/current-effective-appointments.repository";
-import { studentDisplayNameSql } from "@/server/students/student-display-name";
+import {
+  studentDisplayNameSql,
+  studentLegacyDisplayNameSql,
+} from "@/server/students/student-display-name";
 
 export type AppointmentSummaryItem = {
   studentNumber: string;
@@ -53,6 +56,7 @@ const summaryRowsCte = `
     SELECT
       s.student_number AS "studentNumber",
       ${studentDisplayNameSql("s")} AS "studentName",
+      ${studentLegacyDisplayNameSql("s")} AS "legacyStudentDisplayName",
       CONCAT_WS(' ', BTRIM(s.first_name), BTRIM(s.last_name)) AS "legacyStudentName",
       CONCAT_WS(
         ' ', BTRIM(s.first_name), NULLIF(BTRIM(s.middle_name), ''),
@@ -167,6 +171,7 @@ export async function appointmentSummaryReport(filters: AppointmentSummaryFilter
     add(
       `(summary_rows."studentNumber" ILIKE ?
         OR summary_rows."studentName" ILIKE ?
+        OR summary_rows."legacyStudentDisplayName" ILIKE ?
         OR summary_rows."legacyStudentName" ILIKE ?
         OR summary_rows."legacyStudentFullName" ILIKE ?)`,
       `%${filters.search}%`,

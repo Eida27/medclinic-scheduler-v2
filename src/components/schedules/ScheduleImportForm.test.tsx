@@ -7,7 +7,7 @@ const push = vi.fn();
 const refresh = vi.fn();
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push, refresh }) }));
 
-const headers = "Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth";
+const headers = "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth";
 
 function csvFile() {
   return new File([

@@ -1,6 +1,9 @@
 import "server-only";
 import { query } from "@/server/db/pool";
-import { studentDisplayNameSql } from "@/server/students/student-display-name";
+import {
+  studentDisplayNameSql,
+  studentLegacyDisplayNameSql,
+} from "@/server/students/student-display-name";
 
 export type StudentInput = {
   studentNumber: string;
@@ -100,6 +103,7 @@ export async function listStudents(filters: StudentListFilters) {
     clauses.push(`(
       s.student_number ILIKE $${values.length}
       OR ${studentDisplayNameSql("s")} ILIKE $${values.length}
+      OR ${studentLegacyDisplayNameSql("s")} ILIKE $${values.length}
       OR CONCAT_WS(' ', BTRIM(s.first_name), BTRIM(s.last_name)) ILIKE $${values.length}
       OR CONCAT_WS(
         ' ', BTRIM(s.first_name), NULLIF(BTRIM(s.middle_name), ''),

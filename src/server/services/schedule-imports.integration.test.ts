@@ -9,7 +9,7 @@ import {
 import type { SessionUser } from "@/types/roles";
 import { importStudentScheduleCsv } from "./schedule-imports.service";
 
-const header = "Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth";
+const header = "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth";
 const studentPattern = "99-91%";
 const importPattern = "REGULAR % - TEST-AY%";
 const sourceFilename = "TEST-AY-students.csv";

@@ -28,7 +28,7 @@ afterAll(async () => {
 describe("published schedule import detail", () => {
   it("returns compact published children with nullable category-driven priority", async () => {
     const contents = [
-      "Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth",
+      "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth",
       "99-9301-01,Reviewer,Draft,M.,,College of Computer Studies,BSIT,3,05-06-2003",
     ].join("\n");
     const created = await acceptAndScheduleImport({

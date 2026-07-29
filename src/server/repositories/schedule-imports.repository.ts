@@ -309,7 +309,7 @@ export async function createScheduleImport(
       [
         resolvedRows.map((student) => student.studentNumber),
         resolvedRows.map((student) => student.firstName),
-        resolvedRows.map((student) => student.middleInitial),
+        resolvedRows.map((student) => student.middleName),
         resolvedRows.map((student) => student.surname),
         resolvedRows.map((student) => student.suffix),
         resolvedRows.map((student) => student.collegeId),

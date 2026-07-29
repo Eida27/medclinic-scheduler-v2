@@ -6,7 +6,7 @@ const header = [
   "Student ID",
   "Surname",
   "First Name",
-  "MI",
+  "Middle Name",
   "Suffix",
   "College",
   "Course",
@@ -28,10 +28,10 @@ function fieldsFrom(input: string | Uint8Array) {
 describe("parseStudentImportCsv", () => {
   const validRow = "23-1212-97,Abad,Aaron,,,College of Computer Studies,BSIT,3,08-04-2004";
 
-  it("parses the exact nine-column workbook export and nullable MI and suffix", () => {
+  it("parses complete and multi-word middle names from the exact nine-column workbook export", () => {
     const input = [
       header,
-      "23-1212-97,Abad,Aaron Miguel,A.,,College of Computer Studies,BSIT,3,08-04-2004",
+      "23-1212-97,Abad,Aaron Miguel,  Maria Angela  ,,College of Computer Studies,BSIT,3,08-04-2004",
       "24-0001-01,Santos,Ana,,Jr.,College of Nursing,BSN,2,01-31-2005",
     ].join("\n");
 
@@ -41,7 +41,7 @@ describe("parseStudentImportCsv", () => {
         studentNumber: "23-1212-97",
         surname: "Abad",
         firstName: "Aaron Miguel",
-        middleInitial: "A.",
+        middleName: "Maria Angela",
         suffix: null,
         collegeName: "College of Computer Studies",
         courseCode: "BSIT",
@@ -53,7 +53,7 @@ describe("parseStudentImportCsv", () => {
         studentNumber: "24-0001-01",
         surname: "Santos",
         firstName: "Ana",
-        middleInitial: null,
+        middleName: null,
         suffix: "Jr.",
         collegeName: "College of Nursing",
         courseCode: "BSN",
@@ -67,6 +67,15 @@ describe("parseStudentImportCsv", () => {
     expect(fieldsFrom([
       header.replace("Surname,First Name", "First Name,Surname"),
       "23-1212-97,Aaron,Abad,,,College of Computer Studies,BSIT,3,08-04-2004",
+    ].join("\n"))).toEqual({
+      file: [`CSV headers must exactly match: ${header}.`],
+    });
+  });
+
+  it("rejects the legacy MI header", () => {
+    expect(fieldsFrom([
+      header.replace("Middle Name", "MI"),
+      validRow,
     ].join("\n"))).toEqual({
       file: [`CSV headers must exactly match: ${header}.`],
     });

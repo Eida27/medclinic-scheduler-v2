@@ -11,7 +11,7 @@ import {
 import type { SessionUser } from "@/types/roles";
 import { acceptAndScheduleImport } from "./schedule-imports.service";
 
-const header = "Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth";
+const header = "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth";
 const studentPattern = "99-92%";
 const importPattern = "REGULAR 20%-20% - TEST-FCFS%";
 let capacityFixture: CapacityFixtureLock | null = null;

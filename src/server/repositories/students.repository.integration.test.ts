@@ -36,10 +36,10 @@ afterAll(async () => {
 
 describe("student display names", () => {
   it.each([
-    ["TEST-NAME-FORMAT-001", "Santos, Ana M. (Jr.)"],
+    ["TEST-NAME-FORMAT-001", "Santos, Ana Maria Angela (Jr.)"],
     ["TEST-NAME-FORMAT-002", "Santos, Ana L."],
     ["TEST-NAME-FORMAT-003", "Santos, Ana (III)"],
-    ["TEST-NAME-FORMAT-004", "Santos, Ana M. (Jr.)"],
+    ["TEST-NAME-FORMAT-004", "Santos, Ana maria (Jr.)"],
     ["TEST-NAME-FORMAT-005", "Santos, Ana"],
   ])("formats %s from its stored name parts", async (studentNumber, expected) => {
     await expect(getStudent(studentNumber)).resolves.toMatchObject({
@@ -48,7 +48,13 @@ describe("student display names", () => {
     });
   });
 
-  it.each(["Santos, Ana", "Ana Santos"])(
+  it.each([
+    "TEST-NAME-FORMAT-001",
+    "Santos, Ana Maria Angela (Jr.)",
+    "Santos, Ana M. (Jr.)",
+    "Ana Santos",
+    "Ana Maria Angela Santos Jr.",
+  ])(
     "finds the middle-name fixture using the %s search order",
     async (search) => {
       const result = await listStudents({

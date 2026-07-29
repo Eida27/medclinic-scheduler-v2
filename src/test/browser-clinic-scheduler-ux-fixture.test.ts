@@ -26,9 +26,9 @@ import {
 } from "../../scripts/browser-clinic-scheduler-ux-fixture";
 
 const csv = [
-  "\uFEFFStudent ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth,,",
-  "23-8200-01,Abad,Aaron Miguel,A.,,College of Computer Studies,BSCS,3,08-04-2004,,",
-  "23-8300-01,Abalos,Alicia Mae,A.,,College of Computer Studies,BSDMIA,3,10-03-2005,,",
+  "\uFEFFStudent ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth,,",
+  "23-8200-01,Abad,Aaron Miguel,Abella,,College of Computer Studies,BSCS,3,08-04-2004,,",
+  "23-8300-01,Abalos,Alicia Mae,Abad,,College of Computer Studies,BSDMIA,3,10-03-2005,,",
 ].join("\r\n");
 
 const emptyManifest: CleanupManifest = {
@@ -188,6 +188,10 @@ describe("browser clinic scheduler UX fixture helpers", () => {
       bomHex: "efbbbf",
       acceptedRows: 2,
       studentNumbers: ["23-8200-01", "23-8300-01"],
+      rows: [
+        expect.objectContaining({ middleName: "Abella" }),
+        expect.objectContaining({ middleName: "Abad" }),
+      ],
     });
     expect(() => inspectApprovedCsv(bytes.subarray(3), 2)).toThrow(/UTF-8 BOM/);
     expect(() => inspectApprovedCsv(bytes, 3)).toThrow(/3 accepted rows/);
@@ -197,9 +201,9 @@ describe("browser clinic scheduler UX fixture helpers", () => {
     const bytes = Buffer.from(csv, "utf8");
     const expectedSha256 = createHash("sha256").update(bytes).digest("hex");
 
-    expect(EXPECTED_APPROVED_BYTE_LENGTH).toBe(23_834);
+    expect(EXPECTED_APPROVED_BYTE_LENGTH).toBe(25_176);
     expect(EXPECTED_APPROVED_SHA256)
-      .toBe("fa01469d107bd0401444b9f95f555ffaf68a4c116b4600af8142c15dca5d3c17");
+      .toBe("a8324f7ccf2d7000ddf1ce873c57eb92d7f4557b1e016f494c4b4a1a53bd0e15");
     expect(inspectApprovedCsv(bytes, {
       expectedRows: 2,
       expectedByteLength: bytes.byteLength,

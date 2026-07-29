@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-29  
 **Repository:** `Eida27/medclinic-scheduler-v2`  
-**Status:** Approved design pending written-spec review
+**Status:** Approved for implementation
 
 ## 1. Purpose
 
@@ -451,6 +451,8 @@ The feature reuses:
 - Existing audit infrastructure
 
 The uploaded schedule CSV's full middle-name values continue through the existing import path. The change is in shared display formatting, not storage structure.
+
+The canonical schedule-import header is now `Middle Name`, replacing `MI`. The import remains strict: legacy `MI` files are rejected, while complete and multi-word middle-name values are stored in the existing `students.middle_name` column.
 
 ## 15. Testing strategy
 

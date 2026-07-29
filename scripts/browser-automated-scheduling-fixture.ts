@@ -210,7 +210,7 @@ async function setup() {
     ],
   );
 
-  const header = "Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth";
+  const header = "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth";
   const regularCsv = [
     header,
     "99-9801-01,Browser,Regular One,,,College of Computer Studies,BSIT,3,05-06-2003",

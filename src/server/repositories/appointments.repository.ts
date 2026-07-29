@@ -6,7 +6,10 @@ import type { AutomaticNoShowLog } from "@/server/appointments/automatic-no-show
 import { query, transaction } from "@/server/db/pool";
 import type { ClinicCode } from "@/server/clinics";
 import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
-import { studentDisplayNameSql } from "@/server/students/student-display-name";
+import {
+  studentDisplayNameSql,
+  studentLegacyDisplayNameSql,
+} from "@/server/students/student-display-name";
 
 export type AppointmentStatus = "DRAFT" | "PENDING" | "COMPLETED" | "NO_SHOW" | "RESCHEDULED" | "CANCELLED" | "AWAITING_RESCHEDULE";
 type AppointmentDetail = {
@@ -60,6 +63,7 @@ export async function listAppointments(filters: {
     add(
       `(a.student_number ILIKE ?
         OR ${studentDisplayNameSql("s")} ILIKE ?
+        OR ${studentLegacyDisplayNameSql("s")} ILIKE ?
         OR CONCAT_WS(' ', BTRIM(s.first_name), BTRIM(s.last_name)) ILIKE ?
         OR CONCAT_WS(
           ' ', BTRIM(s.first_name), NULLIF(BTRIM(s.middle_name), ''),

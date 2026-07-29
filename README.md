@@ -78,7 +78,7 @@ The supplied workbook is a reference source. Export it as **CSV UTF-8** or Excel
 Use these headers in this exact order:
 
 ```csv
-Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth
+Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth
 23-1212-97,Abad,Aaron Miguel,A.,,College of Computer Studies,BSIT,3,08-04-2004
 ```
 

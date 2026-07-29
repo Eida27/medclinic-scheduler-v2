@@ -60,8 +60,8 @@ describe("NewScheduleImportPage", () => {
     if (!existsSync(templatePath)) return;
 
     expect(readFileSync(templatePath, "utf8").replaceAll("\r\n", "\n")).toBe([
-      "Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth",
-      "23-1212-97,Abad,Aaron Miguel,A.,,College of Computer Studies,BSIT,3,08-04-2004",
+      "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth",
+      "23-1212-97,Abad,Aaron Miguel,Abella,,College of Computer Studies,BSIT,3,08-04-2004",
       "",
     ].join("\n"));
   });

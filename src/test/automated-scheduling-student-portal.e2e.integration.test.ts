@@ -64,7 +64,7 @@ describe("unified calendar scheduling and student flow", () => {
       fileName: "TEST-UNIFIED-E2E.csv",
       fileSize: 100,
       contents: [
-        "Student ID,Surname,First Name,MI,Suffix,College,Course,Year,Date of Birth",
+        "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth",
         `${studentNumber},Calendar,Unified,,,College of Computer Studies,BSIT,4,05-06-2003`,
       ].join("\n"),
       studentCategory: "REGULAR",
