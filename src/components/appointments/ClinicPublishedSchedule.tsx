@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { AppointmentPagination } from "@/components/appointments/AppointmentPagination";
+import { AppointmentQuickStatusButton } from "@/components/appointments/AppointmentQuickStatusButton";
 import type { AppointmentListSort } from "@/components/appointments/appointment-list-sort";
-import { operationalStatusLabel, statusTone } from "@/components/appointments/status-labels";
-import { Badge } from "@/components/ui/Badge";
+import { operationalStatusLabel } from "@/components/appointments/status-labels";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -15,6 +15,7 @@ type ClinicAppointment = {
   scheduleType: string;
   appointmentDate: string;
   status: string;
+  completedFromStatus: "PENDING" | "NO_SHOW" | null;
 };
 
 type ClinicPublishedScheduleProps = {
@@ -105,27 +106,33 @@ export function ClinicPublishedSchedule({
                   <th className="px-5 py-3">Service</th>
                   <th className="px-5 py-3">Date</th>
                   <th className="px-5 py-3">Status</th>
-                  <th className="px-5 py-3"><span className="sr-only">Actions</span></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">
                 {appointments.map((appointment) => (
                   <tr key={appointment.id} className="transition hover:bg-cpu-navy-soft/35">
                     <td className="px-5 py-4">
-                      <p className="font-bold text-ink">{appointment.studentName}</p>
-                      <p className="font-mono text-xs text-muted">{appointment.studentNumber}</p>
+                      <Link
+                        className="block font-bold text-cpu-navy hover:underline"
+                        href={`${basePath}/${appointment.id}`}
+                      >
+                        {appointment.studentName}
+                      </Link>
+                      <Link
+                        className="mt-1 block w-fit font-mono text-xs text-muted hover:text-cpu-navy hover:underline"
+                        href={`${basePath}/${appointment.id}`}
+                      >
+                        {appointment.studentNumber}
+                      </Link>
                     </td>
                     <td className="px-5 py-4">{appointment.scheduleType.replaceAll("_", " ")}</td>
                     <td className="px-5 py-4">{appointment.appointmentDate}</td>
                     <td className="px-5 py-4">
-                      <Badge tone={statusTone(appointment.status)}>
-                        {operationalStatusLabel(appointment.status)}
-                      </Badge>
-                    </td>
-                    <td className="px-5 py-4 text-right">
-                      <Link className="font-bold text-cpu-navy hover:underline" href={`${basePath}/${appointment.id}`}>
-                        Open
-                      </Link>
+                      <AppointmentQuickStatusButton
+                        appointmentId={appointment.id}
+                        status={appointment.status}
+                        completedFromStatus={appointment.completedFromStatus}
+                      />
                     </td>
                   </tr>
                 ))}

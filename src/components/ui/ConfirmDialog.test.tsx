@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ConfirmDialog } from "./ConfirmDialog";
 
@@ -26,5 +28,42 @@ describe("ConfirmDialog", () => {
 
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("traps focus, closes on Escape, and restores focus to the originating control", async () => {
+    const user = userEvent.setup();
+
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>Open confirmation</button>
+          <ConfirmDialog
+            open={open}
+            title="Confirm action"
+            description="Proceed with this action?"
+            confirmLabel="Confirm"
+            onCancel={() => setOpen(false)}
+            onConfirm={vi.fn()}
+          />
+        </>
+      );
+    }
+
+    render(<Harness />);
+    const origin = screen.getByRole("button", { name: "Open confirmation" });
+    await user.click(origin);
+
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    const confirm = screen.getByRole("button", { name: "Confirm" });
+    expect(cancel).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(confirm).toHaveFocus();
+    await user.tab();
+    expect(cancel).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(origin).toHaveFocus();
   });
 });

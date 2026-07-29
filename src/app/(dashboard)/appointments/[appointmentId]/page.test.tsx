@@ -42,7 +42,7 @@ describe("AppointmentPage", () => {
 const publishedAppointment = {
   id: "appointment-1",
   studentNumber: "2026-0001",
-  studentName: "Santos, Ana M. (Jr.)",
+  studentName: "Santos, Ana Maria Angela (Jr.)",
   scheduleType: "LABORATORY",
   clinicId: "clinic-1",
   appointmentDate: "2026-08-18",
@@ -79,7 +79,7 @@ describe("AppointmentDetail", () => {
 
     expect(requireUser).toHaveBeenCalledWith(["ADMIN", "CLINIC_STAFF"]);
     expect(getPublishedAppointment).toHaveBeenCalledWith("appointment-1");
-    expect(screen.getByRole("heading", { level: 1, name: "Santos, Ana M. (Jr.)" })).toBeVisible();
+    expect(screen.getByRole("heading", { level: 1, name: "Santos, Ana Maria Angela (Jr.)" })).toBeVisible();
     expect(screen.getByText("Published")).toBeVisible();
   });
 
@@ -189,7 +189,7 @@ describe("AppointmentDetail", () => {
 
     render(await AppointmentDetail({ appointmentId: "appointment-1", source: "APPOINTMENTS" }));
 
-    expect(screen.getByRole("heading", { level: 1, name: "Santos, Ana M. (Jr.)" })).toBeVisible();
+    expect(screen.getByRole("heading", { level: 1, name: "Santos, Ana Maria Angela (Jr.)" })).toBeVisible();
     expect(notFound).not.toHaveBeenCalled();
   });
 });

@@ -264,7 +264,7 @@ describe("appointment summary ordering and pagination", () => {
     const result = await report(sort);
     expect(result.items.map((item) => item.studentNumber)).toEqual(expected);
     expect(result.items.find((item) => item.studentNumber === "TEST-ORDER-0001")?.studentName)
-      .toBe("Alpha, Aaron M. (Jr.)");
+      .toBe("Alpha, Aaron Maria Angela (Jr.)");
     expect(result.items.find((item) => item.studentNumber === "TEST-ORDER-0001"))
       .toMatchObject({ physicalExamStatus: "COMPLETED", laboratoryStatus: "PENDING" });
   });

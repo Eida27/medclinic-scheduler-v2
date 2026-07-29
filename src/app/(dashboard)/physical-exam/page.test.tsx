@@ -12,6 +12,7 @@ vi.mock("@/server/auth/current-user", () => ({ requireUser }));
 vi.mock("@/server/clinic-access", () => ({ assertClinicAccess }));
 vi.mock("@/server/repositories/appointments.repository", () => ({ listAppointments }));
 vi.mock("@/server/repositories/tracking.repository", () => ({ dashboardMetrics }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 
 import PhysicalExamPage from "./page";
 
@@ -76,6 +77,7 @@ describe("PhysicalExamPage", () => {
         scheduleType: "PHYSICAL_EXAM",
         appointmentDate: "2026-08-19",
         status: "PENDING",
+        completedFromStatus: null,
       }],
       total: 280,
     });
@@ -108,5 +110,10 @@ describe("PhysicalExamPage", () => {
       "/physical-exam?studentNumber=Ben+Reyes&sort=latest&appointmentDate=2026-08-19&status=NO_SHOW&page=1",
     );
     expect(screen.queryByRole("link", { name: "Next page" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Pending — click to mark completed" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Ben Reyes" })).toHaveAttribute(
+      "href",
+      "/physical-exam/physical-appointment-151",
+    );
   });
 });

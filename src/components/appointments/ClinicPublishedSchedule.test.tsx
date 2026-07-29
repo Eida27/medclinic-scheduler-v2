@@ -1,5 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 import { ClinicPublishedSchedule } from "./ClinicPublishedSchedule";
 
 const appointment = {
@@ -9,6 +11,7 @@ const appointment = {
   scheduleType: "LABORATORY",
   appointmentDate: "2026-08-18",
   status: "PENDING",
+  completedFromStatus: null,
 };
 
 describe("ClinicPublishedSchedule", () => {
@@ -54,13 +57,18 @@ describe("ClinicPublishedSchedule", () => {
     ]);
 
     const row = screen.getByRole("row", { name: /Ana Maria Santos Jr\./ });
-    expect(within(row).getByText("2026-0001")).toBeVisible();
-    expect(within(row).getByText("2026-08-18")).toBeVisible();
-    expect(within(row).getByText("Pending")).toBeVisible();
-    expect(within(row).getByRole("link", { name: "Open" })).toHaveAttribute(
+    expect(within(row).getByRole("link", { name: "Ana Maria Santos Jr." })).toHaveAttribute(
       "href",
       "/laboratory/appointment-1",
     );
+    expect(within(row).getByRole("link", { name: "2026-0001" })).toHaveAttribute(
+      "href",
+      "/laboratory/appointment-1",
+    );
+    expect(within(row).getByText("2026-08-18")).toBeVisible();
+    expect(within(row).getByRole("button", { name: "Pending — click to mark completed" })).toBeVisible();
+    expect(within(row).queryByRole("link", { name: "Open" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("columnheader")).toHaveLength(4);
     expect(screen.getByText("Page 1 of 1")).toBeVisible();
     expect(screen.queryByRole("link", { name: "Previous page" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Next page" })).not.toBeInTheDocument();
@@ -113,7 +121,7 @@ describe("ClinicPublishedSchedule", () => {
       "href",
       "/physical-exam?studentNumber=Ana+Santos&sort=latest&appointmentDate=2026-08-18&status=PENDING&page=2",
     );
-    expect(screen.getByRole("link", { name: "Open" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Ana Maria Santos Jr." })).toHaveAttribute(
       "href",
       "/physical-exam/appointment-1",
     );

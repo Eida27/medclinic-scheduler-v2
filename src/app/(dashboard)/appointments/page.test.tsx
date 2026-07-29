@@ -146,6 +146,7 @@ describe("AppointmentsPage", () => {
       "/students/23-8200-01",
     );
     expect(within(row).getAllByRole("link")).toEqual([studentLink]);
+    expect(within(row).queryByRole("button")).not.toBeInTheDocument();
     expect(within(row).getByText("No-show")).toHaveClass("bg-red-100");
     expect(within(row).getByText("Completed")).toHaveClass("bg-emerald-100");
     expect(within(row).getByText("Incomplete")).toHaveClass("bg-cpu-navy-soft");

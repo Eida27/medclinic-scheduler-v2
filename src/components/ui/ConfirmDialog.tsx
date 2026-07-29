@@ -29,14 +29,51 @@ export function ConfirmDialog({
   onCancel,
   onConfirm,
 }: ConfirmDialogProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
+  const originRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
+    originRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
     cancelButtonRef.current?.focus();
 
+    return () => {
+      originRef.current?.focus();
+      originRef.current = null;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape" && !pending) onCancel();
+      if (event.key === "Escape" && !pending) {
+        event.preventDefault();
+        onCancel();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>(
+          "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
+        ) ?? [],
+      );
+      if (focusable.length === 0) {
+        event.preventDefault();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !dialogRef.current?.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !dialogRef.current?.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
     }
 
     document.addEventListener("keydown", handleKeyDown);
@@ -48,6 +85,7 @@ export function ConfirmDialog({
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-cpu-navy-dark/70 p-4 backdrop-blur-sm">
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-busy={pending}

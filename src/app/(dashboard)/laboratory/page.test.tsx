@@ -12,6 +12,7 @@ vi.mock("@/server/auth/current-user", () => ({ requireUser }));
 vi.mock("@/server/clinic-access", () => ({ assertClinicAccess }));
 vi.mock("@/server/repositories/appointments.repository", () => ({ listAppointments }));
 vi.mock("@/server/repositories/tracking.repository", () => ({ dashboardMetrics }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 
 import LaboratoryPage from "./page";
 
@@ -76,6 +77,7 @@ describe("LaboratoryPage", () => {
         scheduleType: "LABORATORY",
         appointmentDate: "2026-08-18",
         status: "PENDING",
+        completedFromStatus: null,
       }],
       total: 280,
     });
@@ -108,6 +110,11 @@ describe("LaboratoryPage", () => {
       "/laboratory?studentNumber=Ana+Santos&sort=latest&appointmentDate=2026-08-18&status=COMPLETED&page=1",
     );
     expect(screen.queryByRole("link", { name: "Next page" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Pending — click to mark completed" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Ana Santos" })).toHaveAttribute(
+      "href",
+      "/laboratory/laboratory-appointment-151",
+    );
   });
 
   it("falls back to soonest for an unsupported sort", async () => {
