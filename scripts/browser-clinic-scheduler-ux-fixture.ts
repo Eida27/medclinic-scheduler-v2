@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { resolve, sep } from "node:path";
+import { basename, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool, type PoolClient } from "pg";
+import { AUTOMATIC_NO_SHOW_NOTE } from "../src/server/appointments/automatic-no-show";
 import {
   parseStudentImportCsv,
   STUDENT_IMPORT_HEADERS,
@@ -196,6 +197,24 @@ export function validateCalendarAcceptanceFixture<T extends CalendarAcceptanceFi
   return fixture;
 }
 
+export type QuickStatusAcceptanceFixture = {
+  pending: { studentNumber: string; appointmentId: string; appointmentDate: string };
+  noShow: { studentNumber: string; appointmentId: string; appointmentDate: string };
+  protected: { studentNumber: string; appointmentId: string; appointmentDate: string };
+};
+
+export function validateQuickStatusAcceptanceFixture<T extends QuickStatusAcceptanceFixture>(fixture: T): T {
+  const appointmentIds = [
+    fixture.pending.appointmentId,
+    fixture.noShow.appointmentId,
+    fixture.protected.appointmentId,
+  ];
+  if (new Set(appointmentIds).size !== appointmentIds.length) {
+    throw new Error("Quick-status acceptance appointments must be disjoint.");
+  }
+  return fixture;
+}
+
 type FixtureState = {
   version: 3;
   runId: string;
@@ -216,6 +235,11 @@ type FixtureState = {
     byteLength: number;
     encoding: "windows-1252";
     peñaCount: 1;
+  };
+  browserImport?: {
+    path: string;
+    filename: string;
+    encoding: "utf-8-bom" | "windows-1252";
   };
   fixtureReason: string;
   studentNumbers: string[];
@@ -242,6 +266,7 @@ type FixtureState = {
     successCalendarDate: string;
     failureCalendarDate: string;
     calendar?: CalendarAcceptanceFixture;
+    quickStatus?: QuickStatusAcceptanceFixture;
   };
   cleanup?: CleanupProgress;
 };
@@ -440,8 +465,9 @@ async function prepare(pool: Pool, databaseIdentity: AcceptanceDatabaseIdentity)
   const sourceBytes = await readFile(APPROVED_CSV_PATH);
   const inspection = inspectApprovedCsv(sourceBytes);
   const variant = createWindows1252Variant(sourceBytes);
+  const useApprovedCsv = process.env.CLINIC_UX_ACCEPTANCE_USE_APPROVED_CSV === "1";
   const runId = randomUUID();
-    const filename = `BROWSER-UX-${runId}-Physical_Laboratory_Scheduling-windows1252.csv`;
+  const filename = `BROWSER-UX-${runId}-Physical_Laboratory_Scheduling-windows1252.csv`;
   const temporaryPath = resolve(FIXTURE_DIRECTORY, filename);
   const client = await pool.connect();
   let state: FixtureState;
@@ -510,6 +536,15 @@ async function prepare(pool: Pool, databaseIdentity: AcceptanceDatabaseIdentity)
         encoding: "windows-1252",
         peñaCount: 1,
       },
+      browserImport: useApprovedCsv ? {
+        path: APPROVED_CSV_PATH,
+        filename: basename(APPROVED_CSV_PATH),
+        encoding: "utf-8-bom",
+      } : {
+        path: temporaryPath,
+        filename,
+        encoding: "windows-1252",
+      },
       fixtureReason: `BROWSER-UX-${runId}`,
       studentNumbers: inspection.studentNumbers,
       preExistingStudents: students.rows.map(({ value }) => value),
@@ -566,11 +601,17 @@ async function prepare(pool: Pool, databaseIdentity: AcceptanceDatabaseIdentity)
     temporaryReferencePrograms: state.referencePrograms.temporary,
     capacityRowsRecorded: state.baseline.capacities.length,
     browserImport: {
-      file: state.temporaryCsv.path,
+      file: state.browserImport!.path,
+      filename: state.browserImport!.filename,
+      encoding: state.browserImport!.encoding,
       studentCategory: "Regular",
       academicYear: "Use the current academic year shown by the form",
     },
   };
+}
+
+function browserImportFilename(state: FixtureState) {
+  return state.browserImport?.filename ?? state.temporaryCsv.filename;
 }
 
 async function captureImport(client: PoolClient, state: FixtureState) {
@@ -578,7 +619,7 @@ async function captureImport(client: PoolClient, state: FixtureState) {
     client,
     `SELECT id::text AS id FROM schedule_import_groups
       WHERE source_filename=$1 AND created_at >= $2::timestamptz ORDER BY created_at`,
-    [state.temporaryCsv.filename, state.startedAt],
+    [browserImportFilename(state), state.startedAt],
   );
   const batchIds = importIds.length
     ? await idRows(client, "SELECT id::text AS id FROM schedule_batches WHERE import_group_id=ANY($1::uuid[]) ORDER BY id", [importIds])
@@ -713,7 +754,7 @@ function addIsoDays(date: string, days: number) {
   return shifted.toISOString().slice(0, 10);
 }
 
-async function findEmptyFutureWeekday(
+export async function findEmptyFutureWeekday(
   client: PoolClient,
   clinicId = LABORATORY_CLINIC_ID,
   startDate = manilaDate(1),
@@ -725,8 +766,8 @@ async function findEmptyFutureWeekday(
       WHERE EXTRACT(ISODOW FROM candidate) BETWEEN 1 AND 5
         AND NOT EXISTS (
           SELECT 1 FROM clinic_unavailable_dates unavailable
-           WHERE unavailable.clinic_id=$3 AND candidate::date BETWEEN unavailable.start_date AND unavailable.end_date
-             AND unavailable.unblocked_at IS NULL
+           WHERE unavailable.blocked_date=candidate::date
+             AND unavailable.reopened_at IS NULL
         )
         AND NOT EXISTS (
           SELECT 1 FROM appointments appointment
@@ -764,19 +805,24 @@ async function seedCpuRestorationFixture(
   kind: "safe" | "protected",
 ) {
   const blockBatchId = randomUUID();
-  const block = await client.query<{ id: string; updatedAt: string }>(
-    `INSERT INTO clinic_unavailable_dates (
-       clinic_id, start_date, end_date, category, reason, created_by, created_batch_id
-     ) VALUES ($1,$2,$2,'MAINTENANCE',$3,$4,$5)
-     RETURNING id::text,
-               to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "updatedAt"`,
+  const closureGroup = await client.query<{ id: string }>(
+    `INSERT INTO clinic_closure_groups (
+       start_date,end_date,category,reason,created_by,creation_batch_id
+     ) VALUES ($1,$1,'MAINTENANCE',$2,$3,$4)
+     RETURNING id::text`,
     [
-      PHYSICAL_EXAM_CLINIC_ID,
       pair.physicalDate,
       `${state.fixtureReason} ${kind} restoration`,
       ADMIN_USER_ID,
       blockBatchId,
     ],
+  );
+  const block = await client.query<{ id: string; updatedAt: string }>(
+    `INSERT INTO clinic_unavailable_dates (closure_group_id,blocked_date)
+     VALUES ($1,$2)
+     RETURNING id::text,
+               to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "updatedAt"`,
+    [closureGroup.rows[0].id, pair.physicalDate],
   );
   const replacementDate = await findEmptyFutureWeekday(
     client,
@@ -818,14 +864,22 @@ async function seedCpuRestorationFixture(
       replacement.rows[0].id,
     ],
   );
-  await client.query(
+  const event = await client.query<{ id: string }>(
     `INSERT INTO appointment_reschedule_events (
-       student_number, schedule_pair_id, cause, clinic_unavailable_date_id,
+       student_number, schedule_pair_id, cause, closure_group_id, schedule_cycle_start,
+       strategy, outcome,
        old_physical_exam_appointment_id, new_physical_exam_appointment_id,
        actor_user_id, block_batch_id
-     ) SELECT student_number, schedule_pair_id, 'CLINIC_CLOSURE', $2, id, $3, $4, $5
-         FROM appointments WHERE id=$1`,
-    [pair.physicalId, block.rows[0].id, replacement.rows[0].id, ADMIN_USER_ID, blockBatchId],
+     ) SELECT student_number, schedule_pair_id, 'CLINIC_CLOSURE', $2, schedule_cycle_start,
+              'MOVE_PHYSICAL_ONLY', 'REPLACED', id, $3, $4, $5
+          FROM appointments WHERE id=$1
+     RETURNING id::text`,
+    [pair.physicalId, closureGroup.rows[0].id, replacement.rows[0].id, ADMIN_USER_ID, blockBatchId],
+  );
+  await client.query(
+    `INSERT INTO appointment_reschedule_event_unavailable_dates (event_id,unavailable_date_id)
+     VALUES ($1,$2)`,
+    [event.rows[0].id, block.rows[0].id],
   );
   if (kind === "protected") {
     await client.query(
@@ -856,7 +910,7 @@ async function stage(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
     await client.query("BEGIN");
     const imported = await captureImport(client, state);
     if (imported.importIds.length !== 1) {
-      throw new Error(`Expected one UI import for ${state.temporaryCsv.filename}; found ${imported.importIds.length}.`);
+      throw new Error(`Expected one UI import for ${browserImportFilename(state)}; found ${imported.importIds.length}.`);
     }
     const importRow = await client.query<{ totalRows: number; processedStudentCount: number }>(
       `SELECT total_rows AS "totalRows",
@@ -934,23 +988,30 @@ async function stage(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
       laboratoryDate: string;
       physicalId: string;
       physicalDate: string;
+      middleName: string | null;
     }>(
       `SELECT appointment.student_number AS "studentNumber",
               MAX(appointment.id::text) FILTER (WHERE appointment.schedule_type='LABORATORY') AS "laboratoryId",
               MAX(appointment.appointment_date::text) FILTER (WHERE appointment.schedule_type='LABORATORY') AS "laboratoryDate",
               MAX(appointment.id::text) FILTER (WHERE appointment.schedule_type='PHYSICAL_EXAM') AS "physicalId",
-              MAX(appointment.appointment_date::text) FILTER (WHERE appointment.schedule_type='PHYSICAL_EXAM') AS "physicalDate"
+              MAX(appointment.appointment_date::text) FILTER (WHERE appointment.schedule_type='PHYSICAL_EXAM') AS "physicalDate",
+              student.middle_name AS "middleName"
          FROM appointments appointment
+         JOIN students student ON student.student_number=appointment.student_number
         WHERE appointment.batch_id=ANY($1::uuid[]) AND appointment.status='PENDING' AND appointment.is_published=TRUE
-        GROUP BY appointment.student_number
+        GROUP BY appointment.student_number, student.middle_name
        HAVING COUNT(*) FILTER (WHERE appointment.schedule_type='LABORATORY')=1
           AND COUNT(*) FILTER (WHERE appointment.schedule_type='PHYSICAL_EXAM')=1
-        ORDER BY appointment.student_number
-        LIMIT 6`,
+        ORDER BY CASE WHEN BTRIM(COALESCE(student.middle_name, '')) LIKE '% %' THEN 0 ELSE 1 END,
+                 appointment.student_number
+        LIMIT 8`,
       [imported.batchIds],
     );
-    if (pairs.rows.length < 6) throw new Error(`Expected at least six published appointment pairs; found ${pairs.rows.length}.`);
-    const [correction, complete, mixed, clinicContext, safeRestorationPair, protectedRestorationPair] = pairs.rows;
+    if (pairs.rows.length < 8) throw new Error(`Expected at least eight published appointment pairs; found ${pairs.rows.length}.`);
+    const [fullMiddleName, correction, complete, mixed, clinicContext, safeRestorationPair, protectedRestorationPair, noShow] = pairs.rows;
+    if (!fullMiddleName.middleName?.includes(" ")) {
+      throw new Error("Acceptance import must provide a student with a multi-word middle name.");
+    }
     const appointmentIds = [
       correction.laboratoryId,
       complete.laboratoryId,
@@ -958,7 +1019,10 @@ async function stage(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
       mixed.laboratoryId,
       mixed.physicalId,
     ];
-    await client.query("SELECT id FROM appointments WHERE id=ANY($1::uuid[]) FOR UPDATE", [appointmentIds]);
+    await client.query(
+      "SELECT id FROM appointments WHERE id=ANY($1::uuid[]) FOR UPDATE",
+      [[...appointmentIds, noShow.laboratoryId]],
+    );
     const correctionDate = manilaDate(-2);
     await client.query(
       `UPDATE appointments
@@ -988,6 +1052,19 @@ async function stage(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
         complete.studentNumber, complete.physicalId, manilaDate(0), state.fixtureReason,
         mixed.studentNumber, mixed.physicalId, ADMIN_USER_ID,
       ],
+    );
+    const noShowDate = manilaDate(-2);
+    noShow.laboratoryDate = noShowDate;
+    await client.query(
+      `UPDATE appointments
+          SET status='NO_SHOW', appointment_date=$2::date, updated_by=$3, updated_at=NOW()
+        WHERE id=$1 AND status='PENDING' AND is_published=TRUE`,
+      [noShow.laboratoryId, noShowDate, ADMIN_USER_ID],
+    );
+    await client.query(
+      `INSERT INTO appointment_status_logs (appointment_id, old_status, new_status, notes, changed_by)
+       VALUES ($1,'PENDING','NO_SHOW',$2,NULL)`,
+      [noShow.laboratoryId, AUTOMATIC_NO_SHOW_NOTE],
     );
     const safeRestorationMonth = monthBounds(3);
     const protectedRestorationMonth = monthBounds(4);
@@ -1053,6 +1130,23 @@ async function stage(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
       },
     });
     const successCalendarDate = draftBlocks[0].date;
+    const quickStatus = validateQuickStatusAcceptanceFixture({
+      pending: {
+        studentNumber: fullMiddleName.studentNumber,
+        appointmentId: fullMiddleName.laboratoryId,
+        appointmentDate: fullMiddleName.laboratoryDate,
+      },
+      noShow: {
+        studentNumber: noShow.studentNumber,
+        appointmentId: noShow.laboratoryId,
+        appointmentDate: noShow.laboratoryDate,
+      },
+      protected: {
+        studentNumber: complete.studentNumber,
+        appointmentId: complete.laboratoryId,
+        appointmentDate: complete.laboratoryDate,
+      },
+    });
     state.phase = "STAGED";
     state.staged = {
       correction: {
@@ -1074,6 +1168,7 @@ async function stage(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
       successCalendarDate,
       failureCalendarDate: protectedRestoration.date,
       calendar,
+      quickStatus,
     };
     await client.query("COMMIT");
     await writeState(state);
@@ -1099,6 +1194,38 @@ async function stage(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
   }
 }
 
+async function quickStatusDatabaseProof(client: PoolClient, fixture?: QuickStatusAcceptanceFixture) {
+  if (!fixture) return null;
+  const roles = new Map([
+    [fixture.pending.appointmentId, "pending"],
+    [fixture.noShow.appointmentId, "noShow"],
+    [fixture.protected.appointmentId, "protected"],
+  ]);
+  const result = await client.query<{
+    id: string;
+    appointmentDate: string;
+    status: string;
+    resultStatus: string | null;
+    statusLogCount: number;
+    auditCount: number;
+  }>(
+    `SELECT appointment.id::text,
+            appointment.appointment_date::text AS "appointmentDate",
+            appointment.status,
+            result.result_status AS "resultStatus",
+            (SELECT COUNT(*)::int FROM appointment_status_logs log
+              WHERE log.appointment_id=appointment.id) AS "statusLogCount",
+            (SELECT COUNT(*)::int FROM audit_logs audit
+              WHERE audit.entity_type='appointment' AND audit.entity_id=appointment.id::text) AS "auditCount"
+       FROM appointments appointment
+       LEFT JOIN laboratory_results result ON result.appointment_id=appointment.id
+      WHERE appointment.id=ANY($1::uuid[])
+      ORDER BY appointment.id`,
+    [[...roles.keys()]],
+  );
+  return result.rows.map((row) => ({ role: roles.get(row.id), ...row }));
+}
+
 async function status(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
   const state = await readState();
   if (!state) {
@@ -1119,12 +1246,13 @@ async function status(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
       createdBatchId: string | null;
       unblockedBatchId: string | null;
     }>(
-      `SELECT id::text, unblocked_at AS "unblockedAt",
-              created_batch_id::text AS "createdBatchId",
-              unblocked_batch_id::text AS "unblockedBatchId"
-         FROM clinic_unavailable_dates
-        WHERE reason LIKE $1 AND created_at >= $2::timestamptz
-        ORDER BY id`,
+      `SELECT unavailable.id::text, unavailable.reopened_at AS "unblockedAt",
+              closure.creation_batch_id::text AS "createdBatchId",
+              unavailable.reopening_batch_id::text AS "unblockedBatchId"
+         FROM clinic_unavailable_dates unavailable
+         JOIN clinic_closure_groups closure ON closure.id=unavailable.closure_group_id
+        WHERE closure.reason LIKE $1 AND closure.created_at >= $2::timestamptz
+        ORDER BY unavailable.id`,
       [`${state.fixtureReason}%`, state.startedAt],
     )).rows;
     const eventProvenance = (await client.query<{
@@ -1137,8 +1265,10 @@ async function status(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
               event.restoration_batch_id::text AS "restorationBatchId",
               event.restored_at AS "restoredAt"
          FROM appointment_reschedule_events event
-         JOIN clinic_unavailable_dates unavailable ON unavailable.id=event.clinic_unavailable_date_id
-        WHERE unavailable.reason LIKE $1 AND unavailable.created_at >= $2::timestamptz
+         JOIN appointment_reschedule_event_unavailable_dates link ON link.event_id=event.id
+         JOIN clinic_unavailable_dates unavailable ON unavailable.id=link.unavailable_date_id
+         JOIN clinic_closure_groups closure ON closure.id=unavailable.closure_group_id
+        WHERE closure.reason LIKE $1 AND closure.created_at >= $2::timestamptz
         ORDER BY event.id`,
       [`${state.fixtureReason}%`, state.startedAt],
     )).rows;
@@ -1149,10 +1279,12 @@ async function status(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
       phase: state.phase,
       source: state.source,
       temporaryCsv: state.temporaryCsv,
+      browserImport: state.browserImport,
       preExistingMatchingStudents: state.preExistingStudents.length,
       imported: importSummary(imported),
       peñaStudent: await peñaStudent(client, state),
       staged: state.staged,
+      quickStatusProof: await quickStatusDatabaseProof(client, state.staged?.quickStatus),
       fixtureClosures: calendarRows.map((row) => row.id),
       calendarProof: {
         rowCount: calendarRows.length,
@@ -1282,7 +1414,7 @@ export async function collectCleanupManifest(
   const imports = await idRows(
     client,
     "SELECT id::text AS id FROM schedule_import_groups WHERE source_filename=$1 AND created_at >= $2::timestamptz",
-    [state.temporaryCsv.filename, state.startedAt],
+    [browserImportFilename(state), state.startedAt],
   );
   const batches = imports.length
     ? await idRows(client, "SELECT id::text AS id FROM schedule_batches WHERE import_group_id=ANY($1::uuid[])", [imports])

@@ -6,6 +6,8 @@ import {
   collectCleanupManifest,
   countCleanupResidue,
   deleteDatabaseManifestWithClient,
+  findEmptyFutureWeekday,
+  validateQuickStatusAcceptanceFixture,
 } from "../../scripts/browser-clinic-scheduler-ux-fixture";
 
 const ids = {
@@ -38,6 +40,68 @@ const sourceFilename = "T20-ownership-fixture.csv";
 
 afterAll(async () => {
   await pool.end();
+});
+
+describe("browser quick-status fixture validation", () => {
+  const fixture = {
+    pending: {
+      studentNumber: "pending-student",
+      appointmentId: "pending-appointment",
+      appointmentDate: "2045-08-18",
+    },
+    noShow: {
+      studentNumber: "no-show-student",
+      appointmentId: "no-show-appointment",
+      appointmentDate: "2026-07-27",
+    },
+    protected: {
+      studentNumber: "protected-student",
+      appointmentId: "protected-appointment",
+      appointmentDate: "2045-08-19",
+    },
+  };
+
+  it("accepts three disjoint quick-status appointments", () => {
+    expect(validateQuickStatusAcceptanceFixture(fixture)).toBe(fixture);
+  });
+
+  it("rejects reused appointments across quick-status states", () => {
+    expect(() => validateQuickStatusAcceptanceFixture({
+      ...fixture,
+      protected: { ...fixture.protected, appointmentId: fixture.pending.appointmentId },
+    })).toThrow("Quick-status acceptance appointments must be disjoint.");
+  });
+});
+
+describe("browser clinic scheduler date selection", () => {
+  it("skips active unified clinic closure dates", async () => {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const group = await client.query<{ id: string }>(
+        `INSERT INTO clinic_closure_groups (
+           start_date,end_date,category,reason,created_by,creation_batch_id
+         ) VALUES ('2047-03-04','2047-03-04','MAINTENANCE',$1,$2,$3)
+         RETURNING id::text`,
+        ["T20-date-selection", TEST_REFERENCE_IDS.adminUser, ids.blockBatch],
+      );
+      await client.query(
+        `INSERT INTO clinic_unavailable_dates (closure_group_id,blocked_date)
+         VALUES ($1,'2047-03-04')`,
+        [group.rows[0].id],
+      );
+
+      await expect(findEmptyFutureWeekday(
+        client,
+        TEST_REFERENCE_IDS.laboratoryClinic,
+        "2047-03-04",
+        "2047-03-05",
+      )).resolves.toBe("2047-03-05");
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
+  });
 });
 
 describe("browser clinic scheduler cleanup ownership", () => {
