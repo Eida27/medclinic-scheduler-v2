@@ -58,6 +58,7 @@ describe("PhysicalExamPage", () => {
       studentNumber: "Ben Reyes",
       sort: "surname_desc",
       isPublished: true,
+      includeLaboratoryStatus: true,
       page: 1,
       limit: 150,
       offset: 0,
@@ -78,6 +79,7 @@ describe("PhysicalExamPage", () => {
         appointmentDate: "2026-08-19",
         status: "PENDING",
         completedFromStatus: null,
+        laboratoryStatus: "COMPLETED",
       }],
       total: 280,
     });
@@ -100,6 +102,7 @@ describe("PhysicalExamPage", () => {
       studentNumber: "Ben Reyes",
       sort: "latest",
       isPublished: true,
+      includeLaboratoryStatus: true,
       page: 2,
       limit: 150,
       offset: 150,
@@ -111,6 +114,8 @@ describe("PhysicalExamPage", () => {
     );
     expect(screen.queryByRole("link", { name: "Next page" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Pending — click to mark completed" })).toBeVisible();
+    expect(screen.getByRole("columnheader", { name: "Laboratory Status" })).toBeVisible();
+    expect(screen.getByText("Completed", { selector: "td span" })).toHaveClass("bg-emerald-100");
     expect(screen.getByRole("link", { name: "Ben Reyes" })).toHaveAttribute(
       "href",
       "/physical-exam/physical-appointment-151",

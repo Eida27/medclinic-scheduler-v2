@@ -96,6 +96,65 @@ describe("ClinicPublishedSchedule", () => {
     expect(screen.queryByRole("navigation", { name: "Appointment pagination" })).not.toBeInTheDocument();
   });
 
+  it.each([
+    ["PENDING", "Pending", "bg-slate-100", "text-slate-800"],
+    ["COMPLETED", "Completed", "bg-emerald-100", "text-emerald-800"],
+    ["NO_SHOW", "No-show", "bg-red-100", "text-red-800"],
+    [null, "Not available", "bg-slate-100", "text-muted"],
+  ] as const)("renders the physical examination laboratory status %s as a read-only badge", (laboratoryStatus, label, backgroundClass, textClass) => {
+    render(
+      <ClinicPublishedSchedule
+        basePath="/physical-exam"
+        title="Published physical examination schedule"
+        description="1 published physical examination appointment matches the current filters."
+        emptyMessage="No published physical examination appointments match these filters."
+        page={1}
+        total={1}
+        filters={{}}
+        showLaboratoryStatus
+        appointments={[{ ...appointment, scheduleType: "PHYSICAL_EXAM", laboratoryStatus }]}
+      />,
+    );
+
+    expect(screen.getAllByRole("columnheader").map((header) => header.textContent)).toEqual([
+      "Student",
+      "Service",
+      "Date",
+      "Laboratory Status",
+      "Status",
+    ]);
+    const row = screen.getByRole("row", { name: new RegExp(label) });
+    const laboratoryCell = within(row).getAllByRole("cell")[3];
+    const laboratoryBadge = within(laboratoryCell).getByText(label);
+    expect(laboratoryBadge.tagName).toBe("SPAN");
+    expect(laboratoryBadge).toHaveClass(backgroundClass, textClass);
+    expect(within(laboratoryCell).queryByRole("button", { name: label })).not.toBeInTheDocument();
+    expect(within(laboratoryCell).queryByRole("link", { name: label })).not.toBeInTheDocument();
+  });
+
+  it("keeps the laboratory table at four columns without the cross-clinic status", () => {
+    render(
+      <ClinicPublishedSchedule
+        basePath="/laboratory"
+        title="Published laboratory schedule"
+        description="1 published laboratory appointment matches the current filters."
+        emptyMessage="No published laboratory appointments match these filters."
+        page={1}
+        total={1}
+        filters={{}}
+        appointments={[appointment]}
+      />,
+    );
+
+    expect(screen.getAllByRole("columnheader").map((header) => header.textContent)).toEqual([
+      "Student",
+      "Service",
+      "Date",
+      "Status",
+    ]);
+    expect(screen.queryByRole("columnheader", { name: "Laboratory Status" })).not.toBeInTheDocument();
+  });
+
   it("renders clinic pagination and preserves clinic filters", () => {
     render(
       <ClinicPublishedSchedule

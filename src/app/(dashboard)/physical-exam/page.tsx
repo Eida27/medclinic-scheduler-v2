@@ -29,6 +29,7 @@ export default async function PhysicalExamPage({
     studentNumber: params.studentNumber,
     sort,
     isPublished: true,
+    includeLaboratoryStatus: true,
     page,
     limit: APPOINTMENT_PAGE_SIZE,
     offset: (page - 1) * APPOINTMENT_PAGE_SIZE,
@@ -45,6 +46,7 @@ export default async function PhysicalExamPage({
       total={result.total}
       filters={{ ...params, sort }}
       appointments={result.items}
+      showLaboratoryStatus
     />
   );
 }

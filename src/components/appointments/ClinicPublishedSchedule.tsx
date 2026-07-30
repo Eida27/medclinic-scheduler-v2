@@ -16,6 +16,7 @@ type ClinicAppointment = {
   appointmentDate: string;
   status: string;
   completedFromStatus: "PENDING" | "NO_SHOW" | null;
+  laboratoryStatus?: "PENDING" | "COMPLETED" | "NO_SHOW" | null;
 };
 
 type ClinicPublishedScheduleProps = {
@@ -32,7 +33,15 @@ type ClinicPublishedScheduleProps = {
     sort?: AppointmentListSort;
   };
   appointments: ClinicAppointment[];
+  showLaboratoryStatus?: boolean;
 };
+
+function laboratoryStatusBadge(status: ClinicAppointment["laboratoryStatus"]) {
+  if (status === "PENDING") return { label: "Pending", className: "bg-slate-100 text-slate-800" };
+  if (status === "COMPLETED") return { label: "Completed", className: "bg-emerald-100 text-emerald-800" };
+  if (status === "NO_SHOW") return { label: "No-show", className: "bg-red-100 text-red-800" };
+  return { label: "Not available", className: "bg-slate-100 text-muted" };
+}
 
 const operationalStatuses = ["PENDING", "COMPLETED", "NO_SHOW"];
 const sortOptions: Array<[AppointmentListSort, string]> = [
@@ -51,6 +60,7 @@ export function ClinicPublishedSchedule({
   total,
   filters,
   appointments,
+  showLaboratoryStatus = false,
 }: ClinicPublishedScheduleProps) {
   return (
     <>
@@ -105,12 +115,15 @@ export function ClinicPublishedSchedule({
                   <th className="px-5 py-3">Student</th>
                   <th className="px-5 py-3">Service</th>
                   <th className="px-5 py-3">Date</th>
+                  {showLaboratoryStatus ? <th className="px-5 py-3">Laboratory Status</th> : null}
                   <th className="px-5 py-3">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">
-                {appointments.map((appointment) => (
-                  <tr key={appointment.id} className="transition hover:bg-cpu-navy-soft/35">
+                {appointments.map((appointment) => {
+                  const laboratoryStatus = laboratoryStatusBadge(appointment.laboratoryStatus);
+                  return (
+                    <tr key={appointment.id} className="transition hover:bg-cpu-navy-soft/35">
                     <td className="px-5 py-4">
                       <Link
                         className="block font-bold text-cpu-navy hover:underline"
@@ -127,6 +140,13 @@ export function ClinicPublishedSchedule({
                     </td>
                     <td className="px-5 py-4">{appointment.scheduleType.replaceAll("_", " ")}</td>
                     <td className="px-5 py-4">{appointment.appointmentDate}</td>
+                    {showLaboratoryStatus ? (
+                      <td className="px-5 py-4">
+                        <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${laboratoryStatus.className}`}>
+                          {laboratoryStatus.label}
+                        </span>
+                      </td>
+                    ) : null}
                     <td className="px-5 py-4">
                       <AppointmentQuickStatusButton
                         appointmentId={appointment.id}
@@ -134,8 +154,9 @@ export function ClinicPublishedSchedule({
                         completedFromStatus={appointment.completedFromStatus}
                       />
                     </td>
-                  </tr>
-                ))}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
