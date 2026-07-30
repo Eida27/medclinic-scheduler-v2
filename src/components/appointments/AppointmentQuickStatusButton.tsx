@@ -14,7 +14,8 @@ type AppointmentQuickStatusButtonProps = {
 type QuickStatusAction = "MARK_COMPLETED" | "REVERT_COMPLETION";
 
 type QuickStatusConfig = {
-  label: string;
+  visibleLabel: string;
+  accessibleLabel: string;
   quickStatusAction: QuickStatusAction;
   expectedStatus: "PENDING" | "NO_SHOW" | "COMPLETED";
   tone: "pending" | "noShow" | "completed";
@@ -32,7 +33,8 @@ function quickStatusConfig(
 ): QuickStatusConfig | null {
   if (status === "PENDING") {
     return {
-      label: "Pending — click to mark completed",
+      visibleLabel: "Pending",
+      accessibleLabel: "Pending — click to mark completed",
       quickStatusAction: "MARK_COMPLETED",
       expectedStatus: "PENDING",
       tone: "pending",
@@ -40,7 +42,8 @@ function quickStatusConfig(
   }
   if (status === "NO_SHOW") {
     return {
-      label: "No-show — click to correct as completed",
+      visibleLabel: "No-show",
+      accessibleLabel: "No-show — click to correct as completed",
       quickStatusAction: "MARK_COMPLETED",
       expectedStatus: "NO_SHOW",
       tone: "noShow",
@@ -53,7 +56,8 @@ function quickStatusConfig(
   }
   if (status === "COMPLETED" && completedFromStatus === "PENDING") {
     return {
-      label: "Completed — click to restore pending",
+      visibleLabel: "Completed",
+      accessibleLabel: "Completed — click to restore pending",
       quickStatusAction: "REVERT_COMPLETION",
       expectedStatus: "COMPLETED",
       tone: "completed",
@@ -61,7 +65,8 @@ function quickStatusConfig(
   }
   if (status === "COMPLETED" && completedFromStatus === "NO_SHOW") {
     return {
-      label: "Completed — click to restore no-show",
+      visibleLabel: "Completed",
+      accessibleLabel: "Completed — click to restore no-show",
       quickStatusAction: "REVERT_COMPLETION",
       expectedStatus: "COMPLETED",
       tone: "completed",
@@ -77,9 +82,9 @@ function quickStatusConfig(
 }
 
 const toneClasses = {
-  pending: "bg-slate-100 text-slate-800 hover:bg-slate-200 focus-visible:outline-slate-600",
-  noShow: "bg-red-100 text-red-800 hover:bg-red-200 focus-visible:outline-red-700",
-  completed: "bg-emerald-100 text-emerald-800 hover:bg-emerald-200 focus-visible:outline-emerald-700",
+  pending: "bg-slate-600 hover:bg-slate-700 focus-visible:outline-slate-600",
+  noShow: "bg-red-600 hover:bg-red-700 focus-visible:outline-red-600",
+  completed: "bg-emerald-700 hover:bg-emerald-800 focus-visible:outline-emerald-700",
 };
 
 export function AppointmentQuickStatusButton({
@@ -92,9 +97,16 @@ export function AppointmentQuickStatusButton({
   const [confirmationOpen, setConfirmationOpen] = useState(false);
   const [error, setError] = useState<string>();
   const config = quickStatusConfig(status, completedFromStatus);
-  const disabledLabel = status === "COMPLETED"
+  const disabledVisibleLabel = status === "COMPLETED"
+    ? "Completed"
+    : status.replaceAll("_", " ");
+  const disabledAccessibleLabel = status === "COMPLETED"
     ? "Completed — previous status unavailable"
     : `${status.replaceAll("_", " ")} — quick status unavailable`;
+  const accessibleLabel = pending
+    ? "Updating appointment status"
+    : config?.accessibleLabel ?? disabledAccessibleLabel;
+  const tone = config?.tone ?? (status === "COMPLETED" ? "completed" : "pending");
 
   async function submit() {
     if (!config || pending) return;
@@ -140,13 +152,16 @@ export function AppointmentQuickStatusButton({
         type="button"
         disabled={!config || pending}
         aria-busy={pending}
+        aria-label={accessibleLabel}
         onClick={activate}
         className={cn(
-          "inline-flex min-h-9 items-center rounded-full px-3 py-1.5 text-left text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
-          config ? toneClasses[config.tone] : "bg-emerald-100 text-emerald-800",
+          "relative inline-flex min-h-9 w-fit items-center justify-center overflow-hidden rounded-full px-3 py-1.5 text-center text-xs font-bold text-white shadow-sm transition-[background-color,box-shadow,transform] duration-150 ease-out enabled:cursor-pointer enabled:hover:shadow-md enabled:focus-visible:shadow-md disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 motion-safe:enabled:hover:-translate-y-px motion-safe:enabled:hover:scale-[1.02] motion-safe:enabled:focus-visible:-translate-y-px motion-safe:enabled:focus-visible:scale-[1.02] before:pointer-events-none before:absolute before:inset-y-0 before:-left-1/2 before:w-1/3 before:-skew-x-12 before:bg-linear-to-r before:from-transparent before:via-white/35 before:to-transparent before:content-[''] motion-safe:enabled:hover:before:translate-x-[500%] motion-safe:enabled:hover:before:transition-transform motion-safe:enabled:hover:before:duration-500 motion-safe:enabled:hover:before:ease-out motion-safe:enabled:focus-visible:before:translate-x-[500%] motion-safe:enabled:focus-visible:before:transition-transform motion-safe:enabled:focus-visible:before:duration-500 motion-safe:enabled:focus-visible:before:ease-out",
+          toneClasses[tone],
         )}
       >
-        {pending ? "Updating..." : config?.label ?? disabledLabel}
+        <span className="relative z-10">
+          {pending ? "Updating..." : config?.visibleLabel ?? disabledVisibleLabel}
+        </span>
       </button>
       {error && !confirmationOpen ? (
         <p role="alert" className="max-w-xs text-xs font-medium text-red-700">{error}</p>

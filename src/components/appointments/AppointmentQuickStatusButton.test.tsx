@@ -26,6 +26,89 @@ describe("AppointmentQuickStatusButton", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each([
+    {
+      status: "PENDING" as const,
+      completedFromStatus: null,
+      visibleLabel: "Pending",
+      accessibleLabel: "Pending — click to mark completed",
+      toneClasses: ["bg-slate-600", "hover:bg-slate-700", "focus-visible:outline-slate-600"],
+    },
+    {
+      status: "COMPLETED" as const,
+      completedFromStatus: "PENDING" as const,
+      visibleLabel: "Completed",
+      accessibleLabel: "Completed — click to restore pending",
+      toneClasses: ["bg-emerald-700", "hover:bg-emerald-800", "focus-visible:outline-emerald-700"],
+    },
+    {
+      status: "COMPLETED" as const,
+      completedFromStatus: "NO_SHOW" as const,
+      visibleLabel: "Completed",
+      accessibleLabel: "Completed — click to restore no-show",
+      toneClasses: ["bg-emerald-700", "hover:bg-emerald-800", "focus-visible:outline-emerald-700"],
+    },
+    {
+      status: "NO_SHOW" as const,
+      completedFromStatus: null,
+      visibleLabel: "No-show",
+      accessibleLabel: "No-show — click to correct as completed",
+      toneClasses: ["bg-red-600", "hover:bg-red-700", "focus-visible:outline-red-600"],
+    },
+  ])("renders only the $visibleLabel status with its full accessible action", (scenario) => {
+    render(
+      <AppointmentQuickStatusButton
+        appointmentId="appointment-1"
+        status={scenario.status}
+        completedFromStatus={scenario.completedFromStatus}
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: scenario.accessibleLabel });
+    expect(button).toHaveTextContent(new RegExp(`^${scenario.visibleLabel}$`));
+    expect(button).toHaveAttribute("aria-label", scenario.accessibleLabel);
+    expect(button).toHaveClass("text-white", ...scenario.toneClasses);
+  });
+
+  it("uses the shared compact pill, restrained interaction, and clipped shine classes", () => {
+    render(
+      <AppointmentQuickStatusButton
+        appointmentId="appointment-1"
+        status="PENDING"
+        completedFromStatus={null}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Pending — click to mark completed" })).toHaveClass(
+      "relative",
+      "min-h-9",
+      "w-fit",
+      "overflow-hidden",
+      "rounded-full",
+      "shadow-sm",
+      "transition-[background-color,box-shadow,transform]",
+      "duration-150",
+      "enabled:cursor-pointer",
+      "enabled:hover:shadow-md",
+      "enabled:focus-visible:shadow-md",
+      "motion-safe:enabled:hover:-translate-y-px",
+      "motion-safe:enabled:hover:scale-[1.02]",
+      "motion-safe:enabled:focus-visible:-translate-y-px",
+      "motion-safe:enabled:focus-visible:scale-[1.02]",
+      "before:pointer-events-none",
+      "before:absolute",
+      "before:inset-y-0",
+      "before:-left-1/2",
+      "before:bg-linear-to-r",
+      "before:via-white/35",
+      "before:content-['']",
+      "motion-safe:enabled:hover:before:translate-x-[500%]",
+      "motion-safe:enabled:hover:before:transition-transform",
+      "motion-safe:enabled:focus-visible:before:translate-x-[500%]",
+      "motion-safe:enabled:focus-visible:before:transition-transform",
+    );
+  });
+
   it("marks Pending completed immediately with the semantic payload", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: { status: "COMPLETED" } }));
     vi.stubGlobal("fetch", fetchMock);
@@ -39,7 +122,8 @@ describe("AppointmentQuickStatusButton", () => {
     );
 
     const button = screen.getByRole("button", { name: "Pending — click to mark completed" });
-    expect(button).toHaveClass("bg-slate-100");
+    expect(button).toHaveTextContent(/^Pending$/);
+    expect(button).toHaveClass("bg-slate-600");
     await user.click(button);
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -75,7 +159,8 @@ describe("AppointmentQuickStatusButton", () => {
     expect(button).toBeDisabled();
     expect(button).toHaveAttribute("aria-busy", "true");
     expect(button).toHaveTextContent("Updating...");
-    expect(button).toHaveClass("bg-slate-100");
+    expect(button).toHaveAccessibleName("Updating appointment status");
+    expect(button).toHaveClass("bg-slate-600");
     await user.click(button);
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
@@ -96,7 +181,8 @@ describe("AppointmentQuickStatusButton", () => {
     );
 
     const button = screen.getByRole("button", { name: "Completed — click to restore pending" });
-    expect(button).toHaveClass("bg-emerald-100");
+    expect(button).toHaveTextContent(/^Completed$/);
+    expect(button).toHaveClass("bg-emerald-700");
     await user.click(button);
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -124,12 +210,13 @@ describe("AppointmentQuickStatusButton", () => {
     );
 
     const button = screen.getByRole("button", { name: "No-show — click to correct as completed" });
-    expect(button).toHaveClass("bg-red-100");
+    expect(button).toHaveTextContent(/^No-show$/);
+    expect(button).toHaveClass("bg-red-600");
     await user.click(button);
 
     expect(screen.getByRole("dialog", { name: "Correct no-show as completed?" })).toBeVisible();
     expect(screen.getAllByRole("button").map((item) => item.textContent)).toEqual([
-      "No-show — click to correct as completed",
+      "No-show",
       "Cancel",
       "Mark as completed",
     ]);
@@ -210,8 +297,8 @@ describe("AppointmentQuickStatusButton", () => {
       "This appointment can no longer be reverted because protected result data is linked to it.",
     );
     expect(button).toBeEnabled();
-    expect(button).toHaveTextContent("Completed — click to restore pending");
-    expect(button).toHaveClass("bg-emerald-100");
+    expect(button).toHaveTextContent(/^Completed$/);
+    expect(button).toHaveClass("bg-emerald-700");
     expect(refresh).not.toHaveBeenCalled();
 
     await user.click(button);
@@ -227,8 +314,11 @@ describe("AppointmentQuickStatusButton", () => {
       />,
     );
 
-    expect(screen.getByRole("button", {
+    const button = screen.getByRole("button", {
       name: "Completed — previous status unavailable",
-    })).toBeDisabled();
+    });
+    expect(button).toBeDisabled();
+    expect(button).toHaveTextContent(/^Completed$/);
+    expect(button).toHaveAttribute("aria-label", "Completed — previous status unavailable");
   });
 });
