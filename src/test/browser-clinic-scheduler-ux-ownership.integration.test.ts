@@ -7,6 +7,7 @@ import {
   countCleanupResidue,
   deleteDatabaseManifestWithClient,
   findEmptyFutureWeekday,
+  validateLaboratoryStatusAcceptanceFixture,
   validateQuickStatusAcceptanceFixture,
 } from "../../scripts/browser-clinic-scheduler-ux-fixture";
 
@@ -33,6 +34,12 @@ const ids = {
   unrelatedCalendarAudit: "d2100000-0000-4000-8000-000000000065",
   unrelatedCalendarBatch: "d2100000-0000-4000-8000-000000000066",
   lateCalendarAudit: "d2100000-0000-4000-8000-000000000067",
+  laboratoryBatch: "d2100000-0000-4000-8000-000000000070",
+  physicalExamBatch: "d2100000-0000-4000-8000-000000000071",
+  laboratoryAppointment: "d2100000-0000-4000-8000-000000000072",
+  physicalExamAppointment: "d2100000-0000-4000-8000-000000000073",
+  laboratoryStatusLog: "d2100000-0000-4000-8000-000000000074",
+  schedulePair: "d2100000-0000-4000-8000-000000000075",
 } as const;
 const preExistingStudent = "T20-PRE-OWN";
 const createdStudent = "T20-NEW-OWN";
@@ -70,6 +77,29 @@ describe("browser quick-status fixture validation", () => {
       ...fixture,
       protected: { ...fixture.protected, appointmentId: fixture.pending.appointmentId },
     })).toThrow("Quick-status acceptance appointments must be disjoint.");
+  });
+});
+
+describe("browser Physical Exam Laboratory-status fixture validation", () => {
+  it("rejects a staged unavailable row that reuses a quick-status or calendar role", () => {
+    const unavailable = {
+      studentNumber: "unavailable-student",
+      laboratoryAppointmentId: "unavailable-laboratory",
+      physicalAppointmentId: "unavailable-physical",
+    };
+    const laboratoryStatus = { unavailable };
+    const ownership = {
+      studentNumbers: ["quick-status-student", "calendar-student"],
+      appointmentIds: ["quick-status-appointment", "calendar-replacement"],
+    };
+
+    expect(validateLaboratoryStatusAcceptanceFixture(laboratoryStatus, ownership)).toBe(laboratoryStatus);
+    expect(() => validateLaboratoryStatusAcceptanceFixture({
+      unavailable: { ...unavailable, studentNumber: ownership.studentNumbers[1] },
+    }, ownership)).toThrow(/student role.*disjoint/i);
+    expect(() => validateLaboratoryStatusAcceptanceFixture({
+      unavailable: { ...unavailable, physicalAppointmentId: ownership.appointmentIds[1] },
+    }, ownership)).toThrow(/appointment.*disjoint/i);
   });
 });
 
@@ -126,6 +156,44 @@ describe("browser clinic scheduler cleanup ownership", () => {
            (id, import_name, source_filename, total_rows, created_by)
          VALUES ($1,'T20 ownership fixture',$2,2,$3)`,
         [ids.import, sourceFilename, TEST_REFERENCE_IDS.adminUser],
+      );
+      await client.query(
+        `INSERT INTO schedule_batches
+           (id, clinic_id, batch_name, status, created_by, import_group_id)
+         VALUES ($1,$3,'T20 owned Laboratory batch','PUBLISHED',$5,$2),
+                ($4,$6,'T20 owned Physical Exam batch','PUBLISHED',$5,$2)`,
+        [
+          ids.laboratoryBatch,
+          ids.import,
+          TEST_REFERENCE_IDS.laboratoryClinic,
+          ids.physicalExamBatch,
+          TEST_REFERENCE_IDS.adminUser,
+          TEST_REFERENCE_IDS.physicalExamClinic,
+        ],
+      );
+      await client.query(
+        `INSERT INTO appointments (
+           id,batch_id,clinic_id,student_number,schedule_type,appointment_date,
+           status,is_published,schedule_pair_id,schedule_cycle_start,created_by,updated_by
+         ) VALUES ($1,$2,$3,$7,'LABORATORY','2047-08-01','CANCELLED',TRUE,$8,2047,$9,$9),
+                  ($4,$5,$6,$7,'PHYSICAL_EXAM','2047-08-02','PENDING',TRUE,$8,2047,$9,$9)`,
+        [
+          ids.laboratoryAppointment,
+          ids.laboratoryBatch,
+          TEST_REFERENCE_IDS.laboratoryClinic,
+          ids.physicalExamAppointment,
+          ids.physicalExamBatch,
+          TEST_REFERENCE_IDS.physicalExamClinic,
+          createdStudent,
+          ids.schedulePair,
+          TEST_REFERENCE_IDS.adminUser,
+        ],
+      );
+      await client.query(
+        `INSERT INTO appointment_status_logs
+           (id, appointment_id, old_status, new_status, notes, changed_by)
+         VALUES ($1,$2,'PENDING','CANCELLED','T20 deterministic Not available state',$3)`,
+        [ids.laboratoryStatusLog, ids.laboratoryAppointment, TEST_REFERENCE_IDS.adminUser],
       );
       await client.query(
         `INSERT INTO student_portal_notifications
@@ -252,6 +320,11 @@ describe("browser clinic scheduler cleanup ownership", () => {
       } as never;
       const manifest = await collectCleanupManifest(client, state);
 
+      expect(manifest.appointments).toEqual(expect.arrayContaining([
+        ids.laboratoryAppointment,
+        ids.physicalExamAppointment,
+      ]));
+      expect(manifest.statusLogs).toContain(ids.laboratoryStatusLog);
       expect(manifest.notifications).toEqual(expect.arrayContaining([
         ids.linkedNotification,
         ids.createdNotification,

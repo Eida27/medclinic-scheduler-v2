@@ -19,6 +19,7 @@ import {
   runPersistedCleanup,
   assertZeroCleanupResidue,
   validateCalendarAcceptanceFixture,
+  validateLaboratoryStatusAcceptanceFixture,
   validatePublishedImport,
   type CleanupManifest,
   type CleanupProgress,
@@ -346,6 +347,42 @@ describe("browser clinic scheduler UX fixture helpers", () => {
         protectedAppointmentId: "safe-replacement",
       },
     })).toThrow(/disjoint/i);
+  });
+
+  it("requires a complete unavailable-Laboratory row that is disjoint from every staged role", () => {
+    const unavailable = {
+      studentNumber: "23-8400-01",
+      laboratoryAppointmentId: "unavailable-laboratory",
+      physicalAppointmentId: "unavailable-physical",
+    };
+    const laboratoryStatus = { unavailable };
+    const ownership = {
+      studentNumbers: ["pending-student", "calendar-student"],
+      appointmentIds: ["pending-appointment", "calendar-original", "calendar-replacement"],
+    };
+
+    expect(validateLaboratoryStatusAcceptanceFixture(laboratoryStatus, ownership)).toBe(laboratoryStatus);
+    for (const field of [
+      "studentNumber",
+      "laboratoryAppointmentId",
+      "physicalAppointmentId",
+    ] as const) {
+      expect(() => validateLaboratoryStatusAcceptanceFixture({
+        unavailable: { ...unavailable, [field]: "" },
+      }, ownership)).toThrow(new RegExp(field, "i"));
+    }
+    expect(() => validateLaboratoryStatusAcceptanceFixture({
+      unavailable: {
+        ...unavailable,
+        physicalAppointmentId: unavailable.laboratoryAppointmentId,
+      },
+    }, ownership)).toThrow(/appointment.*disjoint/i);
+    expect(() => validateLaboratoryStatusAcceptanceFixture({
+      unavailable: { ...unavailable, studentNumber: ownership.studentNumbers[0] },
+    }, ownership)).toThrow(/student role.*disjoint/i);
+    expect(() => validateLaboratoryStatusAcceptanceFixture({
+      unavailable: { ...unavailable, laboratoryAppointmentId: ownership.appointmentIds[0] },
+    }, ownership)).toThrow(/appointment.*disjoint/i);
   });
 
   it("retries private-file cleanup from persisted paths after database rows are gone", async () => {

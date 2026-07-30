@@ -215,6 +215,49 @@ export function validateQuickStatusAcceptanceFixture<T extends QuickStatusAccept
   return fixture;
 }
 
+export type LaboratoryStatusAcceptanceFixture = {
+  unavailable: {
+    studentNumber: string;
+    laboratoryAppointmentId: string;
+    physicalAppointmentId: string;
+  };
+};
+
+export type LaboratoryStatusAcceptanceOwnership = {
+  studentNumbers: string[];
+  appointmentIds: string[];
+};
+
+export function validateLaboratoryStatusAcceptanceFixture<T extends LaboratoryStatusAcceptanceFixture>(
+  fixture: T,
+  ownership: LaboratoryStatusAcceptanceOwnership,
+): T {
+  const { unavailable } = fixture;
+  for (const field of [
+    "studentNumber",
+    "laboratoryAppointmentId",
+    "physicalAppointmentId",
+  ] as const) {
+    if (!unavailable[field]?.trim()) {
+      throw new Error(`Laboratory-status acceptance requires unavailable.${field}.`);
+    }
+  }
+  if (ownership.studentNumbers.includes(unavailable.studentNumber)) {
+    throw new Error("The unavailable Laboratory-status student role must be disjoint from other staged roles.");
+  }
+  const unavailableAppointmentIds = [
+    unavailable.laboratoryAppointmentId,
+    unavailable.physicalAppointmentId,
+  ];
+  if (
+    new Set(unavailableAppointmentIds).size !== unavailableAppointmentIds.length
+    || unavailableAppointmentIds.some((id) => ownership.appointmentIds.includes(id))
+  ) {
+    throw new Error("Unavailable Laboratory-status appointments must be disjoint from other staged roles.");
+  }
+  return fixture;
+}
+
 type FixtureState = {
   version: 3;
   runId: string;
@@ -267,6 +310,7 @@ type FixtureState = {
     failureCalendarDate: string;
     calendar?: CalendarAcceptanceFixture;
     quickStatus?: QuickStatusAcceptanceFixture;
+    laboratoryStatus?: LaboratoryStatusAcceptanceFixture;
   };
   cleanup?: CleanupProgress;
 };
@@ -1004,11 +1048,21 @@ async function stage(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
           AND COUNT(*) FILTER (WHERE appointment.schedule_type='PHYSICAL_EXAM')=1
         ORDER BY CASE WHEN BTRIM(COALESCE(student.middle_name, '')) LIKE '% %' THEN 0 ELSE 1 END,
                  appointment.student_number
-        LIMIT 8`,
+        LIMIT 9`,
       [imported.batchIds],
     );
-    if (pairs.rows.length < 8) throw new Error(`Expected at least eight published appointment pairs; found ${pairs.rows.length}.`);
-    const [fullMiddleName, correction, complete, mixed, clinicContext, safeRestorationPair, protectedRestorationPair, noShow] = pairs.rows;
+    if (pairs.rows.length < 9) throw new Error(`Expected at least nine published appointment pairs; found ${pairs.rows.length}.`);
+    const [
+      fullMiddleName,
+      correction,
+      complete,
+      mixed,
+      clinicContext,
+      safeRestorationPair,
+      protectedRestorationPair,
+      noShow,
+      unavailableLaboratory,
+    ] = pairs.rows;
     if (!fullMiddleName.middleName?.includes(" ")) {
       throw new Error("Acceptance import must provide a student with a multi-word middle name.");
     }
@@ -1021,7 +1075,7 @@ async function stage(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
     ];
     await client.query(
       "SELECT id FROM appointments WHERE id=ANY($1::uuid[]) FOR UPDATE",
-      [[...appointmentIds, noShow.laboratoryId]],
+      [[...appointmentIds, noShow.laboratoryId, unavailableLaboratory.laboratoryId]],
     );
     const correctionDate = manilaDate(-2);
     await client.query(
@@ -1065,6 +1119,24 @@ async function stage(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
       `INSERT INTO appointment_status_logs (appointment_id, old_status, new_status, notes, changed_by)
        VALUES ($1,'PENDING','NO_SHOW',$2,NULL)`,
       [noShow.laboratoryId, AUTOMATIC_NO_SHOW_NOTE],
+    );
+    const unavailableLaboratoryUpdate = await client.query(
+      `UPDATE appointments
+          SET status='CANCELLED', updated_by=$2, updated_at=NOW()
+        WHERE id=$1 AND status='PENDING' AND is_published=TRUE`,
+      [unavailableLaboratory.laboratoryId, ADMIN_USER_ID],
+    );
+    if (unavailableLaboratoryUpdate.rowCount !== 1) {
+      throw new Error("Expected one pending Laboratory appointment for the Not available fixture.");
+    }
+    await client.query(
+      `INSERT INTO appointment_status_logs (appointment_id, old_status, new_status, notes, changed_by)
+       VALUES ($1,'PENDING','CANCELLED',$2,$3)`,
+      [
+        unavailableLaboratory.laboratoryId,
+        `${state.fixtureReason} deterministic Not available state`,
+        ADMIN_USER_ID,
+      ],
     );
     const safeRestorationMonth = monthBounds(3);
     const protectedRestorationMonth = monthBounds(4);
@@ -1147,6 +1219,23 @@ async function stage(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
         appointmentDate: complete.laboratoryDate,
       },
     });
+    const otherStagedPairs = pairs.rows.slice(0, 8);
+    const laboratoryStatus = validateLaboratoryStatusAcceptanceFixture({
+      unavailable: {
+        studentNumber: unavailableLaboratory.studentNumber,
+        laboratoryAppointmentId: unavailableLaboratory.laboratoryId,
+        physicalAppointmentId: unavailableLaboratory.physicalId,
+      },
+    }, {
+      studentNumbers: otherStagedPairs.map((pair) => pair.studentNumber),
+      appointmentIds: [
+        ...otherStagedPairs.flatMap((pair) => [pair.laboratoryId, pair.physicalId]),
+        ...calendar.safeRestoration.originalAppointmentIds,
+        ...calendar.safeRestoration.replacementAppointmentIds,
+        ...calendar.protectedRestoration.originalAppointmentIds,
+        ...calendar.protectedRestoration.replacementAppointmentIds,
+      ],
+    });
     state.phase = "STAGED";
     state.staged = {
       correction: {
@@ -1169,6 +1258,7 @@ async function stage(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
       failureCalendarDate: protectedRestoration.date,
       calendar,
       quickStatus,
+      laboratoryStatus,
     };
     await client.query("COMMIT");
     await writeState(state);
@@ -1224,6 +1314,50 @@ async function quickStatusDatabaseProof(client: PoolClient, fixture?: QuickStatu
     [[...roles.keys()]],
   );
   return result.rows.map((row) => ({ role: roles.get(row.id), ...row }));
+}
+
+async function laboratoryStatusDatabaseProof(
+  client: PoolClient,
+  fixture?: LaboratoryStatusAcceptanceFixture,
+) {
+  if (!fixture) return null;
+  const { unavailable } = fixture;
+  const result = await client.query<{
+    id: string;
+    studentNumber: string;
+    scheduleType: string;
+    status: string;
+    isPublished: boolean;
+    statusLogCount: number;
+    latestOldStatus: string | null;
+    latestNewStatus: string | null;
+    latestNotes: string | null;
+    latestChangedBy: string | null;
+  }>(
+    `SELECT appointment.id::text,
+            appointment.student_number AS "studentNumber",
+            appointment.schedule_type AS "scheduleType",
+            appointment.status,
+            appointment.is_published AS "isPublished",
+            (SELECT COUNT(*)::int FROM appointment_status_logs log
+              WHERE log.appointment_id=appointment.id) AS "statusLogCount",
+            latest.old_status AS "latestOldStatus",
+            latest.new_status AS "latestNewStatus",
+            latest.notes AS "latestNotes",
+            latest.changed_by::text AS "latestChangedBy"
+       FROM appointments appointment
+       LEFT JOIN LATERAL (
+         SELECT old_status, new_status, notes, changed_by
+           FROM appointment_status_logs
+          WHERE appointment_id=appointment.id
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1
+       ) latest ON TRUE
+      WHERE appointment.id=ANY($1::uuid[])
+      ORDER BY appointment.schedule_type`,
+    [[unavailable.laboratoryAppointmentId, unavailable.physicalAppointmentId]],
+  );
+  return { ...unavailable, appointments: result.rows };
 }
 
 async function status(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
@@ -1285,6 +1419,10 @@ async function status(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
       peñaStudent: await peñaStudent(client, state),
       staged: state.staged,
       quickStatusProof: await quickStatusDatabaseProof(client, state.staged?.quickStatus),
+      laboratoryStatusProof: await laboratoryStatusDatabaseProof(
+        client,
+        state.staged?.laboratoryStatus,
+      ),
       fixtureClosures: calendarRows.map((row) => row.id),
       calendarProof: {
         rowCount: calendarRows.length,
