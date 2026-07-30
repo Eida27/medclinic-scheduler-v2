@@ -47,7 +47,7 @@ describe("listAppointments", () => {
 
   it("adds the paired Laboratory status projection only when requested without changing the count query", async () => {
     await listAppointments({
-      clinicCode: "PHYSICAL_EXAM_CLINIC",
+      clinicCode: "CPU_CLINIC",
       scheduleType: "PHYSICAL_EXAM",
       page: 2,
       limit: 10,
@@ -59,7 +59,7 @@ describe("listAppointments", () => {
     expect(query.mock.calls[0][0]).not.toContain("LEFT JOIN LATERAL");
     // The repository appends pagination after issuing the count query, so the mock
     // observes the same values array after its later mutation.
-    expect(query.mock.calls[0][1]).toEqual(["PHYSICAL_EXAM_CLINIC", "PHYSICAL_EXAM", 10, 10]);
+    expect(query.mock.calls[0][1]).toEqual(["CPU_CLINIC", "PHYSICAL_EXAM", 10, 10]);
     expect(query.mock.calls[1][0]).toContain('laboratory.status AS "laboratoryStatus"');
     expect(query.mock.calls[1][0]).toContain("LEFT JOIN LATERAL");
     expect(query.mock.calls[1][0]).toContain("laboratory.student_number=a.student_number");
@@ -68,7 +68,7 @@ describe("listAppointments", () => {
     expect(query.mock.calls[1][0]).toContain("laboratory.schedule_pair_id=a.schedule_pair_id");
     expect(query.mock.calls[1][0]).toContain("a.schedule_pair_id IS NULL");
     expect(query.mock.calls[1][0]).toContain("ORDER BY laboratory.appointment_date DESC, laboratory.created_at DESC, laboratory.id DESC");
-    expect(query.mock.calls[1][1]).toEqual(["PHYSICAL_EXAM_CLINIC", "PHYSICAL_EXAM", 10, 10]);
+    expect(query.mock.calls[1][1]).toEqual(["CPU_CLINIC", "PHYSICAL_EXAM", 10, 10]);
   });
 });
 
@@ -88,6 +88,7 @@ describe("rescheduleAppointmentWithClient", () => {
       isManuallyLocked: false,
       lockReason: null,
       latestLog: null,
+      completedFromStatus: null,
     } satisfies AppointmentMutationContext;
     const replacementId = "22222222-2222-4222-8222-222222222222";
     const actorUserId = "00000000-0000-4000-8000-000000000001";

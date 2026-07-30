@@ -418,6 +418,53 @@ describe("AppointmentQuickStatusButton", () => {
     await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
   });
 
+  it("ignores an old successful request after an A to B to A row reuse", async () => {
+    const oldRequest = deferredResponse();
+    const currentRequest = deferredResponse();
+    const fetchMock = vi.fn()
+      .mockReturnValueOnce(oldRequest.promise)
+      .mockReturnValueOnce(currentRequest.promise);
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <AppointmentQuickStatusButton
+        appointmentId="appointment-1"
+        status="PENDING"
+        completedFromStatus={null}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Pending.*click to mark completed/ }));
+    rerender(
+      <AppointmentQuickStatusButton
+        appointmentId="appointment-2"
+        status="PENDING"
+        completedFromStatus={null}
+      />,
+    );
+    rerender(
+      <AppointmentQuickStatusButton
+        appointmentId="appointment-1"
+        status="PENDING"
+        completedFromStatus={null}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Pending.*click to mark completed/ }));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    oldRequest.resolve(jsonResponse({ data: { status: "COMPLETED" } }));
+    await act(async () => {
+      await oldRequest.promise;
+    });
+
+    expect(refresh).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Updating appointment status" })).toBeDisabled();
+
+    currentRequest.resolve(jsonResponse({ data: { status: "COMPLETED" } }));
+    await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+  });
+
   it("keeps the authoritative state visible, reports a failure inline, and allows retry", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({

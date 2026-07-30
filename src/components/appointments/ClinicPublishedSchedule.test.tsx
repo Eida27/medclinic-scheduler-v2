@@ -121,7 +121,7 @@ describe("ClinicPublishedSchedule", () => {
       "Service",
       "Date",
       "Laboratory Status",
-      "Status",
+      "Physical Exam Status",
     ]);
     const row = screen.getByRole("row", { name: new RegExp(label) });
     const laboratoryCell = within(row).getAllByRole("cell")[3];

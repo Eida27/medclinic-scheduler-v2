@@ -116,7 +116,9 @@ export function ClinicPublishedSchedule({
                   <th className="px-5 py-3">Service</th>
                   <th className="px-5 py-3">Date</th>
                   {showLaboratoryStatus ? <th className="px-5 py-3">Laboratory Status</th> : null}
-                  <th className="px-5 py-3">Status</th>
+                  <th className="px-5 py-3">
+                    {showLaboratoryStatus ? "Physical Exam Status" : "Status"}
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">

@@ -134,7 +134,7 @@ async function appointmentMutationSnapshot(appointmentId: string) {
 
 async function insertQuickPendingAppointment(
   fixtureStudentNumber: string,
-  clinicId = TEST_REFERENCE_IDS.laboratoryClinic,
+  clinicId: string = TEST_REFERENCE_IDS.laboratoryClinic,
 ) {
   const result = await pool.query<{ id: string }>(
     `INSERT INTO appointments (
