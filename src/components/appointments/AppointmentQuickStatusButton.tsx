@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/cn";
@@ -82,9 +82,9 @@ function quickStatusConfig(
 }
 
 const toneClasses = {
-  pending: "bg-slate-600 hover:bg-slate-700 focus-visible:outline-slate-600",
-  noShow: "bg-red-600 hover:bg-red-700 focus-visible:outline-red-600",
-  completed: "bg-emerald-700 hover:bg-emerald-800 focus-visible:outline-emerald-700",
+  pending: "bg-slate-600 enabled:hover:bg-slate-700 focus-visible:outline-slate-600",
+  noShow: "bg-red-600 enabled:hover:bg-red-700 focus-visible:outline-red-600",
+  completed: "bg-emerald-700 enabled:hover:bg-emerald-800 focus-visible:outline-emerald-700",
 };
 
 export function AppointmentQuickStatusButton({
@@ -93,9 +93,27 @@ export function AppointmentQuickStatusButton({
   completedFromStatus,
 }: AppointmentQuickStatusButtonProps) {
   const router = useRouter();
-  const [pending, setPending] = useState(false);
-  const [confirmationOpen, setConfirmationOpen] = useState(false);
-  const [error, setError] = useState<string>();
+  const requestKey = `${appointmentId}\u001f${status}\u001f${completedFromStatus ?? ""}`;
+  const [requestContext, setRequestContext] = useState({ key: requestKey, generation: 0 });
+  if (requestContext.key !== requestKey) {
+    setRequestContext({ key: requestKey, generation: requestContext.generation + 1 });
+  }
+  const requestIdentity = `${requestContext.generation}\u001f${requestKey}`;
+  const currentRequestIdentityRef = useRef(requestIdentity);
+  const inFlightRequestIdentitiesRef = useRef(new Set<string>());
+  useLayoutEffect(() => {
+    const previousRequestIdentity = currentRequestIdentityRef.current;
+    currentRequestIdentityRef.current = requestIdentity;
+    if (previousRequestIdentity !== requestIdentity) {
+      inFlightRequestIdentitiesRef.current.delete(previousRequestIdentity);
+    }
+  }, [requestIdentity]);
+  const [pendingRequestIdentity, setPendingRequestIdentity] = useState<string>();
+  const [confirmationRequestIdentity, setConfirmationRequestIdentity] = useState<string>();
+  const [errorState, setErrorState] = useState<{ requestIdentity: string; message: string }>();
+  const pending = pendingRequestIdentity === requestIdentity;
+  const confirmationOpen = confirmationRequestIdentity === requestIdentity;
+  const error = errorState?.requestIdentity === requestIdentity ? errorState.message : undefined;
   const config = quickStatusConfig(status, completedFromStatus);
   const disabledVisibleLabel = status === "COMPLETED"
     ? "Completed"
@@ -109,9 +127,10 @@ export function AppointmentQuickStatusButton({
   const tone = config?.tone ?? (status === "COMPLETED" ? "completed" : "pending");
 
   async function submit() {
-    if (!config || pending) return;
-    setPending(true);
-    setError(undefined);
+    if (!config || inFlightRequestIdentitiesRef.current.has(requestIdentity)) return;
+    inFlightRequestIdentitiesRef.current.add(requestIdentity);
+    setPendingRequestIdentity(requestIdentity);
+    setErrorState(undefined);
     try {
       const response = await fetch(`/api/appointments/${appointmentId}`, {
         method: "PATCH",
@@ -123,24 +142,40 @@ export function AppointmentQuickStatusButton({
       });
       if (!response.ok) {
         const payload = await response.json();
-        setError(payload.error?.message ?? "Unable to update the appointment status.");
+        inFlightRequestIdentitiesRef.current.delete(requestIdentity);
+        if (currentRequestIdentityRef.current === requestIdentity) {
+          setPendingRequestIdentity(undefined);
+          setErrorState({
+            requestIdentity,
+            message: payload.error?.message ?? "Unable to update the appointment status.",
+          });
+        }
         return;
       }
-      setConfirmationOpen(false);
-      router.refresh();
+      if (currentRequestIdentityRef.current === requestIdentity) {
+        setConfirmationRequestIdentity(undefined);
+        router.refresh();
+      } else {
+        inFlightRequestIdentitiesRef.current.delete(requestIdentity);
+      }
     } catch {
-      setError("Unable to update the appointment status. Check your connection and try again.");
-    } finally {
-      setPending(false);
+      inFlightRequestIdentitiesRef.current.delete(requestIdentity);
+      if (currentRequestIdentityRef.current === requestIdentity) {
+        setPendingRequestIdentity(undefined);
+        setErrorState({
+          requestIdentity,
+          message: "Unable to update the appointment status. Check your connection and try again.",
+        });
+      }
     }
   }
 
   function activate(event: React.MouseEvent<HTMLButtonElement>) {
     event.stopPropagation();
     if (!config || pending) return;
-    setError(undefined);
+    setErrorState(undefined);
     if (config.confirmation) {
-      setConfirmationOpen(true);
+      setConfirmationRequestIdentity(requestIdentity);
       return;
     }
     void submit();
@@ -159,8 +194,16 @@ export function AppointmentQuickStatusButton({
           toneClasses[tone],
         )}
       >
-        <span className="relative z-10">
-          {pending ? "Updating..." : config?.visibleLabel ?? disabledVisibleLabel}
+        <span className="relative z-10 inline-flex items-center gap-2">
+          {pending ? (
+            <>
+              <span
+                aria-hidden="true"
+                className="size-3 rounded-full border-2 border-white/45 border-t-white motion-safe:animate-spin"
+              />
+              <span>Updating...</span>
+            </>
+          ) : config?.visibleLabel ?? disabledVisibleLabel}
         </span>
       </button>
       {error && !confirmationOpen ? (
@@ -178,8 +221,8 @@ export function AppointmentQuickStatusButton({
           danger={config.confirmation.danger}
           onCancel={() => {
             if (!pending) {
-              setConfirmationOpen(false);
-              setError(undefined);
+              setConfirmationRequestIdentity(undefined);
+              setErrorState(undefined);
             }
           }}
           onConfirm={() => void submit()}
