@@ -42,6 +42,70 @@ afterAll(async () => {
 });
 
 describe("published-only appointment access", () => {
+  it("projects the active paired Laboratory status without affecting filtered Physical Exam totals", async () => {
+    const pairedStudent = "TEST-PUB-PAIR-0001";
+    await insertTestStudent({
+      studentNumber: pairedStudent,
+      firstName: "Paired",
+      lastName: "Student",
+      yearLevel: 4,
+    });
+    await pool.query(
+      `INSERT INTO appointments (
+         id,clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+         schedule_pair_id,schedule_cycle_start,rescheduled_from,created_by,updated_by,created_at
+       ) VALUES
+         ('10000000-0000-4000-8000-000000000001',$2,$1,'PHYSICAL_EXAM','2035-08-10','COMPLETED',TRUE,'30000000-0000-4000-8000-000000000001',2035,NULL,$3,$3,'2035-01-01T00:00:00Z'),
+         ('10000000-0000-4000-8000-000000000002',$2,$1,'PHYSICAL_EXAM','2035-08-11','COMPLETED',TRUE,'30000000-0000-4000-8000-000000000002',2035,NULL,$3,$3,'2035-01-01T00:00:00Z'),
+         ('10000000-0000-4000-8000-000000000003',$2,$1,'PHYSICAL_EXAM','2035-08-12','NO_SHOW',TRUE,NULL,2035,NULL,$3,$3,'2035-01-01T00:00:00Z'),
+         ('10000000-0000-4000-8000-000000000004',$2,$1,'PHYSICAL_EXAM','2035-08-13','PENDING',TRUE,'30000000-0000-4000-8000-000000000003',2035,NULL,$3,$3,'2035-01-01T00:00:00Z'),
+         ('20000000-0000-4000-8000-000000000001',$4,$1,'LABORATORY','2035-08-01','PENDING',TRUE,'30000000-0000-4000-8000-000000000001',2035,NULL,$3,$3,'2035-01-01T00:00:00Z'),
+         ('20000000-0000-4000-8000-000000000002',$4,$1,'LABORATORY','2035-08-02','NO_SHOW',TRUE,'30000000-0000-4000-8000-000000000002',2035,NULL,$3,$3,'2035-01-01T00:00:00Z'),
+         ('20000000-0000-4000-8000-000000000003',$4,$1,'LABORATORY','2035-08-03','COMPLETED',TRUE,'30000000-0000-4000-8000-000000000002',2035,'20000000-0000-4000-8000-000000000002',$3,$3,'2035-01-02T00:00:00Z'),
+         ('20000000-0000-4000-8000-000000000004',$4,$1,'LABORATORY','2035-08-04','COMPLETED',TRUE,NULL,2035,NULL,$3,$3,'2035-01-01T00:00:00Z'),
+         ('20000000-0000-4000-8000-000000000005',$4,$1,'LABORATORY','2035-08-04','NO_SHOW',TRUE,NULL,2035,NULL,$3,$3,'2035-01-03T00:00:00Z'),
+         ('20000000-0000-4000-8000-000000000006',$4,$1,'LABORATORY','2035-08-04','PENDING',TRUE,NULL,2034,NULL,$3,$3,'2035-01-04T00:00:00Z')`,
+      [
+        pairedStudent,
+        TEST_REFERENCE_IDS.physicalExamClinic,
+        admin.userId,
+        TEST_REFERENCE_IDS.laboratoryClinic,
+      ],
+    );
+
+    const physicalExams = await listAppointments({
+      clinicCode: "CPU_CLINIC",
+      scheduleType: "PHYSICAL_EXAM",
+      studentNumber: pairedStudent,
+      page: 1,
+      limit: 20,
+      offset: 0,
+      includeLaboratoryStatus: true,
+    });
+    expect(physicalExams.total).toBe(4);
+    expect(physicalExams.items.map((item) => [item.appointmentDate, item.laboratoryStatus])).toEqual([
+      ["2035-08-10", "PENDING"],
+      ["2035-08-11", "COMPLETED"],
+      ["2035-08-12", "NO_SHOW"],
+      ["2035-08-13", null],
+    ]);
+
+    const completedPhysicalExams = await listAppointments({
+      clinicCode: "CPU_CLINIC",
+      scheduleType: "PHYSICAL_EXAM",
+      status: "COMPLETED",
+      studentNumber: pairedStudent,
+      page: 1,
+      limit: 1,
+      offset: 1,
+      includeLaboratoryStatus: true,
+    });
+    expect(completedPhysicalExams.total).toBe(2);
+    expect(completedPhysicalExams.items).toEqual([
+      expect.objectContaining({ appointmentDate: "2035-08-11", laboratoryStatus: "COMPLETED" }),
+    ]);
+  });
+
   it("keeps awaiting items out of clinic operations while exposing an unresolved student state", async () => {
     await insertTestStudent({
       studentNumber,

@@ -18,6 +18,7 @@ type AppointmentDetail = {
   appointmentDate: string; status: AppointmentStatus; isPublished: boolean;
   notes: string | null; rescheduledFrom: string | null; collegeName: string; programName: string;
   completedFromStatus: CompletionSourceStatus | null;
+  laboratoryStatus?: "PENDING" | "COMPLETED" | "NO_SHOW" | null;
 };
 type StatusLog = { id: string; oldStatus: string | null; newStatus: string; notes: string | null; createdAt: Date; changedById: string | null; changedByName: string | null };
 
@@ -53,7 +54,7 @@ const appointmentListOrderBy: Record<AppointmentListSort, string> = {
 
 export async function listAppointments(filters: {
   clinicCode?: ClinicCode; appointmentDate?: string; scheduleType?: string; status?: string; collegeId?: string; programId?: string;
-  studentNumber?: string; isPublished?: true; sort?: AppointmentListSort; page: number; limit: number; offset: number;
+  studentNumber?: string; isPublished?: true; sort?: AppointmentListSort; includeLaboratoryStatus?: boolean; page: number; limit: number; offset: number;
 }) {
   const clauses = ["a.is_published=TRUE", "a.status NOT IN ('RESCHEDULED','CANCELLED','AWAITING_RESCHEDULE')"]; const values: unknown[] = [];
   const add = (sql: string, value: unknown) => { values.push(value); clauses.push(sql.replaceAll("?", `$${values.length}`)); };
@@ -78,6 +79,34 @@ export async function listAppointments(filters: {
   }
   const where = clauses.join(" AND ");
   const orderBy = appointmentListOrderBy[filters.sort ?? "soonest"];
+  const laboratoryStatusSelect = filters.includeLaboratoryStatus
+    ? ', laboratory.status AS "laboratoryStatus"'
+    : "";
+  const laboratoryStatusJoin = filters.includeLaboratoryStatus
+    ? `LEFT JOIN LATERAL (
+         SELECT laboratory.status
+           FROM appointments laboratory
+          WHERE a.schedule_type='PHYSICAL_EXAM'
+            AND laboratory.student_number=a.student_number
+            AND laboratory.schedule_cycle_start=a.schedule_cycle_start
+            AND laboratory.schedule_type='LABORATORY'
+            AND laboratory.is_published=TRUE
+            AND laboratory.status IN ('PENDING','COMPLETED','NO_SHOW')
+            AND NOT EXISTS (
+              SELECT 1
+                FROM appointments replacement
+               WHERE replacement.rescheduled_from=laboratory.id
+                 AND replacement.is_published=TRUE
+                 AND replacement.status IN ('PENDING','COMPLETED','NO_SHOW')
+            )
+            AND (
+              (a.schedule_pair_id IS NOT NULL AND laboratory.schedule_pair_id=a.schedule_pair_id)
+              OR a.schedule_pair_id IS NULL
+            )
+          ORDER BY laboratory.appointment_date DESC, laboratory.created_at DESC, laboratory.id DESC
+          LIMIT 1
+       ) laboratory ON TRUE`
+    : "";
   const count = await query<{ count: string }>(
     `SELECT COUNT(*)::text AS count FROM appointments a
       JOIN clinics cl ON cl.id=a.clinic_id
@@ -95,7 +124,7 @@ export async function listAppointments(filters: {
               WHEN a.status='COMPLETED' AND completion.old_status IN ('PENDING','NO_SHOW')
                 THEN completion.old_status
               ELSE NULL
-            END AS "completedFromStatus"
+            END AS "completedFromStatus"${laboratoryStatusSelect}
      FROM appointments a JOIN students s ON s.student_number=a.student_number
      JOIN clinics cl ON cl.id=a.clinic_id
      JOIN colleges c ON c.id=s.college_id JOIN programs p ON p.id=s.program_id
@@ -106,6 +135,7 @@ export async function listAppointments(filters: {
         ORDER BY created_at DESC, id DESC
         LIMIT 1
      ) completion ON TRUE
+     ${laboratoryStatusJoin}
      WHERE ${where} ORDER BY ${orderBy}
      LIMIT $${values.length - 1} OFFSET $${values.length}`,
     values,

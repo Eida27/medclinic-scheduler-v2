@@ -44,6 +44,32 @@ describe("listAppointments", () => {
       "ORDER BY a.appointment_date ASC, s.last_name ASC, s.first_name ASC, a.student_number ASC, a.id ASC",
     );
   });
+
+  it("adds the paired Laboratory status projection only when requested without changing the count query", async () => {
+    await listAppointments({
+      clinicCode: "PHYSICAL_EXAM_CLINIC",
+      scheduleType: "PHYSICAL_EXAM",
+      page: 2,
+      limit: 10,
+      offset: 10,
+      includeLaboratoryStatus: true,
+    });
+
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query.mock.calls[0][0]).not.toContain("LEFT JOIN LATERAL");
+    // The repository appends pagination after issuing the count query, so the mock
+    // observes the same values array after its later mutation.
+    expect(query.mock.calls[0][1]).toEqual(["PHYSICAL_EXAM_CLINIC", "PHYSICAL_EXAM", 10, 10]);
+    expect(query.mock.calls[1][0]).toContain('laboratory.status AS "laboratoryStatus"');
+    expect(query.mock.calls[1][0]).toContain("LEFT JOIN LATERAL");
+    expect(query.mock.calls[1][0]).toContain("laboratory.student_number=a.student_number");
+    expect(query.mock.calls[1][0]).toContain("laboratory.schedule_cycle_start=a.schedule_cycle_start");
+    expect(query.mock.calls[1][0]).toContain("a.schedule_pair_id IS NOT NULL");
+    expect(query.mock.calls[1][0]).toContain("laboratory.schedule_pair_id=a.schedule_pair_id");
+    expect(query.mock.calls[1][0]).toContain("a.schedule_pair_id IS NULL");
+    expect(query.mock.calls[1][0]).toContain("ORDER BY laboratory.appointment_date DESC, laboratory.created_at DESC, laboratory.id DESC");
+    expect(query.mock.calls[1][1]).toEqual(["PHYSICAL_EXAM_CLINIC", "PHYSICAL_EXAM", 10, 10]);
+  });
 });
 
 describe("rescheduleAppointmentWithClient", () => {
