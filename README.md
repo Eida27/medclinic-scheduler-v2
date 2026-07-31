@@ -69,7 +69,7 @@ Doctor scheduling, QR check-in, student self-rescheduling, and cloud document st
 | Coordinator | `coordinator@medclinic.local` | `Coordinator123!` |
 | KABALAKA clinic staff | `staff@medclinic.local` | `Staff123!` |
 
-Change seeded passwords before real deployment. Students sign in separately with Student Number and Date of Birth; imported students receive the DOB from the CSV. Existing students whose DOB is null remain readable but cannot sign in until updated.
+Change seeded passwords before real deployment. Students sign in separately with Student Number, Date of Birth, and their complete Middle Name; imported students receive the DOB and Middle Name from the CSV. Middle Name matching ignores capitalization only, so spacing and punctuation must exactly match the stored value. Existing students whose DOB or Middle Name is null remain readable but cannot sign in until updated.
 
 ## Academic-Year Student CSV
 
@@ -84,7 +84,7 @@ Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Bir
 
 - Download the matching sample at [`public/templates/student-schedule-import-template.csv`](public/templates/student-schedule-import-template.csv).
 - Date of Birth is required and uses strict `MM-DD-YYYY`.
-- MI and Suffix may be blank. Names are displayed surname-first with only the first middle initial.
+- Middle Name is required and must contain the complete name; Suffix may be blank. Names are displayed surname-first with only the first middle initial.
 - College names and course codes must match active reference data case-insensitively.
 - Files may contain up to 3,000 data rows and may not exceed 1 MB.
 - Student IDs must be valid and unique within the file after normalization.
@@ -109,7 +109,7 @@ Automatic no-shows run at the next local midnight after the appointment date. Th
 
 ## Student Portal and Notifications
 
-Use **Student sign in** from the public landing page. Authentication uses a separate HTTP-only `medclinic_student_session` cookie. Five failed attempts for the same normalized Student Number/IP pair cause a 15-minute lock. Login errors do not reveal whether a student exists, is inactive, or lacks DOB.
+Use **Student sign in** from the public landing page. Authentication uses a separate HTTP-only `medclinic_student_session` cookie. Five failed attempts for the same normalized Student Number/IP pair cause a 15-minute lock. Login errors do not reveal whether a student exists, is inactive, lacks DOB or Middle Name, or which credential was incorrect.
 
 Every student query is constrained to the session Student Number and revalidates the active student. The portal includes:
 

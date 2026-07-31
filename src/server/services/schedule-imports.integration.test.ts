@@ -94,7 +94,7 @@ describe("student scheduling imports", () => {
 
     const contents = csv(
       `${existingStudentNumber},Updated,Alex,Q.,Jr.,College of Computer Studies,BSIT,4,05-06-2003`,
-      `${newStudentNumber},New,Bea,,,College of Computer Studies,BSIT,3,07-08-2004`,
+      `${newStudentNumber},New,Bea,Rosa,,College of Computer Studies,BSIT,3,07-08-2004`,
     );
     const created = await importStudentScheduleCsv(input(contents), admin);
 
@@ -134,7 +134,7 @@ describe("student scheduling imports", () => {
       {
         student_number: newStudentNumber,
         first_name: "Bea",
-        middle_name: null,
+        middle_name: "Rosa",
         last_name: "New",
         suffix: null,
         year_level: 3,
@@ -164,7 +164,7 @@ describe("student scheduling imports", () => {
   it("rolls back all writes when a reference is unknown", async () => {
     const studentNumber = "99-9103-03";
     const contents = csv(
-      `${studentNumber},Invalid,Reference,,,Unknown College,BSIT,3,05-06-2003`,
+      `${studentNumber},Invalid,Reference,Maria Angela,,Unknown College,BSIT,3,05-06-2003`,
     );
 
     await expect(importStudentScheduleCsv(input(contents), admin)).rejects.toMatchObject({
@@ -183,7 +183,7 @@ describe("student scheduling imports", () => {
 
   it("requires preferred month only for priority categories", async () => {
     const contents = csv(
-      "99-9104-04,Priority,Student,,,College of Computer Studies,BSIT,3,05-06-2003",
+      "99-9104-04,Priority,Student,Maria Angela,,College of Computer Studies,BSIT,3,05-06-2003",
     );
     await expect(importStudentScheduleCsv(input(contents, {
       studentCategory: "OJT",
@@ -211,7 +211,7 @@ describe("student scheduling imports", () => {
     );
 
     await importStudentScheduleCsv(input(csv(
-      `${studentNumber},Unblocked,Import,,,College of Computer Studies,BSIT,3,05-06-2003`,
+      `${studentNumber},Unblocked,Import,Maria Angela,,College of Computer Studies,BSIT,3,05-06-2003`,
     ), { academicYearStart: 2027 }), admin);
 
     const laboratory = await pool.query<{ appointment_date: string }>(
@@ -241,7 +241,7 @@ describe("student scheduling imports", () => {
     );
 
     await importStudentScheduleCsv(input(csv(
-      `${studentNumber},Blocked,Import,,,College of Computer Studies,BSIT,3,05-06-2003`,
+      `${studentNumber},Blocked,Import,Maria Angela,,College of Computer Studies,BSIT,3,05-06-2003`,
     ), { academicYearStart: 2027 }), admin);
 
     const appointments = await pool.query<{ schedule_type: string; appointment_date: string }>(

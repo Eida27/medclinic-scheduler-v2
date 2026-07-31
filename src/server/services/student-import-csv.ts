@@ -6,7 +6,7 @@ export type ImportedStudentRow = {
   studentNumber: string;
   surname: string;
   firstName: string;
-  middleName: string | null;
+  middleName: string;
   suffix: string | null;
   collegeName: string;
   courseCode: string;
@@ -139,7 +139,7 @@ export function parseStudentImportCsv(
       year,
       dateOfBirthValue,
     ] = record;
-    const middleName = middleNameValue || null;
+    const middleName = middleNameValue;
     const suffix = suffixValue || null;
     const dateOfBirth = birthDateIso(dateOfBirthValue);
     let valid = true;
@@ -171,7 +171,9 @@ export function parseStudentImportCsv(
     requiredText("First Name", firstName, 100);
     requiredText("College", collegeName, 150);
     requiredText("Course", courseCode, 50);
-    if (middleName && characterCount(middleName) > 100) {
+    if (!middleName) {
+      rowError("Middle Name", "Middle Name is required.");
+    } else if (characterCount(middleName) > 100) {
       rowError("Middle Name", "Middle Name must contain at most 100 characters.");
     }
     if (suffix && characterCount(suffix) > 50) {

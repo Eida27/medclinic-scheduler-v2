@@ -31,7 +31,7 @@ describe("legacy coordinator schedule reads", () => {
   it("lists historical ungrouped batches without exposing grouped import children", async () => {
     const contents = [
       "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth",
-      "99-8901-01,Reader,Grouped,,,College of Computer Studies,BSIT,3,05-06-2003",
+      "99-8901-01,Reader,Grouped,Maria Angela,,College of Computer Studies,BSIT,3,05-06-2003",
     ].join("\n");
     const grouped = await importStudentScheduleCsv({
       fileName: "TEST-LEGACY-grouped.csv",
