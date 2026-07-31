@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { AppError } from "@/lib/errors";
 import { parseStudentImportCsv } from "./student-import-csv";
@@ -27,6 +29,29 @@ function fieldsFrom(input: string | Uint8Array) {
 
 describe("parseStudentImportCsv", () => {
   const validRow = "23-1212-97,Abad,Aaron,,,College of Computer Studies,BSIT,3,08-04-2004";
+
+  it("keeps the downloadable template Excel-friendly and valid for the current import contract", () => {
+    const template = readFileSync(resolve(
+      process.cwd(),
+      "public/templates/student-schedule-import-template.csv",
+    ));
+
+    expect([...template.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+    expect(parseStudentImportCsv(template)).toEqual([
+      {
+        rowNumber: 2,
+        studentNumber: "23-1212-97",
+        surname: "Abad",
+        firstName: "Aaron Miguel",
+        middleName: "Abella",
+        suffix: null,
+        collegeName: "College of Computer Studies",
+        courseCode: "BSIT",
+        yearLevel: 3,
+        dateOfBirth: "2004-08-04",
+      },
+    ]);
+  });
 
   it("parses complete and multi-word middle names from the exact nine-column workbook export", () => {
     const input = [

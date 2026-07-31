@@ -59,7 +59,9 @@ describe("NewScheduleImportPage", () => {
     expect(existsSync(templatePath)).toBe(true);
     if (!existsSync(templatePath)) return;
 
-    expect(readFileSync(templatePath, "utf8").replaceAll("\r\n", "\n")).toBe([
+    const template = readFileSync(templatePath);
+    expect([...template.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+    expect(template.subarray(3).toString("utf8").replaceAll("\r\n", "\n")).toBe([
       "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth",
       "23-1212-97,Abad,Aaron Miguel,Abella,,College of Computer Studies,BSIT,3,08-04-2004",
       "",
