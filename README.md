@@ -119,6 +119,19 @@ Every student query is constrained to the session Student Number and revalidates
 - Laboratory and PE result drafts/downloads
 - Logout
 
+### Student middle-name Browser acceptance fixture
+
+The student-authentication fixture creates one synthetic student and one blank-Middle-Name CSV under ignored `.data/` storage. Every fixture command requires a loopback PostgreSQL `DATABASE_URL` and an explicit `STUDENT_AUTH_ACCEPTANCE_EXCLUSIVE_DATABASE=1` opt-in. Set that flag only for a local database dedicated exclusively to this acceptance run.
+
+```powershell
+$env:STUDENT_AUTH_ACCEPTANCE_EXCLUSIVE_DATABASE = "1"
+npm run acceptance:student-auth -- prepare
+npm run acceptance:student-auth -- status
+npm run acceptance:student-auth -- cleanup
+```
+
+`cleanup` removes the synthetic student and login attempts, verifies that no matching student or import remains, and removes the temporary CSV and state file.
+
 Schedule changes and result invalidations always create a portal notification in the business transaction. A verified email also creates an outbox item. Email configuration is optional; missing or failing SMTP never blocks schedules, portal notices, or uploads.
 
 To enable delivery, set:
