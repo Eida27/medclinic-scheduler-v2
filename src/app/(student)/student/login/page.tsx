@@ -14,7 +14,7 @@ export default async function StudentLoginPage() {
         <div className="mb-6 mt-7 h-1.5 w-14 rounded-full bg-cpu-gold" />
         <h1 className="text-2xl font-bold tracking-tight text-ink">Student sign in</h1>
         <p className="mb-6 mt-2 text-sm leading-6 text-muted">
-          Use your Student Number and date of birth to view your schedule and results.
+          Sign in to view your appointments and upload your laboratory and physical examination results.
         </p>
         <StudentLoginForm />
       </Card>

@@ -23,6 +23,7 @@ export function StudentLoginForm() {
       body: JSON.stringify({
         studentNumber: form.get("studentNumber"),
         dateOfBirth: form.get("dateOfBirth"),
+        middleName: form.get("middleName"),
       }),
     });
     const payload = await response.json();
@@ -43,6 +44,15 @@ export function StudentLoginForm() {
       </Field>
       <Field label="Date of Birth">
         <Input name="dateOfBirth" type="date" autoComplete="bday" required />
+      </Field>
+      <Field label="Middle Name">
+        <Input
+          name="middleName"
+          type="text"
+          autoComplete="additional-name"
+          maxLength={100}
+          required
+        />
       </Field>
       <Button type="submit" className="mt-1 w-full" disabled={pending}>
         {pending ? "Signing in..." : "Student sign in"}

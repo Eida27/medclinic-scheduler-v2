@@ -11,6 +11,10 @@ import { authenticateStudent } from "@/server/services/student-auth.service";
 const loginSchema = z.object({
   studentNumber: z.string().trim().min(1).max(20),
   dateOfBirth: z.iso.date(),
+  middleName: z.string()
+    .min(1)
+    .max(100)
+    .refine((value) => value.trim().length > 0, "Middle Name is required."),
 });
 
 function requestIp(request: Request) {
