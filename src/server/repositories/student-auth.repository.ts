@@ -4,6 +4,7 @@ import type { PoolClient } from "pg";
 type StudentCredential = {
   studentNumber: string;
   dateOfBirth: string | null;
+  middleName: string | null;
   isActive: boolean;
 };
 
@@ -21,6 +22,7 @@ export async function findStudentCredential(client: PoolClient, studentNumber: s
   const result = await client.query<StudentCredential>(
     `SELECT student_number AS "studentNumber",
             date_of_birth::text AS "dateOfBirth",
+            middle_name AS "middleName",
             is_active AS "isActive"
        FROM students
       WHERE student_number=$1`,

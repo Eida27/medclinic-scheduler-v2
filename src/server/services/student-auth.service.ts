@@ -14,12 +14,16 @@ import type { StudentSession } from "@/server/auth/student-session";
 const inputSchema = z.object({
   studentNumber: z.string().trim().min(1).max(20),
   dateOfBirth: z.iso.date(),
+  middleName: z.string()
+    .min(1)
+    .max(100)
+    .refine((value) => value.trim().length > 0, "Middle Name is required."),
   ipAddress: z.string().trim().min(1).max(64),
 });
 
 const invalidCredentials = () => new AppError(
   "INVALID_STUDENT_CREDENTIALS",
-  "Invalid Student Number or Date of Birth.",
+  "Invalid Student Number, Date of Birth, or Middle Name.",
   401,
 );
 const throttled = () => new AppError(
@@ -31,6 +35,7 @@ const throttled = () => new AppError(
 export async function authenticateStudent(input: {
   studentNumber: string;
   dateOfBirth: string;
+  middleName: string;
   ipAddress: string;
 }): Promise<StudentSession> {
   const parsed = inputSchema.parse(input);
@@ -41,7 +46,12 @@ export async function authenticateStudent(input: {
       return { type: "throttled" as const };
     }
     const student = await findStudentCredential(client, studentNumber);
-    if (student?.isActive && student.dateOfBirth === parsed.dateOfBirth) {
+    if (
+      student?.isActive
+      && student.dateOfBirth === parsed.dateOfBirth
+      && student.middleName !== null
+      && student.middleName.toLowerCase() === parsed.middleName.toLowerCase()
+    ) {
       await clearStudentLoginAttempt(client, studentNumber, parsed.ipAddress);
       return { type: "success" as const };
     }

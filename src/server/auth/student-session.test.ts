@@ -8,7 +8,7 @@ import {
 } from "./student-session";
 
 describe("student session tokens", () => {
-  it("round-trips only student identity without DOB", async () => {
+  it("round-trips only student identity without DOB or Middle Name", async () => {
     const token = await createStudentSessionToken({
       studentNumber: "23-1212-97",
       sessionType: "STUDENT",
@@ -20,6 +20,7 @@ describe("student session tokens", () => {
     expect(STUDENT_SESSION_COOKIE).toBe("medclinic_student_session");
     const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8"));
     expect(payload).not.toHaveProperty("dateOfBirth");
+    expect(payload).not.toHaveProperty("middleName");
   });
 
   it("keeps staff and student token types separate", async () => {
