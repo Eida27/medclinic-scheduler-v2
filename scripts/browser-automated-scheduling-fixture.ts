@@ -213,12 +213,12 @@ async function setup() {
   const header = "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth";
   const regularCsv = [
     header,
-    "99-9801-01,Browser,Regular One,Maria Angela,,College of Computer Studies,BSIT,3,05-06-2003",
-    "99-9802-02,Browser,Regular Two,De la Cruz,,College of Computer Studies,BSIT,3,05-07-2003",
+    "99-9801-01,Browser,Regular One,Maria Angela,,College of Computer Studies,BSIT,3,2003-05-06",
+    "99-9802-02,Browser,Regular Two,De la Cruz,,College of Computer Studies,BSIT,3,2003-05-07",
   ].join("\n");
   const priorityCsv = [
     header,
-    "99-9803-03,Browser,Priority,Ana Rosa,,College of Computer Studies,BSIT,3,05-08-2003",
+    "99-9803-03,Browser,Priority,Ana Rosa,,College of Computer Studies,BSIT,3,2003-05-08",
   ].join("\n");
   const files = {
     regularCsv: resolve(FIXTURE_DIR, "BROWSER-AY-regular.csv"),

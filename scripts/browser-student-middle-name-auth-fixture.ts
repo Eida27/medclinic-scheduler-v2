@@ -103,7 +103,7 @@ function assertMatchingDatabaseIdentity(
 export function createMissingMiddleNameCsv() {
   return [
     "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth",
-    `${STUDENT_AUTH_ACCEPTANCE_FIXTURE.missingMiddleNameStudentNumber},Browser,Missing,,,College of Computer Studies,BSIT,3,08-04-2004`,
+    `${STUDENT_AUTH_ACCEPTANCE_FIXTURE.missingMiddleNameStudentNumber},Browser,Missing,,,College of Computer Studies,BSIT,3,2004-08-04`,
   ].join("\n");
 }
 

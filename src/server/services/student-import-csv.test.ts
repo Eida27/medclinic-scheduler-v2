@@ -28,7 +28,7 @@ function fieldsFrom(input: string | Uint8Array) {
 }
 
 describe("parseStudentImportCsv", () => {
-  const validRow = "23-1212-97,Abad,Aaron,Abella,,College of Computer Studies,BSIT,3,08-04-2004";
+  const validRow = "23-1212-97,Abad,Aaron,Abella,,College of Computer Studies,BSIT,3,2004-08-04";
 
   it("keeps the downloadable template Excel-friendly and valid for the current import contract", () => {
     const template = readFileSync(resolve(
@@ -56,8 +56,8 @@ describe("parseStudentImportCsv", () => {
   it("parses complete and multi-word middle names from the exact nine-column workbook export", () => {
     const input = [
       header,
-      "23-1212-97,Abad,Aaron Miguel,  Maria Angela  ,,College of Computer Studies,BSIT,3,08-04-2004",
-      "24-0001-01,Santos,Ana,Rosa,Jr.,College of Nursing,BSN,2,01-31-2005",
+      "23-1212-97,Abad,Aaron Miguel,  Maria Angela  ,,College of Computer Studies,BSIT,3,2004-08-04",
+      "24-0001-01,Santos,Ana,Rosa,Jr.,College of Nursing,BSN,2,2005-01-31",
     ].join("\n");
 
     expect(parseStudentImportCsv(input)).toEqual([
@@ -91,8 +91,8 @@ describe("parseStudentImportCsv", () => {
   it("rejects blank and whitespace-only Middle Names with row-specific errors", () => {
     expect(fieldsFrom([
       header,
-      "23-1212-97,Abad,Aaron,,,College of Computer Studies,BSIT,3,08-04-2004",
-      "24-0001-01,Santos,Ana,   ,Jr.,College of Nursing,BSN,2,01-31-2005",
+      "23-1212-97,Abad,Aaron,,,College of Computer Studies,BSIT,3,2004-08-04",
+      "24-0001-01,Santos,Ana,   ,Jr.,College of Nursing,BSN,2,2005-01-31",
     ].join("\n"))).toEqual({
       "rows.2.Middle Name": ["Middle Name is required."],
       "rows.3.Middle Name": ["Middle Name is required."],
@@ -102,7 +102,7 @@ describe("parseStudentImportCsv", () => {
   it("requires the approved exact header order", () => {
     expect(fieldsFrom([
       header.replace("Surname,First Name", "First Name,Surname"),
-      "23-1212-97,Aaron,Abad,,,College of Computer Studies,BSIT,3,08-04-2004",
+      "23-1212-97,Aaron,Abad,,,College of Computer Studies,BSIT,3,2004-08-04",
     ].join("\n"))).toEqual({
       file: [`CSV headers must exactly match: ${header}.`],
     });
@@ -120,7 +120,7 @@ describe("parseStudentImportCsv", () => {
   it("rejects malformed CSV", () => {
     expect(fieldsFrom([
       header,
-      '23-1212-97,"Abad,Aaron,,,College of Computer Studies,BSIT,3,08-04-2004',
+      '23-1212-97,"Abad,Aaron,,,College of Computer Studies,BSIT,3,2004-08-04',
     ].join("\n"))).toEqual({
       file: ["The file is not valid CSV."],
     });
@@ -142,30 +142,41 @@ describe("parseStudentImportCsv", () => {
   it("falls back to Windows-1252 for standard Excel CSV bytes", () => {
     const contents = [
       header,
-      "23-1212-97,Peña,Aaron,Abella,,College of Computer Studies,BSIT,3,08-04-2004",
+      "23-1212-97,Peña,Aaron,Abella,,College of Computer Studies,BSIT,3,2004-08-04",
     ].join("\n");
     const bytes = Uint8Array.from(contents, (character) => character.charCodeAt(0));
 
     expect(parseStudentImportCsv(bytes)[0].surname).toBe("Peña");
   });
 
+  it("requires ISO birth dates and rejects month-first separators", () => {
+    expect(fieldsFrom([
+      header,
+      "23-1212-97,Abad,Aaron,Abella,,College of Computer Studies,BSIT,3,08-04-2004",
+      "23-1212-98,Cruz,Bea,Rosa,,College of Computer Studies,BSIT,3,08/04/2004",
+    ].join("\n"))).toEqual({
+      "rows.2.Date of Birth": ["Date of Birth must be a valid past or present date in YYYY-MM-DD format."],
+      "rows.3.Date of Birth": ["Date of Birth must be a valid past or present date in YYYY-MM-DD format."],
+    });
+  });
+
   it("rejects malformed IDs and impossible or future birth dates", () => {
     expect(fieldsFrom([
       header,
-      "S-1,Abad,Aaron,Abella,,College of Computer Studies,BSIT,3,02-29-2023",
-      "23-1212-98,Cruz,Bea,Rosa,,College of Computer Studies,BSIT,3,12-31-9999",
+      "S-1,Abad,Aaron,Abella,,College of Computer Studies,BSIT,3,2023-02-29",
+      "23-1212-98,Cruz,Bea,Rosa,,College of Computer Studies,BSIT,3,9999-12-31",
     ].join("\n"))).toEqual({
       "rows.2.Student ID": ["Student ID must use the NN-NNNN-NN format."],
-      "rows.2.Date of Birth": ["Date of Birth must be a valid past or present date in MM-DD-YYYY format."],
-      "rows.3.Date of Birth": ["Date of Birth must be a valid past or present date in MM-DD-YYYY format."],
+      "rows.2.Date of Birth": ["Date of Birth must be a valid past or present date in YYYY-MM-DD format."],
+      "rows.3.Date of Birth": ["Date of Birth must be a valid past or present date in YYYY-MM-DD format."],
     });
   });
 
   it("reports every duplicate Student ID row", () => {
     expect(fieldsFrom([
       header,
-      "23-1212-97,Abad,Aaron,Abella,,College of Computer Studies,BSIT,3,08-04-2004",
-      "23-1212-97,Abad,Aaron,Abella,,College of Computer Studies,BSIT,3,08-04-2004",
+      "23-1212-97,Abad,Aaron,Abella,,College of Computer Studies,BSIT,3,2004-08-04",
+      "23-1212-97,Abad,Aaron,Abella,,College of Computer Studies,BSIT,3,2004-08-04",
     ].join("\n"))).toEqual({
       "rows.2.Student ID": ["This student ID also appears in row 3."],
       "rows.3.Student ID": ["This student ID also appears in row 2."],
@@ -176,7 +187,7 @@ describe("parseStudentImportCsv", () => {
     const rows = Array.from({ length: 3_000 }, (_, index) => {
       const middle = String(Math.floor(index / 100) % 100).padStart(2, "0");
       const tail = String(index % 100).padStart(2, "0");
-      return `23-${middle}${tail}-${tail},Surname${index},First${index},Middle${index},,College of Computer Studies,BSIT,3,08-04-2004`;
+      return `23-${middle}${tail}-${tail},Surname${index},First${index},Middle${index},,College of Computer Studies,BSIT,3,2004-08-04`;
     });
     const bytes = new TextEncoder().encode([header, ...rows].join("\n"));
     expect(parseStudentImportCsv(bytes)).toHaveLength(3_000);

@@ -430,11 +430,6 @@ function windows1252Bytes(text: string) {
   return Buffer.from(bytes);
 }
 
-function displayBirthDate(isoDate: string) {
-  const [year, month, day] = isoDate.split("-");
-  return `${month}-${day}-${year}`;
-}
-
 export function createWindows1252Variant(
   sourceBytes: Uint8Array,
   expectedRows = EXPECTED_APPROVED_ROWS,
@@ -451,7 +446,7 @@ export function createWindows1252Variant(
       row.collegeName,
       row.courseCode,
       row.yearLevel,
-      displayBirthDate(row.dateOfBirth),
+      row.dateOfBirth,
     ]),
   ];
   const text = records.map((record) => record.map(csvCell).join(",")).join("\r\n");

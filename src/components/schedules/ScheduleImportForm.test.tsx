@@ -11,7 +11,7 @@ const headers = "Student ID,Surname,First Name,Middle Name,Suffix,College,Course
 
 function csvFile() {
   return new File([
-    `${headers}\n23-1212-97,Abad,Aaron,A.,,College of Computer Studies,BSIT,3,08-04-2004`,
+    `${headers}\n23-1212-97,Abad,Aaron,A.,,College of Computer Studies,BSIT,3,2004-08-04`,
   ], "students.csv", { type: "text/csv" });
 }
 
@@ -37,9 +37,10 @@ describe("ScheduleImportForm", () => {
     expect(screen.getByLabelText("Academic year")).toBeRequired();
     expect(screen.getByText(/CSV UTF-8/)).toBeVisible();
     expect(screen.getByText(/CSV \(Comma delimited\).*Windows-1252/)).toBeVisible();
+    expect(screen.getByText(/Date of Birth must use YYYY-MM-DD/)).toBeVisible();
     expect(screen.queryByLabelText("Preferred month")).not.toBeInTheDocument();
     expect(screen.getByText(/seven calendar days of preparation/i)).toBeVisible();
-    expect(screen.queryByText(/schedule dates in MM-DD-YYYY/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/schedule dates in YYYY-MM-DD/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/at least one service date/i)).not.toBeInTheDocument();
   });
 

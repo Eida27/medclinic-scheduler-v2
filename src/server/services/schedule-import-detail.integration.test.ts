@@ -29,7 +29,7 @@ describe("published schedule import detail", () => {
   it("returns compact published children with nullable category-driven priority", async () => {
     const contents = [
       "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth",
-      "99-9301-01,Reviewer,Draft,M.,,College of Computer Studies,BSIT,3,05-06-2003",
+      "99-9301-01,Reviewer,Draft,M.,,College of Computer Studies,BSIT,3,2003-05-06",
     ].join("\n");
     const created = await acceptAndScheduleImport({
       fileName: "TEST-DETAIL-students.csv",

@@ -79,11 +79,11 @@ Use these headers in this exact order:
 
 ```csv
 Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth
-23-1212-97,Abad,Aaron Miguel,A.,,College of Computer Studies,BSIT,3,08-04-2004
+23-1212-97,Abad,Aaron Miguel,A.,,College of Computer Studies,BSIT,3,2004-08-04
 ```
 
 - Download the matching sample at [`public/templates/student-schedule-import-template.csv`](public/templates/student-schedule-import-template.csv).
-- Date of Birth is required and uses strict `MM-DD-YYYY`.
+- Date of Birth is required and uses the strict ISO `YYYY-MM-DD` format.
 - Middle Name is required and must contain the complete name; Suffix may be blank. Names are displayed surname-first with only the first middle initial.
 - College names and course codes must match active reference data case-insensitively.
 - Files may contain up to 3,000 data rows and may not exceed 1 MB.

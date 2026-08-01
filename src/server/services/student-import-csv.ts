@@ -70,9 +70,9 @@ function manilaTodayIso() {
 }
 
 function birthDateIso(value: string): string | null {
-  const match = /^(\d{2})-(\d{2})-(\d{4})$/.exec(value);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (!match) return null;
-  const [, month, day, year] = match;
+  const [, year, month, day] = match;
   const numericYear = Number(year);
   if (numericYear < 1900) return null;
 
@@ -84,8 +84,7 @@ function birthDateIso(value: string): string | null {
     || date.getUTCDate() !== Number(day)
   ) return null;
 
-  const iso = `${year}-${month}-${day}`;
-  return iso <= manilaTodayIso() ? iso : null;
+  return value <= manilaTodayIso() ? value : null;
 }
 
 export function parseStudentImportCsv(
@@ -185,7 +184,7 @@ export function parseStudentImportCsv(
     if (!dateOfBirth) {
       rowError(
         "Date of Birth",
-        "Date of Birth must be a valid past or present date in MM-DD-YYYY format.",
+        "Date of Birth must be a valid past or present date in YYYY-MM-DD format.",
       );
     }
 

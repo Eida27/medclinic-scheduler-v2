@@ -26,7 +26,7 @@ const admin: SessionUser = {
 function input(fileName: string, studentNumber: string, academicYearStart = 2026) {
   const contents = [
     header,
-    `${studentNumber},Student,${studentNumber.slice(-2)},Maria Angela,,College of Computer Studies,BSIT,3,05-06-2003`,
+    `${studentNumber},Student,${studentNumber.slice(-2)},Maria Angela,,College of Computer Studies,BSIT,3,2003-05-06`,
   ].join("\n");
   return {
     fileName,

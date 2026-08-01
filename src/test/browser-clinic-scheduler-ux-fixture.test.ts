@@ -28,8 +28,8 @@ import {
 
 const csv = [
   "\uFEFFStudent ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth,,",
-  "23-8200-01,Abad,Aaron Miguel,Abella,,College of Computer Studies,BSCS,3,08-04-2004,,",
-  "23-8300-01,Abalos,Alicia Mae,Abad,,College of Computer Studies,BSDMIA,3,10-03-2005,,",
+  "23-8200-01,Abad,Aaron Miguel,Abella,,College of Computer Studies,BSCS,3,2004-08-04,,",
+  "23-8300-01,Abalos,Alicia Mae,Abad,,College of Computer Studies,BSDMIA,3,2005-10-03,,",
 ].join("\r\n");
 
 const emptyManifest: CleanupManifest = {

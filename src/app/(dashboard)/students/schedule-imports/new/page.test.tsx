@@ -63,7 +63,7 @@ describe("NewScheduleImportPage", () => {
     expect([...template.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
     expect(template.subarray(3).toString("utf8").replaceAll("\r\n", "\n")).toBe([
       "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth",
-      "23-1212-97,Abad,Aaron Miguel,Abella,,College of Computer Studies,BSIT,3,08-04-2004",
+      "23-1212-97,Abad,Aaron Miguel,Abella,,College of Computer Studies,BSIT,3,2004-08-04",
       "",
     ].join("\n"));
   });
