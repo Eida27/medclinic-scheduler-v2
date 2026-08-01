@@ -22,6 +22,7 @@ const manualCase = {
   resolutionDetails: null,
   laboratory: { id: "lab-1", date: "2026-08-18", status: "AWAITING_RESCHEDULE" },
   physicalExam: { id: "pe-1", date: "2026-08-19", status: "AWAITING_RESCHEDULE" },
+  currentAssignmentBlock: null,
 };
 
 function jsonResponse(body: unknown, status = 200) {
@@ -102,5 +103,32 @@ describe("ManualResolutionQueue", () => {
     expect(screen.getByRole("button", { name: "Keep current replacement for 24-0001" })).toBeDisabled();
     await user.type(screen.getByLabelText("Keep-current reason for 24-0001"), "Existing replacement was reviewed and is safe");
     expect(screen.getByRole("button", { name: "Keep current replacement for 24-0001" })).toBeEnabled();
+  });
+
+  it("explains live draft protection, links to result review, and disables resolution controls", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: {
+      page: 1,
+      pageSize: 20,
+      total: 1,
+      items: [{
+        ...manualCase,
+        reasonCode: "DRAFT_RESULT_FILES_EXIST",
+        currentAssignmentBlock: {
+          code: "DRAFT_RESULT_FILES_EXIST",
+          message: "Draft result files exist. Remove them before assigning a replacement.",
+        },
+      }],
+    } }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ManualResolutionQueue />);
+
+    expect(await screen.findByRole("link", { name: "Review student results" })).toHaveAttribute(
+      "href",
+      "/settings/student-result-submissions/students/24-0001",
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(/Draft result files exist/);
+    expect(screen.getByLabelText("Laboratory replacement date for 24-0001")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Assign replacement for 24-0001" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Keep current replacement for 24-0001" })).toBeDisabled();
   });
 });

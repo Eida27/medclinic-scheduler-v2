@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { operationalStatusLabel } from "@/components/appointments/status-labels";
 import { Alert } from "@/components/ui/Alert";
@@ -33,6 +34,13 @@ type ManualCase = {
   resolutionDetails: unknown;
   laboratory: AppointmentSummary | null;
   physicalExam: AppointmentSummary | null;
+  currentAssignmentBlock: {
+    code:
+      | "DRAFT_RESULT_FILES_EXIST"
+      | "PROTECTED_RESULTS_EXIST"
+      | "APPOINTMENT_MANUALLY_LOCKED";
+    message: string;
+  } | null;
 };
 
 type ManualCasePage = {
@@ -63,6 +71,7 @@ const initialFilters: Filters = {
 const reasonOptions = [
   "PHYSICAL_COMPLETED_BEFORE_LABORATORY",
   "APPOINTMENT_MANUALLY_LOCKED",
+  "DRAFT_RESULT_FILES_EXIST",
   "PROTECTED_RESULTS_EXIST",
   "PAIR_MISSING_OR_INCONSISTENT",
   "NO_REPLACEMENT_CAPACITY",
@@ -115,6 +124,7 @@ function CaseResolutionCard({ manualCase, onResolved }: {
   const assignmentReady = assignmentReason.trim().length >= 3
     && (!manualCase.laboratory || laboratoryDate)
     && (!manualCase.physicalExam || physicalExamDate);
+  const resolutionBlocked = Boolean(manualCase.currentAssignmentBlock);
 
   return (
     <Card className="grid gap-4 p-5">
@@ -141,6 +151,20 @@ function CaseResolutionCard({ manualCase, onResolved }: {
         </p>
       </div>
 
+      {manualCase.currentAssignmentBlock ? (
+        <Alert tone="warning">
+          <div className="grid gap-2">
+            <p>{manualCase.currentAssignmentBlock.message}</p>
+            <Link
+              className="w-fit font-bold underline underline-offset-2"
+              href={`/settings/student-result-submissions/students/${encodeURIComponent(manualCase.studentNumber)}`}
+            >
+              Review student results
+            </Link>
+          </div>
+        </Alert>
+      ) : null}
+
       {manualCase.status === "OPEN" ? (
         <div className="grid gap-4 xl:grid-cols-2">
           <section className="grid content-start gap-3 rounded-xl border border-line p-3">
@@ -153,6 +177,7 @@ function CaseResolutionCard({ manualCase, onResolved }: {
                   aria-label={`Laboratory replacement date for ${manualCase.studentNumber}`}
                   type="date"
                   value={laboratoryDate}
+                  disabled={resolutionBlocked}
                   onInput={(event) => setLaboratoryDate(event.currentTarget.value)}
                 />
               </label>
@@ -164,6 +189,7 @@ function CaseResolutionCard({ manualCase, onResolved }: {
                   aria-label={`Physical Examination replacement date for ${manualCase.studentNumber}`}
                   type="date"
                   value={physicalExamDate}
+                  disabled={resolutionBlocked}
                   onInput={(event) => setPhysicalExamDate(event.currentTarget.value)}
                 />
               </label>
@@ -173,11 +199,12 @@ function CaseResolutionCard({ manualCase, onResolved }: {
               <Input
                 aria-label={`Assignment reason for ${manualCase.studentNumber}`}
                 value={assignmentReason}
+                disabled={resolutionBlocked}
                 onChange={(event) => setAssignmentReason(event.target.value)}
               />
             </label>
             <Button
-              disabled={busy || !assignmentReady}
+              disabled={busy || resolutionBlocked || !assignmentReady}
               onClick={() => { void resolve({
                 action: "ASSIGN_REPLACEMENT",
                 expectedOptimisticToken: manualCase.optimisticToken,
@@ -199,12 +226,13 @@ function CaseResolutionCard({ manualCase, onResolved }: {
               <Input
                 aria-label={`Keep-current reason for ${manualCase.studentNumber}`}
                 value={keepReason}
+                disabled={resolutionBlocked}
                 onChange={(event) => setKeepReason(event.target.value)}
               />
             </label>
             <Button
               variant="secondary"
-              disabled={busy || keepReason.trim().length < 3}
+              disabled={busy || resolutionBlocked || keepReason.trim().length < 3}
               onClick={() => { void resolve({
                 action: "KEEP_CURRENT_REPLACEMENT",
                 expectedOptimisticToken: manualCase.optimisticToken,

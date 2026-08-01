@@ -19,8 +19,7 @@ function appointment(
     status,
     isPublished: true,
     isManuallyLocked: false,
-    hasProtectedResult: false,
-    hasFinalizedSubmission: false,
+    resultProtectionState: { type: "CLEAR" },
     schedulePairId: "10000000-0000-4000-8000-000000000001",
     scheduleCycleStart: 2026,
     ...overrides,
@@ -70,9 +69,30 @@ describe("unified clinic closure planning", () => {
     expect(classifyClinicCycle(appointments as ClinicCycleAppointment[]).strategy).toBe(expected);
   });
 
-  it("reports a specific reason for protected and inconsistent pairs", () => {
+  it("reports a specific reason for draft files, protected results, and inconsistent pairs", () => {
     expect(classifyClinicCycle([
-      appointment("LABORATORY", "PENDING", { hasFinalizedSubmission: true }),
+      appointment("LABORATORY", "PENDING", {
+        resultProtectionState: {
+          type: "PROTECTED",
+          reason: "DRAFT_RESULT_FILES_EXIST",
+          message: "Draft result files exist for this appointment.",
+          submissionId: "submission-1",
+          activeFileCount: 1,
+        },
+      }),
+      appointment("PHYSICAL_EXAM", "PENDING"),
+    ])).toMatchObject({
+      strategy: "MANUAL_RESOLUTION_REQUIRED",
+      reasonCode: "DRAFT_RESULT_FILES_EXIST",
+    });
+    expect(classifyClinicCycle([
+      appointment("LABORATORY", "PENDING", {
+        resultProtectionState: {
+          type: "PROTECTED",
+          reason: "FINALIZED_RESULT_SUBMISSION",
+          message: "A finalized result submission exists for this appointment.",
+        },
+      }),
       appointment("PHYSICAL_EXAM", "PENDING"),
     ])).toMatchObject({
       strategy: "MANUAL_RESOLUTION_REQUIRED",
@@ -81,6 +101,22 @@ describe("unified clinic closure planning", () => {
     expect(classifyClinicCycle([appointment("LABORATORY", "PENDING")])).toMatchObject({
       strategy: "MANUAL_RESOLUTION_REQUIRED",
       reasonCode: "PAIR_MISSING_OR_INCONSISTENT",
+    });
+  });
+
+  it("classifies manual locks before draft result files", () => {
+    expect(classifyClinicCycle([
+      appointment("LABORATORY", "PENDING", { isManuallyLocked: true }),
+      appointment("PHYSICAL_EXAM", "PENDING", {
+        resultProtectionState: {
+          type: "PROTECTED",
+          reason: "DRAFT_RESULT_FILES_EXIST",
+          message: "Draft result files exist for this appointment.",
+        },
+      }),
+    ])).toMatchObject({
+      strategy: "MANUAL_RESOLUTION_REQUIRED",
+      reasonCode: "APPOINTMENT_MANUALLY_LOCKED",
     });
   });
 

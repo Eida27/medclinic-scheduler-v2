@@ -38,6 +38,9 @@ const requestIds = {
   rollback: "90000000-0000-4000-8000-000000000008",
   keepBlock: "90000000-0000-4000-8000-000000000009",
   concurrency: "90000000-0000-4000-8000-000000000010",
+  mixedDraft: "90000000-0000-4000-8000-000000000011",
+  restorationDraftBlock: "90000000-0000-4000-8000-000000000012",
+  restorationDraftReopen: "90000000-0000-4000-8000-000000000013",
 } as const;
 
 async function cleanup() {
@@ -122,6 +125,44 @@ async function createPair(input: {
       input.lockPhysical ?? false,
       TEST_REFERENCE_IDS.adminUser,
     ],
+  );
+}
+
+async function addActiveDraftFile(studentNumber: string) {
+  const appointment = await pool.query<{ id: string }>(
+    `SELECT id::text FROM appointments
+      WHERE student_number=$1 AND schedule_type='LABORATORY'`,
+    [studentNumber],
+  );
+  const submission = await pool.query<{ id: string }>(
+    `INSERT INTO student_result_submissions (appointment_id,student_number,result_type)
+     VALUES ($1,$2,'LABORATORY') RETURNING id::text`,
+    [appointment.rows[0].id, studentNumber],
+  );
+  const file = await pool.query<{ id: string }>(
+    `INSERT INTO student_result_files (
+       submission_id,storage_key,original_filename,detected_mime_type,
+       extension,byte_size,checksum_sha256
+     ) VALUES ($1,$2,'private-clinical-name.pdf','application/pdf','pdf',32,$3)
+     RETURNING id::text`,
+    [submission.rows[0].id, `unified/${studentNumber}.pdf`, "d".repeat(64)],
+  );
+  return file.rows[0].id;
+}
+
+async function addActiveDraftFileToAppointment(appointmentId: string, studentNumber: string) {
+  const submission = await pool.query<{ id: string }>(
+    `INSERT INTO student_result_submissions (appointment_id,student_number,result_type)
+     SELECT id,student_number,schedule_type FROM appointments WHERE id=$1
+     RETURNING id::text`,
+    [appointmentId],
+  );
+  await pool.query(
+    `INSERT INTO student_result_files (
+       submission_id,storage_key,original_filename,detected_mime_type,
+       extension,byte_size,checksum_sha256
+     ) VALUES ($1,$2,'restoration-private.pdf','application/pdf','pdf',32,$3)`,
+    [submission.rows[0].id, `unified/${studentNumber}-restoration.pdf`, "e".repeat(64)],
   );
 }
 
@@ -255,10 +296,18 @@ describe("unified clinic calendar lifecycle", () => {
         closureReason: "TEST-UNIFIED manual",
         laboratory: expect.objectContaining({ date: "2049-08-12", status: "AWAITING_RESCHEDULE" }),
         physicalExam: expect.objectContaining({ date: "2049-08-13", status: "AWAITING_RESCHEDULE" }),
+        currentAssignmentBlock: expect.objectContaining({ code: "APPOINTMENT_MANUALLY_LOCKED" }),
       })],
     });
 
     const caseId = cases.items[0].id;
+    await expect(resolveClinicClosureManualCase(caseId, {
+      action: "ASSIGN_REPLACEMENT",
+      expectedOptimisticToken: cases.items[0].optimisticToken,
+      laboratoryDate: "2049-08-16",
+      physicalExamDate: "2049-08-17",
+      reason: "Attempt while an appointment remains locked.",
+    }, admin)).rejects.toMatchObject({ code: "APPOINTMENT_MANUALLY_LOCKED", status: 409 });
     await pool.query(
       "UPDATE appointments SET is_manually_locked=FALSE,locked_by=NULL,locked_at=NULL,lock_reason=NULL WHERE student_number='UCAL-MANUAL'",
     );
@@ -285,6 +334,102 @@ describe("unified clinic calendar lifecycle", () => {
       { notification_type: "CLINIC_CLOSURE_AWAITING_RESCHEDULE" },
       { notification_type: "CLINIC_CLOSURE_MANUALLY_RESOLVED" },
     ]);
+  });
+
+  it("moves safe students in a mixed closure while live draft files block manual assignment", async () => {
+    await createPair({
+      studentNumber: "UCAL-MIX-SAFE",
+      laboratoryDate: "2049-08-12",
+      physicalExamDate: "2049-08-13",
+    });
+    await createPair({
+      studentNumber: "UCAL-MIX-DRAFT",
+      laboratoryDate: "2049-08-12",
+      physicalExamDate: "2049-08-13",
+    });
+    const fileId = await addActiveDraftFile("UCAL-MIX-DRAFT");
+
+    const saved = await saveClinicCalendarChanges({
+      requestId: requestIds.mixedDraft,
+      emergencyAcknowledged: false,
+      changes: [{
+        action: "BLOCK",
+        date: "2049-08-12",
+        category: "CLOSURE",
+        reason: "TEST-UNIFIED mixed draft",
+      }],
+    }, admin);
+    expect(saved).toMatchObject({
+      movedStudentCount: 1,
+      movedAppointmentCount: 2,
+      manualCaseCount: 1,
+    });
+
+    const page = await listClinicClosureManualCases({
+      page: 1,
+      pageSize: 20,
+      search: "UCAL-MIX-DRAFT",
+    }, admin);
+    expect(page.items[0]).toMatchObject({
+      reasonCode: "DRAFT_RESULT_FILES_EXIST",
+      currentAssignmentBlock: {
+        code: "DRAFT_RESULT_FILES_EXIST",
+        message: expect.stringContaining("Draft result files exist"),
+      },
+    });
+    const manualCase = page.items[0];
+    await expect(resolveClinicClosureManualCase(manualCase.id, {
+      action: "ASSIGN_REPLACEMENT",
+      expectedOptimisticToken: manualCase.optimisticToken,
+      laboratoryDate: "2049-08-16",
+      physicalExamDate: "2049-08-17",
+      reason: "Safe dates selected after review.",
+    }, admin)).rejects.toMatchObject({ code: "DRAFT_RESULT_FILES_EXIST", status: 409 });
+
+    await pool.query(
+      "UPDATE student_result_files SET deleted_at=NOW() WHERE id=$1",
+      [fileId],
+    );
+    const reloaded = await listClinicClosureManualCases({
+      page: 1,
+      pageSize: 20,
+      search: "UCAL-MIX-DRAFT",
+    }, admin);
+    expect(reloaded.items[0].currentAssignmentBlock).toBeNull();
+    await resolveClinicClosureManualCase(manualCase.id, {
+      action: "ASSIGN_REPLACEMENT",
+      expectedOptimisticToken: manualCase.optimisticToken,
+      laboratoryDate: "2049-08-16",
+      physicalExamDate: "2049-08-17",
+      reason: "Safe dates selected after draft removal.",
+    }, admin);
+
+    const current = await pool.query<{ schedule_type: string; appointment_date: string }>(
+      `SELECT schedule_type,appointment_date::text
+         FROM appointments
+        WHERE student_number='UCAL-MIX-DRAFT' AND is_published=TRUE
+        ORDER BY schedule_type`,
+    );
+    expect(current.rows).toEqual([
+      { schedule_type: "LABORATORY", appointment_date: "2049-08-16" },
+      { schedule_type: "PHYSICAL_EXAM", appointment_date: "2049-08-17" },
+    ]);
+    const audits = await pool.query<{ action: string; metadata: Record<string, unknown> }>(
+      `SELECT action,metadata FROM audit_logs
+        WHERE entity_type='clinic_closure_manual_case' AND entity_id=$1
+        ORDER BY created_at,id`,
+      [manualCase.id],
+    );
+    expect(audits.rows.map((row) => row.action)).toEqual([
+      "CLINIC_CLOSURE_MANUAL_CASE_CREATED",
+      "CLINIC_CLOSURE_MANUAL_CASE_RESOLVED",
+    ]);
+    expect(JSON.stringify(audits.rows)).not.toContain("private-clinical-name.pdf");
+    expect(audits.rows[0].metadata).toMatchObject({
+      reasonCode: "DRAFT_RESULT_FILES_EXIST",
+      activeDraftFileCount: 1,
+      submissionIds: [expect.any(String)],
+    });
   });
 
   it("waits for complete reopening and then restores the original pair atomically", async () => {
@@ -331,6 +476,58 @@ describe("unified clinic calendar lifecycle", () => {
       { notification_type: "CLINIC_CLOSURE_RESCHEDULED" },
       { notification_type: "CLINIC_CLOSURE_SCHEDULE_RESTORED" },
     ]);
+  });
+
+  it("retains replacements and creates a draft-specific case when protection changes before restoration", async () => {
+    await createPair({
+      studentNumber: "UCAL-RESTORE-DRAFT",
+      laboratoryDate: "2049-08-09",
+      physicalExamDate: "2049-08-10",
+    });
+    const blocked = await saveClinicCalendarChanges({
+      requestId: requestIds.restorationDraftBlock,
+      emergencyAcknowledged: false,
+      changes: [
+        { action: "BLOCK", date: "2049-08-09", category: "CLOSURE", reason: "TEST-UNIFIED restoration draft" },
+        { action: "BLOCK", date: "2049-08-10", category: "CLOSURE", reason: "TEST-UNIFIED restoration draft" },
+      ],
+    }, admin);
+    const replacement = await pool.query<{ id: string }>(
+      `SELECT id::text FROM appointments
+        WHERE student_number='UCAL-RESTORE-DRAFT'
+          AND schedule_type='LABORATORY' AND is_published=TRUE`,
+    );
+    await addActiveDraftFileToAppointment(replacement.rows[0].id, "UCAL-RESTORE-DRAFT");
+
+    const unavailable = blocked.activeUnavailableDates.filter((date) =>
+      date.blockedDate === "2049-08-09" || date.blockedDate === "2049-08-10");
+    const reopened = await saveClinicCalendarChanges({
+      requestId: requestIds.restorationDraftReopen,
+      emergencyAcknowledged: false,
+      changes: unavailable.map((date) => ({
+        action: "REOPEN" as const,
+        date: date.blockedDate,
+        unavailableDateId: date.id,
+        expectedUpdatedAt: date.updatedAt,
+      })),
+    }, admin);
+    expect(reopened).toMatchObject({ restoredAppointmentCount: 0, restoredStudentCount: 0 });
+
+    const cases = await listClinicClosureManualCases({
+      page: 1,
+      pageSize: 20,
+      search: "UCAL-RESTORE-DRAFT",
+    }, admin);
+    expect(cases.items[0]).toMatchObject({
+      reasonCode: "DRAFT_RESULT_FILES_EXIST",
+      currentAssignmentBlock: expect.objectContaining({ code: "DRAFT_RESULT_FILES_EXIST" }),
+    });
+    const published = await pool.query<{ status: string; count: number }>(
+      `SELECT status,COUNT(*)::int AS count FROM appointments
+        WHERE student_number='UCAL-RESTORE-DRAFT' AND is_published=TRUE
+        GROUP BY status`,
+    );
+    expect(published.rows).toEqual([{ status: "PENDING", count: 2 }]);
   });
 
   it("allows clinic staff to read but not mutate the unified calendar", async () => {

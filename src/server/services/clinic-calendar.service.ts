@@ -25,6 +25,7 @@ import type {
 import type { SessionUser } from "@/types/roles";
 import { createStudentNotification } from "@/server/services/student-notifications.service";
 import { studentDisplayNameSql } from "@/server/students/student-display-name";
+import { loadAppointmentResultProtectionStates } from "@/server/repositories/student-result-submissions.repository";
 import {
   allocateReplacementDates,
   classifyClinicCycle,
@@ -93,6 +94,55 @@ type AppointmentState = ClinicCycleAppointment & {
   clinicId: string;
   rescheduledFrom: string | null;
 };
+
+type CurrentAssignmentBlock = {
+  code:
+    | "DRAFT_RESULT_FILES_EXIST"
+    | "PROTECTED_RESULTS_EXIST"
+    | "APPOINTMENT_MANUALLY_LOCKED";
+  message: string;
+};
+
+function currentAssignmentBlock(
+  appointments: Array<Pick<ClinicCycleAppointment, "isManuallyLocked" | "resultProtectionState">>,
+): CurrentAssignmentBlock | null {
+  if (appointments.some((appointment) => appointment.isManuallyLocked)) {
+    return {
+      code: "APPOINTMENT_MANUALLY_LOCKED",
+      message: "Unlock the affected appointment before assigning a replacement.",
+    };
+  }
+  if (appointments.some((appointment) =>
+    appointment.resultProtectionState.type === "PROTECTED"
+    && appointment.resultProtectionState.reason === "DRAFT_RESULT_FILES_EXIST")) {
+    return {
+      code: "DRAFT_RESULT_FILES_EXIST",
+      message: "Draft result files exist. Remove them from the student result profile before assigning a replacement.",
+    };
+  }
+  if (appointments.some((appointment) => appointment.resultProtectionState.type === "PROTECTED")) {
+    return {
+      code: "PROTECTED_RESULTS_EXIST",
+      message: "Finalized or verified results protect this appointment from replacement.",
+    };
+  }
+  return null;
+}
+
+function resultProtectionAuditMetadata(appointments: ClinicCycleAppointment[]) {
+  const protectedStates = appointments.flatMap((appointment) =>
+    appointment.resultProtectionState.type === "PROTECTED"
+      ? [{ appointmentId: appointment.id, state: appointment.resultProtectionState }]
+      : []);
+  return {
+    appointmentIds: appointments.map((appointment) => appointment.id),
+    submissionIds: protectedStates.flatMap(({ state }) => state.submissionId ? [state.submissionId] : []),
+    activeDraftFileCount: protectedStates.reduce(
+      (count, { state }) => count + (state.activeFileCount ?? 0),
+      0,
+    ),
+  };
+}
 
 function assertAdmin(actor: SessionUser) {
   if (actor.role !== "ADMIN") {
@@ -195,8 +245,6 @@ async function loadAffectedCycles(client: PoolClient, dates: string[], lock: boo
     is_manually_locked: boolean;
     schedule_pair_id: string | null;
     schedule_cycle_start: number;
-    has_protected_result: boolean;
-    has_finalized_submission: boolean;
   }>(
     `WITH impacted AS (
        SELECT DISTINCT student_number,schedule_cycle_start
@@ -209,21 +257,7 @@ async function loadAffectedCycles(client: PoolClient, dates: string[], lock: boo
             appointment.student_number,appointment.schedule_type,
             appointment.appointment_date::text,appointment.status,
             appointment.is_published,appointment.is_manually_locked,
-            appointment.schedule_pair_id::text,appointment.schedule_cycle_start,
-            EXISTS (
-              SELECT 1 FROM student_result_submissions submission
-               WHERE submission.appointment_id=appointment.id
-                 AND submission.status='FINALIZED'
-            ) AS has_finalized_submission,
-            (EXISTS (
-               SELECT 1 FROM laboratory_results result
-                WHERE result.appointment_id=appointment.id
-                  AND result.result_status<>'PENDING_UPLOAD'
-             ) OR EXISTS (
-               SELECT 1 FROM exam_results result
-                WHERE result.appointment_id=appointment.id
-                  AND result.result_status<>'PENDING_UPLOAD'
-             )) AS has_protected_result
+            appointment.schedule_pair_id::text,appointment.schedule_cycle_start
        FROM appointments appointment
        JOIN impacted USING(student_number,schedule_cycle_start)
       WHERE appointment.is_published=TRUE
@@ -232,6 +266,10 @@ async function loadAffectedCycles(client: PoolClient, dates: string[], lock: boo
                appointment.schedule_pair_id,appointment.schedule_type,appointment.id
       ${lock ? "FOR UPDATE OF appointment" : ""}`,
     [dates],
+  );
+  const protectionStates = await loadAppointmentResultProtectionStates(
+    client,
+    result.rows.map((row) => row.id),
   );
   const cycleByKey = new Map<string, CalendarCycle>();
   for (const row of result.rows) {
@@ -250,8 +288,7 @@ async function loadAffectedCycles(client: PoolClient, dates: string[], lock: boo
       status: row.status,
       isPublished: row.is_published,
       isManuallyLocked: row.is_manually_locked,
-      hasProtectedResult: row.has_protected_result,
-      hasFinalizedSubmission: row.has_finalized_submission,
+      resultProtectionState: protectionStates.get(row.id) ?? { type: "CLEAR" },
       schedulePairId: row.schedule_pair_id,
       scheduleCycleStart: row.schedule_cycle_start,
     });
@@ -371,6 +408,29 @@ async function createManualCase(
       input.classification.physicalExam?.id ?? null,
       input.classification.reasonCode,
       input.classification.reasonMessage,
+    ],
+  );
+  const protectionMetadata = resultProtectionAuditMetadata(input.cycle.appointments);
+  await client.query(
+    `INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,metadata)
+     VALUES ($1,'CLINIC_CLOSURE_MANUAL_CASE_CREATED','clinic_closure_manual_case',$2::text,
+             jsonb_build_object(
+               'studentNumber',$3::text,
+               'closureGroupId',$4::text,
+               'reasonCode',$5::text,
+               'appointmentIds',$6::jsonb,
+               'submissionIds',$7::jsonb,
+               'activeDraftFileCount',$8::int
+             ))`,
+    [
+      input.actorUserId,
+      inserted.rows[0].id,
+      input.cycle.studentNumber,
+      input.closureGroupId,
+      input.classification.reasonCode,
+      JSON.stringify(protectionMetadata.appointmentIds),
+      JSON.stringify(protectionMetadata.submissionIds),
+      protectionMetadata.activeDraftFileCount,
     ],
   );
   return inserted.rows[0].id;
@@ -645,31 +705,11 @@ async function restoreForReopenedDates(
       continue;
     }
     const allIds = [...originalIds, ...replacementIds] as string[];
-    const appointments = await client.query<{
-      id: string;
-      appointment_date: string;
-      status: string;
-      is_published: boolean;
-      is_manually_locked: boolean;
-      protected: boolean;
-    }>(
-      `SELECT appointment.id::text,appointment.appointment_date::text,
-              appointment.status,appointment.is_published,appointment.is_manually_locked,
-              (EXISTS (SELECT 1 FROM student_result_submissions submission
-                        WHERE submission.appointment_id=appointment.id AND submission.status='FINALIZED')
-               OR EXISTS (SELECT 1 FROM laboratory_results result
-                           WHERE result.appointment_id=appointment.id AND result.result_status<>'PENDING_UPLOAD')
-               OR EXISTS (SELECT 1 FROM exam_results result
-                           WHERE result.appointment_id=appointment.id AND result.result_status<>'PENDING_UPLOAD')) AS protected
-         FROM appointments appointment
-        WHERE appointment.id=ANY($1::uuid[])
-        ORDER BY appointment.id FOR UPDATE`,
-      [allIds],
-    );
-    const byId = new Map(appointments.rows.map((appointment) => [appointment.id, appointment]));
+    const appointments = await loadAppointmentStates(client, allIds);
+    const byId = new Map(appointments.map((appointment) => [appointment.id, appointment]));
     const originals = (originalIds as string[]).map((id) => byId.get(id));
     const replacements = (replacementIds as string[]).map((id) => byId.get(id));
-    const originalDates = originals.flatMap((appointment) => appointment ? [appointment.appointment_date] : []);
+    const originalDates = originals.flatMap((appointment) => appointment ? [appointment.appointmentDate] : []);
     const blockedOriginal = originalDates.length
       ? await client.query(
           "SELECT 1 FROM clinic_unavailable_dates WHERE reopened_at IS NULL AND blocked_date=ANY($1::date[]) LIMIT 1",
@@ -680,13 +720,19 @@ async function restoreForReopenedDates(
       || replacements.some((appointment) =>
         !appointment
         || appointment.status !== "PENDING"
-        || !appointment.is_published
-        || appointment.is_manually_locked
-        || appointment.protected)
+        || !appointment.isPublished)
+      || appointments.some((appointment) =>
+        appointment.isManuallyLocked || appointment.resultProtectionState.type === "PROTECTED")
       || Boolean(blockedOriginal.rowCount);
     if (unsafe) {
+      const block = currentAssignmentBlock(appointments);
+      const reasonCode: ClinicManualCaseReason = block?.code ?? "UNSAFE_RESTORATION";
+      const reasonMessage = block?.message
+        ?? "The current replacement cannot be safely restored automatically.";
       const existingCase = await client.query(
-        "SELECT 1 FROM clinic_closure_manual_cases WHERE id=(SELECT manual_case_id FROM appointment_reschedule_events WHERE id=$1)",
+        `SELECT 1 FROM clinic_closure_manual_cases
+          WHERE id=(SELECT manual_case_id FROM appointment_reschedule_events WHERE id=$1)
+            AND status='OPEN'`,
         [eventId],
       );
       if (!existingCase.rowCount) {
@@ -695,8 +741,7 @@ async function restoreForReopenedDates(
              student_number,closure_group_id,schedule_pair_id,schedule_cycle_start,
              affected_laboratory_appointment_id,affected_physical_exam_appointment_id,
              reason_code,reason_message
-           ) VALUES ($1,$2,$3,$4,$5,$6,'UNSAFE_RESTORATION',
-                     'The current replacement cannot be safely restored automatically.')
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
            RETURNING id::text`,
           [
             event.student_number,
@@ -705,6 +750,28 @@ async function restoreForReopenedDates(
             event.schedule_cycle_start,
             event.old_laboratory_appointment_id,
             event.old_physical_exam_appointment_id,
+            reasonCode,
+            reasonMessage,
+          ],
+        );
+        const protectionMetadata = resultProtectionAuditMetadata(appointments);
+        await client.query(
+          `INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,metadata)
+           VALUES ($1,'CLINIC_CLOSURE_MANUAL_CASE_CREATED','clinic_closure_manual_case',$2::text,
+                   jsonb_build_object(
+                     'studentNumber',$3::text,'closureGroupId',$4::text,'reasonCode',$5::text,
+                     'appointmentIds',$6::jsonb,'submissionIds',$7::jsonb,
+                     'activeDraftFileCount',$8::int
+                   ))`,
+          [
+            actor.userId,
+            insertedCase.rows[0].id,
+            event.student_number,
+            event.closure_group_id,
+            reasonCode,
+            JSON.stringify(protectionMetadata.appointmentIds),
+            JSON.stringify(protectionMetadata.submissionIds),
+            protectionMetadata.activeDraftFileCount,
           ],
         );
         await client.query(
@@ -1049,7 +1116,8 @@ export async function listClinicClosureManualCases(
   const closureGroupId = raw.closureGroupId?.trim() || null;
   const date = raw.date?.trim() || null;
   const service = raw.service?.trim() || null;
-  const result = await transaction(async (client) => client.query<{
+  const loaded = await transaction(async (client) => {
+    const result = await client.query<{
     id: string;
     student_number: string;
     student_name: string;
@@ -1069,9 +1137,15 @@ export async function listClinicClosureManualCases(
     laboratory_id: string | null;
     laboratory_date: string | null;
     laboratory_status: string | null;
+    laboratory_is_manually_locked: boolean | null;
     physical_exam_id: string | null;
     physical_exam_date: string | null;
     physical_exam_status: string | null;
+    physical_exam_is_manually_locked: boolean | null;
+    replacement_laboratory_id: string | null;
+    replacement_laboratory_is_manually_locked: boolean | null;
+    replacement_physical_exam_id: string | null;
+    replacement_physical_exam_is_manually_locked: boolean | null;
     total: number;
   }>(
     `SELECT manual_case.id::text,manual_case.student_number,
@@ -1084,14 +1158,25 @@ export async function listClinicClosureManualCases(
             closure.category,closure.reason AS closure_reason,
             laboratory.id::text AS laboratory_id,laboratory.appointment_date::text AS laboratory_date,
             laboratory.status AS laboratory_status,
+            laboratory.is_manually_locked AS laboratory_is_manually_locked,
             physical.id::text AS physical_exam_id,physical.appointment_date::text AS physical_exam_date,
             physical.status AS physical_exam_status,
+            physical.is_manually_locked AS physical_exam_is_manually_locked,
+            replacement_laboratory.id::text AS replacement_laboratory_id,
+            replacement_laboratory.is_manually_locked AS replacement_laboratory_is_manually_locked,
+            replacement_physical.id::text AS replacement_physical_exam_id,
+            replacement_physical.is_manually_locked AS replacement_physical_exam_is_manually_locked,
             COUNT(*) OVER()::int AS total
        FROM clinic_closure_manual_cases manual_case
        JOIN students student ON student.student_number=manual_case.student_number
        JOIN clinic_closure_groups closure ON closure.id=manual_case.closure_group_id
        LEFT JOIN appointments laboratory ON laboratory.id=manual_case.affected_laboratory_appointment_id
        LEFT JOIN appointments physical ON physical.id=manual_case.affected_physical_exam_appointment_id
+       LEFT JOIN appointment_reschedule_events event ON event.manual_case_id=manual_case.id
+       LEFT JOIN appointments replacement_laboratory
+         ON replacement_laboratory.id=event.new_laboratory_appointment_id
+       LEFT JOIN appointments replacement_physical
+         ON replacement_physical.id=event.new_physical_exam_appointment_id
       WHERE ($1::text IS NULL OR manual_case.student_number ILIKE '%'||$1||'%'
              OR student.first_name ILIKE '%'||$1||'%' OR student.last_name ILIKE '%'||$1||'%')
         AND ($2::text IS NULL OR manual_case.reason_code=$2)
@@ -1105,7 +1190,18 @@ export async function listClinicClosureManualCases(
       ORDER BY manual_case.created_at,manual_case.id
       LIMIT $7 OFFSET $8`,
     [search, reasonCode, status || null, closureGroupId, date, service, pageSize, (page - 1) * pageSize],
-  ));
+    );
+    const appointmentIds = result.rows.flatMap((row) =>
+      [
+        row.laboratory_id,
+        row.physical_exam_id,
+        row.replacement_laboratory_id,
+        row.replacement_physical_exam_id,
+      ].filter((id): id is string => Boolean(id)));
+    const protectionStates = await loadAppointmentResultProtectionStates(client, appointmentIds);
+    return { result, protectionStates };
+  });
+  const { result, protectionStates } = loaded;
   return {
     page,
     pageSize,
@@ -1137,6 +1233,24 @@ export async function listClinicClosureManualCases(
         date: row.physical_exam_date,
         status: row.physical_exam_status,
       } : null,
+      currentAssignmentBlock: currentAssignmentBlock([
+        ...(row.laboratory_id ? [{
+          isManuallyLocked: Boolean(row.laboratory_is_manually_locked),
+          resultProtectionState: protectionStates.get(row.laboratory_id) ?? { type: "CLEAR" as const },
+        }] : []),
+        ...(row.physical_exam_id ? [{
+          isManuallyLocked: Boolean(row.physical_exam_is_manually_locked),
+          resultProtectionState: protectionStates.get(row.physical_exam_id) ?? { type: "CLEAR" as const },
+        }] : []),
+        ...(row.replacement_laboratory_id ? [{
+          isManuallyLocked: Boolean(row.replacement_laboratory_is_manually_locked),
+          resultProtectionState: protectionStates.get(row.replacement_laboratory_id) ?? { type: "CLEAR" as const },
+        }] : []),
+        ...(row.replacement_physical_exam_id ? [{
+          isManuallyLocked: Boolean(row.replacement_physical_exam_is_manually_locked),
+          resultProtectionState: protectionStates.get(row.replacement_physical_exam_id) ?? { type: "CLEAR" as const },
+        }] : []),
+      ]),
     })),
   };
 }
@@ -1152,8 +1266,6 @@ async function loadAppointmentStates(client: PoolClient, ids: string[]) {
     status: string;
     is_published: boolean;
     is_manually_locked: boolean;
-    has_protected_result: boolean;
-    has_finalized_submission: boolean;
     schedule_pair_id: string | null;
     schedule_cycle_start: number;
     rescheduled_from: string | null;
@@ -1162,15 +1274,13 @@ async function loadAppointmentStates(client: PoolClient, ids: string[]) {
             appointment.schedule_type,appointment.appointment_date::text,appointment.status,
             appointment.is_published,appointment.is_manually_locked,
             appointment.schedule_pair_id::text,appointment.schedule_cycle_start,
-            appointment.rescheduled_from::text,
-            EXISTS (SELECT 1 FROM student_result_submissions submission
-                     WHERE submission.appointment_id=appointment.id AND submission.status='FINALIZED') AS has_finalized_submission,
-            (EXISTS (SELECT 1 FROM laboratory_results result
-                     WHERE result.appointment_id=appointment.id AND result.result_status<>'PENDING_UPLOAD')
-             OR EXISTS (SELECT 1 FROM exam_results result
-                        WHERE result.appointment_id=appointment.id AND result.result_status<>'PENDING_UPLOAD')) AS has_protected_result
+            appointment.rescheduled_from::text
        FROM appointments appointment WHERE appointment.id=ANY($1::uuid[]) ORDER BY appointment.id FOR UPDATE`,
     [ids],
+  );
+  const protectionStates = await loadAppointmentResultProtectionStates(
+    client,
+    result.rows.map((row) => row.id),
   );
   return result.rows.map((row): AppointmentState => ({
     id: row.id,
@@ -1181,8 +1291,7 @@ async function loadAppointmentStates(client: PoolClient, ids: string[]) {
     status: row.status,
     isPublished: row.is_published,
     isManuallyLocked: row.is_manually_locked,
-    hasProtectedResult: row.has_protected_result,
-    hasFinalizedSubmission: row.has_finalized_submission,
+    resultProtectionState: protectionStates.get(row.id) ?? { type: "CLEAR" },
     schedulePairId: row.schedule_pair_id,
     scheduleCycleStart: row.schedule_cycle_start,
     rescheduledFrom: row.rescheduled_from,
@@ -1259,8 +1368,27 @@ export async function resolveClinicClosureManualCase(
       manualCase.affected_physical_exam_appointment_id,
     ].filter((id): id is string => Boolean(id));
     const affected = await loadAppointmentStates(client, affectedIds);
+    const event = await client.query<{
+      new_laboratory_appointment_id: string | null;
+      new_physical_exam_appointment_id: string | null;
+    }>(
+      `SELECT new_laboratory_appointment_id::text,new_physical_exam_appointment_id::text
+         FROM appointment_reschedule_events WHERE manual_case_id=$1 FOR UPDATE`,
+      [caseId],
+    );
+    const replacementIds = event.rows.flatMap((row) => [
+      row.new_laboratory_appointment_id,
+      row.new_physical_exam_appointment_id,
+    ].filter((id): id is string => Boolean(id)));
+    const replacements = await loadAppointmentStates(client, replacementIds);
+    const recheckedAppointments = [...affected, ...replacements];
+    let auditedAppointments: AppointmentState[] = recheckedAppointments;
     const insertedByType: Partial<Record<AppointmentState["scheduleType"], string>> = {};
     if (request.action === "ASSIGN_REPLACEMENT") {
+      const assignmentBlock = currentAssignmentBlock(recheckedAppointments);
+      if (assignmentBlock) {
+        throw new AppError(assignmentBlock.code, assignmentBlock.message, 409);
+      }
       const unfinished = affected.filter((appointment) => appointment.status === "AWAITING_RESCHEDULE");
       if (!unfinished.length) throw new AppError("MANUAL_CASE_NO_AWAITING_APPOINTMENT", "No appointment is awaiting a replacement.", 409);
       const dateByType = {
@@ -1309,25 +1437,11 @@ export async function resolveClinicClosureManualCase(
         insertedByType[appointment.scheduleType] = inserted.rows[0].id;
       }
     } else {
-      const event = await client.query<{
-        new_laboratory_appointment_id: string | null;
-        new_physical_exam_appointment_id: string | null;
-      }>(
-        `SELECT new_laboratory_appointment_id::text,new_physical_exam_appointment_id::text
-           FROM appointment_reschedule_events WHERE manual_case_id=$1 FOR UPDATE`,
-        [caseId],
-      );
-      const replacementIds = event.rows.flatMap((row) => [
-        row.new_laboratory_appointment_id,
-        row.new_physical_exam_appointment_id,
-      ].filter((id): id is string => Boolean(id)));
-      const replacements = await loadAppointmentStates(client, replacementIds);
+      auditedAppointments = replacements;
+      const assignmentBlock = currentAssignmentBlock(replacements);
       if (!replacements.length || replacements.some((appointment) =>
         appointment.status !== "PENDING"
-        || !appointment.isPublished
-        || appointment.isManuallyLocked
-        || appointment.hasProtectedResult
-        || appointment.hasFinalizedSubmission)) {
+        || !appointment.isPublished) || assignmentBlock) {
         throw new AppError("CURRENT_REPLACEMENT_NOT_SAFE", "There is no safe current replacement to keep.", 409);
       }
     }
@@ -1363,11 +1477,25 @@ export async function resolveClinicClosureManualCase(
         JSON.stringify({ manualResolutionReason: request.reason }),
       ],
     );
+    const protectionMetadata = resultProtectionAuditMetadata(auditedAppointments);
     await client.query(
       `INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,metadata)
        VALUES ($1,'CLINIC_CLOSURE_MANUAL_CASE_RESOLVED','clinic_closure_manual_case',$2::text,
-               jsonb_build_object('studentNumber',$3::text,'resolutionAction',$4::text,'reason',$5::text))`,
-      [actor.userId, caseId, manualCase.student_number, request.action, request.reason],
+               jsonb_build_object(
+                 'studentNumber',$3::text,'resolutionAction',$4::text,'reasonCode',$5::text,
+                 'appointmentIds',$6::jsonb,'submissionIds',$7::jsonb,
+                 'activeDraftFileCount',$8::int
+               ))`,
+      [
+        actor.userId,
+        caseId,
+        manualCase.student_number,
+        request.action,
+        manualCase.reason_code,
+        JSON.stringify(protectionMetadata.appointmentIds),
+        JSON.stringify(protectionMetadata.submissionIds),
+        protectionMetadata.activeDraftFileCount,
+      ],
     );
     await createStudentNotification(client, {
       studentNumber: manualCase.student_number,

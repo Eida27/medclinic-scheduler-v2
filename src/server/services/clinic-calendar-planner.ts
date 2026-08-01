@@ -3,6 +3,7 @@ import type {
   ClinicCalendarClosureGroupPreview,
   ClinicManualCaseReason,
 } from "@/types/clinic-calendar";
+import type { AppointmentResultProtectionState } from "@/server/appointments/appointment-result-protection";
 
 export type ClinicCycleAppointment = {
   id: string;
@@ -12,8 +13,7 @@ export type ClinicCycleAppointment = {
   status: string;
   isPublished: boolean;
   isManuallyLocked: boolean;
-  hasProtectedResult: boolean;
-  hasFinalizedSubmission: boolean;
+  resultProtectionState: AppointmentResultProtectionState;
   schedulePairId: string | null;
   scheduleCycleStart: number;
 };
@@ -157,12 +157,18 @@ export function classifyClinicCycle(
       physicalExam,
     );
   }
-  if (
-    laboratory.hasProtectedResult
-    || physicalExam.hasProtectedResult
-    || laboratory.hasFinalizedSubmission
-    || physicalExam.hasFinalizedSubmission
-  ) {
+  const protectionStates = [laboratory.resultProtectionState, physicalExam.resultProtectionState];
+  if (protectionStates.some(
+    (state) => state.type === "PROTECTED" && state.reason === "DRAFT_RESULT_FILES_EXIST",
+  )) {
+    return manual(
+      "DRAFT_RESULT_FILES_EXIST",
+      "At least one appointment has active files in a draft result submission.",
+      laboratory,
+      physicalExam,
+    );
+  }
+  if (protectionStates.some((state) => state.type === "PROTECTED")) {
     return manual(
       "PROTECTED_RESULTS_EXIST",
       "At least one appointment has protected result data.",
