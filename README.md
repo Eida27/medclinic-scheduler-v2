@@ -73,16 +73,16 @@ Change seeded passwords before real deployment. Students sign in separately with
 
 ## Academic-Year Student CSV
 
-The supplied workbook is a reference source. Export it as **CSV UTF-8** or Excel **CSV (Comma delimited)** / Windows-1252 before upload. The application does not accept XLSX or UTF-16 CSV. The original workbook is never modified.
+Download the Excel template, replace its synthetic sample row, and copy that formatted row for additional students. The Date of Birth cell uses a real Excel date with the fixed `yyyy-mm-dd` display format. Before upload, save the completed workbook as **CSV UTF-8** or Excel **CSV (Comma delimited)** / Windows-1252. The application does not accept XLSX uploads or UTF-16 CSV.
 
 Use these headers in this exact order:
 
 ```csv
 Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth
-23-1212-97,Abad,Aaron Miguel,A.,,College of Computer Studies,BSIT,3,2004-08-04
+23-1212-97,Abad,Aaron Miguel,Abella,,College of Computer Studies,BSIT,3,2004-08-04
 ```
 
-- Download the matching sample at [`public/templates/student-schedule-import-template.csv`](public/templates/student-schedule-import-template.csv).
+- Download the matching Excel template at [`public/templates/student-schedule-import-template.xlsx`](public/templates/student-schedule-import-template.xlsx).
 - Date of Birth is required and uses the strict ISO `YYYY-MM-DD` format.
 - Middle Name is required and must contain the complete name; Suffix may be blank. Names are displayed surname-first with only the first middle initial.
 - College names and course codes must match active reference data case-insensitively.

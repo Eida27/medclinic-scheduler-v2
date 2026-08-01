@@ -43,11 +43,11 @@ function HeaderActions({
             Import schedule CSV
           </Link>
           <Link
-            href="/templates/student-schedule-import-template.csv"
+            href="/templates/student-schedule-import-template.xlsx"
             download
             className="rounded-xl border border-line bg-surface px-4 py-2.5 text-sm font-bold text-ink transition hover:border-cpu-navy/25 hover:bg-cpu-navy-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cpu-navy"
           >
-            Download CSV template
+            Download Excel template
           </Link>
         </>
       ) : null}

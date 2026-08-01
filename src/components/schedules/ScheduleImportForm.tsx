@@ -97,13 +97,14 @@ export function ScheduleImportForm() {
               </code>
             </div>
             <ul className="list-disc space-y-1 pl-5">
-              <li>Upload the approved workbook as CSV UTF-8 or Excel CSV (Comma delimited) / Windows-1252.</li>
+              <li>Download the Excel template, replace the sample row, and copy that formatted row for additional students.</li>
+              <li>Before upload, use Save As to create CSV UTF-8 or Excel CSV (Comma delimited) / Windows-1252.</li>
               <li>Date of Birth must use YYYY-MM-DD.</li>
               <li>The file may be up to 1 MB and contain up to 3,000 data rows.</li>
               <li>Every new schedule receives seven calendar days of preparation notice.</li>
             </ul>
-            <a href="/templates/student-schedule-import-template.csv" download className="w-fit font-bold text-cpu-navy hover:underline">
-              Download CSV template
+            <a href="/templates/student-schedule-import-template.xlsx" download className="w-fit font-bold text-cpu-navy hover:underline">
+              Download Excel template
             </a>
           </div>
 

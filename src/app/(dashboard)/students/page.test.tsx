@@ -128,9 +128,9 @@ describe("StudentsPage", () => {
       "href",
       "/students/schedule-imports/new",
     );
-    expect(screen.getByRole("link", { name: "Download CSV template" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Download Excel template" })).toHaveAttribute(
       "href",
-      "/templates/student-schedule-import-template.csv",
+      "/templates/student-schedule-import-template.xlsx",
     );
     expect(screen.getByRole("link", { name: "Add student" })).toHaveAttribute("href", "/students/new");
 
@@ -159,7 +159,7 @@ describe("StudentsPage", () => {
     expect(screen.getByRole("link", { name: "Students" })).toHaveAttribute("aria-current", "page");
     expect(screen.queryByRole("link", { name: "Schedule Imports" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Import schedule CSV" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Download CSV template" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Download Excel template" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Add student" })).toBeVisible();
     expect(screen.getByText("Ana Santos")).toBeVisible();
     expect(listScheduleImports).not.toHaveBeenCalled();
@@ -175,7 +175,7 @@ describe("StudentsPage", () => {
 
     expect(screen.getByRole("link", { name: "Schedule Imports" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "Import schedule CSV" })).toBeVisible();
-    expect(screen.getByRole("link", { name: "Download CSV template" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Download Excel template" })).toBeVisible();
     expect(screen.queryByRole("link", { name: "Add student" })).not.toBeInTheDocument();
     expect(listScheduleImports).toHaveBeenCalledWith(coordinator);
     expect(listStudents).not.toHaveBeenCalled();

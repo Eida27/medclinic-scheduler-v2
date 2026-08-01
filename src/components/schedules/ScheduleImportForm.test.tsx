@@ -38,6 +38,13 @@ describe("ScheduleImportForm", () => {
     expect(screen.getByText(/CSV UTF-8/)).toBeVisible();
     expect(screen.getByText(/CSV \(Comma delimited\).*Windows-1252/)).toBeVisible();
     expect(screen.getByText(/Date of Birth must use YYYY-MM-DD/)).toBeVisible();
+    expect(screen.getByText(/replace the sample row/i)).toBeVisible();
+    expect(screen.getByText(/save as.*CSV UTF-8/i)).toBeVisible();
+    expect(screen.getByRole("link", { name: "Download Excel template" })).toHaveAttribute(
+      "href",
+      "/templates/student-schedule-import-template.xlsx",
+    );
+    expect(screen.getByLabelText("CSV file")).toHaveAttribute("accept", ".csv,text/csv");
     expect(screen.queryByLabelText("Preferred month")).not.toBeInTheDocument();
     expect(screen.getByText(/seven calendar days of preparation/i)).toBeVisible();
     expect(screen.queryByText(/schedule dates in YYYY-MM-DD/i)).not.toBeInTheDocument();
