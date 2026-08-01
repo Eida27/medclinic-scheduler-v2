@@ -16,6 +16,11 @@ import {
   type AdminStudentResultProfile,
 } from "@/server/student-results/admin-student-result-profile";
 import { studentDisplayNameSql } from "@/server/students/student-display-name";
+import {
+  getAppointmentResultProtectionState,
+  type AppointmentResultProtectionState,
+  type AppointmentResultTable,
+} from "@/server/appointments/appointment-result-protection";
 
 export type AppointmentResultCorrectionState =
   | { type: "CLEAR" }
@@ -62,53 +67,142 @@ type DraftRow = {
   lastActivityAt: Date;
 };
 
+type AppointmentResultProtectionRow = {
+  appointmentId: string;
+  scheduleType: ScheduleType;
+  finalizedSubmissionId: string | null;
+  activeDraftSubmissionId: string | null;
+  activeDraftFileCount: number;
+  laboratoryResultId: string | null;
+  laboratoryResultStatus: string | null;
+  examResultId: string | null;
+  examResultStatus: string | null;
+};
+
+export async function loadAppointmentResultProtectionStates(
+  client: PoolClient,
+  appointmentIds: string[],
+): Promise<Map<string, AppointmentResultProtectionState>> {
+  const uniqueIds = [...new Set(appointmentIds)];
+  const states = new Map<string, AppointmentResultProtectionState>(
+    uniqueIds.map((appointmentId) => [appointmentId, { type: "CLEAR" }]),
+  );
+  if (uniqueIds.length === 0) return states;
+
+  const result = await client.query<AppointmentResultProtectionRow>(
+    `WITH target AS (
+       SELECT UNNEST($1::uuid[]) AS id
+     )
+     SELECT appointment.id AS "appointmentId",
+            appointment.schedule_type AS "scheduleType",
+            finalized.id::text AS "finalizedSubmissionId",
+            draft.submission_id::text AS "activeDraftSubmissionId",
+            COALESCE(draft.active_file_count, 0)::int AS "activeDraftFileCount",
+            laboratory.id::text AS "laboratoryResultId",
+            laboratory.result_status AS "laboratoryResultStatus",
+            exam.id::text AS "examResultId",
+            exam.result_status AS "examResultStatus"
+       FROM target
+       JOIN appointments appointment ON appointment.id=target.id
+       LEFT JOIN LATERAL (
+         SELECT submission.id
+           FROM student_result_submissions submission
+          WHERE submission.appointment_id=appointment.id
+            AND submission.status='FINALIZED'
+          ORDER BY submission.finalized_at DESC NULLS LAST, submission.id DESC
+          LIMIT 1
+       ) finalized ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT (ARRAY_AGG(submission.id ORDER BY submission.last_activity_at DESC, submission.id DESC))[1]
+                  AS submission_id,
+                COUNT(file.id)::int AS active_file_count
+           FROM student_result_submissions submission
+           JOIN student_result_files file ON file.submission_id=submission.id
+          WHERE submission.appointment_id=appointment.id
+            AND submission.status='DRAFT'
+            AND file.deleted_at IS NULL
+            AND file.storage_delete_pending=FALSE
+       ) draft ON TRUE
+       LEFT JOIN laboratory_results laboratory
+         ON laboratory.appointment_id=appointment.id
+        AND appointment.schedule_type='LABORATORY'
+       LEFT JOIN exam_results exam
+         ON exam.appointment_id=appointment.id
+        AND appointment.schedule_type='PHYSICAL_EXAM'`,
+    [uniqueIds],
+  );
+
+  for (const row of result.rows) {
+    const resultId = row.scheduleType === "LABORATORY"
+      ? row.laboratoryResultId
+      : row.examResultId;
+    const resultStatus = row.scheduleType === "LABORATORY"
+      ? row.laboratoryResultStatus
+      : row.examResultStatus;
+    const resultTable: AppointmentResultTable = row.scheduleType === "LABORATORY"
+      ? "laboratory_results"
+      : "exam_results";
+
+    states.set(row.appointmentId, getAppointmentResultProtectionState({
+      finalizedSubmissionId: row.finalizedSubmissionId,
+      activeDraftSubmissionId: row.activeDraftSubmissionId,
+      activeDraftFileCount: row.activeDraftFileCount,
+      verifiedResult: resultId && resultStatus && resultStatus !== "PENDING_UPLOAD"
+        ? { resultId, resultTable }
+        : null,
+      pendingPlaceholder: resultId && resultStatus === "PENDING_UPLOAD"
+        ? { resultId, resultTable }
+        : null,
+    }));
+  }
+
+  return states;
+}
+
 export async function getAppointmentResultCorrectionState(
   client: PoolClient,
   appointment: { id: string; scheduleType: string },
 ): Promise<AppointmentResultCorrectionState> {
-  const table = appointment.scheduleType === "LABORATORY"
-    ? "laboratory_results" as const
-    : "exam_results" as const;
-  const submissions = await client.query<{ id: string; status: string }>(
-    `SELECT id, status
+  await client.query(
+    `SELECT id
        FROM student_result_submissions
       WHERE appointment_id=$1
       FOR UPDATE`,
     [appointment.id],
   );
-  const result = await client.query<{ id: string; resultStatus: string }>(
-    table === "laboratory_results"
-      ? `SELECT id, result_status AS "resultStatus"
+  await client.query(
+    appointment.scheduleType === "LABORATORY"
+      ? `SELECT id
            FROM laboratory_results
           WHERE appointment_id=$1
           FOR UPDATE`
-      : `SELECT id, result_status AS "resultStatus"
+      : `SELECT id
            FROM exam_results
           WHERE appointment_id=$1
           FOR UPDATE`,
     [appointment.id],
   );
-  const files = await client.query<{ activeFileCount: number }>(
-    `SELECT COUNT(file.id)::int AS "activeFileCount"
-       FROM student_result_submissions submission
-       JOIN student_result_files file ON file.submission_id=submission.id
-      WHERE submission.appointment_id=$1 AND file.deleted_at IS NULL`,
-    [appointment.id],
-  );
 
-  if (submissions.rows.some((submission) => submission.status === "FINALIZED")) {
-    return { type: "PROTECTED", reason: "FINALIZED_SUBMISSION" };
+  const state = (await loadAppointmentResultProtectionStates(client, [appointment.id]))
+    .get(appointment.id) ?? { type: "CLEAR" };
+  if (state.type === "PENDING_PLACEHOLDER") {
+    return {
+      type: "PENDING_PLACEHOLDER",
+      resultId: state.resultId,
+      table: state.resultTable,
+    };
   }
-  if (files.rows[0].activeFileCount > 0) {
-    return { type: "PROTECTED", reason: "UPLOADED_FILES" };
+  if (state.type === "PROTECTED") {
+    return {
+      type: "PROTECTED",
+      reason: state.reason === "FINALIZED_RESULT_SUBMISSION"
+        ? "FINALIZED_SUBMISSION"
+        : state.reason === "DRAFT_RESULT_FILES_EXIST"
+          ? "UPLOADED_FILES"
+          : "VERIFIED_RESULT",
+    };
   }
-  if (result.rows[0] && result.rows[0].resultStatus !== "PENDING_UPLOAD") {
-    return { type: "PROTECTED", reason: "VERIFIED_RESULT" };
-  }
-  if (result.rows[0]) {
-    return { type: "PENDING_PLACEHOLDER", resultId: result.rows[0].id, table };
-  }
-  return { type: "CLEAR" };
+  return state;
 }
 
 export async function deletePendingResultPlaceholder(

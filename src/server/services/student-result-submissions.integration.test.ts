@@ -9,6 +9,7 @@ import {
   deletePendingResultPlaceholder,
   getAppointmentResultCorrectionState,
   invalidateFinalizedSubmissionMetadata,
+  loadAppointmentResultProtectionStates,
   lockCurrentFinalizedSubmissionForInvalidation,
   lockFinalizedSubmissionForInvalidation,
 } from "@/server/repositories/student-result-submissions.repository";
@@ -623,6 +624,92 @@ describe("student result drafts", () => {
 });
 
 describe("appointment result correction protection", () => {
+  it("bulk-loads clear, placeholder, finalized, verified, active-draft, and harmless-file states", async () => {
+    const fixtures = [
+      ["99-9422-22", "Clear"],
+      ["99-9423-23", "Placeholder"],
+      ["99-9424-24", "Finalized"],
+      ["99-9425-25", "Verified"],
+      ["99-9426-26", "Active"],
+      ["99-9427-27", "Deleted"],
+      ["99-9428-28", "PendingDelete"],
+    ] as const;
+    for (const [studentNumber, firstName] of fixtures) {
+      await insertTestStudent({ studentNumber, firstName, lastName: "Protection", yearLevel: 3 });
+    }
+    const ids = new Map<string, string>();
+    for (const [studentNumber] of fixtures) {
+      ids.set(studentNumber, await appointment(studentNumber));
+    }
+
+    await pool.query(
+      `INSERT INTO laboratory_results (student_number, appointment_id, result_status, completed_at, encoded_by)
+       VALUES
+         ('99-9423-23',$1,'PENDING_UPLOAD',NULL,NULL),
+         ('99-9425-25',$2,'COMPLETED','2027-08-02',$3)`,
+      [ids.get("99-9423-23"), ids.get("99-9425-25"), TEST_REFERENCE_IDS.clinicStaffUser],
+    );
+    await pool.query(
+      `INSERT INTO student_result_submissions (
+         appointment_id, student_number, result_type, status, finalized_at
+       ) VALUES ($1,'99-9424-24','LABORATORY','FINALIZED',NOW())`,
+      [ids.get("99-9424-24")],
+    );
+
+    for (const [studentNumber, storageKey, deleted, storageDeletePending] of [
+      ["99-9426-26", "active.pdf", false, false],
+      ["99-9427-27", "deleted.pdf", true, false],
+      ["99-9428-28", "pending-delete.pdf", false, true],
+    ] as const) {
+      const submission = await pool.query<{ id: string }>(
+        `INSERT INTO student_result_submissions (appointment_id, student_number, result_type)
+         VALUES ($1,$2,'LABORATORY') RETURNING id`,
+        [ids.get(studentNumber), studentNumber],
+      );
+      await pool.query(
+        `INSERT INTO student_result_files (
+           submission_id, storage_key, original_filename, detected_mime_type,
+           extension, byte_size, checksum_sha256, deleted_at, storage_delete_pending
+         ) VALUES ($1,$2,$3,'application/pdf','pdf',32,$4,
+                   CASE WHEN $5 THEN NOW() ELSE NULL END,$6)`,
+        [
+          submission.rows[0].id,
+          storageKey,
+          storageKey,
+          "b".repeat(64),
+          deleted,
+          storageDeletePending,
+        ],
+      );
+    }
+
+    const states = await transaction((client) =>
+      loadAppointmentResultProtectionStates(client, [...ids.values()]),
+    );
+
+    expect(states.get(ids.get("99-9422-22")!)).toEqual({ type: "CLEAR" });
+    expect(states.get(ids.get("99-9423-23")!)).toMatchObject({
+      type: "PENDING_PLACEHOLDER",
+      resultTable: "laboratory_results",
+    });
+    expect(states.get(ids.get("99-9424-24")!)).toMatchObject({
+      type: "PROTECTED",
+      reason: "FINALIZED_RESULT_SUBMISSION",
+    });
+    expect(states.get(ids.get("99-9425-25")!)).toEqual({
+      type: "PROTECTED",
+      reason: "VERIFIED_RESULT",
+      message: "A verified result exists for this appointment.",
+    });
+    expect(states.get(ids.get("99-9426-26")!)).toMatchObject({
+      type: "PROTECTED",
+      reason: "DRAFT_RESULT_FILES_EXIST",
+      activeFileCount: 1,
+    });
+    expect(states.get(ids.get("99-9427-27")!)).toEqual({ type: "CLEAR" });
+    expect(states.get(ids.get("99-9428-28")!)).toEqual({ type: "CLEAR" });
+  });
+
   it("returns clear when the completed appointment has no result row", async () => {
     await insertTestStudent({ studentNumber: "99-9415-15", firstName: "Clear", lastName: "Result", yearLevel: 3 });
     const appointmentId = await appointment("99-9415-15");
@@ -679,7 +766,7 @@ describe("appointment result correction protection", () => {
     }))).resolves.toEqual({ type: "PROTECTED", reason: "VERIFIED_RESULT" });
   });
 
-  it("protects finalized submissions and any non-deleted uploaded file", async () => {
+  it("protects finalized submissions while ignoring storage-delete-pending files", async () => {
     for (const studentNumber of ["99-9418-18", "99-9419-19"]) {
       await insertTestStudent({ studentNumber, firstName: "Protected", lastName: "Submission", yearLevel: 3 });
     }
@@ -723,7 +810,10 @@ describe("appointment result correction protection", () => {
     await expect(transaction((client) => getAppointmentResultCorrectionState(client, {
       id: fileAppointmentId,
       scheduleType: "LABORATORY",
-    }))).resolves.toEqual({ type: "PROTECTED", reason: "UPLOADED_FILES" });
+    }))).resolves.toMatchObject({
+      type: "PENDING_PLACEHOLDER",
+      table: "laboratory_results",
+    });
   });
 
   it("rejects placeholder deletion when the result is no longer pending upload", async () => {

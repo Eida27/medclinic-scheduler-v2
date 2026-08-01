@@ -67,6 +67,15 @@ export async function lockEligibleRegularPairs(
              AND submission.status='FINALIZED'
         )
         AND NOT EXISTS (
+          SELECT 1
+            FROM student_result_submissions submission
+            JOIN student_result_files file ON file.submission_id=submission.id
+           WHERE submission.appointment_id IN (laboratory.id, physical.id)
+             AND submission.status='DRAFT'
+             AND file.deleted_at IS NULL
+             AND file.storage_delete_pending=FALSE
+        )
+        AND NOT EXISTS (
           SELECT 1 FROM laboratory_results result
            WHERE result.appointment_id=laboratory.id
              AND result.result_status <> 'PENDING_UPLOAD'
@@ -150,6 +159,15 @@ export async function lockEligibleRegularPhysicalExams(
           SELECT 1 FROM student_result_submissions submission
            WHERE submission.appointment_id=physical.id
              AND submission.status='FINALIZED'
+        )
+        AND NOT EXISTS (
+          SELECT 1
+            FROM student_result_submissions submission
+            JOIN student_result_files file ON file.submission_id=submission.id
+           WHERE submission.appointment_id=physical.id
+             AND submission.status='DRAFT'
+             AND file.deleted_at IS NULL
+             AND file.storage_delete_pending=FALSE
         )
         AND NOT EXISTS (
           SELECT 1 FROM exam_results result

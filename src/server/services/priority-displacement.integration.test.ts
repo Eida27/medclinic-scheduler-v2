@@ -1,8 +1,12 @@
 // @vitest-environment node
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { pool } from "@/server/db/pool";
+import { pool, transaction } from "@/server/db/pool";
 import { cleanupTestFixtures, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
+import {
+  lockEligibleRegularPairs,
+  lockEligibleRegularPhysicalExams,
+} from "@/server/repositories/priority-displacement.repository";
 import {
   cleanupAndRestoreCapacitySettings,
   setupCapacityFixtureLock,
@@ -37,6 +41,27 @@ async function fixture(studentNumber: string) {
      ) VALUES ($1,$1,1,$2,'REGULAR',2027) RETURNING id::text`,
     [`${importPattern.replace("%", "")}-${studentNumber}`, TEST_REFERENCE_IDS.adminUser],
   );
+  const batches = await pool.query<{ id: string; clinicId: string }>(
+    `INSERT INTO schedule_batches (
+       clinic_id,batch_name,status,created_by,import_group_id
+     ) VALUES
+       ($1,$3,'PUBLISHED',$4,$5),
+       ($2,$3,'PUBLISHED',$4,$5)
+     RETURNING id::text,clinic_id::text AS "clinicId"`,
+    [
+      TEST_REFERENCE_IDS.laboratoryClinic,
+      TEST_REFERENCE_IDS.physicalExamClinic,
+      `${importPattern.replace("%", "")}-${studentNumber}`,
+      TEST_REFERENCE_IDS.adminUser,
+      importGroup.rows[0].id,
+    ],
+  );
+  const laboratoryBatchId = batches.rows.find(
+    (batch) => batch.clinicId === TEST_REFERENCE_IDS.laboratoryClinic,
+  )!.id;
+  const physicalExamBatchId = batches.rows.find(
+    (batch) => batch.clinicId === TEST_REFERENCE_IDS.physicalExamClinic,
+  )!.id;
   const pairId = randomUUID();
   const appointments = await pool.query<{
     id: string;
@@ -45,22 +70,51 @@ async function fixture(studentNumber: string) {
   }>(
     `INSERT INTO appointments (
        clinic_id,student_number,schedule_type,appointment_date,status,is_published,
-       schedule_pair_id,schedule_cycle_start,created_by,updated_by
+       schedule_pair_id,schedule_cycle_start,batch_id,created_by,updated_by
      ) VALUES
-       ($1,$3,'LABORATORY','2027-08-30','RESCHEDULED',FALSE,$4,2027,$5,$5),
-       ($2,$3,'PHYSICAL_EXAM','2027-08-31','RESCHEDULED',FALSE,$4,2027,$5,$5)
+       ($1,$3,'LABORATORY','2027-08-30','RESCHEDULED',FALSE,$4,2027,$5,$7,$7),
+       ($2,$3,'PHYSICAL_EXAM','2027-08-31','RESCHEDULED',FALSE,$4,2027,$6,$7,$7)
      RETURNING id::text,schedule_type,appointment_date::text`,
     [
       TEST_REFERENCE_IDS.laboratoryClinic,
       TEST_REFERENCE_IDS.physicalExamClinic,
       studentNumber,
       pairId,
+      laboratoryBatchId,
+      physicalExamBatchId,
       TEST_REFERENCE_IDS.adminUser,
     ],
   );
   const laboratory = appointments.rows.find((appointment) => appointment.schedule_type === "LABORATORY")!;
   const physicalExam = appointments.rows.find((appointment) => appointment.schedule_type === "PHYSICAL_EXAM")!;
   return { importGroupId: importGroup.rows[0].id, pairId, laboratory, physicalExam };
+}
+
+async function eligibleFixture(studentNumber: string) {
+  const created = await fixture(studentNumber);
+  await pool.query(
+    `UPDATE appointments
+        SET status='PENDING', is_published=TRUE
+      WHERE id=ANY($1::uuid[])`,
+    [[created.laboratory.id, created.physicalExam.id]],
+  );
+  return created;
+}
+
+async function addActiveDraftFile(appointmentId: string, studentNumber: string) {
+  const submission = await pool.query<{ id: string }>(
+    `INSERT INTO student_result_submissions (appointment_id,student_number,result_type)
+     SELECT id,student_number,schedule_type FROM appointments WHERE id=$1
+     RETURNING id::text`,
+    [appointmentId],
+  );
+  await pool.query(
+    `INSERT INTO student_result_files (
+       submission_id,storage_key,original_filename,detected_mime_type,
+       extension,byte_size,checksum_sha256
+     ) VALUES ($1,$2,$3,'application/pdf','pdf',32,$4)`,
+    [submission.rows[0].id, `priority/${studentNumber}.pdf`, `${studentNumber}.pdf`, "c".repeat(64)],
+  );
 }
 
 async function insertUnifiedDate(date: string, reopened: boolean) {
@@ -128,6 +182,30 @@ afterAll(async () => {
 });
 
 describe("priority displacement with the unified closure calendar", () => {
+  it("excludes a pair when either appointment has an active draft result file", async () => {
+    const created = await eligibleFixture("99-9403-03");
+    await addActiveDraftFile(created.laboratory.id, "99-9403-03");
+
+    await expect(transaction((client) => lockEligibleRegularPairs(client, {
+      scheduleCycleStart: 2027,
+      windowStart: "2027-08-01",
+      windowEnd: "2027-09-30",
+      limit: 10,
+    }))).resolves.toEqual([]);
+  });
+
+  it("excludes a Physical-only candidate with an active draft result file", async () => {
+    const created = await eligibleFixture("99-9404-04");
+    await addActiveDraftFile(created.physicalExam.id, "99-9404-04");
+
+    await expect(transaction((client) => lockEligibleRegularPhysicalExams(client, {
+      scheduleCycleStart: 2027,
+      windowStart: "2027-08-01",
+      windowEnd: "2027-09-30",
+      limit: 10,
+    }))).resolves.toEqual([]);
+  });
+
   it("skips the same active blocked dates for both replacement services", async () => {
     await insertUnifiedDate("2027-09-01", false);
     await insertUnifiedDate("2027-09-02", false);
