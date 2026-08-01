@@ -206,6 +206,21 @@ npm run build
 
 Tests cover schema/backfills, the exact nine-column CSV, 3,000-row atomic imports, scheduling windows/capacity/concurrency, displacement, closure rollback, manual locks, date-only no-shows, separate sessions/throttling, strict ownership, file signatures/limits, finalization, ZIP access, invalidation, cleanup, outbox retry, and the full cross-feature scenario.
 
+### Appointment protection Browser acceptance fixture
+
+The focused appointment-protection fixture creates two synthetic students with exact owned appointment and pair IDs for the locking/inheritance and active-draft-file closure journeys. Every command requires a PostgreSQL `DATABASE_URL` on `localhost`, `127.0.0.1`, or `::1` plus an explicit `APPOINTMENT_PROTECTION_ACCEPTANCE_EXCLUSIVE_DATABASE=1` opt-in. Set that flag only while the configured local database is dedicated exclusively to this acceptance run.
+
+```powershell
+$env:APPOINTMENT_PROTECTION_ACCEPTANCE_EXCLUSIVE_DATABASE = "1"
+npm run acceptance:appointment-protection -- prepare
+# Complete the authenticated administrator, clinic-staff, and student Browser flows.
+npm run acceptance:appointment-protection -- status
+npm run acceptance:appointment-protection -- cleanup
+Remove-Item Env:APPOINTMENT_PROTECTION_ACCEPTANCE_EXCLUSIVE_DATABASE
+```
+
+The ignored state is `.data/browser-appointment-protection/state.json`. `status` and `cleanup` refuse a database-identity or `RESULT_UPLOAD_ROOT` mismatch. Before deletion, cleanup persists all discovered appointment, submission, file, manual-case, reschedule, closure, notification, and audit IDs plus each private storage key. Its resumable phases delete only that exact manifest, constrain every private-file path beneath `RESULT_UPLOAD_ROOT`, and finish only after proving zero database, storage, and state residue.
+
 ### Clinic UX Browser acceptance fixture
 
 The targeted fixture reads `C:\endless_refinement\microsoft_docs\Physical_Laboratory_Scheduling_Completed.csv` in place and requires its exact 23,834-byte length, SHA-256 `fa01469d107bd0401444b9f95f555ffaf68a4c116b4600af8142c15dca5d3c17`, UTF-8 BOM, and exactly 280 accepted rows. It never changes, copies, or commits that source file. Every fixture command requires a PostgreSQL `DATABASE_URL` on `localhost`, `127.0.0.1`, or `::1` and an explicit `CLINIC_UX_ACCEPTANCE_EXCLUSIVE_DATABASE=1` opt-in. Set that flag only when `DATABASE_URL` names a local database dedicated exclusively to this acceptance run; it is intentionally not baked into the npm script. `prepare` creates an ignored Windows-1252 upload under `.data/browser-clinic-scheduler-ux/` with exactly one `Peña` value, records a credential-free database identity plus matching-student/reference/capacity baselines, and prints the absolute upload and state paths.
