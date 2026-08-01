@@ -12,6 +12,7 @@ const appointment = {
   appointmentDate: "2026-08-18",
   status: "PENDING",
   completedFromStatus: null,
+  isManuallyLocked: true,
 };
 
 describe("ClinicPublishedSchedule", () => {
@@ -67,6 +68,7 @@ describe("ClinicPublishedSchedule", () => {
     );
     expect(within(row).getByText("2026-08-18")).toBeVisible();
     expect(within(row).getByRole("button", { name: "Pending — click to mark completed" })).toBeVisible();
+    expect(within(row).getByText("Protected")).toHaveAttribute("aria-label", "Appointment manually locked");
     expect(within(row).queryByRole("link", { name: "Open" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("columnheader")).toHaveLength(4);
     expect(screen.getByText("Page 1 of 1")).toBeVisible();

@@ -8,6 +8,7 @@ const {
   deletePendingResultPlaceholder,
   ensurePendingUploadResult,
   getAppointmentResultCorrectionState,
+  getAppointmentLockMutationContext,
   getAppointmentMutationContext,
   getPublishedAppointment,
   publishBatch,
@@ -21,6 +22,7 @@ const {
   deletePendingResultPlaceholder: vi.fn(),
   ensurePendingUploadResult: vi.fn(),
   getAppointmentResultCorrectionState: vi.fn(),
+  getAppointmentLockMutationContext: vi.fn(),
   getAppointmentMutationContext: vi.fn(),
   getPublishedAppointment: vi.fn(),
   publishBatch: vi.fn(),
@@ -35,6 +37,7 @@ vi.mock("@/server/db/pool", () => ({ transaction }));
 vi.mock("@/server/repositories/audit.repository", () => ({ writeAudit }));
 vi.mock("@/server/repositories/appointments.repository", () => ({
   changeAppointmentStatusWithClient,
+  getAppointmentLockMutationContext,
   getAppointmentMutationContext,
   getPublishedAppointment,
   publishBatch,
@@ -163,6 +166,10 @@ function publishedAppointment(
     scheduleCycleStart: 2026,
     isManuallyLocked: false,
     lockReason: null,
+    lockedById: null,
+    lockedByName: null,
+    lockedAt: null,
+    updatedAt: new Date("2026-08-01T00:00:00.000Z"),
     notes: null,
     rescheduledFrom: null,
     collegeName: "College of Computer Studies",
@@ -193,6 +200,13 @@ function mutationContext(
     clinicId,
     clinicCode: clinicId === laboratoryClinicId ? "KABALAKA_CLINIC" : "CPU_CLINIC",
     isPublished: true,
+    schedulePairId: "33333333-3333-4333-8333-333333333333",
+    scheduleCycleStart: 2026,
+    isManuallyLocked: false,
+    lockReason: null,
+    lockedById: null,
+    lockedAt: null,
+    updatedAt: new Date("2026-08-01T00:00:00.000Z"),
     latestLog,
     completedFromStatus,
   };
@@ -227,11 +241,13 @@ describe("appointment mutation authorization and automatic no-show correction", 
   beforeEach(() => {
     vi.clearAllMocks();
     getPublishedAppointment.mockResolvedValue(publishedAppointment());
+    getAppointmentLockMutationContext.mockResolvedValue(mutationContext());
     getAppointmentMutationContext.mockResolvedValue(mutationContext());
     getAppointmentResultCorrectionState.mockResolvedValue({ type: "CLEAR" });
     changeAppointmentStatusWithClient.mockResolvedValue(undefined);
     deletePendingResultPlaceholder.mockResolvedValue(undefined);
     rescheduleAppointmentWithClient.mockResolvedValue(replacementId);
+    setAppointmentManualLockWithClient.mockResolvedValue(true);
     writeAudit.mockResolvedValue(undefined);
     transaction.mockImplementation(async (callback: (transactionClient: PoolClient) => Promise<unknown>) => (
       callback(client)
@@ -907,6 +923,127 @@ describe("appointment mutation authorization and automatic no-show correction", 
       status: 403,
     });
     expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
+  });
+
+  describe("manual appointment protection", () => {
+    const expectedUpdatedAt = "2026-08-01T00:00:00.000Z";
+
+    it("locks the row before validating and records a structured audit", async () => {
+      const lockedRow = mutationContext();
+      getAppointmentLockMutationContext.mockResolvedValue(lockedRow);
+
+      await updateAppointment(appointmentId, {
+        lockAction: "LOCK",
+        lockReason: "Protect while the clinic reviews this schedule",
+        expectedUpdatedAt,
+      }, admin);
+
+      expect(getAppointmentLockMutationContext).toHaveBeenCalledWith(appointmentId, client);
+      expect(setAppointmentManualLockWithClient).toHaveBeenCalledWith(
+        client,
+        appointmentId,
+        true,
+        admin.userId,
+        "Protect while the clinic reviews this schedule",
+      );
+      expect(writeAudit).toHaveBeenCalledWith(
+        admin.userId,
+        "APPOINTMENT_LOCKED",
+        "appointment",
+        appointmentId,
+        {
+          appointmentId,
+          studentNumber: "2026-0001",
+          scheduleType: "LABORATORY",
+          reason: "Protect while the clinic reviews this schedule",
+          previousAppointmentId: null,
+        },
+        client,
+      );
+    });
+
+    it("locks the row before rejecting clinic staff authorization", async () => {
+      await expect(updateAppointment(appointmentId, {
+        lockAction: "LOCK",
+        lockReason: null,
+      }, laboratoryStaff)).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+
+      expect(getAppointmentLockMutationContext).toHaveBeenCalledWith(appointmentId, client);
+      expect(setAppointmentManualLockWithClient).not.toHaveBeenCalled();
+    });
+
+    it("rejects a stale optimistic timestamp", async () => {
+      await expect(updateAppointment(appointmentId, {
+        lockAction: "LOCK",
+        lockReason: "Protect this appointment",
+        expectedUpdatedAt: "2026-07-31T00:00:00.000Z",
+      }, admin)).rejects.toMatchObject({ code: "APPOINTMENT_STALE", status: 409 });
+      expect(setAppointmentManualLockWithClient).not.toHaveBeenCalled();
+    });
+
+    it("rejects new locks for historical statuses", async () => {
+      getAppointmentLockMutationContext.mockResolvedValue(mutationContext("COMPLETED"));
+      await expect(updateAppointment(appointmentId, {
+        lockAction: "LOCK",
+        lockReason: "Too late to create a lock",
+        expectedUpdatedAt,
+      }, admin)).rejects.toMatchObject({ code: "APPOINTMENT_LOCK_STATUS_INVALID", status: 422 });
+    });
+
+    it("allows an administrator to unlock after the status changes", async () => {
+      getAppointmentLockMutationContext.mockResolvedValue({
+        ...mutationContext("COMPLETED"),
+        isManuallyLocked: true,
+        lockReason: "Original protection reason",
+        lockedById: admin.userId,
+        lockedAt: new Date("2026-08-01T00:00:00.000Z"),
+      });
+
+      await updateAppointment(appointmentId, {
+        lockAction: "UNLOCK",
+        expectedUpdatedAt,
+      }, admin);
+
+      expect(setAppointmentManualLockWithClient).toHaveBeenCalledWith(
+        client,
+        appointmentId,
+        false,
+        admin.userId,
+        null,
+      );
+      expect(writeAudit).toHaveBeenCalledWith(
+        admin.userId,
+        "APPOINTMENT_UNLOCKED",
+        "appointment",
+        appointmentId,
+        expect.objectContaining({ reason: "Original protection reason" }),
+        client,
+      );
+    });
+
+    it.each([
+      ["LOCK", true, "APPOINTMENT_ALREADY_LOCKED"],
+      ["UNLOCK", false, "APPOINTMENT_ALREADY_UNLOCKED"],
+    ] as const)("rejects %s when the row is already in that state", async (lockAction, isManuallyLocked, code) => {
+      getAppointmentLockMutationContext.mockResolvedValue({
+        ...mutationContext(),
+        isManuallyLocked,
+      });
+      await expect(updateAppointment(appointmentId, {
+        lockAction,
+        ...(lockAction === "LOCK" ? { lockReason: "Already protected" } : {}),
+        expectedUpdatedAt,
+      }, admin)).rejects.toMatchObject({ code, status: 409 });
+    });
+
+    it("returns the lock-specific reason error for short input", async () => {
+      await expect(updateAppointment(appointmentId, {
+        lockAction: "LOCK",
+        lockReason: "x",
+        expectedUpdatedAt,
+      }, admin)).rejects.toMatchObject({ code: "LOCK_REASON_REQUIRED", status: 422 });
+      expect(setAppointmentManualLockWithClient).not.toHaveBeenCalled();
+    });
   });
 
   it.each([

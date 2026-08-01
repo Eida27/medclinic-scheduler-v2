@@ -17,6 +17,8 @@ type AppointmentDetail = {
   clinicId: string; clinicCode: string; clinicName: string;
   appointmentDate: string; status: AppointmentStatus; isPublished: boolean;
   notes: string | null; rescheduledFrom: string | null; collegeName: string; programName: string;
+  isManuallyLocked: boolean; lockReason: string | null; lockedById: string | null;
+  lockedByName: string | null; lockedAt: Date | null; updatedAt: Date;
   completedFromStatus: CompletionSourceStatus | null;
   laboratoryStatus?: "PENDING" | "COMPLETED" | "NO_SHOW" | null;
 };
@@ -37,6 +39,9 @@ export type AppointmentMutationContext = {
   scheduleCycleStart: number;
   isManuallyLocked: boolean;
   lockReason: string | null;
+  lockedById: string | null;
+  lockedAt: Date | null;
+  updatedAt: Date;
   latestLog: AutomaticNoShowLog | null;
   completedFromStatus: CompletionSourceStatus | null;
 };
@@ -44,6 +49,22 @@ export type AppointmentMutationContext = {
 type AppointmentMutationContextWithDate = AppointmentMutationContext & {
   appointmentDate: string;
 };
+
+export type AppointmentLockMutationContext = Pick<
+  AppointmentMutationContextWithDate,
+  | "id"
+  | "studentNumber"
+  | "scheduleType"
+  | "appointmentDate"
+  | "status"
+  | "clinicId"
+  | "isPublished"
+  | "isManuallyLocked"
+  | "lockReason"
+  | "lockedById"
+  | "lockedAt"
+  | "updatedAt"
+>;
 
 const appointmentListOrderBy: Record<AppointmentListSort, string> = {
   soonest: "a.appointment_date ASC, s.last_name ASC, s.first_name ASC, a.student_number ASC, a.id ASC",
@@ -120,6 +141,7 @@ export async function listAppointments(filters: {
             a.clinic_id AS "clinicId", cl.code AS "clinicCode", cl.name AS "clinicName",
             a.appointment_date::text AS "appointmentDate",
             a.status, a.is_published AS "isPublished", c.name AS "collegeName", p.name AS "programName",
+            a.is_manually_locked AS "isManuallyLocked",
             CASE
               WHEN a.status='COMPLETED' AND completion.old_status IN ('PENDING','NO_SHOW')
                 THEN completion.old_status
@@ -151,10 +173,13 @@ export async function getPublishedAppointment(id: string) {
             a.clinic_id AS "clinicId", cl.code AS "clinicCode", cl.name AS "clinicName",
             a.status, a.is_published AS "isPublished",
             a.notes, a.rescheduled_from AS "rescheduledFrom", c.name AS "collegeName", p.name AS "programName",
-            a.is_manually_locked AS "isManuallyLocked", a.lock_reason AS "lockReason"
+            a.is_manually_locked AS "isManuallyLocked", a.lock_reason AS "lockReason",
+            a.locked_by::text AS "lockedById", locked_user.full_name AS "lockedByName",
+            a.locked_at AS "lockedAt", a.updated_at AS "updatedAt"
      FROM appointments a JOIN students s ON s.student_number=a.student_number
      JOIN clinics cl ON cl.id=a.clinic_id
      JOIN colleges c ON c.id=s.college_id JOIN programs p ON p.id=s.program_id
+     LEFT JOIN users locked_user ON locked_user.id=a.locked_by
      WHERE a.id=$1 AND a.is_published=TRUE
        AND a.status NOT IN ('RESCHEDULED','CANCELLED','AWAITING_RESCHEDULE')`, [id]);
   if (!result.rows[0]) return null;
@@ -187,6 +212,9 @@ export async function getAppointmentMutationContext(id: string, client: PoolClie
     scheduleCycleStart: number;
     isManuallyLocked: boolean;
     lockReason: string | null;
+    lockedById: string | null;
+    lockedAt: Date | null;
+    updatedAt: Date;
   }>(
     `SELECT appointment.id, appointment.batch_id AS "batchId",
             appointment.student_number AS "studentNumber",
@@ -198,6 +226,9 @@ export async function getAppointmentMutationContext(id: string, client: PoolClie
             appointment.schedule_cycle_start AS "scheduleCycleStart",
             appointment.is_manually_locked AS "isManuallyLocked",
             appointment.lock_reason AS "lockReason",
+            appointment.locked_by::text AS "lockedById",
+            appointment.locked_at AS "lockedAt",
+            appointment.updated_at AS "updatedAt",
             latest.old_status AS "latestOldStatus",
             latest.new_status AS "latestNewStatus",
             latest.notes AS "latestNotes",
@@ -243,6 +274,9 @@ export async function getAppointmentMutationContext(id: string, client: PoolClie
     scheduleCycleStart: row.scheduleCycleStart,
     isManuallyLocked: row.isManuallyLocked,
     lockReason: row.lockReason,
+    lockedById: row.lockedById,
+    lockedAt: row.lockedAt,
+    updatedAt: row.updatedAt,
     latestLog: row.latestNewStatus ? {
       oldStatus: row.latestOldStatus,
       newStatus: row.latestNewStatus,
@@ -251,6 +285,24 @@ export async function getAppointmentMutationContext(id: string, client: PoolClie
     } : null,
     completedFromStatus: row.completedFromStatus,
   } satisfies AppointmentMutationContextWithDate;
+}
+
+export async function getAppointmentLockMutationContext(
+  id: string,
+  client: PoolClient,
+): Promise<AppointmentLockMutationContext | null> {
+  const result = await client.query<AppointmentLockMutationContext>(
+    `SELECT id::text,student_number AS "studentNumber",schedule_type AS "scheduleType",
+            appointment_date::text AS "appointmentDate",status,
+            clinic_id::text AS "clinicId",is_published AS "isPublished",
+            is_manually_locked AS "isManuallyLocked",lock_reason AS "lockReason",
+            locked_by::text AS "lockedById",locked_at AS "lockedAt",updated_at AS "updatedAt"
+       FROM appointments
+      WHERE id=$1
+      FOR UPDATE`,
+    [id],
+  );
+  return result.rows[0] ?? null;
 }
 
 export async function changeAppointmentStatusWithClient(
@@ -310,7 +362,7 @@ export async function rescheduleAppointmentWithClient(
   await lockEffectiveAppointmentScopes(client, [appointment]);
   const changed = await client.query(
     `UPDATE appointments
-        SET status='RESCHEDULED', updated_by=$3
+        SET status='RESCHEDULED', is_published=FALSE, updated_by=$3
       WHERE id=$1 AND status=$2 AND is_published=TRUE
       RETURNING id`,
     [appointment.id, appointment.status, actorUserId],
@@ -328,8 +380,12 @@ export async function rescheduleAppointmentWithClient(
     `INSERT INTO appointments (
       batch_id, clinic_id, student_number, schedule_type, appointment_date,
       status, is_published, notes, rescheduled_from, created_by, updated_by,
-      schedule_pair_id, schedule_cycle_start
-    ) VALUES ($1,$2,$3,$4,$5,'PENDING',$6,$7,$8,$9,$9,$10,$11) RETURNING id`,
+      schedule_pair_id, schedule_cycle_start,is_manually_locked,locked_by,locked_at,lock_reason
+    ) VALUES ($1,$2,$3,$4,$5,'PENDING',$6,$7,$8,$9,$9,$10,$11,$12,
+              CASE WHEN $12 THEN $9::uuid ELSE NULL END,
+              CASE WHEN $12 THEN NOW() ELSE NULL END,
+              CASE WHEN $12 THEN $13 ELSE NULL END)
+    RETURNING id`,
     [
       appointment.batchId,
       appointment.clinicId,
@@ -342,6 +398,8 @@ export async function rescheduleAppointmentWithClient(
       actorUserId,
       appointment.schedulePairId,
       appointment.scheduleCycleStart,
+      appointment.isManuallyLocked,
+      appointment.lockReason,
     ],
   );
   await client.query(

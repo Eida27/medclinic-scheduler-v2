@@ -13,18 +13,22 @@ type AppointmentActionsProps = {
   id: string;
   status: string;
   canCorrectNoShow?: boolean;
+  isManuallyLocked?: boolean;
+  basePath?: "/appointments" | "/laboratory" | "/physical-exam";
 };
 
 export function AppointmentActions({
   id,
   status,
   canCorrectNoShow = false,
+  isManuallyLocked = false,
+  basePath = "/appointments",
 }: AppointmentActionsProps) {
   const router = useRouter();
   const [error, setError] = useState<string>();
   const [pending, setPending] = useState(false);
 
-  async function update(body: Record<string, unknown>) {
+  async function update(body: Record<string, unknown>, navigateToReplacement = false) {
     setPending(true);
     setError(undefined);
     const response = await fetch(`/api/appointments/${id}`, {
@@ -32,13 +36,20 @@ export function AppointmentActions({
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    const payload = await response.json();
+    const payload = await response.json() as {
+      data?: { id?: string };
+      error?: { message?: string };
+    };
     if (!response.ok) {
       setError(payload.error?.message);
       setPending(false);
       return;
     }
-    router.refresh();
+    if (navigateToReplacement && payload.data?.id) {
+      router.push(`${basePath}/${payload.data.id}`);
+    } else {
+      router.refresh();
+    }
     setPending(false);
   }
 
@@ -54,7 +65,7 @@ export function AppointmentActions({
     void update({
       appointmentDate: form.get("appointmentDate"),
       notes: form.get("notes"),
-    });
+    }, true);
   }
 
   return (
@@ -91,10 +102,18 @@ export function AppointmentActions({
       ) : null}
       {["PENDING", "NO_SHOW"].includes(status) ? (
         <form onSubmit={rescheduleSubmit} className="grid gap-3 sm:grid-cols-2">
-          <Input name="appointmentDate" type="date" required />
+          {isManuallyLocked ? (
+            <div className="sm:col-span-2">
+              <Alert tone="warning">
+                This appointment is manually locked. Its protection will transfer to the replacement appointment.
+              </Alert>
+            </div>
+          ) : null}
+          <Input name="appointmentDate" aria-label="Replacement appointment date" type="date" required />
           <Button type="submit" variant="secondary" disabled={pending}>Create replacement</Button>
           <Textarea
             name="notes"
+            aria-label="Reason for rescheduling"
             placeholder="Reason for rescheduling"
             required
             className="sm:col-span-3"

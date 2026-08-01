@@ -2,13 +2,14 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { operationalStatusLabel, refresh } = vi.hoisted(() => ({
+const { operationalStatusLabel, push, refresh } = vi.hoisted(() => ({
   operationalStatusLabel: vi.fn((value: string) => `Readable ${value}`),
+  push: vi.fn(),
   refresh: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ refresh }),
+  useRouter: () => ({ push, refresh }),
 }));
 vi.mock("@/components/appointments/status-labels", () => ({ operationalStatusLabel }));
 
@@ -119,5 +120,29 @@ describe("AppointmentActions automatic no-show correction", () => {
       },
     ));
     expect(refresh).toHaveBeenCalledOnce();
+  });
+
+  it("warns about lock inheritance and navigates to the replacement detail", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      data: { id: "replacement-2", status: "PENDING" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(
+      <AppointmentActions
+        id="appointment-1"
+        status="PENDING"
+        isManuallyLocked
+        basePath="/laboratory"
+      />,
+    );
+
+    expect(screen.getByText(/protection will transfer to the replacement/)).toBeVisible();
+    await user.type(screen.getByLabelText("Replacement appointment date"), "2026-08-24");
+    await user.type(screen.getByLabelText("Reason for rescheduling"), "Clinic selected a safe date");
+    await user.click(screen.getByRole("button", { name: "Create replacement" }));
+
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/laboratory/replacement-2"));
+    expect(refresh).not.toHaveBeenCalled();
   });
 });

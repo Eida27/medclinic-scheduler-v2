@@ -85,8 +85,11 @@ describe("rescheduleAppointmentWithClient", () => {
       isPublished: true,
       schedulePairId: "44444444-4444-4444-8444-444444444444",
       scheduleCycleStart: 2026,
-      isManuallyLocked: false,
-      lockReason: null,
+      isManuallyLocked: true,
+      lockReason: "Inherited protection reason",
+      lockedById: "00000000-0000-4000-8000-000000000001",
+      lockedAt: new Date("2026-08-01T00:00:00.000Z"),
+      updatedAt: new Date("2026-08-01T00:00:00.000Z"),
       latestLog: null,
       completedFromStatus: null,
     } satisfies AppointmentMutationContext;
@@ -116,13 +119,32 @@ describe("rescheduleAppointmentWithClient", () => {
     );
     expect(client.query).toHaveBeenNthCalledWith(
       2,
-      expect.stringContaining("WHERE id=$1 AND status=$2 AND is_published=TRUE"),
+      expect.stringContaining("SET status='RESCHEDULED', is_published=FALSE"),
       [appointment.id, "PENDING", actorUserId],
     );
     expect(client.query).toHaveBeenNthCalledWith(
       3,
       expect.stringContaining("appointment_status_logs"),
       [appointment.id, "PENDING", "Student requested a replacement", actorUserId],
+    );
+    expect(client.query).toHaveBeenNthCalledWith(
+      4,
+      expect.stringContaining("is_manually_locked,locked_by,locked_at,lock_reason"),
+      [
+        appointment.batchId,
+        appointment.clinicId,
+        appointment.studentNumber,
+        appointment.scheduleType,
+        "2026-08-19",
+        true,
+        "Student requested a replacement",
+        appointment.id,
+        actorUserId,
+        appointment.schedulePairId,
+        appointment.scheduleCycleStart,
+        true,
+        "Inherited protection reason",
+      ],
     );
     expect(client.query).toHaveBeenNthCalledWith(
       5,

@@ -124,6 +124,52 @@ describe("/api/appointments/[appointmentId]", () => {
     expect(updateAppointment).toHaveBeenCalledWith(appointmentId, request, clinicStaff);
   });
 
+  it("passes lock action, reason, and optimistic version through unchanged", async () => {
+    const request = {
+      lockAction: "LOCK",
+      lockReason: "Approved scheduling protection",
+      expectedUpdatedAt: "2026-08-01T13:30:00.000Z",
+    };
+    const response = await PATCH(new Request(
+      `http://localhost/api/appointments/${appointmentId}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(request),
+      },
+    ), context);
+
+    expect(response.status).toBe(200);
+    expect(updateAppointment).toHaveBeenCalledWith(appointmentId, request, clinicStaff);
+  });
+
+  it("preserves appointment lock conflicts", async () => {
+    updateAppointment.mockRejectedValue(new AppError(
+      "APPOINTMENT_STALE",
+      "The appointment changed. Reload before updating its protection.",
+      409,
+    ));
+    const response = await PATCH(new Request(
+      `http://localhost/api/appointments/${appointmentId}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          lockAction: "UNLOCK",
+          expectedUpdatedAt: "2026-08-01T13:30:00.000Z",
+        }),
+      },
+    ), context);
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "APPOINTMENT_STALE",
+        message: "The appointment changed. Reload before updating its protection.",
+      },
+    });
+  });
+
   it("returns a quick-status conflict without rewriting its code or status", async () => {
     updateAppointment.mockRejectedValue(new AppError(
       "APPOINTMENT_STATUS_CONFLICT",

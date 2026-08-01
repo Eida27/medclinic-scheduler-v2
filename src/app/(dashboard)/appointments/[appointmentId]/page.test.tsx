@@ -2,9 +2,10 @@ import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTOMATIC_NO_SHOW_NOTE } from "@/server/appointments/automatic-no-show";
 
-const { appointmentActions, appointmentDetail, completedStatusCorrection, getPublishedAppointment, notFound, requireUser } = vi.hoisted(() => ({
+const { appointmentActions, appointmentDetail, appointmentProtectionPanel, completedStatusCorrection, getPublishedAppointment, notFound, requireUser } = vi.hoisted(() => ({
   appointmentActions: vi.fn(() => null),
   appointmentDetail: vi.fn(() => null),
+  appointmentProtectionPanel: vi.fn(() => null),
   completedStatusCorrection: vi.fn(() => null),
   getPublishedAppointment: vi.fn(),
   notFound: vi.fn(() => {
@@ -18,6 +19,9 @@ vi.mock("@/components/appointments/AppointmentDetail", () => ({
 }));
 vi.mock("@/components/appointments/AppointmentActions", () => ({
   AppointmentActions: appointmentActions,
+}));
+vi.mock("@/components/appointments/AppointmentProtectionPanel", () => ({
+  AppointmentProtectionPanel: appointmentProtectionPanel,
 }));
 vi.mock("@/components/appointments/CompletedStatusCorrection", () => ({
   CompletedStatusCorrection: completedStatusCorrection,
@@ -47,6 +51,12 @@ const publishedAppointment = {
   clinicId: "clinic-1",
   appointmentDate: "2026-08-18",
   status: "PENDING",
+  isManuallyLocked: true,
+  lockReason: "Administrator review",
+  lockedById: "admin-1",
+  lockedByName: "System Admin",
+  lockedAt: new Date("2026-08-01T02:30:00.000Z"),
+  updatedAt: new Date("2026-08-01T03:00:00.000Z"),
   statusLogs: [{
     id: "log-1",
     oldStatus: "DRAFT",
@@ -81,6 +91,16 @@ describe("AppointmentDetail", () => {
     expect(getPublishedAppointment).toHaveBeenCalledWith("appointment-1");
     expect(screen.getByRole("heading", { level: 1, name: "Santos, Ana Maria Angela (Jr.)" })).toBeVisible();
     expect(screen.getByText("Published")).toBeVisible();
+    expect(appointmentProtectionPanel).toHaveBeenCalledWith({
+      appointmentId: "appointment-1",
+      status: "PENDING",
+      isManuallyLocked: true,
+      lockReason: "Administrator review",
+      lockedByName: "System Admin",
+      lockedAt: "2026-08-01T02:30:00.000Z",
+      updatedAt: "2026-08-01T03:00:00.000Z",
+      canManage: false,
+    }, undefined);
   });
 
   it("returns not found when the published-only loader cannot find the appointment", async () => {
@@ -119,6 +139,8 @@ describe("AppointmentDetail", () => {
       id: "appointment-1",
       status: "NO_SHOW",
       canCorrectNoShow: true,
+      isManuallyLocked: true,
+      basePath: "/appointments",
     }, undefined);
   });
 
@@ -191,5 +213,9 @@ describe("AppointmentDetail", () => {
 
     expect(screen.getByRole("heading", { level: 1, name: "Santos, Ana Maria Angela (Jr.)" })).toBeVisible();
     expect(notFound).not.toHaveBeenCalled();
+    expect(appointmentProtectionPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ canManage: true }),
+      undefined,
+    );
   });
 });

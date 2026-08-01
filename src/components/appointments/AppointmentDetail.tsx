@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { AppointmentActions } from "@/components/appointments/AppointmentActions";
+import { AppointmentProtectionPanel } from "@/components/appointments/AppointmentProtectionPanel";
 import { CompletedStatusCorrection } from "@/components/appointments/CompletedStatusCorrection";
 import { operationalStatusLabel, statusTone } from "@/components/appointments/status-labels";
 import { Badge } from "@/components/ui/Badge";
@@ -71,6 +72,16 @@ export async function AppointmentDetail({
           </div>
         </div>
       </Card>
+      <AppointmentProtectionPanel
+        appointmentId={String(appointment.id)}
+        status={String(appointment.status)}
+        isManuallyLocked={Boolean(appointment.isManuallyLocked)}
+        lockReason={appointment.lockReason ?? null}
+        lockedByName={appointment.lockedByName ?? null}
+        lockedAt={appointment.lockedAt?.toISOString() ?? null}
+        updatedAt={appointment.updatedAt.toISOString()}
+        canManage={user.role === "ADMIN"}
+      />
       <Card>
         <CardTitle>Update appointment</CardTitle>
         <div className="mt-4">
@@ -78,6 +89,12 @@ export async function AppointmentDetail({
             id={String(appointment.id)}
             status={String(appointment.status)}
             canCorrectNoShow={canCorrectNoShow}
+            isManuallyLocked={Boolean(appointment.isManuallyLocked)}
+            basePath={source === "LABORATORY"
+              ? "/laboratory"
+              : source === "PHYSICAL_EXAM"
+                ? "/physical-exam"
+                : "/appointments"}
           />
           {appointment.status === "COMPLETED" ? (
             <div className="mt-5">

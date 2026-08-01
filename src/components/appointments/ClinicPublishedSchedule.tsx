@@ -15,6 +15,7 @@ type ClinicAppointment = {
   scheduleType: string;
   appointmentDate: string;
   status: string;
+  isManuallyLocked: boolean;
   completedFromStatus: "PENDING" | "NO_SHOW" | null;
   laboratoryStatus?: "PENDING" | "COMPLETED" | "NO_SHOW" | null;
 };
@@ -150,11 +151,21 @@ export function ClinicPublishedSchedule({
                       </td>
                     ) : null}
                     <td className="px-5 py-4">
-                      <AppointmentQuickStatusButton
-                        appointmentId={appointment.id}
-                        status={appointment.status}
-                        completedFromStatus={appointment.completedFromStatus}
-                      />
+                      <div className="flex flex-wrap items-center gap-2">
+                        <AppointmentQuickStatusButton
+                          appointmentId={appointment.id}
+                          status={appointment.status}
+                          completedFromStatus={appointment.completedFromStatus}
+                        />
+                        {appointment.isManuallyLocked ? (
+                          <span
+                            aria-label="Appointment manually locked"
+                            className="inline-flex rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-950"
+                          >
+                            Protected
+                          </span>
+                        ) : null}
+                      </div>
                     </td>
                     </tr>
                   );
