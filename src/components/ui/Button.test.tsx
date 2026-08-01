@@ -12,4 +12,15 @@ describe("Button", () => {
       "whitespace-nowrap",
     );
   });
+
+  it("renders an exact square control for icon-only actions", () => {
+    render(<Button size="icon" aria-label="Delete college">X</Button>);
+
+    expect(screen.getByRole("button", { name: "Delete college" })).toHaveClass(
+      "h-9",
+      "w-9",
+      "shrink-0",
+      "p-0",
+    );
+  });
 });

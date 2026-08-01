@@ -3,7 +3,7 @@ import { cn } from "@/lib/cn";
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "primary" | "accent" | "secondary" | "danger" | "ghost";
-  size?: "sm" | "md";
+  size?: "sm" | "md" | "icon";
 };
 
 const variants = {
@@ -12,6 +12,12 @@ const variants = {
   secondary: "border border-line bg-surface text-ink hover:border-cpu-navy/25 hover:bg-canvas focus-visible:outline-cpu-navy",
   danger: "bg-red-700 text-white hover:bg-red-800 focus-visible:outline-red-700",
   ghost: "text-muted-strong hover:bg-cpu-navy-soft hover:text-cpu-navy focus-visible:outline-cpu-navy",
+};
+
+const sizes = {
+  sm: "h-9 px-3 text-sm",
+  md: "h-11 px-4 text-sm",
+  icon: "h-9 w-9 shrink-0 p-0",
 };
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
@@ -24,7 +30,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       type={type}
       className={cn(
         "inline-flex items-center justify-center whitespace-nowrap rounded-xl font-semibold transition duration-200 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
-        size === "sm" ? "h-9 px-3 text-sm" : "h-11 px-4 text-sm",
+        sizes[size],
         variants[variant],
         className,
       )}

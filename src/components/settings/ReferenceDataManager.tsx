@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { cn } from "@/lib/cn";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Card, CardTitle } from "@/components/ui/Card";
@@ -15,11 +16,10 @@ type Entry = {
   name: string;
   collegeId?: string;
   collegeName?: string;
-  rankOrder?: number;
   isActive: boolean;
 };
 
-type ReferenceLabel = "college" | "program" | "priority group";
+type ReferenceLabel = "college" | "program";
 
 type DeleteTarget = {
   endpoint: string;
@@ -30,7 +30,6 @@ type DeleteTarget = {
 type ReferenceDataManagerProps = {
   colleges: Entry[];
   programs: Entry[];
-  priorities: Entry[];
 };
 
 function entryLabel(entry: Entry) {
@@ -40,7 +39,6 @@ function entryLabel(entry: Entry) {
 export function ReferenceDataManager({
   colleges,
   programs,
-  priorities,
 }: ReferenceDataManagerProps) {
   const router = useRouter();
   const [error, setError] = useState<string>();
@@ -53,7 +51,6 @@ export function ReferenceDataManager({
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const body: Record<string, string | number> = Object.fromEntries(form.entries()) as Record<string, string>;
-    if (body.rankOrder) body.rankOrder = Number(body.rankOrder);
     const response = await fetch(endpoint, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -102,7 +99,7 @@ export function ReferenceDataManager({
   return (
     <div className="grid gap-6">
       {error ? <Alert tone="danger">{error}</Alert> : null}
-      <div className="grid gap-6 xl:grid-cols-3">
+      <div className="grid gap-6 xl:grid-cols-2">
         <Card>
           <CardTitle>Colleges</CardTitle>
           <form onSubmit={(event) => create(event, "/api/colleges")} className="mt-4 grid gap-3">
@@ -112,6 +109,7 @@ export function ReferenceDataManager({
           </form>
           <List
             entries={colleges}
+            label="College reference values"
             deleting={deleting}
             onDelete={(entry) => requestDelete(entry, "/api/colleges", "college")}
           />
@@ -132,24 +130,12 @@ export function ReferenceDataManager({
           </form>
           <List
             entries={programs}
+            label="Program reference values"
             deleting={deleting}
             onDelete={(entry) => requestDelete(entry, "/api/programs", "program")}
           />
         </Card>
 
-        <Card>
-          <CardTitle>Priority groups</CardTitle>
-          <form onSubmit={(event) => create(event, "/api/priority-groups")} className="mt-4 grid gap-3">
-            <Input name="name" placeholder="Group name" required />
-            <Input name="rankOrder" type="number" min="1" placeholder="Rank" required />
-            <Button type="submit">Add priority</Button>
-          </form>
-          <List
-            entries={priorities}
-            deleting={deleting}
-            onDelete={(entry) => requestDelete(entry, "/api/priority-groups", "priority group")}
-          />
-        </Card>
       </div>
 
       <ConfirmDialog
@@ -171,35 +157,70 @@ export function ReferenceDataManager({
 
 function List({
   entries,
+  label,
   deleting,
   onDelete,
 }: {
   entries: Entry[];
+  label: string;
   deleting: boolean;
   onDelete: (entry: Entry) => void;
 }) {
   return (
-    <div className="mt-5 divide-y divide-line">
+    <div
+      role="list"
+      aria-label={label}
+      className={cn(
+        "mt-5 divide-y divide-line",
+        entries.length > 10 && "max-h-[40rem] overflow-y-auto overscroll-contain pr-2",
+      )}
+    >
       {entries.map((entry) => (
-        <div key={entry.id} className="flex items-center justify-between gap-3 py-3 text-sm">
+        <div
+          key={entry.id}
+          role="listitem"
+          className="flex min-h-16 items-center justify-between gap-3 py-3 text-sm"
+        >
           <div className="min-w-0">
-            <p className="font-bold text-ink">{entryLabel(entry)}</p>
+            <p className="break-words font-bold text-ink">{entryLabel(entry)}</p>
             <p className="text-xs text-muted">
-              {entry.collegeName ?? (entry.rankOrder ? `Priority ${entry.rankOrder}` : "")}
+              {entry.collegeName ?? ""}
               {!entry.isActive ? " · Inactive" : ""}
             </p>
           </div>
           <Button
-            size="sm"
+            size="icon"
             variant="danger"
             aria-label={`Delete ${entryLabel(entry)}`}
+            title={`Delete ${entryLabel(entry)}`}
             disabled={deleting}
             onClick={() => onDelete(entry)}
           >
-            Delete
+            <TrashIcon />
           </Button>
         </div>
       ))}
     </div>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-5 w-5"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="m19 6-1 14H6L5 6" />
+      <path d="M10 11v5" />
+      <path d="M14 11v5" />
+    </svg>
   );
 }
