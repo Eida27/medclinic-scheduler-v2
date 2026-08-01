@@ -181,7 +181,7 @@ export async function getPublishedAppointment(id: string) {
      JOIN colleges c ON c.id=s.college_id JOIN programs p ON p.id=s.program_id
      LEFT JOIN users locked_user ON locked_user.id=a.locked_by
      WHERE a.id=$1 AND a.is_published=TRUE
-       AND a.status NOT IN ('RESCHEDULED','CANCELLED','AWAITING_RESCHEDULE')`, [id]);
+       AND a.status NOT IN ('RESCHEDULED','CANCELLED')`, [id]);
   if (!result.rows[0]) return null;
   const logs = await query<StatusLog>(
     `SELECT l.id, l.old_status AS "oldStatus", l.new_status AS "newStatus", l.notes,

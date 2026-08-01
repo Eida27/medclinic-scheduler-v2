@@ -135,7 +135,11 @@ describe("published-only appointment access", () => {
       offset: 0,
     });
     expect(operational.items).toEqual([expect.objectContaining({ status: "NO_SHOW" })]);
-    await expect(getPublishedAppointment(awaiting.rows[0].id)).resolves.toBeNull();
+    await expect(getPublishedAppointment(awaiting.rows[0].id)).resolves.toMatchObject({
+      id: awaiting.rows[0].id,
+      status: "AWAITING_RESCHEDULE",
+      isPublished: true,
+    });
 
     const publicSchedule = await publicStudentSchedule(studentNumber);
     expect(Object.keys(publicSchedule!).sort()).toEqual(["appointments", "compliance", "studentNumber"]);
