@@ -13,6 +13,7 @@ import {
   type AppointmentMutationContext, type AppointmentStatus,
 } from "@/server/repositories/appointments.repository";
 import { getScheduleBatch } from "@/server/repositories/coordinator-schedules.repository";
+import { ensureBatchStudentAcademicSnapshotsWithClient } from "@/server/repositories/student-academic-snapshots.repository";
 import {
   deletePendingResultPlaceholder,
   ensurePendingUploadResult,
@@ -549,25 +550,55 @@ export async function publishScheduleBatchWithClient(
   actorUserId: string,
   client?: PoolClient,
   allowGrouped = false,
+  snapshotsAlreadyEnsured = false,
 ) {
-  const batch = await getScheduleBatch(batchId, client);
-  if (!batch) throw new AppError("BATCH_NOT_FOUND", "Schedule batch not found.", 404);
-  if (batch.importGroupId && !allowGrouped) {
-    throw new AppError(
-      "GROUPED_BATCH_ACTION_REQUIRED",
-      "This batch belongs to a grouped schedule import. Use the grouped import action instead.",
-      409,
+  const publish = async (transactionClient: PoolClient) => {
+    const batch = await getScheduleBatch(batchId, transactionClient);
+    if (!batch) throw new AppError("BATCH_NOT_FOUND", "Schedule batch not found.", 404);
+    if (batch.importGroupId && !allowGrouped) {
+      throw new AppError(
+        "GROUPED_BATCH_ACTION_REQUIRED",
+        "This batch belongs to a grouped schedule import. Use the grouped import action instead.",
+        409,
+      );
+    }
+    if (!snapshotsAlreadyEnsured) {
+      const snapshots = await ensureBatchStudentAcademicSnapshotsWithClient(
+        transactionClient,
+        { actorUserId, batchIds: [batchId] },
+      );
+      if (snapshots.outcome === "CONFLICT") {
+        return { snapshotConflict: snapshots.conflicts } as const;
+      }
+    }
+    const result = await publishBatch(batchId, actorUserId, transactionClient);
+    if (!result) throw new AppError("BATCH_NOT_FOUND", "Schedule batch not found.", 404);
+    if ("invalidStatus" in result) throw new AppError("BATCH_NOT_GENERATED", "Only generated batches can be published.", 409);
+    await writeAudit(
+      actorUserId,
+      "SCHEDULE_BATCH_PUBLISHED",
+      "schedule_batch",
+      batchId,
+      result,
+      transactionClient,
     );
-  }
-  const result = await publishBatch(batchId, actorUserId, client);
-  if (!result) throw new AppError("BATCH_NOT_FOUND", "Schedule batch not found.", 404);
-  if ("invalidStatus" in result) throw new AppError("BATCH_NOT_GENERATED", "Only generated batches can be published.", 409);
-  await writeAudit(actorUserId, "SCHEDULE_BATCH_PUBLISHED", "schedule_batch", batchId, result, client);
-  return result;
+    return result;
+  };
+  return client ? publish(client) : transaction(publish);
 }
 
 export async function publishScheduleBatch(batchId: string, actorUserId: string) {
-  return publishScheduleBatchWithClient(batchId, actorUserId);
+  const result = await publishScheduleBatchWithClient(batchId, actorUserId);
+  if ("snapshotConflict" in result) {
+    throw new AppError(
+      "SNAPSHOT_CONFLICT",
+      "Publication conflicts with immutable academic history.",
+      409,
+      undefined,
+      { conflicts: result.snapshotConflict },
+    );
+  }
+  return result;
 }
 
 export const capacitySchema = z.object({

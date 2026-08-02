@@ -2,6 +2,7 @@ import "server-only";
 import { z } from "zod";
 import { AppError } from "@/lib/errors";
 import { writeAudit } from "@/server/repositories/audit.repository";
+import { ensureBatchStudentAcademicSnapshotsWithClient } from "@/server/repositories/student-academic-snapshots.repository";
 import {
   createScheduleImport,
   deriveScheduleImportStatus,
@@ -341,6 +342,14 @@ export async function publishScheduleImport(
       throw invalidImportStatus("Only generated schedule imports can be published.");
     }
 
+    const batchIds = children.map((child) => child.id);
+    const snapshots = await ensureBatchStudentAcademicSnapshotsWithClient(client, {
+      actorUserId: actor.userId,
+      batchIds,
+    });
+    if (snapshots.outcome === "CONFLICT") {
+      return { snapshotConflict: snapshots.conflicts } as const;
+    }
     let publishedAppointmentCount = 0;
     for (const child of children) {
       const published = await publishScheduleBatchWithClient(
@@ -348,11 +357,14 @@ export async function publishScheduleImport(
         actor.userId,
         client,
         true,
+        true,
       );
+      if ("snapshotConflict" in published) {
+        throw new Error("Snapshot preflight invariant violated");
+      }
       publishedAppointmentCount += published.count;
     }
 
-    const batchIds = children.map((child) => child.id);
     await writeAudit(
       actor.userId,
       "SCHEDULE_IMPORT_PUBLISHED",
@@ -370,6 +382,15 @@ export async function publishScheduleImport(
     };
   });
   if (!result) throw scheduleImportNotFound();
+  if ("snapshotConflict" in result && result.snapshotConflict) {
+    throw new AppError(
+      "SNAPSHOT_CONFLICT",
+      "Publication conflicts with immutable academic history.",
+      409,
+      undefined,
+      { conflicts: result.snapshotConflict },
+    );
+  }
   return result;
 }
 

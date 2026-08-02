@@ -61,6 +61,7 @@ const correctionStudentNumbers = [
   "TEST-APPT-Q-CROSS",
   "TEST-APPT-Q-CONC",
   "TEST-APPT-Q-ROLL",
+  "TEST-APPT-SNAP-CONF",
 ];
 const orderingFixtures = [
   { studentNumber: "TEST-APPT-SORT-ALPHA", firstName: "Zoe", lastName: "Alpha", appointmentDate: "2044-01-03" },
@@ -154,6 +155,12 @@ async function insertQuickPendingAppointment(
 
 beforeAll(async () => {
   await cleanupTestFixtures("TEST-APPT-%", "TEST appointment lifecycle%");
+  await pool.query(
+    `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+     VALUES (2026,'2027-07-31',$1,$1)
+     ON CONFLICT (start_year) DO NOTHING`,
+    [TEST_REFERENCE_IDS.adminUser],
+  );
   await insertTestStudent({
     studentNumber,
     firstName: "Appointment",
@@ -252,6 +259,21 @@ describe("appointment lifecycle", () => {
     });
     expect(publicSchedule).not.toHaveProperty("studentName");
 
+    const snapshot = await pool.query(
+      `SELECT student_name,college_name,program_code,program_name,year_level,source_type
+         FROM student_academic_snapshots
+        WHERE student_number=$1 AND academic_year_start=2026`,
+      [studentNumber],
+    );
+    expect(snapshot.rows).toEqual([{
+      student_name: "Fixture, Appointment Maria Angela (Jr.)",
+      college_name: "College of Computer Studies",
+      program_code: "BSIT",
+      program_name: "Bachelor of Science in Information Technology",
+      year_level: 3,
+      source_type: "MIGRATED_INCOMPLETE",
+    }]);
+
     const current = await pool.query<{ id: string }>("SELECT id FROM appointments WHERE batch_id=$1", [batchId]);
     await expect(getPublishedAppointment(current.rows[0].id)).resolves.toMatchObject({
       studentName: "Fixture, Appointment Maria Angela (Jr.)",
@@ -278,6 +300,68 @@ describe("appointment lifecycle", () => {
     expect(replacement?.rescheduledFrom).toBe(current.rows[0].id);
     const logs = await pool.query("SELECT new_status FROM appointment_status_logs WHERE appointment_id IN ($1,$2)", [current.rows[0].id, replacement?.id]);
     expect(logs.rows.map((row) => row.new_status)).toEqual(expect.arrayContaining(["PENDING", "RESCHEDULED"]));
+  });
+
+  it("commits a legacy publication conflict without publishing draft appointments", async () => {
+    const conflictStudentNumber = "TEST-APPT-SNAP-CONF";
+    await pool.query(
+      `INSERT INTO student_academic_snapshots (
+         student_number,academic_year_start,student_name,college_id,college_name,
+         program_id,program_code,program_name,year_level,source_type,source_metadata
+       ) VALUES (
+         $1,2026,'Fixture, Correction',$2,'College of Computer Studies',
+         $3,'BSIT','Bachelor of Science in Information Technology',2,
+         'MIGRATED_INCOMPLETE','{"fixture":true}'::jsonb
+       ) ON CONFLICT (student_number,academic_year_start) DO NOTHING`,
+      [conflictStudentNumber, TEST_REFERENCE_IDS.college, TEST_REFERENCE_IDS.program],
+    );
+    const batch = await addScheduleBatch({
+      batchName: "TEST appointment lifecycle snapshot conflict",
+      collegeId: TEST_REFERENCE_IDS.college,
+      programId: TEST_REFERENCE_IDS.program,
+      submittedByName: "Test",
+      description: "Disposable",
+      items: [{
+        studentNumber: conflictStudentNumber,
+        scheduleType: "LABORATORY",
+        priorityGroupId: TEST_REFERENCE_IDS.regularPriority,
+        targetDate: "2026-09-01",
+        targetWeekStart: null,
+        targetWeekEnd: null,
+        remarks: "",
+      }],
+    }, admin.userId);
+    const batchId = String(batch?.id);
+    await generateBatchAppointments(batchId, admin);
+    const auditBefore = await pool.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM audit_logs
+        WHERE action='SNAPSHOT_CONFLICT_DETECTED' AND entity_id=$1`,
+      [`${conflictStudentNumber}:2026`],
+    );
+
+    await expect(publishScheduleBatch(batchId, admin.userId)).rejects.toMatchObject({
+      code: "SNAPSHOT_CONFLICT",
+      status: 409,
+    });
+    const state = await pool.query(
+      `SELECT batch.status AS batch_status,appointment.status AS appointment_status,
+              appointment.is_published
+         FROM schedule_batches batch
+         JOIN appointments appointment ON appointment.batch_id=batch.id
+        WHERE batch.id=$1`,
+      [batchId],
+    );
+    expect(state.rows).toEqual([{
+      batch_status: "GENERATED",
+      appointment_status: "DRAFT",
+      is_published: false,
+    }]);
+    const auditAfter = await pool.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM audit_logs
+        WHERE action='SNAPSHOT_CONFLICT_DETECTED' AND entity_id=$1`,
+      [`${conflictStudentNumber}:2026`],
+    );
+    expect(auditAfter.rows[0].count).toBe(auditBefore.rows[0].count + 1);
   });
 
   it("reschedules a manual no-show when a mixed request also carries completed status", async () => {

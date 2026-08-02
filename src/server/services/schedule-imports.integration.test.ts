@@ -56,7 +56,15 @@ async function cleanup() {
   await pool.query("DELETE FROM clinic_closure_groups WHERE reason LIKE 'TEST-AY%'");
 }
 
-beforeAll(cleanup);
+beforeAll(async () => {
+  await cleanup();
+  await pool.query(
+    `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+     VALUES (2026,'2027-07-31',$1,$1),(2027,'2028-07-31',$1,$1)
+     ON CONFLICT (start_year) DO NOTHING`,
+    [TEST_REFERENCE_IDS.adminUser],
+  );
+});
 afterEach(cleanup);
 afterAll(async () => {
   await cleanup();
@@ -159,6 +167,108 @@ describe("student scheduling imports", () => {
       preferred_month: null,
       accepted: true,
     }]);
+    const snapshots = await pool.query(
+      `SELECT student_number,student_name,college_name,program_code,program_name,
+              year_level,source_type
+         FROM student_academic_snapshots
+        WHERE student_number=ANY($1::varchar[]) AND academic_year_start=2026
+        ORDER BY student_number`,
+      [[existingStudentNumber, newStudentNumber]],
+    );
+    expect(snapshots.rows).toEqual([
+      {
+        student_number: existingStudentNumber,
+        student_name: "Updated, Alex Q. (Jr.)",
+        college_name: "College of Computer Studies",
+        program_code: "BSIT",
+        program_name: "Bachelor of Science in Information Technology",
+        year_level: 4,
+        source_type: "VERIFIED_HISTORICAL",
+      },
+      {
+        student_number: newStudentNumber,
+        student_name: "New, Bea Rosa",
+        college_name: "College of Computer Studies",
+        program_code: "BSIT",
+        program_name: "Bachelor of Science in Information Technology",
+        year_level: 3,
+        source_type: "VERIFIED_HISTORICAL",
+      },
+    ]);
+  });
+
+  it("commits a snapshot-conflict audit without changing the profile or appointments", async () => {
+    const studentNumber = "99-9107-07";
+    await insertTestStudent({
+      studentNumber,
+      firstName: "Original",
+      middleName: "Maria",
+      lastName: "Profile",
+      suffix: null,
+      yearLevel: 2,
+      dateOfBirth: "2003-05-06",
+    });
+    await pool.query(
+      `INSERT INTO student_academic_snapshots (
+         student_number,academic_year_start,student_name,college_id,college_name,
+         program_id,program_code,program_name,year_level,source_type,source_metadata
+       ) VALUES (
+         $1,2026,'Profile, Original Maria',$2,'College of Computer Studies',
+         $3,'BSIT','Bachelor of Science in Information Technology',2,
+         'VERIFIED_HISTORICAL','{"fixture":true}'::jsonb
+       ) ON CONFLICT (student_number,academic_year_start) DO NOTHING`,
+      [studentNumber, TEST_REFERENCE_IDS.college, TEST_REFERENCE_IDS.program],
+    );
+
+    const auditBefore = await pool.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM audit_logs
+        WHERE action='SNAPSHOT_CONFLICT_DETECTED' AND entity_id=$1`,
+      [`${studentNumber}:2026`],
+    );
+    await expect(importStudentScheduleCsv(input(csv(
+      `${studentNumber},Changed,Student,Maria Angela,,College of Computer Studies,BSIT,4,2004-06-07`,
+    )), admin)).rejects.toMatchObject({
+      code: "SNAPSHOT_CONFLICT",
+      status: 409,
+    });
+
+    const state = await pool.query(
+      `SELECT first_name,middle_name,last_name,year_level,date_of_birth::text,
+              (SELECT COUNT(*)::int FROM appointments WHERE student_number=$1) AS appointments
+         FROM students WHERE student_number=$1`,
+      [studentNumber],
+    );
+    expect(state.rows).toEqual([{
+      first_name: "Original",
+      middle_name: "Maria",
+      last_name: "Profile",
+      year_level: 2,
+      date_of_birth: "2003-05-06",
+      appointments: 0,
+    }]);
+    const auditAfter = await pool.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM audit_logs
+        WHERE action='SNAPSHOT_CONFLICT_DETECTED' AND entity_id=$1`,
+      [`${studentNumber}:2026`],
+    );
+    expect(auditAfter.rows[0].count).toBe(auditBefore.rows[0].count + 1);
+  });
+
+  it("requires an academic year configuration before writing an import", async () => {
+    const studentNumber = "99-9108-08";
+    await expect(importStudentScheduleCsv(input(csv(
+      `${studentNumber},Missing,Year,Maria Angela,,College of Computer Studies,BSIT,3,2003-05-06`,
+    ), { academicYearStart: 2099 }), admin)).rejects.toMatchObject({
+      code: "ACADEMIC_YEAR_NOT_CONFIGURED",
+      status: 409,
+    });
+    const writes = await pool.query(
+      `SELECT
+         (SELECT COUNT(*)::int FROM students WHERE student_number=$1) AS students,
+         (SELECT COUNT(*)::int FROM schedule_import_groups WHERE academic_year_start=2099) AS imports`,
+      [studentNumber],
+    );
+    expect(writes.rows[0]).toEqual({ students: 0, imports: 0 });
   });
 
   it("rolls back all writes when a reference is unknown", async () => {

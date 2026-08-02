@@ -1,4 +1,5 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { AppError } from "@/lib/errors";
 import type { AppointmentScheduleType, ClinicCode } from "@/server/clinics";
@@ -18,6 +19,7 @@ import {
   publishDisplacedRegularReplacementsWithLockedScopes,
 } from "@/server/services/priority-displacement.service";
 import { studentDisplayNameSql } from "@/server/students/student-display-name";
+import { ensureStudentAcademicSnapshotsWithClient } from "./student-academic-snapshots.repository";
 
 export type ScheduleImportStatus =
   | "DRAFT"
@@ -129,6 +131,7 @@ type ProgramReference = {
   id: string;
   college_id: string;
   code: string;
+  name: string;
 };
 
 type ExistingStudent = {
@@ -138,9 +141,18 @@ type ExistingStudent = {
 type ResolvedRow = ImportedStudentRow & {
   collegeId: string | null;
   programId: string | null;
+  resolvedCollegeName: string;
+  resolvedProgramCode: string;
+  resolvedProgramName: string;
   existedBeforeImport: boolean;
   alreadyScheduledForCycle: boolean;
 };
+
+function importedStudentName(row: ImportedStudentRow) {
+  return `${row.surname}, ${row.firstName}${
+    row.middleName.trim() ? ` ${row.middleName.trim()}` : ""
+  }${row.suffix?.trim() ? ` (${row.suffix.trim()})` : ""}`;
+}
 
 function normalizeComparable(value: string | null | undefined): string {
   return (value ?? "")
@@ -175,13 +187,13 @@ export async function createScheduleImport(
   input: CreateScheduleImportInput,
   actorUserId: string,
 ): Promise<ScheduleImportResult | { fields: Record<string, string[]> }> {
-  return transaction(async (client) => {
+  const result = await transaction(async (client) => {
     const fields: Record<string, string[]> = {};
     const colleges = await client.query<CollegeReference>(
       "SELECT id, name FROM colleges WHERE is_active=TRUE",
     );
     const programs = await client.query<ProgramReference>(
-      "SELECT id, college_id, code FROM programs WHERE is_active=TRUE",
+      "SELECT id, college_id, code, name FROM programs WHERE is_active=TRUE",
     );
     const collegeByName = uniqueReferenceMap(
       colleges.rows,
@@ -215,6 +227,9 @@ export async function createScheduleImport(
         ...row,
         collegeId: college?.id ?? null,
         programId: program?.id ?? null,
+        resolvedCollegeName: college?.name ?? row.collegeName,
+        resolvedProgramCode: program?.code ?? row.courseCode,
+        resolvedProgramName: program?.name ?? row.courseCode,
         existedBeforeImport: false,
         alreadyScheduledForCycle: false,
       };
@@ -259,14 +274,39 @@ export async function createScheduleImport(
     const importName = Array.from(
       `${input.studentCategory} ${input.academicYearStart}-${input.academicYearStart + 1} - ${input.sourceFilename}`,
     ).slice(0, 150).join("");
-    const importGroup = await client.query<{ id: string }>(
+    const importId = randomUUID();
+    const snapshotResult = await ensureStudentAcademicSnapshotsWithClient(client, {
+      actorUserId,
+      candidates: resolvedRows.map((row) => ({
+        studentNumber: row.studentNumber,
+        academicYearStart: input.academicYearStart,
+        studentName: importedStudentName(row),
+        collegeId: row.collegeId,
+        collegeName: row.resolvedCollegeName,
+        programId: row.programId,
+        programCode: row.resolvedProgramCode,
+        programName: row.resolvedProgramName,
+        yearLevel: row.yearLevel,
+        sourceImportGroupId: importId,
+        sourceType: "VERIFIED_HISTORICAL" as const,
+        sourceMetadata: {
+          sourceFilename: input.sourceFilename,
+          sourceRowNumber: row.rowNumber,
+          studentCategory: input.studentCategory,
+        },
+      })),
+    });
+    if (snapshotResult.outcome === "CONFLICT") {
+      return { snapshotConflict: snapshotResult.conflicts } as const;
+    }
+    await client.query(
       `INSERT INTO schedule_import_groups (
-         import_name, source_filename, total_rows, created_student_count,
+         id, import_name, source_filename, total_rows, created_student_count,
          matched_student_count, created_by, student_category, academic_year_start,
          preferred_month, accepted_at
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-       RETURNING id`,
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
       [
+        importId,
         importName,
         input.sourceFilename,
         input.rows.length,
@@ -279,7 +319,6 @@ export async function createScheduleImport(
         accepted.rows[0].acceptedAt,
       ],
     );
-    const importId = importGroup.rows[0].id;
 
     await client.query(
       `INSERT INTO students (
@@ -698,8 +737,8 @@ export async function createScheduleImport(
 
     return {
       importId,
-      outcome: "PUBLISHED",
-      status: "PUBLISHED",
+      outcome: "PUBLISHED" as const,
+      status: "PUBLISHED" as const,
       totalRows: input.rows.length,
       insertedStudentCount,
       updatedStudentCount,
@@ -716,6 +755,16 @@ export async function createScheduleImport(
       batchIds,
     };
   });
+  if ("snapshotConflict" in result && result.snapshotConflict) {
+    throw new AppError(
+      "SNAPSHOT_CONFLICT",
+      "The import conflicts with immutable academic history.",
+      409,
+      undefined,
+      { conflicts: result.snapshotConflict },
+    );
+  }
+  return result;
 }
 
 type ScheduleImportSummaryRow = {
