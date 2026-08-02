@@ -17,7 +17,10 @@
     "acceptance:clinic-ux": "tsx --env-file=.env.local scripts/browser-clinic-scheduler-ux-fixture.ts",
     "acceptance:appointment-protection": "tsx --env-file=.env.local scripts/browser-appointment-protection-fixture.ts",
     "acceptance:student-auth": "tsx --env-file=.env.local scripts/browser-student-middle-name-auth-fixture.ts",
-    "acceptance:unified-clinic-calendar": "tsx --env-file=.env.local scripts/browser-unified-clinic-calendar-fixture.ts"
+    "acceptance:unified-clinic-calendar": "tsx --env-file=.env.local scripts/browser-unified-clinic-calendar-fixture.ts",
+    "acceptance:reports:setup": "tsx --env-file=.env.local scripts/browser-reports-acceptance-fixture.ts setup",
+    "acceptance:reports:status": "tsx --env-file=.env.local scripts/browser-reports-acceptance-fixture.ts status",
+    "acceptance:reports:cleanup": "tsx --env-file=.env.local scripts/browser-reports-acceptance-fixture.ts cleanup"
   },
   "dependencies": {
     "archiver": "^8.0.0",
