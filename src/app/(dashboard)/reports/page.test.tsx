@@ -2,16 +2,19 @@ import { render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppError } from "@/lib/errors";
 
-const { getHistoricalComplianceReport, listAcademicYears, notFound, requireUser } = vi.hoisted(() => ({
+const { getHistoricalComplianceReport, listAcademicYears, notFound, redirect, requireUser } = vi.hoisted(() => ({
   getHistoricalComplianceReport: vi.fn(),
   listAcademicYears: vi.fn(),
   notFound: vi.fn(() => {
     throw new Error("NEXT_NOT_FOUND");
   }),
+  redirect: vi.fn(() => {
+    throw new Error("NEXT_REDIRECT");
+  }),
   requireUser: vi.fn(),
 }));
 
-vi.mock("next/navigation", () => ({ notFound }));
+vi.mock("next/navigation", () => ({ notFound, redirect }));
 vi.mock("@/server/auth/current-user", () => ({ requireUser }));
 vi.mock("@/server/services/academic-years.service", () => ({ listAcademicYears }));
 vi.mock("@/server/services/historical-compliance-report.service", () => ({
@@ -174,6 +177,78 @@ describe("ReportsPage", () => {
     expect(notFound).toHaveBeenCalledOnce();
   });
 
+  it("redirects an incompatible bookmarked college and program to normalized filters", async () => {
+    getHistoricalComplianceReport.mockResolvedValue({
+      ...report,
+      filters: {
+        ...report.filters,
+        collegeId,
+        programId: otherProgramId,
+        page: 2,
+        offset: 150,
+      },
+      total: 0,
+      items: [],
+    });
+
+    await expect(ReportsPage({
+      searchParams: Promise.resolve({
+        academicYearStart: "2025",
+        search: "Aaron",
+        overallStatus: "DID_NOT_COMPLY",
+        laboratoryStatus: "NO_SHOW",
+        physicalExamStatus: "COMPLETED",
+        collegeId,
+        programId: otherProgramId,
+        yearLevel: "4",
+        dataQuality: "MIGRATED_INCOMPLETE",
+        sort: "name_desc",
+        page: "2",
+      }),
+    })).rejects.toThrow("NEXT_REDIRECT");
+
+    expect(redirect).toHaveBeenCalledWith(
+      `/reports?academicYearStart=2025&search=Aaron&overallStatus=DID_NOT_COMPLY&laboratoryStatus=NO_SHOW&physicalExamStatus=COMPLETED&collegeId=${collegeId}&yearLevel=4&dataQuality=MIGRATED_INCOMPLETE&sort=name_desc`,
+    );
+  });
+
+  it("preserves a valid bookmarked program filter when no college is selected", async () => {
+    getHistoricalComplianceReport.mockResolvedValue({
+      ...report,
+      filters: {
+        ...report.filters,
+        collegeId: undefined,
+        page: 1,
+        offset: 0,
+      },
+    });
+
+    render(await ReportsPage({
+      searchParams: Promise.resolve({ academicYearStart: "2025", programId }),
+    }));
+
+    expect(redirect).not.toHaveBeenCalled();
+    expect(screen.getByRole("combobox", { name: "College" })).toHaveValue("");
+    expect(screen.getByRole("combobox", { name: "Program" })).toHaveValue(programId);
+  });
+
+  it("redirects pages beyond the last result page while preserving normalized filters", async () => {
+    getHistoricalComplianceReport.mockResolvedValue({
+      ...report,
+      filters: { ...report.filters, page: 999, offset: 149_700 },
+      items: [],
+      total: 301,
+    });
+
+    await expect(ReportsPage({
+      searchParams: Promise.resolve({ academicYearStart: "2025", page: "999" }),
+    })).rejects.toThrow("NEXT_REDIRECT");
+
+    expect(redirect).toHaveBeenCalledWith(
+      `/reports?academicYearStart=2025&search=Aaron&overallStatus=DID_NOT_COMPLY&laboratoryStatus=NO_SHOW&physicalExamStatus=COMPLETED&collegeId=${collegeId}&programId=${programId}&yearLevel=4&dataQuality=MIGRATED_INCOMPLETE&sort=name_desc&page=3`,
+    );
+  });
+
   it("renders normalized metrics, dependent filters, breakdowns, rows, and pagination", async () => {
     render(await ReportsPage({
       searchParams: Promise.resolve({
@@ -293,5 +368,6 @@ describe("ReportsPage", () => {
     expect(screen.queryByRole("table", { name: "Detailed historical compliance records" })).not.toBeInTheDocument();
     expect(screen.queryByRole("navigation", { name: "Report pagination" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Export PDF" })).toBeDisabled();
+    expect(redirect).not.toHaveBeenCalled();
   });
 });

@@ -1,7 +1,10 @@
 import { redirect } from "next/navigation";
-import { historicalReportRedirectTarget } from "@/lib/historical-report-redirect";
+import {
+  historicalReportRedirectTarget,
+  type LegacyReportParams,
+} from "@/lib/historical-report-redirect";
 
-type AppointmentsSearchParams = Record<string, string | undefined>;
+type AppointmentsSearchParams = LegacyReportParams;
 
 export default async function AppointmentsPage({
   searchParams,

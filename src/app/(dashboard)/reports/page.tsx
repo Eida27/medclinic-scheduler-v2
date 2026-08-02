@@ -1,21 +1,27 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { ReportBreakdowns } from "@/components/reports/ReportBreakdowns";
 import { ReportExportButton } from "@/components/reports/ReportExportButton";
 import { ReportFilters } from "@/components/reports/ReportFilters";
 import { ReportPagination } from "@/components/reports/ReportPagination";
 import { ReportRecordsTable } from "@/components/reports/ReportRecordsTable";
 import { ReportSummaryCards } from "@/components/reports/ReportSummaryCards";
-import { buildReportSearchParams } from "@/components/reports/report-query";
+import {
+  buildReportSearchParams,
+  reportHref,
+} from "@/components/reports/report-query";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { AppError } from "@/lib/errors";
-import { parseHistoricalReportQuery } from "@/lib/historical-compliance-report";
+import {
+  parseHistoricalReportQuery,
+  REPORT_PAGE_SIZE,
+} from "@/lib/historical-compliance-report";
 import { requireUser } from "@/server/auth/current-user";
 import { listAcademicYears } from "@/server/services/academic-years.service";
 import { getHistoricalComplianceReport } from "@/server/services/historical-compliance-report.service";
 
-type ReportsSearchParams = Record<string, string | undefined>;
+type ReportsSearchParams = Record<string, string | string[] | undefined>;
 
 function yearStateLabel(state: "OPEN" | "CLOSING_SOON" | "CLOSED") {
   return { OPEN: "Open", CLOSING_SOON: "Closing Soon", CLOSED: "Closed" }[state];
@@ -53,6 +59,7 @@ export default async function ReportsPage({
           <p className="mt-1 text-sm text-muted">Select a configured academic year to generate the report.</p>
         </Card>
         <ReportFilters
+          key={buildReportSearchParams(parsed).toString()}
           years={years.map(({ startYear, label }) => ({ startYear, label }))}
           filters={parsed}
           dimensions={{ colleges: [], programs: [], yearLevels: [] }}
@@ -71,6 +78,22 @@ export default async function ReportsPage({
   } catch (error) {
     if (error instanceof AppError && error.status === 404) notFound();
     throw error;
+  }
+
+  const selectedProgram = report.dimensions.programs.find((program) => (
+    program.id === report.filters.programId
+  ));
+  const programIsInvalid = report.filters.programId && (
+    !selectedProgram
+    || (report.filters.collegeId && selectedProgram.collegeId !== report.filters.collegeId)
+  );
+  if (programIsInvalid) {
+    redirect(reportHref(report.filters, { programId: undefined, page: 1 }));
+  }
+
+  const totalPages = Math.ceil(report.total / REPORT_PAGE_SIZE);
+  if (report.total > 0 && report.filters.page > totalPages) {
+    redirect(reportHref(report.filters, { page: totalPages }));
   }
 
   const exportQuery = buildReportSearchParams(report.filters, { page: 1 }).toString();
@@ -100,18 +123,24 @@ export default async function ReportsPage({
           <span className="font-bold">Historical data notice:</span> {report.summary.migratedIncomplete} records use migrated or incomplete historical data. Review the data-quality label in the detailed table.
         </Card>
       ) : null}
-      <ReportBreakdowns breakdowns={report.breakdowns} filters={report.filters} state={yearState} />
+      <ReportBreakdowns
+        breakdowns={report.breakdowns}
+        filters={report.filters}
+        programs={report.dimensions.programs}
+        state={yearState}
+      />
       <ReportFilters
+        key={buildReportSearchParams(report.filters).toString()}
         years={years.map(({ startYear, label }) => ({ startYear, label }))}
         filters={report.filters}
         dimensions={report.dimensions}
       />
-      {hasRecords && report.items.length > 0 ? (
-        <ReportRecordsTable items={report.items} />
-      ) : (
+      {report.total === 0 ? (
         <Card>
           <p className="py-6 text-center text-sm text-muted">No historical compliance records match the selected filters.</p>
         </Card>
+      ) : (
+        <ReportRecordsTable items={report.items} />
       )}
       <ReportPagination filters={report.filters} total={report.total} />
     </>

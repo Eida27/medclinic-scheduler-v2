@@ -1,4 +1,7 @@
+"use client";
+
 import Link from "next/link";
+import { useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
@@ -69,8 +72,10 @@ export function ReportFilters({
   filters: HistoricalReportFilters;
   dimensions: ReportDimensions;
 }) {
-  const programs = filters.collegeId
-    ? dimensions.programs.filter((program) => program.collegeId === filters.collegeId)
+  const [collegeId, setCollegeId] = useState(filters.collegeId ?? "");
+  const [programId, setProgramId] = useState(filters.programId ?? "");
+  const programs = collegeId
+    ? dimensions.programs.filter((program) => program.collegeId === collegeId)
     : dimensions.programs;
   const resetHref = filters.academicYearStart === null
     ? "/reports"
@@ -118,7 +123,23 @@ export function ReportFilters({
           </Select>
         </Field>
         <Field label="College">
-          <Select name="collegeId" defaultValue={filters.collegeId ?? ""}>
+          <Select
+            name="collegeId"
+            value={collegeId}
+            onChange={(event) => {
+              const nextCollegeId = event.target.value;
+              setCollegeId(nextCollegeId);
+              if (
+                nextCollegeId
+                && programId
+                && !dimensions.programs.some((program) => (
+                  program.id === programId && program.collegeId === nextCollegeId
+                ))
+              ) {
+                setProgramId("");
+              }
+            }}
+          >
             <option value="">Any college</option>
             {dimensions.colleges.map((college) => (
               <option key={college.id} value={college.id}>{college.name}</option>
@@ -126,7 +147,7 @@ export function ReportFilters({
           </Select>
         </Field>
         <Field label="Program">
-          <Select name="programId" defaultValue={filters.programId ?? ""}>
+          <Select name="programId" value={programId} onChange={(event) => setProgramId(event.target.value)}>
             <option value="">Any program</option>
             {programs.map((program) => (
               <option key={program.id} value={program.id}>{program.code} — {program.name}</option>

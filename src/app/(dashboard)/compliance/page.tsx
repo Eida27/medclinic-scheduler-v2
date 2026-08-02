@@ -1,7 +1,10 @@
 import { redirect } from "next/navigation";
-import { historicalReportRedirectTarget } from "@/lib/historical-report-redirect";
+import {
+  historicalReportRedirectTarget,
+  type LegacyReportParams,
+} from "@/lib/historical-report-redirect";
 
-type ComplianceSearchParams = Record<string, string | undefined>;
+type ComplianceSearchParams = LegacyReportParams;
 
 export default async function CompliancePage({
   searchParams,

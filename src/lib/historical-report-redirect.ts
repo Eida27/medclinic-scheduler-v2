@@ -6,7 +6,8 @@ import {
   type HistoricalRequirementStatus,
 } from "./historical-compliance-report";
 
-type LegacyReportParams = Record<string, string | undefined>;
+type LegacyQueryValue = string | string[] | undefined;
+export type LegacyReportParams = Record<string, LegacyQueryValue>;
 
 const requirementStatuses = new Set<HistoricalRequirementStatus>([
   "UNSCHEDULED",
@@ -30,6 +31,10 @@ const dataQualities = new Set<HistoricalDataQuality>([
 const sorts = new Set<HistoricalReportSort>(historicalReportSorts);
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+function first(value: LegacyQueryValue) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
 function positiveInteger(value: string | undefined, minimum: number, maximum: number) {
   if (!value || !/^\d+$/.test(value)) return undefined;
   const parsed = Number(value);
@@ -47,36 +52,39 @@ export function historicalReportRedirectTarget(
   source: "appointments" | "compliance",
 ) {
   const query = new URLSearchParams();
-  const academicYearStart = positiveInteger(params.academicYearStart, 2020, 2100);
+  const academicYearStart = positiveInteger(first(params.academicYearStart), 2020, 2100);
   if (academicYearStart) query.set("academicYearStart", academicYearStart);
 
-  const search = (params.studentNumber ?? params.search)?.trim();
+  const search = (first(params.studentNumber) ?? first(params.search))?.trim();
   if (search) query.set("search", search);
 
-  const mappedOverallStatus = source === "appointments" && params.overallStatus === "COMPLETE"
+  const overallStatus = first(params.overallStatus);
+  const mappedOverallStatus = source === "appointments" && overallStatus === "COMPLETE"
     ? "COMPLIED"
-    : member(params.overallStatus, overallStatuses);
+    : member(overallStatus, overallStatuses);
   if (mappedOverallStatus) query.set("overallStatus", mappedOverallStatus);
 
-  const laboratoryStatus = member(params.laboratoryStatus, requirementStatuses);
+  const laboratoryStatus = member(first(params.laboratoryStatus), requirementStatuses);
   if (laboratoryStatus) query.set("laboratoryStatus", laboratoryStatus);
-  const physicalExamStatus = member(params.physicalExamStatus, requirementStatuses);
+  const physicalExamStatus = member(first(params.physicalExamStatus), requirementStatuses);
   if (physicalExamStatus) query.set("physicalExamStatus", physicalExamStatus);
 
-  if (params.collegeId && uuidPattern.test(params.collegeId)) {
-    query.set("collegeId", params.collegeId);
+  const collegeId = first(params.collegeId);
+  if (collegeId && uuidPattern.test(collegeId)) {
+    query.set("collegeId", collegeId);
   }
-  if (params.programId && uuidPattern.test(params.programId)) {
-    query.set("programId", params.programId);
+  const programId = first(params.programId);
+  if (programId && uuidPattern.test(programId)) {
+    query.set("programId", programId);
   }
 
-  const yearLevel = positiveInteger(params.yearLevel, 1, 6);
+  const yearLevel = positiveInteger(first(params.yearLevel), 1, 6);
   if (yearLevel) query.set("yearLevel", yearLevel);
-  const dataQuality = member(params.dataQuality, dataQualities);
+  const dataQuality = member(first(params.dataQuality), dataQualities);
   if (dataQuality) query.set("dataQuality", dataQuality);
-  const sort = member(params.sort, sorts);
+  const sort = member(first(params.sort), sorts);
   if (sort) query.set("sort", sort);
-  const page = positiveInteger(params.page, 1, Number.MAX_SAFE_INTEGER);
+  const page = positiveInteger(first(params.page), 1, Number.MAX_SAFE_INTEGER);
   if (page) query.set("page", page);
 
   return `/reports${query.size ? `?${query.toString()}` : ""}`;

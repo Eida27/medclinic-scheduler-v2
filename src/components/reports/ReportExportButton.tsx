@@ -22,8 +22,15 @@ export function ReportExportButton({
         { method: "GET" },
       );
       if (!response.ok) {
-        const payload = await response.json().catch(() => undefined) as { message?: string } | undefined;
-        throw new Error(payload?.message ?? "Unable to export the report. Try again.");
+        const payload = await response.json().catch(() => undefined) as {
+          message?: string;
+          error?: { message?: string };
+        } | undefined;
+        throw new Error(
+          payload?.error?.message
+          ?? payload?.message
+          ?? "Unable to export the report. Try again.",
+        );
       }
       const blob = await response.blob();
       const objectUrl = URL.createObjectURL(blob);

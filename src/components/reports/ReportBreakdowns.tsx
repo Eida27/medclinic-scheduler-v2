@@ -57,12 +57,15 @@ function BreakdownTable({
 export function ReportBreakdowns({
   breakdowns,
   filters,
+  programs,
   state,
 }: {
   breakdowns: HistoricalComplianceBreakdowns;
   filters: HistoricalReportFilters;
+  programs: Array<{ id: string; collegeId: string }>;
   state: AcademicYearState;
 }) {
+  const selectedProgram = programs.find((program) => program.id === filters.programId);
   return (
     <section aria-label="Academic breakdowns" className="grid gap-5 xl:grid-cols-3">
       <BreakdownTable
@@ -76,7 +79,9 @@ export function ReportBreakdowns({
             <Link
               href={reportHref(filters, {
                 collegeId: row.collegeId,
-                programId: filters.collegeId === row.collegeId ? filters.programId : undefined,
+                programId: selectedProgram?.collegeId === row.collegeId
+                  ? filters.programId
+                  : undefined,
                 page: 1,
               })}
               aria-label={`Filter by ${row.collegeName}`}

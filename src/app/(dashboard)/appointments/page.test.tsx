@@ -47,4 +47,20 @@ describe("AppointmentsPage legacy redirect", () => {
 
     expect(redirect).toHaveBeenCalledWith("/reports");
   });
+
+  it("uses the first value when legacy query parameters are duplicated", async () => {
+    await AppointmentsPage({
+      searchParams: Promise.resolve({
+        academicYearStart: ["2025", "2024"],
+        studentNumber: ["First Student", "Second Student"],
+        overallStatus: ["COMPLETE", "INCOMPLETE"],
+        sort: ["name_asc", "upcoming_asc"],
+        page: ["2", "999"],
+      }),
+    });
+
+    expect(redirect).toHaveBeenCalledWith(
+      "/reports?academicYearStart=2025&search=First+Student&overallStatus=COMPLIED&sort=name_asc&page=2",
+    );
+  });
 });
