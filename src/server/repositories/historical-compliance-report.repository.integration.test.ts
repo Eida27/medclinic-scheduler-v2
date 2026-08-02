@@ -131,6 +131,10 @@ beforeAll(async () => {
     ["RPT-SORT-B", "Sort", "B", true],
     ["RPT-SORT-C", "Sort", "C", true],
     ["RPT-SORT-D", "Sort", "D", true],
+    ["RPT-STATE-LAB", "State", "Laboratory", true],
+    ["RPT-STATE-PHYS", "State", "Physical", true],
+    ["RPT-STATE-BOTH", "State", "Both", true],
+    ["RPT-STATE-COMPLIED", "State", "Complied", true],
   ];
   await client.query(
     `INSERT INTO students (
@@ -186,6 +190,25 @@ beforeAll(async () => {
     });
   }
 
+  const stateSnapshots = [
+    ["RPT-STATE-LAB", "State, Laboratory"],
+    ["RPT-STATE-PHYS", "State, Physical"],
+    ["RPT-STATE-BOTH", "State, Both"],
+    ["RPT-STATE-COMPLIED", "State, Complied"],
+  ] as const;
+  for (const [studentNumber, name] of stateSnapshots) {
+    await insertSnapshot({
+      studentNumber,
+      name,
+      collegeId: colleges.alpha,
+      collegeName: "Historic Alpha College",
+      programId: programs.alpha,
+      programCode: "ALPHA",
+      programName: "Alpha Program",
+      yearLevel: 2,
+    });
+  }
+
   const replaced = await insertAppointment({
     studentNumber: "RPT-CORE-0001", type: "LABORATORY", date: "2088-09-01", status: "NO_SHOW",
   });
@@ -218,6 +241,15 @@ beforeAll(async () => {
   await insertAppointment({ studentNumber: "RPT-SORT-C", type: "LABORATORY", date: "2088-09-01", status: "COMPLETED" });
   await insertAppointment({ studentNumber: "RPT-SORT-C", type: "PHYSICAL_EXAM", date: "2088-09-02", status: "NO_SHOW" });
 
+  await insertAppointment({ studentNumber: "RPT-STATE-LAB", type: "LABORATORY", date: "2088-09-01", status: "PENDING" });
+  await insertAppointment({ studentNumber: "RPT-STATE-LAB", type: "PHYSICAL_EXAM", date: "2088-09-02", status: "COMPLETED" });
+  await insertAppointment({ studentNumber: "RPT-STATE-PHYS", type: "LABORATORY", date: "2088-09-01", status: "COMPLETED" });
+  await insertAppointment({ studentNumber: "RPT-STATE-PHYS", type: "PHYSICAL_EXAM", date: "2088-09-02", status: "NO_SHOW" });
+  await insertAppointment({ studentNumber: "RPT-STATE-BOTH", type: "LABORATORY", date: "2088-09-01", status: "PENDING" });
+  await insertAppointment({ studentNumber: "RPT-STATE-BOTH", type: "PHYSICAL_EXAM", date: "2088-09-02", status: "CANCELLED" });
+  await insertAppointment({ studentNumber: "RPT-STATE-COMPLIED", type: "LABORATORY", date: "2088-09-01", status: "COMPLETED" });
+  await insertAppointment({ studentNumber: "RPT-STATE-COMPLIED", type: "PHYSICAL_EXAM", date: "2088-09-02", status: "COMPLETED" });
+
   await client.query(
     `INSERT INTO students (
        student_number,first_name,last_name,college_id,program_id,year_level
@@ -229,7 +261,7 @@ beforeAll(async () => {
     `INSERT INTO student_academic_snapshots (
        student_number,academic_year_start,student_name,college_id,college_name,
        program_id,program_code,program_name,year_level,source_type
-     ) SELECT student_number,$1,'Page, ' || RIGHT(student_number,4),$2,'Historic Alpha College',
+     ) SELECT student_number,$1,'Tied Page, Student',$2,'Historic Alpha College',
               $3,'ALPHA','Alpha Program',4,'VERIFIED_HISTORICAL'
          FROM students WHERE student_number LIKE 'RPT-PAGE-%'`,
     [YEAR, colleges.alpha, programs.alpha],
@@ -254,6 +286,130 @@ afterAll(async () => {
 });
 
 const closedNow = new Date("2091-08-01T00:00:00.000Z");
+
+describe("historical academic-year report states", () => {
+  it.each([
+    ["OPEN", new Date("2089-07-01T00:00:00.000Z")],
+    ["CLOSING_SOON", new Date("2089-07-20T00:00:00.000Z")],
+  ] as const)("classifies every incomplete row as pending while the year is %s", async (_state, now) => {
+    const report = await getHistoricalComplianceReport({
+      academicYearStart: String(YEAR), search: "RPT-STATE-", sort: "name_asc",
+    }, now, client);
+    expect(Object.fromEntries(report.items.map((row) => [row.studentNumber, row.overallStatus])))
+      .toEqual({
+        "RPT-STATE-BOTH": "PENDING_COMPLIANCE",
+        "RPT-STATE-COMPLIED": "COMPLIED",
+        "RPT-STATE-LAB": "PENDING_COMPLIANCE",
+        "RPT-STATE-PHYS": "PENDING_COMPLIANCE",
+      });
+  });
+
+  it("classifies each missing-requirement shape separately after the year closes", async () => {
+    const report = await getHistoricalComplianceReport({
+      academicYearStart: String(YEAR), search: "RPT-STATE-", sort: "name_asc",
+    }, closedNow, client);
+    expect(Object.fromEntries(report.items.map((row) => [row.studentNumber, row.overallStatus])))
+      .toEqual({
+        "RPT-STATE-BOTH": "DID_NOT_COMPLY_BOTH",
+        "RPT-STATE-COMPLIED": "COMPLIED",
+        "RPT-STATE-LAB": "DID_NOT_COMPLY_LABORATORY",
+        "RPT-STATE-PHYS": "DID_NOT_COMPLY_PHYSICAL_EXAM",
+      });
+  });
+});
+
+describe("historical report attendance and overall filters", () => {
+  it("filters laboratory status independently of physical-exam status", async () => {
+    const report = await getHistoricalComplianceReport({
+      academicYearStart: String(YEAR),
+      search: "RPT-STATE-",
+      laboratoryStatus: "PENDING",
+      sort: "name_asc",
+    }, closedNow, client);
+    expect(report.items.map((row) => [row.studentNumber, row.physicalExamStatus])).toEqual([
+      ["RPT-STATE-BOTH", "CANCELLED"],
+      ["RPT-STATE-LAB", "COMPLETED"],
+    ]);
+  });
+
+  it("filters physical-exam status independently of laboratory status", async () => {
+    const report = await getHistoricalComplianceReport({
+      academicYearStart: String(YEAR),
+      search: "RPT-STATE-",
+      physicalExamStatus: "NO_SHOW",
+    }, closedNow, client);
+    expect(report.items.map((row) => [row.studentNumber, row.laboratoryStatus])).toEqual([
+      ["RPT-STATE-PHYS", "COMPLETED"],
+    ]);
+  });
+
+  it("filters fully completed rows with the complied overall status", async () => {
+    const report = await getHistoricalComplianceReport({
+      academicYearStart: String(YEAR),
+      search: "RPT-STATE-",
+      overallStatus: "COMPLIED",
+    }, closedNow, client);
+    expect(report.items.map((row) => row.studentNumber)).toEqual(["RPT-STATE-COMPLIED"]);
+  });
+
+  it("filters incomplete open-year rows with the pending overall status", async () => {
+    const report = await getHistoricalComplianceReport({
+      academicYearStart: String(YEAR),
+      search: "RPT-STATE-",
+      overallStatus: "PENDING_COMPLIANCE",
+      sort: "name_asc",
+    }, new Date("2089-07-01T00:00:00.000Z"), client);
+    expect(report.items.map((row) => row.studentNumber)).toEqual([
+      "RPT-STATE-BOTH",
+      "RPT-STATE-LAB",
+      "RPT-STATE-PHYS",
+    ]);
+  });
+
+  it("includes every closed subtype in the did-not-comply umbrella", async () => {
+    const report = await getHistoricalComplianceReport({
+      academicYearStart: String(YEAR),
+      search: "RPT-STATE-",
+      overallStatus: "DID_NOT_COMPLY",
+      sort: "name_asc",
+    }, closedNow, client);
+    expect(report.items.map((row) => [row.studentNumber, row.overallStatus])).toEqual([
+      ["RPT-STATE-BOTH", "DID_NOT_COMPLY_BOTH"],
+      ["RPT-STATE-LAB", "DID_NOT_COMPLY_LABORATORY"],
+      ["RPT-STATE-PHYS", "DID_NOT_COMPLY_PHYSICAL_EXAM"],
+    ]);
+  });
+});
+
+describe("historical report stable final tie-breakers", () => {
+  it.each([
+    ["college_asc", "RPT-PAGE-0001", "RPT-PAGE-0150", "RPT-PAGE-0151"],
+    ["college_desc", "RPT-PAGE-0151", "RPT-PAGE-0002", "RPT-PAGE-0001"],
+    ["program_asc", "RPT-PAGE-0001", "RPT-PAGE-0150", "RPT-PAGE-0151"],
+    ["program_desc", "RPT-PAGE-0151", "RPT-PAGE-0002", "RPT-PAGE-0001"],
+    ["year_asc", "RPT-PAGE-0001", "RPT-PAGE-0150", "RPT-PAGE-0151"],
+    ["year_desc", "RPT-PAGE-0151", "RPT-PAGE-0002", "RPT-PAGE-0001"],
+    ["name_asc", "RPT-PAGE-0001", "RPT-PAGE-0150", "RPT-PAGE-0151"],
+    ["name_desc", "RPT-PAGE-0151", "RPT-PAGE-0002", "RPT-PAGE-0001"],
+    ["attention_first", "RPT-PAGE-0001", "RPT-PAGE-0150", "RPT-PAGE-0151"],
+    ["completed_first", "RPT-PAGE-0001", "RPT-PAGE-0150", "RPT-PAGE-0151"],
+  ] as const)(
+    "uses the student-number tie-breaker for %s across the page boundary",
+    async (sort, firstStudent, lastOnFirstPage, onlyOnSecondPage) => {
+      const first = await getHistoricalComplianceReport({
+        academicYearStart: String(YEAR), search: "RPT-PAGE-", page: "1", sort,
+      }, closedNow, client);
+      const second = await getHistoricalComplianceReport({
+        academicYearStart: String(YEAR), search: "RPT-PAGE-", page: "2", sort,
+      }, closedNow, client);
+      expect(first.total).toBe(151);
+      expect(first.items).toHaveLength(150);
+      expect(first.items.at(0)?.studentNumber).toBe(firstStudent);
+      expect(first.items.at(-1)?.studentNumber).toBe(lastOnFirstPage);
+      expect(second.items.map((row) => row.studentNumber)).toEqual([onlyOnSecondPage]);
+    },
+  );
+});
 
 describe("historical compliance report service", () => {
   it("requires a valid configured academic year before executing", async () => {
