@@ -52,4 +52,16 @@ describe("AcademicYearsPage", () => {
       expect(listAcademicYears).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    ["an unauthenticated error", new AppError("UNAUTHENTICATED", "Sign in required", 401)],
+    ["an unexpected error", new Error("Session store unavailable")],
+  ])("propagates %s before reading academic years", async (_label, error) => {
+    requireUser.mockRejectedValue(error);
+
+    await expect(AcademicYearsPage()).rejects.toBe(error);
+
+    expect(notFound).not.toHaveBeenCalled();
+    expect(listAcademicYears).not.toHaveBeenCalled();
+  });
 });

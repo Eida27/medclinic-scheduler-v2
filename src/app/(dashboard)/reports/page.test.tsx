@@ -153,6 +153,19 @@ describe("ReportsPage", () => {
     },
   );
 
+  it.each([
+    ["an unauthenticated error", new AppError("UNAUTHENTICATED", "Sign in required", 401)],
+    ["an unexpected error", new Error("Session store unavailable")],
+  ])("propagates %s before reading report data", async (_label, error) => {
+    requireUser.mockRejectedValue(error);
+
+    await expect(ReportsPage({ searchParams: Promise.resolve({}) })).rejects.toBe(error);
+
+    expect(notFound).not.toHaveBeenCalled();
+    expect(listAcademicYears).not.toHaveBeenCalled();
+    expect(getHistoricalComplianceReport).not.toHaveBeenCalled();
+  });
+
   it("requires a configured academic year before loading report data", async () => {
     render(await ReportsPage({ searchParams: Promise.resolve({}) }));
 
