@@ -41,6 +41,22 @@ export async function listAcademicYearRecords(
   return result.rows;
 }
 
+export async function getAcademicYearRecord(
+  startYear: number,
+  client?: PoolClient,
+): Promise<AcademicYearRecord | undefined> {
+  const result = await run<AcademicYearRecord>(
+    client,
+    `SELECT ${projection},
+            (SELECT COUNT(*)::integer FROM student_academic_snapshots snapshot
+              WHERE snapshot.academic_year_start=year.start_year) AS "linkedSnapshotCount"
+       FROM academic_years year
+      WHERE year.start_year=$1`,
+    [startYear],
+  );
+  return result.rows[0];
+}
+
 export async function createAcademicYearWithClient(
   client: PoolClient,
   input: { startYear: number; closingDate: string; actorUserId: string },
