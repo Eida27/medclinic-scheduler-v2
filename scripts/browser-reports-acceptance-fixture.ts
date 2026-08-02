@@ -1,10 +1,12 @@
-import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool, type PoolClient } from "pg";
 
 const FIXTURE_DIRECTORY = resolve(".data/browser-reports-acceptance");
 const STATE_FILE = resolve(FIXTURE_DIRECTORY, "state.json");
+const STATE_TEMP_FILE = resolve(FIXTURE_DIRECTORY, "state.json.tmp");
+const FIXTURE_VERSION = 1;
 const LOOPBACK_DATABASE_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 const ADMIN_USER_ID = "00000000-0000-4000-8000-000000000001";
 const LABORATORY_CLINIC_ID = "60000000-0000-4000-8000-000000000001";
@@ -91,9 +93,36 @@ export type ReportsAcceptanceResidue = {
 };
 
 type FixtureState = {
+  version: typeof FIXTURE_VERSION;
   marker: typeof REPORTS_ACCEPTANCE_FIXTURE.marker;
   databaseIdentity: ReportsAcceptanceDatabaseIdentity;
+  setupAuditId: string;
   preparedAt: string;
+};
+
+type StateReadResult =
+  | { kind: "absent" }
+  | { kind: "valid"; value: FixtureState }
+  | { kind: "invalid"; reason: string };
+
+type SetupMarker = {
+  id: string;
+  createdAt: Date;
+};
+
+type SetupMarkerResult =
+  | { kind: "absent" }
+  | { kind: "exact"; value: SetupMarker }
+  | { kind: "invalid"; reason: string };
+
+type AuditCandidate = {
+  id: string;
+  actorUserId: string | null;
+  action: string;
+  entityType: string;
+  entityId: string | null;
+  metadata: unknown;
+  createdAt: Date;
 };
 
 type StudentSeed = {
@@ -189,13 +218,6 @@ export function assertZeroReportsAcceptanceResidue<T extends ReportsAcceptanceRe
   return residue;
 }
 
-export function isReportsAcceptanceFixtureOwned(statePresent: boolean, markerAuditCount: number) {
-  if (!Number.isInteger(markerAuditCount) || markerAuditCount < 0 || markerAuditCount > 1) {
-    throw new Error("Reports fixture setup marker count is invalid; refusing destructive ownership.");
-  }
-  return statePresent || markerAuditCount === 1;
-}
-
 async function fileExists(path: string) {
   try {
     await access(path);
@@ -206,18 +228,76 @@ async function fileExists(path: string) {
   }
 }
 
-async function readState(): Promise<FixtureState | null> {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: string[]) {
+  return Object.keys(value).sort().join("|") === [...keys].sort().join("|");
+}
+
+function isUuid(value: unknown): value is string {
+  return typeof value === "string"
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function isIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T/.test(value)) return false;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (isRecord(value)) {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+export function parseReportsAcceptanceState(value: unknown): FixtureState {
+  if (!isRecord(value) || !hasExactKeys(value, [
+    "version", "marker", "databaseIdentity", "setupAuditId", "preparedAt",
+  ])) {
+    throw new Error("Reports fixture state has an invalid schema.");
+  }
+  if (value.version !== FIXTURE_VERSION || value.marker !== REPORTS_ACCEPTANCE_FIXTURE.marker
+    || !isUuid(value.setupAuditId) || !isIsoTimestamp(value.preparedAt)
+    || !isRecord(value.databaseIdentity)
+    || !hasExactKeys(value.databaseIdentity, ["scheme", "host", "port", "database"])) {
+    throw new Error("Reports fixture state has an invalid marker, version, or identity schema.");
+  }
+  const identity = value.databaseIdentity;
+  if (identity.scheme !== "postgresql"
+    || typeof identity.host !== "string" || !LOOPBACK_DATABASE_HOSTS.has(identity.host)
+    || typeof identity.port !== "string" || !/^\d{1,5}$/.test(identity.port)
+    || typeof identity.database !== "string" || identity.database.length === 0) {
+    throw new Error("Reports fixture state has an invalid database identity.");
+  }
+  return value as FixtureState;
+}
+
+async function readState(): Promise<StateReadResult> {
   try {
-    return JSON.parse(await readFile(STATE_FILE, "utf8")) as FixtureState;
+    const parsed: unknown = JSON.parse(await readFile(STATE_FILE, "utf8"));
+    try {
+      return { kind: "valid", value: parseReportsAcceptanceState(parsed) };
+    } catch {
+      return { kind: "invalid", reason: "Reports fixture state is malformed or has the wrong marker." };
+    }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "absent" };
+    if (error instanceof SyntaxError) {
+      return { kind: "invalid", reason: "Reports fixture state is malformed or truncated." };
+    }
     throw error;
   }
 }
 
 async function writeState(state: FixtureState) {
   await mkdir(dirname(STATE_FILE), { recursive: true });
-  await writeFile(STATE_FILE, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  await writeFile(STATE_TEMP_FILE, `${JSON.stringify(state, null, 2)}\n`, { encoding: "utf8", flag: "w" });
+  await rename(STATE_TEMP_FILE, STATE_FILE);
 }
 
 function sourceType(index: number): SnapshotSeed["source_type"] {
@@ -393,6 +473,130 @@ function appointments(): AppointmentSeed[] {
   return rows;
 }
 
+function setupMarkerMetadata() {
+  return {
+    fixtureMarker: REPORTS_ACCEPTANCE_FIXTURE.marker,
+    fixtureVersion: FIXTURE_VERSION,
+    academicYearStarts: [
+      REPORTS_ACCEPTANCE_FIXTURE.years.closed.startYear,
+      REPORTS_ACCEPTANCE_FIXTURE.years.open.startYear,
+    ],
+    crudScratchYearStart: REPORTS_ACCEPTANCE_FIXTURE.crudScratch.startYear,
+    studentCount: REPORTS_ACCEPTANCE_FIXTURE.studentNumbers.length,
+    snapshotCount: REPORTS_ACCEPTANCE_FIXTURE.snapshotIds.length,
+    appointmentCount: REPORTS_ACCEPTANCE_FIXTURE.appointmentIds.length,
+    paginationCount: REPORTS_ACCEPTANCE_FIXTURE.paginationCount,
+  };
+}
+
+function isExactSetupMarkerMetadata(value: unknown) {
+  return canonicalJson(value) === canonicalJson(setupMarkerMetadata());
+}
+
+async function getSetupMarker(client: PoolClient): Promise<SetupMarkerResult> {
+  const result = await client.query<{
+    id: string; actorUserId: string | null; metadata: unknown; createdAt: Date;
+  }>(
+    `SELECT id::text AS id,actor_user_id::text AS "actorUserId",metadata,created_at AS "createdAt"
+       FROM audit_logs
+      WHERE action='BROWSER_REPORTS_FIXTURE_SETUP'
+        AND entity_type='acceptance_fixture' AND entity_id=$1
+      ORDER BY created_at,id`,
+    [REPORTS_ACCEPTANCE_FIXTURE.marker],
+  );
+  if (result.rows.length === 0) return { kind: "absent" };
+  if (result.rows.length !== 1) {
+    return { kind: "invalid", reason: "Reports fixture setup marker count is invalid." };
+  }
+  const row = result.rows[0];
+  if (!isUuid(row.id) || row.actorUserId !== ADMIN_USER_ID
+    || !(row.createdAt instanceof Date) || !Number.isFinite(row.createdAt.getTime())
+    || !isExactSetupMarkerMetadata(row.metadata)) {
+    return { kind: "invalid", reason: "Reports fixture setup marker ownership is malformed or partial." };
+  }
+  return { kind: "exact", value: { id: row.id, createdAt: row.createdAt } };
+}
+
+function validAcademicClosingDate(value: unknown, startYear: number) {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)
+    && value >= `${startYear}-08-01` && value <= `${startYear + 1}-07-31`;
+}
+
+function isExactScratchAudit(candidate: AuditCandidate) {
+  if (candidate.actorUserId !== ADMIN_USER_ID || candidate.entityType !== "academic_year"
+    || candidate.entityId !== String(REPORTS_ACCEPTANCE_FIXTURE.crudScratch.startYear)
+    || !isRecord(candidate.metadata)) return false;
+  const metadata = candidate.metadata;
+  if (candidate.action === "ACADEMIC_YEAR_CLOSING_DATE_UPDATED") {
+    return hasExactKeys(metadata, ["oldClosingDate", "newClosingDate"])
+      && validAcademicClosingDate(metadata.oldClosingDate, REPORTS_ACCEPTANCE_FIXTURE.crudScratch.startYear)
+      && validAcademicClosingDate(metadata.newClosingDate, REPORTS_ACCEPTANCE_FIXTURE.crudScratch.startYear);
+  }
+  if (candidate.action !== "ACADEMIC_YEAR_CREATED" && candidate.action !== "ACADEMIC_YEAR_DELETED") {
+    return false;
+  }
+  return hasExactKeys(metadata, ["startYear", "label", "closingDate"])
+    && metadata.startYear === REPORTS_ACCEPTANCE_FIXTURE.crudScratch.startYear
+    && metadata.label === "2097–2098"
+    && validAcademicClosingDate(metadata.closingDate, REPORTS_ACCEPTANCE_FIXTURE.crudScratch.startYear);
+}
+
+const REPORT_SORTS = new Set([
+  "college_asc", "college_desc", "program_asc", "program_desc", "year_asc", "year_desc",
+  "name_asc", "name_desc", "attention_first", "completed_first",
+]);
+
+function isExactPdfAudit(candidate: AuditCandidate) {
+  if (candidate.actorUserId !== ADMIN_USER_ID || candidate.action !== "HISTORICAL_COMPLIANCE_PDF_EXPORTED"
+    || candidate.entityType !== "academic_year" || !isRecord(candidate.metadata)) return false;
+  const year = candidate.entityId === String(REPORTS_ACCEPTANCE_FIXTURE.years.closed.startYear)
+    ? REPORTS_ACCEPTANCE_FIXTURE.years.closed
+    : candidate.entityId === String(REPORTS_ACCEPTANCE_FIXTURE.years.open.startYear)
+      ? REPORTS_ACCEPTANCE_FIXTURE.years.open : null;
+  if (!year || !hasExactKeys(candidate.metadata, [
+    "academicYearStart", "academicYearLabel", "filters", "sort", "rowCount",
+    "generatedAt", "generationDurationMs",
+  ])) return false;
+  const metadata = candidate.metadata;
+  return metadata.academicYearStart === year.startYear && metadata.academicYearLabel === year.label
+    && isRecord(metadata.filters) && typeof metadata.sort === "string" && REPORT_SORTS.has(metadata.sort)
+    && Number.isInteger(metadata.rowCount) && (metadata.rowCount as number) > 0
+    && (metadata.rowCount as number) <= 10_000 && isIsoTimestamp(metadata.generatedAt)
+    && Number.isInteger(metadata.generationDurationMs) && (metadata.generationDurationMs as number) >= 0;
+}
+
+async function auditCandidates(client: PoolClient): Promise<AuditCandidate[]> {
+  const result = await client.query<AuditCandidate>(
+    `SELECT id::text AS id,actor_user_id::text AS "actorUserId",action,
+            entity_type AS "entityType",entity_id AS "entityId",metadata,created_at AS "createdAt"
+       FROM audit_logs
+      WHERE actor_user_id=$1
+        AND (
+          (entity_type='academic_year' AND entity_id=$2
+           AND action=ANY($3::text[]))
+          OR
+          (entity_type='academic_year' AND entity_id=ANY($4::text[])
+           AND action='HISTORICAL_COMPLIANCE_PDF_EXPORTED')
+        )
+      ORDER BY created_at,id`,
+    [ADMIN_USER_ID, String(REPORTS_ACCEPTANCE_FIXTURE.crudScratch.startYear), [
+      "ACADEMIC_YEAR_CREATED", "ACADEMIC_YEAR_CLOSING_DATE_UPDATED", "ACADEMIC_YEAR_DELETED",
+    ], [
+      String(REPORTS_ACCEPTANCE_FIXTURE.years.closed.startYear),
+      String(REPORTS_ACCEPTANCE_FIXTURE.years.open.startYear),
+    ]],
+  );
+  return result.rows;
+}
+
+function exactOwnedAuditCandidates(candidates: AuditCandidate[], notBefore?: Date) {
+  return candidates.filter((candidate) => {
+    if (!(candidate.createdAt instanceof Date) || !isUuid(candidate.id)) return false;
+    if (notBefore && candidate.createdAt.getTime() < notBefore.getTime()) return false;
+    return isExactScratchAudit(candidate) || isExactPdfAudit(candidate);
+  });
+}
+
 async function assertRequiredSchemaAndReferences(client: PoolClient) {
   const schema = await client.query<{ academicYears: string | null; snapshots: string | null }>(
     `SELECT to_regclass('academic_years')::text AS "academicYears",
@@ -401,51 +605,70 @@ async function assertRequiredSchemaAndReferences(client: PoolClient) {
   if (!schema.rows[0]?.academicYears || !schema.rows[0]?.snapshots) {
     throw new Error("Migration 016 must be applied to the local acceptance database before setup.");
   }
-  const references = await client.query<{ users: number; clinics: number; colleges: number; programs: number }>(
-    `SELECT
-       (SELECT COUNT(*)::int FROM users WHERE id=$1 AND role='ADMIN') AS users,
-       (SELECT COUNT(*)::int FROM clinics WHERE id=ANY($2::uuid[])) AS clinics,
-       (SELECT COUNT(*)::int FROM colleges WHERE id=$3) AS colleges,
-       (SELECT COUNT(*)::int FROM programs WHERE id=$4 AND college_id=$3) AS programs`,
-    [ADMIN_USER_ID, [LABORATORY_CLINIC_ID, PHYSICAL_EXAM_CLINIC_ID], CURRENT_COLLEGE_ID, CURRENT_PROGRAM_ID],
+  const admin = await client.query<{ role: string; active: boolean }>(
+    `SELECT role,is_active AS active FROM users WHERE id=$1`, [ADMIN_USER_ID],
   );
-  if (Object.values(references.rows[0]).some((count, index) => count !== (index === 1 ? 2 : 1))) {
-    throw new Error("Reports fixture requires the standard local admin, clinics, CCS college, and BSIT program seeds.");
+  const clinics = await client.query<{ id: string; code: string; name: string; active: boolean }>(
+    `SELECT id::text AS id,code,name,is_active AS active FROM clinics
+      WHERE id=ANY($1::uuid[]) ORDER BY id`,
+    [[LABORATORY_CLINIC_ID, PHYSICAL_EXAM_CLINIC_ID]],
+  );
+  const college = await client.query<{ id: string; code: string; name: string; active: boolean }>(
+    `SELECT id::text AS id,code,name,is_active AS active FROM colleges WHERE id=$1`, [CURRENT_COLLEGE_ID],
+  );
+  const program = await client.query<{
+    id: string; collegeId: string; code: string; name: string; active: boolean;
+  }>(
+    `SELECT id::text AS id,college_id::text AS "collegeId",code,name,is_active AS active
+       FROM programs WHERE id=$1`, [CURRENT_PROGRAM_ID],
+  );
+  const actual = {
+    admin: admin.rows,
+    clinics: clinics.rows,
+    college: college.rows,
+    program: program.rows,
+  };
+  const expected = {
+    admin: [{ role: "ADMIN", active: true }],
+    clinics: [
+      { id: LABORATORY_CLINIC_ID, code: "KABALAKA_CLINIC", name: "KABALAKA Clinic", active: true },
+      { id: PHYSICAL_EXAM_CLINIC_ID, code: "CPU_CLINIC", name: "CPU Clinic", active: true },
+    ],
+    college: [{
+      id: CURRENT_COLLEGE_ID, code: "CCS", name: "College of Computer Studies", active: true,
+    }],
+    program: [{
+      id: CURRENT_PROGRAM_ID, collegeId: CURRENT_COLLEGE_ID, code: "BSIT",
+      name: "Bachelor of Science in Information Technology", active: true,
+    }],
+  };
+  if (canonicalJson(actual) !== canonicalJson(expected)) {
+    throw new Error("Reports fixture required reference readiness drifted from the exact local admin/clinic/CCS/BSIT contract.");
   }
 }
 
-async function fixtureOwnershipExists(client: PoolClient) {
-  const result = await client.query<{ markerCount: number }>(
-    `SELECT COUNT(*)::int AS "markerCount"
-       FROM audit_logs WHERE action='BROWSER_REPORTS_FIXTURE_SETUP'
-        AND entity_type='acceptance_fixture' AND entity_id=$1`,
-    [REPORTS_ACCEPTANCE_FIXTURE.marker],
-  );
-  return isReportsAcceptanceFixtureOwned(false, result.rows[0].markerCount);
-}
-
 async function assertReservedScopeAvailable(client: PoolClient) {
-  if (await fixtureOwnershipExists(client)) return;
+  const marker = await getSetupMarker(client);
+  if (marker.kind === "invalid") throw new Error(marker.reason);
+  if (marker.kind === "exact") return;
   const reservedYears = [
     REPORTS_ACCEPTANCE_FIXTURE.years.closed.startYear,
     REPORTS_ACCEPTANCE_FIXTURE.years.open.startYear,
     REPORTS_ACCEPTANCE_FIXTURE.crudScratch.startYear,
   ];
   const collision = await client.query<{
-    years: number; audits: number; students: number; snapshots: number; appointments: number;
+    years: number; students: number; snapshots: number; appointments: number;
   }>(
     `SELECT
        (SELECT COUNT(*)::int FROM academic_years WHERE start_year=ANY($1::int[])) AS years,
-       (SELECT COUNT(*)::int FROM audit_logs
-         WHERE (entity_type='academic_year' AND entity_id=ANY($2::text[]))
-            OR metadata::text LIKE $3) AS audits,
-       (SELECT COUNT(*)::int FROM students WHERE student_number LIKE $4) AS students,
-       (SELECT COUNT(*)::int FROM student_academic_snapshots WHERE id=ANY($5::uuid[])) AS snapshots,
-       (SELECT COUNT(*)::int FROM appointments WHERE id=ANY($6::uuid[])) AS appointments`,
-    [reservedYears, reservedYears.map(String), `%${REPORTS_ACCEPTANCE_FIXTURE.marker}%`,
-      `${REPORTS_ACCEPTANCE_FIXTURE.studentPrefix}%`, snapshotIds, appointmentIds],
+       (SELECT COUNT(*)::int FROM students WHERE student_number LIKE $2) AS students,
+       (SELECT COUNT(*)::int FROM student_academic_snapshots WHERE id=ANY($3::uuid[])) AS snapshots,
+       (SELECT COUNT(*)::int FROM appointments WHERE id=ANY($4::uuid[])) AS appointments`,
+    [reservedYears, `${REPORTS_ACCEPTANCE_FIXTURE.studentPrefix}%`, snapshotIds, appointmentIds],
   );
-  if (Object.values(collision.rows[0]).some((count) => count !== 0)) {
+  const ownedAuditCollisions = exactOwnedAuditCandidates(await auditCandidates(client));
+  if (Object.values(collision.rows[0]).some((count) => count !== 0)
+    || ownedAuditCollisions.length !== 0) {
     throw new Error("Reports fixture reserved IDs or academic years already exist without fixture ownership; refusing to overwrite them.");
   }
 }
@@ -504,84 +727,172 @@ async function insertFixtureRows(client: PoolClient) {
      ON CONFLICT (id) DO NOTHING`,
     [JSON.stringify(appointments()), ADMIN_USER_ID, REPORTS_ACCEPTANCE_FIXTURE.marker],
   );
-  await client.query(
+}
+
+async function ensureSetupMarker(client: PoolClient) {
+  const existing = await getSetupMarker(client);
+  if (existing.kind === "exact") return existing.value;
+  if (existing.kind === "invalid") throw new Error(existing.reason);
+  const inserted = await client.query<{ id: string; createdAt: Date }>(
     `INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,metadata)
-     SELECT $1,'BROWSER_REPORTS_FIXTURE_SETUP','acceptance_fixture',$2::text,
-            jsonb_build_object('fixtureMarker',$2::text,'studentCount',$3::int,'paginationCount',$3::int)
-      WHERE NOT EXISTS (
-        SELECT 1 FROM audit_logs WHERE action='BROWSER_REPORTS_FIXTURE_SETUP'
-          AND entity_type='acceptance_fixture' AND entity_id=$2::text
-      )`,
-    [ADMIN_USER_ID, REPORTS_ACCEPTANCE_FIXTURE.marker, REPORTS_ACCEPTANCE_FIXTURE.paginationCount],
+     VALUES ($1,'BROWSER_REPORTS_FIXTURE_SETUP','acceptance_fixture',$2,$3::jsonb)
+     RETURNING id::text AS id,created_at AS "createdAt"`,
+    [ADMIN_USER_ID, REPORTS_ACCEPTANCE_FIXTURE.marker, JSON.stringify(setupMarkerMetadata())],
   );
+  return inserted.rows[0];
 }
 
 async function databaseCounts(client: PoolClient) {
-  const years = [REPORTS_ACCEPTANCE_FIXTURE.years.closed.startYear, REPORTS_ACCEPTANCE_FIXTURE.years.open.startYear];
-  const result = await client.query<{
-    students: number; snapshots: number; appointments: number; academicYears: number; auditLogs: number;
-  }>(
-    `SELECT
-       (SELECT COUNT(*)::int FROM students WHERE student_number=ANY($1::varchar[])) AS students,
-       (SELECT COUNT(*)::int FROM student_academic_snapshots WHERE id=ANY($2::uuid[])) AS snapshots,
-       (SELECT COUNT(*)::int FROM appointments WHERE id=ANY($3::uuid[])) AS appointments,
-       (SELECT COUNT(*)::int FROM academic_years WHERE start_year=ANY($4::int[])) AS "academicYears",
-       (SELECT COUNT(*)::int FROM audit_logs WHERE action='BROWSER_REPORTS_FIXTURE_SETUP'
-          AND entity_type='acceptance_fixture' AND entity_id=$5) AS "auditLogs"`,
-    [studentNumbers, snapshotIds, appointmentIds, years, REPORTS_ACCEPTANCE_FIXTURE.marker],
-  );
-  return result.rows[0];
+  const marker = await getSetupMarker(client);
+  return {
+    students: studentNumbers.length,
+    snapshots: snapshotIds.length,
+    appointments: appointmentIds.length,
+    academicYears: 2,
+    auditLogs: marker.kind === "exact" ? 1 : 0,
+  };
 }
 
 async function assertFixtureReady(client: PoolClient) {
-  const counts = await databaseCounts(client);
-  const expected = { students: 153, snapshots: 157, appointments: 165, academicYears: 2, auditLogs: 1 };
-  if (JSON.stringify(counts) !== JSON.stringify(expected)) {
-    throw new Error(`Reports fixture setup is incomplete: ${JSON.stringify(counts)}.`);
+  await assertRequiredSchemaAndReferences(client);
+  const marker = await getSetupMarker(client);
+  if (marker.kind !== "exact") {
+    throw new Error(marker.kind === "invalid" ? marker.reason : "Reports fixture readiness is missing its exact setup marker.");
   }
-  const special = await client.query<{
-    historicalCollege: string; historicalProgram: string; currentCollege: string;
-    currentProgram: string; active: boolean;
+
+  const yearRows = await client.query<{
+    startYear: number; label: string; closingDate: string; createdBy: string; updatedBy: string;
   }>(
-    `SELECT snapshot.college_name AS "historicalCollege",
-            snapshot.program_name AS "historicalProgram",college.name AS "currentCollege",
-            program.name AS "currentProgram",student.is_active AS active
-       FROM student_academic_snapshots snapshot
-       JOIN students student ON student.student_number=snapshot.student_number
-       JOIN colleges college ON college.id=student.college_id
-       JOIN programs program ON program.id=student.program_id
-      WHERE snapshot.student_number=$1 AND snapshot.academic_year_start=$2`,
-    [REPORTS_ACCEPTANCE_FIXTURE.expected.historicalDivergence.studentNumber,
-      REPORTS_ACCEPTANCE_FIXTURE.years.closed.startYear],
+    `SELECT start_year AS "startYear",label,closing_date::text AS "closingDate",
+            created_by::text AS "createdBy",updated_by::text AS "updatedBy"
+       FROM academic_years WHERE start_year=ANY($1::int[]) ORDER BY start_year`,
+    [[REPORTS_ACCEPTANCE_FIXTURE.years.closed.startYear, REPORTS_ACCEPTANCE_FIXTURE.years.open.startYear]],
   );
-  if (!special.rows[0] || special.rows[0].active
-    || special.rows[0].historicalCollege === special.rows[0].currentCollege
-    || special.rows[0].historicalProgram === special.rows[0].currentProgram) {
-    throw new Error("Reports fixture historical/current divergence contract is incomplete.");
+  const expectedYears = [REPORTS_ACCEPTANCE_FIXTURE.years.closed, REPORTS_ACCEPTANCE_FIXTURE.years.open]
+    .sort((left, right) => left.startYear - right.startYear)
+    .map((year) => ({
+      startYear: year.startYear, label: year.label, closingDate: year.closingDate,
+      createdBy: ADMIN_USER_ID, updatedBy: ADMIN_USER_ID,
+    }));
+  if (canonicalJson(yearRows.rows) !== canonicalJson(expectedYears)) {
+    throw new Error("Reports fixture readiness detected academic-year ownership or closing-date drift.");
   }
-  return counts;
+
+  const studentRows = await client.query<{
+    studentNumber: string; firstName: string; middleName: string | null; lastName: string;
+    suffix: string | null; collegeId: string; programId: string; yearLevel: number;
+    section: string | null; active: boolean;
+  }>(
+    `SELECT student_number AS "studentNumber",first_name AS "firstName",middle_name AS "middleName",
+            last_name AS "lastName",suffix,college_id::text AS "collegeId",
+            program_id::text AS "programId",year_level AS "yearLevel",section,is_active AS active
+       FROM students WHERE student_number LIKE $1 ORDER BY student_number`,
+    [`${REPORTS_ACCEPTANCE_FIXTURE.studentPrefix}%`],
+  );
+  const expectedStudents = students().map((student) => ({
+    studentNumber: student.student_number, firstName: student.first_name, middleName: null,
+    lastName: student.last_name, suffix: null, collegeId: CURRENT_COLLEGE_ID,
+    programId: CURRENT_PROGRAM_ID, yearLevel: student.year_level, section: null,
+    active: student.is_active,
+  }));
+  if (canonicalJson(studentRows.rows) !== canonicalJson(expectedStudents)) {
+    throw new Error("Reports fixture readiness detected current-student or fixture-prefix drift.");
+  }
+
+  const snapshotRows = await client.query<{
+    id: string; studentNumber: string; academicYearStart: number; studentName: string;
+    collegeId: string; collegeName: string; programId: string; programCode: string;
+    programName: string; yearLevel: number; sourceImportGroupId: string | null;
+    sourceType: string; sourceMetadata: unknown;
+  }>(
+    `SELECT id::text AS id,student_number AS "studentNumber",
+            academic_year_start AS "academicYearStart",student_name AS "studentName",
+            college_id::text AS "collegeId",college_name AS "collegeName",
+            program_id::text AS "programId",program_code AS "programCode",
+            program_name AS "programName",year_level AS "yearLevel",
+            source_import_group_id::text AS "sourceImportGroupId",source_type AS "sourceType",
+            source_metadata AS "sourceMetadata"
+       FROM student_academic_snapshots
+      WHERE student_number LIKE $1 OR id=ANY($2::uuid[]) ORDER BY id`,
+    [`${REPORTS_ACCEPTANCE_FIXTURE.studentPrefix}%`, snapshotIds],
+  );
+  const expectedSnapshots = snapshots().map((snapshot) => ({
+    id: snapshot.id, studentNumber: snapshot.student_number,
+    academicYearStart: snapshot.academic_year_start, studentName: snapshot.student_name,
+    collegeId: snapshot.college_id, collegeName: snapshot.college_name,
+    programId: snapshot.program_id, programCode: snapshot.program_code,
+    programName: snapshot.program_name, yearLevel: snapshot.year_level,
+    sourceImportGroupId: null, sourceType: snapshot.source_type,
+    sourceMetadata: {
+      fixtureMarker: REPORTS_ACCEPTANCE_FIXTURE.marker,
+      historicalEvidenceComplete: snapshot.source_type !== "MIGRATED_INCOMPLETE",
+    },
+  })).sort((left, right) => left.id.localeCompare(right.id));
+  if (canonicalJson(snapshotRows.rows) !== canonicalJson(expectedSnapshots)) {
+    throw new Error("Reports fixture readiness detected immutable snapshot drift or extra snapshot rows.");
+  }
+
+  const appointmentRows = await client.query<{
+    id: string; clinicId: string; studentNumber: string; scheduleType: string;
+    appointmentDate: string; status: string; published: boolean; rescheduledFrom: string | null;
+    scheduleCycleStart: number; createdBy: string; updatedBy: string; notes: string | null;
+  }>(
+    `SELECT id::text AS id,clinic_id::text AS "clinicId",student_number AS "studentNumber",
+            schedule_type AS "scheduleType",appointment_date::text AS "appointmentDate",status,
+            is_published AS published,rescheduled_from::text AS "rescheduledFrom",
+            schedule_cycle_start AS "scheduleCycleStart",created_by::text AS "createdBy",
+            updated_by::text AS "updatedBy",notes
+       FROM appointments
+      WHERE student_number LIKE $1 OR id=ANY($2::uuid[]) ORDER BY id`,
+    [`${REPORTS_ACCEPTANCE_FIXTURE.studentPrefix}%`, appointmentIds],
+  );
+  const expectedAppointments = appointments().map((appointment) => ({
+    id: appointment.id, clinicId: appointment.clinic_id,
+    studentNumber: appointment.student_number, scheduleType: appointment.schedule_type,
+    appointmentDate: appointment.appointment_date, status: appointment.status,
+    published: appointment.is_published, rescheduledFrom: appointment.rescheduled_from,
+    scheduleCycleStart: appointment.schedule_cycle_start, createdBy: ADMIN_USER_ID,
+    updatedBy: ADMIN_USER_ID, notes: REPORTS_ACCEPTANCE_FIXTURE.marker,
+  })).sort((left, right) => left.id.localeCompare(right.id));
+  if (canonicalJson(appointmentRows.rows) !== canonicalJson(expectedAppointments)) {
+    throw new Error("Reports fixture readiness detected appointment drift or extra fixture-student appointments.");
+  }
+
+  return databaseCounts(client);
 }
 
 export async function setupReportsAcceptanceFixture(
   pool: Pool,
   databaseIdentity: ReportsAcceptanceDatabaseIdentity,
 ) {
-  const existingState = await readState();
-  if (existingState) {
-    assertMatchingReportsAcceptanceDatabaseIdentity(databaseIdentity, existingState.databaseIdentity);
+  const state = await readState();
+  if (state.kind === "invalid") throw new Error(state.reason);
+  if (state.kind === "valid") {
+    assertMatchingReportsAcceptanceDatabaseIdentity(databaseIdentity, state.value.databaseIdentity);
   }
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     await assertRequiredSchemaAndReferences(client);
     await assertReservedScopeAvailable(client);
+    const markerBeforeSetup = await getSetupMarker(client);
+    if (state.kind === "valid") {
+      if (markerBeforeSetup.kind !== "exact"
+        || state.value.setupAuditId !== markerBeforeSetup.value.id
+        || state.value.preparedAt !== markerBeforeSetup.value.createdAt.toISOString()) {
+        throw new Error("Reports fixture state does not match the exact database setup marker.");
+      }
+    }
     await insertFixtureRows(client);
+    const marker = await ensureSetupMarker(client);
     const counts = await assertFixtureReady(client);
     await client.query("COMMIT");
     await writeState({
+      version: FIXTURE_VERSION,
       marker: REPORTS_ACCEPTANCE_FIXTURE.marker,
       databaseIdentity,
-      preparedAt: new Date().toISOString(),
+      setupAuditId: marker.id,
+      preparedAt: marker.createdAt.toISOString(),
     });
     return counts;
   } catch (error) {
@@ -597,10 +908,18 @@ export async function getReportsAcceptanceFixtureStatus(
   databaseIdentity: ReportsAcceptanceDatabaseIdentity,
 ) {
   const state = await readState();
-  if (state) assertMatchingReportsAcceptanceDatabaseIdentity(databaseIdentity, state.databaseIdentity);
+  if (state.kind !== "valid") {
+    throw new Error(state.kind === "invalid" ? state.reason : "Reports fixture state is missing.");
+  }
+  assertMatchingReportsAcceptanceDatabaseIdentity(databaseIdentity, state.value.databaseIdentity);
   const client = await pool.connect();
   try {
     await assertRequiredSchemaAndReferences(client);
+    const marker = await getSetupMarker(client);
+    if (marker.kind !== "exact" || marker.value.id !== state.value.setupAuditId
+      || marker.value.createdAt.toISOString() !== state.value.preparedAt) {
+      throw new Error("Reports fixture state does not match the exact database setup marker.");
+    }
     const counts = await assertFixtureReady(client);
     return {
       marker: REPORTS_ACCEPTANCE_FIXTURE.marker,
@@ -618,7 +937,7 @@ export async function getReportsAcceptanceFixtureStatus(
         appointments: counts.appointments,
         academicYears: counts.academicYears,
       },
-      stateFile: Boolean(state),
+      stateFile: true,
     };
   } finally {
     client.release();
@@ -627,8 +946,7 @@ export async function getReportsAcceptanceFixtureStatus(
 
 async function residueCounts(client: PoolClient): Promise<Omit<ReportsAcceptanceResidue, "stateFiles">> {
   const years = [REPORTS_ACCEPTANCE_FIXTURE.years.closed.startYear, REPORTS_ACCEPTANCE_FIXTURE.years.open.startYear];
-  const auditYears = [...years, REPORTS_ACCEPTANCE_FIXTURE.crudScratch.startYear].map(String);
-  const result = await client.query<Omit<ReportsAcceptanceResidue, "stateFiles">>(
+  const result = await client.query<Omit<ReportsAcceptanceResidue, "stateFiles" | "auditLogs">>(
     `SELECT
        (SELECT COUNT(*)::int FROM students WHERE student_number=ANY($1::varchar[])) AS students,
        (SELECT COUNT(*)::int FROM student_academic_snapshots
@@ -636,16 +954,16 @@ async function residueCounts(client: PoolClient): Promise<Omit<ReportsAcceptance
        (SELECT COUNT(*)::int FROM appointments
          WHERE id=ANY($3::uuid[]) OR student_number=ANY($1::varchar[])) AS appointments,
        (SELECT COUNT(*)::int FROM academic_years WHERE start_year=ANY($4::int[])) AS "academicYears",
-       (SELECT COUNT(*)::int FROM academic_years WHERE start_year=$5) AS "crudScratchYears",
-       (SELECT COUNT(*)::int FROM audit_logs
-         WHERE (entity_type='academic_year' AND entity_id=ANY($6::text[]))
-            OR (entity_type='acceptance_fixture' AND entity_id=$7)
-            OR metadata::text LIKE $8) AS "auditLogs"`,
+       (SELECT COUNT(*)::int FROM academic_years WHERE start_year=$5) AS "crudScratchYears"`,
     [studentNumbers, snapshotIds, appointmentIds, years,
-      REPORTS_ACCEPTANCE_FIXTURE.crudScratch.startYear, auditYears,
-      REPORTS_ACCEPTANCE_FIXTURE.marker, `%${REPORTS_ACCEPTANCE_FIXTURE.studentPrefix}%`],
+      REPORTS_ACCEPTANCE_FIXTURE.crudScratch.startYear],
   );
-  return result.rows[0];
+  const marker = await getSetupMarker(client);
+  const markerCount = marker.kind === "absent" ? 0 : 1;
+  return {
+    ...result.rows[0],
+    auditLogs: markerCount + exactOwnedAuditCandidates(await auditCandidates(client)).length,
+  };
 }
 
 export async function cleanupReportsAcceptanceFixture(
@@ -653,23 +971,27 @@ export async function cleanupReportsAcceptanceFixture(
   databaseIdentity: ReportsAcceptanceDatabaseIdentity,
 ) {
   const state = await readState();
-  if (state) assertMatchingReportsAcceptanceDatabaseIdentity(databaseIdentity, state.databaseIdentity);
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     await assertRequiredSchemaAndReferences(client);
-    const owned = Boolean(state) || await fixtureOwnershipExists(client);
-    if (owned) {
+    const marker = await getSetupMarker(client);
+    if (marker.kind === "invalid") throw new Error(marker.reason);
+    if (marker.kind === "exact") {
+      if (state.kind === "valid") {
+        assertMatchingReportsAcceptanceDatabaseIdentity(databaseIdentity, state.value.databaseIdentity);
+        if (state.value.setupAuditId !== marker.value.id
+          || state.value.preparedAt !== marker.value.createdAt.toISOString()) {
+          throw new Error("Reports fixture state does not match the exact database setup marker.");
+        }
+      }
       const years = [REPORTS_ACCEPTANCE_FIXTURE.years.closed.startYear, REPORTS_ACCEPTANCE_FIXTURE.years.open.startYear];
-      const auditYears = [...years, REPORTS_ACCEPTANCE_FIXTURE.crudScratch.startYear].map(String);
-      await client.query(
-        `DELETE FROM audit_logs
-          WHERE (entity_type='academic_year' AND entity_id=ANY($1::text[]))
-             OR (entity_type='acceptance_fixture' AND entity_id=$2)
-             OR metadata::text LIKE $3 OR metadata::text LIKE $4`,
-        [auditYears, REPORTS_ACCEPTANCE_FIXTURE.marker,
-          `%${REPORTS_ACCEPTANCE_FIXTURE.marker}%`, `%${REPORTS_ACCEPTANCE_FIXTURE.studentPrefix}%`],
-      );
+      const ownedAuditIds = [
+        marker.value.id,
+        ...exactOwnedAuditCandidates(await auditCandidates(client), marker.value.createdAt)
+          .map((candidate) => candidate.id),
+      ];
+      await client.query("DELETE FROM audit_logs WHERE id=ANY($1::uuid[])", [ownedAuditIds]);
       await client.query(
         "DELETE FROM appointments WHERE id=ANY($1::uuid[]) OR student_number=ANY($2::varchar[])",
         [appointmentIds, studentNumbers],
@@ -685,6 +1007,8 @@ export async function cleanupReportsAcceptanceFixture(
         "DELETE FROM academic_years WHERE start_year=ANY($1::int[])",
         [[...years, REPORTS_ACCEPTANCE_FIXTURE.crudScratch.startYear]],
       );
+    } else if (state.kind !== "absent") {
+      throw new Error("Reports fixture state exists without exact database marker ownership; refusing cleanup.");
     }
     await client.query("COMMIT");
     await rm(FIXTURE_DIRECTORY, { recursive: true, force: true });
