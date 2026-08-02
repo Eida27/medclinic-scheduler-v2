@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { pool } from "@/server/db/pool";
 import { publicStudentSchedule } from "@/server/repositories/appointments.repository";
 import { getStudentPortalSchedule } from "@/server/repositories/student-portal.repository";
@@ -16,6 +16,7 @@ import type { SessionUser } from "@/types/roles";
 
 const studentNumber = "99-9801-01";
 let capacityFixture: CapacityFixtureLock | null = null;
+let academicYearOwnedByFixture = false;
 const academicYearStart = 2050;
 const academicYearClosingDate = "2051-07-31";
 const importPattern = "REGULAR % - TEST-UNIFIED-E2E%";
@@ -41,26 +42,47 @@ async function cleanup() {
   );
   await pool.query("DELETE FROM clinic_closure_groups WHERE reason LIKE 'TEST-UNIFIED-E2E%'");
   await pool.query("DELETE FROM audit_logs WHERE metadata->>'requestId'=ANY($1::text[])", [requestIds]);
-  await pool.query(
+  if (!academicYearOwnedByFixture) return;
+  const deleted = await pool.query<{ start_year: number }>(
     `DELETE FROM academic_years
       WHERE start_year=$1
         AND closing_date=$2
         AND created_by=$3
-        AND updated_by=$3`,
+        AND updated_by=$3
+      RETURNING start_year`,
     [academicYearStart, academicYearClosingDate, TEST_REFERENCE_IDS.adminUser],
   );
+  if (deleted.rows.length !== 1) {
+    throw new Error("Fixture-owned academic year is missing or changed");
+  }
+  academicYearOwnedByFixture = false;
+}
+
+async function configureAcademicYear() {
+  const collision = await pool.query(
+    "SELECT start_year FROM academic_years WHERE start_year=$1",
+    [academicYearStart],
+  );
+  if (collision.rows.length) {
+    throw new Error(`Academic year ${academicYearStart} already exists; refusing to claim it`);
+  }
+
+  const inserted = await pool.query<{ start_year: number }>(
+    `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+     VALUES ($1,$2,$3,$3)
+     RETURNING start_year`,
+    [academicYearStart, academicYearClosingDate, TEST_REFERENCE_IDS.adminUser],
+  );
+  academicYearOwnedByFixture = true;
+  if (inserted.rows.length !== 1) {
+    throw new Error("Academic-year fixture insert did not return its owned row");
+  }
 }
 
 beforeAll(async () => {
-  capacityFixture = await setupCapacityFixtureLock(pool, async () => {
-    await cleanup();
-    await pool.query(
-      `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
-       VALUES ($1,$2,$3,$3)`,
-      [academicYearStart, academicYearClosingDate, TEST_REFERENCE_IDS.adminUser],
-    );
-  });
+  capacityFixture = await setupCapacityFixtureLock(pool, cleanup);
 });
+beforeEach(configureAcademicYear);
 afterEach(async () => {
   if (!capacityFixture) return;
   await cleanupAndRestoreCapacitySettings(pool, capacityFixture.originalCapacities, cleanup);
@@ -71,6 +93,36 @@ afterAll(async () => {
 });
 
 describe("unified calendar scheduling and student flow", () => {
+  it("does not let fixture cleanup claim a preexisting academic year", async () => {
+    await cleanup();
+    await pool.query(
+      `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+       VALUES ($1,$2,$3,$3)`,
+      [academicYearStart, academicYearClosingDate, TEST_REFERENCE_IDS.adminUser],
+    );
+
+    try {
+      await expect(configureAcademicYear()).rejects.toThrow(
+        `Academic year ${academicYearStart} already exists; refusing to claim it`,
+      );
+      await cleanup();
+      const existing = await pool.query<{ start_year: number }>(
+        "SELECT start_year FROM academic_years WHERE start_year=$1",
+        [academicYearStart],
+      );
+      expect(existing.rows).toEqual([{ start_year: academicYearStart }]);
+    } finally {
+      await pool.query(
+        `DELETE FROM academic_years
+          WHERE start_year=$1
+            AND closing_date=$2
+            AND created_by=$3
+            AND updated_by=$3`,
+        [academicYearStart, academicYearClosingDate, TEST_REFERENCE_IDS.adminUser],
+      );
+    }
+  });
+
   it("avoids a pre-import block, reschedules current appointments, and restores only after final reopening", async () => {
     await saveClinicCalendarChanges({
       requestId: requestIds[0],
