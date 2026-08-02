@@ -13,7 +13,7 @@ const report = {
   },
   filters: {
     academicYearStart: 2025,
-    search: "  should already be normalized  ",
+    search: "  María Ñúñez  ",
     overallStatus: "DID_NOT_COMPLY" as const,
     laboratoryStatus: "NO_SHOW" as const,
     collegeId: "10000000-0000-4000-8000-000000000001",
@@ -114,24 +114,24 @@ describe("historical compliance PDF document model", () => {
   it("derives provenance, normalized filter labels, all breakdowns, and every detail field", () => {
     const model = buildHistoricalCompliancePdfModel(
       report,
-      { userId: "admin-1", fullName: "Ada Administrator" },
+      { userId: "admin-1", fullName: "Adá Administrator" },
       new Date("2026-08-02T02:03:04.000Z"),
     );
 
     expect(model.provenance).toBe("Central Philippine University MedClinic");
     expect(model.academicYear).toEqual({
       startYear: 2025,
-      label: "2025-2026",
+      label: "2025–2026",
       closingDate: "July 31, 2026",
       state: "Closed",
     });
     expect(model.generated).toEqual({
       at: "August 2, 2026 at 10:03 AM",
       iso: "2026-08-02T02:03:04.000Z",
-      by: "Ada Administrator (admin-1)",
+      by: "Adá Administrator (admin-1)",
     });
     expect(model.appliedFilters).toEqual([
-      { label: "Student", value: "should already be normalized" },
+      { label: "Student", value: "María Ñúñez" },
       { label: "Overall", value: "Did Not Comply" },
       { label: "Laboratory", value: "No Show" },
       { label: "Physical Examination", value: "All" },
@@ -148,7 +148,7 @@ describe("historical compliance PDF document model", () => {
       "Year Level:Year 4",
     ]);
     expect(model.details).toEqual([expect.objectContaining({
-      student: "Dela Cruz, Maria\n2025-00001",
+      student: "Dela Cruz, María\n2025-00001",
       college: "College of Engineering",
       program: "BSChE - Bachelor of Science in Chemical Engineering",
       yearLevel: "4",

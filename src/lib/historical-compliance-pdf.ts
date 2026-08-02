@@ -53,7 +53,7 @@ const sortLabels: Record<HistoricalReportFilters["sort"], string> = {
   completed_first: "Completed first",
 };
 
-function asciiSafe(value: string) {
+export function pdfAsciiSafe(value: string) {
   return value
     .replace(/[–—]/g, "-")
     .normalize("NFKD")
@@ -62,7 +62,7 @@ function asciiSafe(value: string) {
 }
 
 function slug(value: string) {
-  return asciiSafe(value)
+  return pdfAsciiSafe(value)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
@@ -132,22 +132,22 @@ export function buildHistoricalCompliancePdfModel(
     title: "Historical Compliance Report",
     academicYear: {
       startYear: report.academicYear.startYear,
-      label: asciiSafe(report.academicYear.label),
+      label: report.academicYear.label,
       closingDate: dateLabel(report.academicYear.closingDate),
       state: stateLabel,
     },
     generated: {
       at: generationLabel(generatedAt),
       iso: generatedAt.toISOString(),
-      by: `${asciiSafe(actor.fullName)} (${asciiSafe(actor.userId)})`,
+      by: `${actor.fullName} (${actor.userId})`,
     },
     appliedFilters: [
-      { label: "Student", value: asciiSafe(report.filters.search?.trim() || "All") },
+      { label: "Student", value: report.filters.search?.trim() || "All" },
       { label: "Overall", value: overallFilterLabel(report.filters.overallStatus) },
       { label: "Laboratory", value: report.filters.laboratoryStatus ? requirementLabels[report.filters.laboratoryStatus] : "All" },
       { label: "Physical Examination", value: report.filters.physicalExamStatus ? requirementLabels[report.filters.physicalExamStatus] : "All" },
-      { label: "College", value: asciiSafe(college?.name ?? "All") },
-      { label: "Program", value: asciiSafe(programLabel) },
+      { label: "College", value: college?.name ?? "All" },
+      { label: "Program", value: programLabel },
       { label: "Year Level", value: report.filters.yearLevel?.toString() ?? "All" },
       { label: "Data Quality", value: report.filters.dataQuality ? historicalDataQualityLabel(report.filters.dataQuality) : "All" },
       { label: "Sort", value: sortLabels[report.filters.sort] },
@@ -156,12 +156,12 @@ export function buildHistoricalCompliancePdfModel(
     breakdowns: [
       ...report.breakdowns.colleges.map((row) => ({
         level: "College" as const,
-        group: asciiSafe(row.collegeName),
+        group: row.collegeName,
         ...row,
       })),
       ...report.breakdowns.programs.map((row) => ({
         level: "Program" as const,
-        group: asciiSafe(`${row.programCode ? `${row.programCode} - ` : ""}${row.programName}`),
+        group: `${row.programCode ? `${row.programCode} - ` : ""}${row.programName}`,
         ...row,
       })),
       ...report.breakdowns.yearLevels.map((row) => ({
@@ -171,9 +171,9 @@ export function buildHistoricalCompliancePdfModel(
       })),
     ],
     details: report.items.map((row) => ({
-      student: `${asciiSafe(row.studentName)}\n${asciiSafe(row.studentNumber)}`,
-      college: asciiSafe(row.collegeName),
-      program: asciiSafe(`${row.programCode ? `${row.programCode} - ` : ""}${row.programName}`),
+      student: `${row.studentName}\n${row.studentNumber}`,
+      college: row.collegeName,
+      program: `${row.programCode ? `${row.programCode} - ` : ""}${row.programName}`,
       yearLevel: row.yearLevel?.toString() ?? "Not recorded",
       laboratory: appointmentLabel(row.laboratoryAppointmentDate, row.laboratoryStatus),
       physicalExam: appointmentLabel(row.physicalExamAppointmentDate, row.physicalExamStatus),

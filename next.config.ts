@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ["pdfkit"],
+  serverExternalPackages: ["dejavu-fonts-ttf", "pdfkit"],
 };
 
 export default nextConfig;
