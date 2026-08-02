@@ -426,10 +426,20 @@ SELECT owner.id,
          'fallbackRule', 'CURRENT_PROFILE_MARKED_INCOMPLETE'
        )
   FROM (
-    SELECT created_by AS id
-      FROM academic_years
-     ORDER BY start_year
-     LIMIT 1
+    SELECT COALESCE(
+      (
+        SELECT created_by
+          FROM academic_years
+         ORDER BY start_year
+         LIMIT 1
+      ),
+      (
+        SELECT id
+          FROM users
+         ORDER BY id
+         LIMIT 1
+      )
+    ) AS id
   ) owner
  WHERE NOT EXISTS (
    SELECT 1 FROM audit_logs

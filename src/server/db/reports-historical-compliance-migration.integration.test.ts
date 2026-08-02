@@ -31,7 +31,7 @@ async function createPrerequisiteSchema(client: PoolClient) {
   await client.query(`
     CREATE FUNCTION set_updated_at() RETURNS TRIGGER LANGUAGE plpgsql AS $$
     BEGIN NEW.updated_at=NOW(); RETURN NEW; END $$;
-    CREATE TABLE users (id UUID PRIMARY KEY);
+    CREATE TABLE users (id UUID PRIMARY KEY, role VARCHAR(30));
     CREATE TABLE colleges (
       id UUID PRIMARY KEY, name VARCHAR(150) NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -267,6 +267,39 @@ describe("reports historical compliance migration", () => {
            '25-0001-01',2025,'Duplicate, Student','College','Program','RECOVERED_HISTORICAL'
          )`,
       )).rejects.toMatchObject({ code: "23505" });
+    });
+  });
+
+  it("audits zero migration totals when users exist without published cycles", async () => {
+    await inIsolatedSchema(async (client) => {
+      await createPrerequisiteSchema(client);
+      await client.query(
+        `INSERT INTO users (id,role) VALUES
+           ('00000000-0000-4000-8000-000000000002','ADMIN'),
+           ('00000000-0000-4000-8000-000000000001','ADMIN')`,
+      );
+
+      await client.query(await readFile(migrationPath, "utf8"));
+
+      const audit = await client.query(
+        `SELECT actor_user_id,metadata
+           FROM audit_logs
+          WHERE action='HISTORICAL_SNAPSHOT_MIGRATION_EXECUTED'`,
+      );
+      expect(audit.rows).toEqual([{
+        actor_user_id: "00000000-0000-4000-8000-000000000001",
+        metadata: {
+          migration: "016_reports_historical_compliance",
+          academicYearCount: 0,
+          snapshotCount: 0,
+          verifiedHistoricalCount: 0,
+          recoveredHistoricalCount: 0,
+          migratedIncompleteCount: 0,
+          closingDateRule: "JULY_31_OF_START_YEAR_PLUS_ONE",
+          recoveryRule: "UNCHANGED_PUBLISHED_IMPORT_GROUP_EVIDENCE",
+          fallbackRule: "CURRENT_PROFILE_MARKED_INCOMPLETE",
+        },
+      }]);
     });
   });
 });
