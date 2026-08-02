@@ -141,6 +141,24 @@ describe("academic-year administration service", () => {
     expect(writeAudit).not.toHaveBeenCalled();
   });
 
+  it("maps the snapshot foreign-key delete race to the in-use conflict", async () => {
+    lockAcademicYearWithSnapshotCount.mockResolvedValue({ ...storedYear, linkedSnapshotCount: 0 });
+    deleteAcademicYearWithClient.mockRejectedValue({
+      code: "23503",
+      constraint: "student_academic_snapshots_academic_year_start_fkey",
+    });
+
+    await expect(deleteAcademicYear({ startYear: 2025 }, actorUserId)).rejects.toEqual(
+      expect.objectContaining({
+        name: "AppError",
+        code: "ACADEMIC_YEAR_IN_USE",
+        status: 409,
+        details: { linkedSnapshotCount: 1 },
+      } satisfies Partial<AppError>),
+    );
+    expect(writeAudit).not.toHaveBeenCalled();
+  });
+
   it("deletes and audits an unlinked academic year in one transaction", async () => {
     lockAcademicYearWithSnapshotCount.mockResolvedValue({ ...storedYear, linkedSnapshotCount: 0 });
 

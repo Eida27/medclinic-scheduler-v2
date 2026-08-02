@@ -1,7 +1,11 @@
 import "server-only";
 import { z } from "zod";
 import { academicYearLabel, academicYearState } from "@/lib/academic-year";
-import { AppError, isPostgresUniqueViolation } from "@/lib/errors";
+import {
+  AppError,
+  isPostgresForeignKeyViolation,
+  isPostgresUniqueViolation,
+} from "@/lib/errors";
 import { transaction } from "@/server/db/pool";
 import { writeAudit } from "@/server/repositories/audit.repository";
 import {
@@ -53,6 +57,24 @@ function present(record: AcademicYearRecord, now: Date) {
 
 function notFound() {
   return new AppError("ACADEMIC_YEAR_NOT_FOUND", "Academic year not found.", 404);
+}
+
+function inUse(linkedSnapshotCount: number) {
+  return new AppError(
+    "ACADEMIC_YEAR_IN_USE",
+    "This academic year has linked historical records and cannot be deleted.",
+    409,
+    undefined,
+    { linkedSnapshotCount },
+  );
+}
+
+function isSnapshotForeignKeyViolation(error: unknown) {
+  return isPostgresForeignKeyViolation(error)
+    && typeof error === "object"
+    && error !== null
+    && "constraint" in error
+    && error.constraint === "student_academic_snapshots_academic_year_start_fkey";
 }
 
 export async function listAcademicYears(now: Date = new Date()) {
@@ -121,15 +143,15 @@ export async function deleteAcademicYear(raw: unknown, actorUserId: string) {
     const existing = await lockAcademicYearWithSnapshotCount(client, startYear);
     if (!existing) throw notFound();
     if (existing.linkedSnapshotCount > 0) {
-      throw new AppError(
-        "ACADEMIC_YEAR_IN_USE",
-        "This academic year has linked historical records and cannot be deleted.",
-        409,
-        undefined,
-        { linkedSnapshotCount: existing.linkedSnapshotCount },
-      );
+      throw inUse(existing.linkedSnapshotCount);
     }
-    const deleted = await deleteAcademicYearWithClient(client, startYear);
+    let deleted;
+    try {
+      deleted = await deleteAcademicYearWithClient(client, startYear);
+    } catch (error) {
+      if (isSnapshotForeignKeyViolation(error)) throw inUse(1);
+      throw error;
+    }
     if (!deleted) throw notFound();
     await writeAudit(
       actorUserId,

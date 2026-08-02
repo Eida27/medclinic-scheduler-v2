@@ -61,16 +61,24 @@ export async function lockAcademicYearWithSnapshotCount(
   client: PoolClient,
   startYear: number,
 ): Promise<AcademicYearRecord | undefined> {
-  const result = await client.query<AcademicYearRecord>(
-    `SELECT ${projection},
-            (SELECT COUNT(*)::integer FROM student_academic_snapshots snapshot
-              WHERE snapshot.academic_year_start=year.start_year) AS "linkedSnapshotCount"
+  const locked = await client.query<AcademicYearRecord>(
+    `SELECT ${projection},0::integer AS "linkedSnapshotCount"
        FROM academic_years year
       WHERE year.start_year=$1
       FOR UPDATE`,
     [startYear],
   );
-  return result.rows[0];
+  if (!locked.rows[0]) return undefined;
+  const linked = await client.query<{ linkedSnapshotCount: number }>(
+    `SELECT COUNT(*)::integer AS "linkedSnapshotCount"
+       FROM student_academic_snapshots
+      WHERE academic_year_start=$1`,
+    [startYear],
+  );
+  return {
+    ...locked.rows[0],
+    linkedSnapshotCount: linked.rows[0].linkedSnapshotCount,
+  };
 }
 
 export async function updateAcademicYearClosingDateWithClient(

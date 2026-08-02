@@ -1,5 +1,7 @@
 // @vitest-environment node
+import type { PoolClient } from "pg";
 import { afterAll, describe, expect, it } from "vitest";
+import { deleteAcademicYear } from "@/server/services/academic-years.service";
 import { pool } from "@/server/db/pool";
 import { TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import {
@@ -14,7 +16,137 @@ afterAll(async () => {
   await pool.end();
 });
 
+const concurrentYear = 2096;
+
+async function waitForAcademicYearDeleteToBlock(
+  observer: PoolClient,
+  blockerTransactionId: string,
+) {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const waiting = await observer.query<{ count: number }>(
+      `SELECT COUNT(*)::integer AS count
+         FROM pg_locks
+        WHERE pid<>pg_backend_pid()
+          AND locktype='transactionid'
+          AND transactionid=$1::xid
+          AND granted=FALSE`,
+      [blockerTransactionId],
+    );
+    if (waiting.rows[0].count > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  const locks = await observer.query<{
+    pid: number;
+    locktype: string;
+    mode: string;
+    granted: boolean;
+  }>(
+    `SELECT pid,locktype,mode,granted
+       FROM pg_locks
+      WHERE transactionid=$1::xid
+      ORDER BY pid,granted`,
+    [blockerTransactionId],
+  );
+  throw new Error(
+    `Timed out waiting for academic-year deletion to block: ${JSON.stringify(locks.rows)}`,
+  );
+}
+
+async function cleanupConcurrentYear() {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      "ALTER TABLE student_academic_snapshots DISABLE TRIGGER student_academic_snapshots_immutable",
+    );
+    await client.query(
+      "DELETE FROM student_academic_snapshots WHERE academic_year_start=$1",
+      [concurrentYear],
+    );
+    await client.query(
+      "ALTER TABLE student_academic_snapshots ENABLE TRIGGER student_academic_snapshots_immutable",
+    );
+    await client.query(
+      `DELETE FROM audit_logs
+        WHERE entity_type='academic_year' AND entity_id=$1`,
+      [String(concurrentYear)],
+    );
+    await client.query("DELETE FROM academic_years WHERE start_year=$1", [concurrentYear]);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 describe("academic-years repository", () => {
+  it("returns an in-use conflict when a snapshot commits while deletion waits for the parent row", async () => {
+    await cleanupConcurrentYear();
+    await pool.query(
+      `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+       VALUES ($1,$2,$3,$3)`,
+      [concurrentYear, "2097-07-31", TEST_REFERENCE_IDS.adminUser],
+    );
+    const inserter = await pool.connect();
+    let inserterCommitted = false;
+    try {
+      await inserter.query("BEGIN");
+      await inserter.query(
+        "SELECT start_year FROM academic_years WHERE start_year=$1 FOR NO KEY UPDATE",
+        [concurrentYear],
+      );
+      const blocker = await inserter.query<{ transaction_id: string }>(
+        "SELECT txid_current()::text AS transaction_id",
+      );
+
+      const deletion = deleteAcademicYear(
+        { startYear: concurrentYear },
+        TEST_REFERENCE_IDS.adminUser,
+      ).then(
+        (value) => ({ outcome: "resolved" as const, value }),
+        (error: unknown) => ({ outcome: "rejected" as const, error }),
+      );
+      await waitForAcademicYearDeleteToBlock(
+        inserter,
+        blocker.rows[0].transaction_id,
+      );
+      await inserter.query(
+        `INSERT INTO student_academic_snapshots (
+           student_number,academic_year_start,student_name,college_name,
+           program_name,source_type
+         ) VALUES ('96-0001-01',$1,'Racing, Student','Historical College',
+                   'Historical Program','VERIFIED_HISTORICAL')`,
+        [concurrentYear],
+      );
+      await inserter.query("COMMIT");
+      inserterCommitted = true;
+
+      await expect(deletion).resolves.toEqual({
+        outcome: "rejected",
+        error: expect.objectContaining({
+          name: "AppError",
+          code: "ACADEMIC_YEAR_IN_USE",
+          status: 409,
+          details: { linkedSnapshotCount: 1 },
+        }),
+      });
+      const stored = await pool.query<{ year_count: number; snapshot_count: number }>(
+        `SELECT (SELECT COUNT(*)::integer FROM academic_years WHERE start_year=$1) AS year_count,
+                (SELECT COUNT(*)::integer FROM student_academic_snapshots
+                  WHERE academic_year_start=$1) AS snapshot_count`,
+        [concurrentYear],
+      );
+      expect(stored.rows[0]).toEqual({ year_count: 1, snapshot_count: 1 });
+    } finally {
+      if (!inserterCommitted) await inserter.query("ROLLBACK");
+      inserter.release();
+      await cleanupConcurrentYear();
+    }
+  });
+
   it("returns linked counts and preserves the creator when the closing date changes", async () => {
     const client = await pool.connect();
     await client.query("BEGIN");
