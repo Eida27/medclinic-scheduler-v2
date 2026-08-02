@@ -392,8 +392,7 @@ function appointments(): AppointmentSeed[] {
   });
   const rows: AppointmentSeed[] = studentNumbers.map((studentNumber, offset) => {
     const index = offset + 1;
-    const status = index === 1 ? "NO_SHOW"
-      : index === 3 || index === 5 ? "COMPLETED" : "PENDING";
+    const status = index === 3 || index === 5 ? "COMPLETED" : "NO_SHOW";
     return next({
       clinic_id: LABORATORY_CLINIC_ID,
       student_number: studentNumber,

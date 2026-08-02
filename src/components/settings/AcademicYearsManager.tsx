@@ -90,10 +90,13 @@ export function AcademicYearsManager({ years }: { years: AcademicYearItem[] }) {
     await send("POST", { startYear, closingDate: newClosingDate }, "Academic year created.");
   }
 
-  async function update(year: AcademicYearItem) {
+  async function update(event: FormEvent<HTMLFormElement>, year: AcademicYearItem) {
+    event.preventDefault();
+    const closingDate = new FormData(event.currentTarget).get("closingDate");
+    if (typeof closingDate !== "string") return;
     await send(
       "PATCH",
-      { startYear: year.startYear, closingDate: closingDates[year.startYear] },
+      { startYear: year.startYear, closingDate },
       "Closing date updated.",
     );
   }
@@ -150,7 +153,12 @@ export function AcademicYearsManager({ years }: { years: AcademicYearItem[] }) {
         {years.length ? (
           <div role="list" aria-label="Academic years" className="mt-4 divide-y divide-line">
             {years.map((year) => (
-              <div key={year.startYear} role="listitem" className="grid gap-4 py-4 lg:grid-cols-[minmax(0,1fr)_minmax(13rem,0.8fr)_auto] lg:items-center">
+              <form
+                key={year.startYear}
+                role="listitem"
+                className="grid gap-4 py-4 lg:grid-cols-[minmax(0,1fr)_minmax(13rem,0.8fr)_auto] lg:items-center"
+                onSubmit={(event) => update(event, year)}
+              >
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="font-bold text-ink">{year.label}</p>
@@ -166,6 +174,7 @@ export function AcademicYearsManager({ years }: { years: AcademicYearItem[] }) {
                   Closing date
                   <Input
                     aria-label={`Closing date for ${year.label}`}
+                    name="closingDate"
                     type="date"
                     value={closingDates[year.startYear] ?? year.closingDate}
                     onChange={(event) => setClosingDates((current) => ({
@@ -176,10 +185,10 @@ export function AcademicYearsManager({ years }: { years: AcademicYearItem[] }) {
                 </label>
                 <div className="flex flex-wrap gap-2 lg:justify-end">
                   <Button
+                    type="submit"
                     size="sm"
                     variant="secondary"
                     disabled={Boolean(pending)}
-                    onClick={() => update(year)}
                   >
                     <span className="sr-only">Save {year.label} closing date</span>
                     <span aria-hidden="true">Save</span>
@@ -197,7 +206,7 @@ export function AcademicYearsManager({ years }: { years: AcademicYearItem[] }) {
                     Delete
                   </Button>
                 </div>
-              </div>
+              </form>
             ))}
           </div>
         ) : <p className="mt-4 text-sm text-muted">No academic years are configured.</p>}

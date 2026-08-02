@@ -232,7 +232,7 @@ describe.runIf(exclusive)("reports Browser acceptance fixture lifecycle", () => 
     expect(byNumber["B-RPT-0002"]).toMatchObject({
       collegeName: "Archived College of Health Sciences",
       programName: "Archived Clinical Sciences",
-      laboratoryStatus: "PENDING", physicalExamStatus: "UNSCHEDULED",
+      laboratoryStatus: "NO_SHOW", physicalExamStatus: "UNSCHEDULED",
       overallStatus: "DID_NOT_COMPLY_BOTH", dataQuality: "RECOVERED_HISTORICAL",
     });
     expect(byNumber["B-RPT-0003"]).toMatchObject({
@@ -240,7 +240,7 @@ describe.runIf(exclusive)("reports Browser acceptance fixture lifecycle", () => 
       overallStatus: "DID_NOT_COMPLY_PHYSICAL_EXAM", dataQuality: "MIGRATED_INCOMPLETE",
     });
     expect(byNumber["B-RPT-0004"]).toMatchObject({
-      laboratoryStatus: "PENDING", physicalExamStatus: "COMPLETED",
+      laboratoryStatus: "NO_SHOW", physicalExamStatus: "COMPLETED",
       overallStatus: "DID_NOT_COMPLY_LABORATORY",
     });
 
@@ -255,6 +255,31 @@ describe.runIf(exclusive)("reports Browser acceptance fixture lifecycle", () => 
         "B-RPT-0003": "PENDING_COMPLIANCE",
         "B-RPT-0004": "PENDING_COMPLIANCE",
       });
+  });
+
+  it("keeps every fixture appointment stable under the production automatic no-show predicate", async () => {
+    await setupReportsAcceptanceFixture(pool, identity);
+    const overdue = await pool.query<{ id: string }>(
+      `SELECT id::text AS id
+         FROM appointments
+        WHERE id=ANY($1::uuid[])
+          AND is_published=TRUE
+          AND status='PENDING'
+          AND schedule_type IN ('LABORATORY','PHYSICAL_EXAM')
+          AND ((appointment_date + 1)::timestamp AT TIME ZONE $3)
+              <= $2::timestamptz
+        ORDER BY id`,
+      [
+        REPORTS_ACCEPTANCE_FIXTURE.appointmentIds,
+        new Date("2026-08-02T04:00:00.000Z"),
+        "Asia/Manila",
+      ],
+    );
+
+    expect(overdue.rows).toEqual([]);
+    await expect(getReportsAcceptanceFixtureStatus(pool, identity)).resolves.toMatchObject({
+      counts: { appointments: 165 },
+    });
   });
 
   it("cleans partial and complete setups repeatedly with no residue", async () => {

@@ -74,6 +74,29 @@ describe("AcademicYearsManager", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Closing date updated.");
   });
 
+  it("submits the closing date currently displayed by a native date input", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: {} }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AcademicYearsManager years={years} />);
+
+    const row = screen.getByRole("listitem");
+    const closingDate = within(row).getByLabelText("Closing date for 2025–2026") as HTMLInputElement;
+    closingDate.value = "2026-06-29";
+    closingDate.dispatchEvent(new Event("input", { bubbles: true }));
+    closingDate.dispatchEvent(new Event("blur", { bubbles: true }));
+    expect(closingDate).toHaveValue("2026-06-29");
+
+    await user.click(within(row).getByRole("button", { name: "Save 2025–2026 closing date" }));
+
+    await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+    expect(fetchMock).toHaveBeenCalledWith("/api/settings/academic-years", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ startYear: 2025, closingDate: "2026-06-29" }),
+    });
+  });
+
   it("keeps a stale unlinked year visible when deletion returns a linked-record conflict", async () => {
     const user = userEvent.setup();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({
