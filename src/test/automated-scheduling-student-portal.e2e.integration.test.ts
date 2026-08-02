@@ -16,6 +16,8 @@ import type { SessionUser } from "@/types/roles";
 
 const studentNumber = "99-9801-01";
 let capacityFixture: CapacityFixtureLock | null = null;
+const academicYearStart = 2050;
+const academicYearClosingDate = "2051-07-31";
 const importPattern = "REGULAR % - TEST-UNIFIED-E2E%";
 const requestIds = [
   "98000000-0000-4000-8000-000000000001",
@@ -39,10 +41,25 @@ async function cleanup() {
   );
   await pool.query("DELETE FROM clinic_closure_groups WHERE reason LIKE 'TEST-UNIFIED-E2E%'");
   await pool.query("DELETE FROM audit_logs WHERE metadata->>'requestId'=ANY($1::text[])", [requestIds]);
+  await pool.query(
+    `DELETE FROM academic_years
+      WHERE start_year=$1
+        AND closing_date=$2
+        AND created_by=$3
+        AND updated_by=$3`,
+    [academicYearStart, academicYearClosingDate, TEST_REFERENCE_IDS.adminUser],
+  );
 }
 
 beforeAll(async () => {
-  capacityFixture = await setupCapacityFixtureLock(pool, cleanup);
+  capacityFixture = await setupCapacityFixtureLock(pool, async () => {
+    await cleanup();
+    await pool.query(
+      `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+       VALUES ($1,$2,$3,$3)`,
+      [academicYearStart, academicYearClosingDate, TEST_REFERENCE_IDS.adminUser],
+    );
+  });
 });
 afterEach(async () => {
   if (!capacityFixture) return;
@@ -68,7 +85,7 @@ describe("unified calendar scheduling and student flow", () => {
         `${studentNumber},Calendar,Unified,Maria Angela,,College of Computer Studies,BSIT,4,2003-05-06`,
       ].join("\n"),
       studentCategory: "REGULAR",
-      academicYearStart: 2050,
+      academicYearStart,
       preferredMonth: null,
     }, admin);
     const imported = await pool.query<{ schedule_type: string; appointment_date: string }>(
