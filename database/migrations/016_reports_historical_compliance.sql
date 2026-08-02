@@ -30,16 +30,18 @@ CREATE TABLE IF NOT EXISTS student_academic_snapshots (
   program_name VARCHAR(150) NOT NULL,
   year_level INTEGER CHECK (year_level BETWEEN 1 AND 6),
   source_import_group_id UUID,
-  source_type VARCHAR(30) NOT NULL CHECK (
+  source_type VARCHAR(30) NOT NULL,
+  source_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT student_academic_snapshots_source_type_check CHECK (
     source_type IN (
       'VERIFIED_HISTORICAL',
       'RECOVERED_HISTORICAL',
       'MIGRATED_INCOMPLETE'
     )
   ),
-  source_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (student_number, academic_year_start)
+  CONSTRAINT student_academic_snapshots_student_year_key
+    UNIQUE (student_number, academic_year_start)
 );
 
 CREATE OR REPLACE FUNCTION reject_student_academic_snapshot_mutation()
@@ -205,46 +207,84 @@ BEGIN
 END;
 $$;
 
-DO $$
-BEGIN
-  IF EXISTS (
-    SELECT 1
-      FROM (
-        SELECT DISTINCT appointment.schedule_cycle_start
-          FROM appointments appointment
-         WHERE appointment.is_published=TRUE
-      ) cycle
-     WHERE NOT EXISTS (SELECT 1 FROM users)
-  ) THEN
-    RAISE EXCEPTION 'Cannot backfill academic years without a user for audit ownership';
-  END IF;
-END
-$$;
+WITH cycle_owner_candidates AS (
+  SELECT appointment.schedule_cycle_start AS start_year,
+         import_group.created_by AS owner_id,
+         1 AS source_priority,
+         COALESCE(batch.published_at,import_group.accepted_at) AS evidence_time,
+         import_group.id::text AS source_id
+    FROM appointments appointment
+    JOIN schedule_batches batch
+      ON batch.id=appointment.batch_id
+     AND batch.status='PUBLISHED'
+    JOIN schedule_import_groups import_group
+      ON import_group.id=batch.import_group_id
+     AND import_group.academic_year_start=appointment.schedule_cycle_start
+   WHERE appointment.is_published=TRUE
 
+  UNION ALL
+
+  SELECT appointment.schedule_cycle_start,
+         COALESCE(
+           CASE WHEN batch.status='PUBLISHED' THEN batch.published_by END,
+           CASE WHEN batch.status='PUBLISHED' THEN batch.created_by END,
+           appointment.created_by
+         ),
+         2,
+         COALESCE(
+           CASE WHEN batch.status='PUBLISHED' THEN batch.published_at END,
+           appointment.appointment_date::timestamptz
+         ),
+         COALESCE(
+           CASE WHEN batch.status='PUBLISHED' THEN batch.id::text END,
+           appointment.id::text
+         )
+    FROM appointments appointment
+    LEFT JOIN schedule_batches batch ON batch.id=appointment.batch_id
+   WHERE appointment.is_published=TRUE
+     AND COALESCE(
+       CASE WHEN batch.status='PUBLISHED' THEN batch.published_by END,
+       CASE WHEN batch.status='PUBLISHED' THEN batch.created_by END,
+       appointment.created_by
+     ) IS NOT NULL
+),
+ranked_cycle_owners AS (
+  SELECT start_year,owner_id,
+         ROW_NUMBER() OVER (
+           PARTITION BY start_year
+           ORDER BY source_priority,evidence_time NULLS LAST,source_id,owner_id
+         ) AS owner_rank
+    FROM cycle_owner_candidates
+),
+cycle_owners AS (
+  SELECT start_year,owner_id
+    FROM ranked_cycle_owners
+   WHERE owner_rank=1
+)
 INSERT INTO academic_years (
   start_year, closing_date, created_by, updated_by
 )
-SELECT cycle.start_year,
-       make_date(cycle.start_year + 1, 7, 31),
-       owner.id,
-       owner.id
-  FROM (
-    SELECT DISTINCT appointment.schedule_cycle_start AS start_year
-      FROM appointments appointment
-     WHERE appointment.is_published=TRUE
-    UNION
-    SELECT DISTINCT import_group.academic_year_start
-      FROM schedule_import_groups import_group
-     WHERE import_group.academic_year_start IS NOT NULL
-  ) cycle
- CROSS JOIN LATERAL (
-   SELECT user_account.id
-     FROM users user_account
-    ORDER BY user_account.id
-    LIMIT 1
- ) owner
- WHERE cycle.start_year IS NOT NULL
+SELECT owner.start_year,
+       make_date(owner.start_year + 1,7,31),
+       owner.owner_id,
+       owner.owner_id
+  FROM cycle_owners owner
 ON CONFLICT (start_year) DO NOTHING;
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT DISTINCT appointment.schedule_cycle_start
+      FROM appointments appointment
+      LEFT JOIN academic_years year
+        ON year.start_year=appointment.schedule_cycle_start
+     WHERE appointment.is_published=TRUE
+       AND year.start_year IS NULL
+  ) THEN
+    RAISE EXCEPTION 'Cannot derive academic-year ownership from published source records';
+  END IF;
+END
+$$;
 
 WITH reporting_population AS (
   SELECT DISTINCT appointment.student_number,
@@ -385,7 +425,12 @@ SELECT owner.id,
          'recoveryRule', 'UNCHANGED_PUBLISHED_IMPORT_GROUP_EVIDENCE',
          'fallbackRule', 'CURRENT_PROFILE_MARKED_INCOMPLETE'
        )
-  FROM (SELECT id FROM users ORDER BY id LIMIT 1) owner
+  FROM (
+    SELECT created_by AS id
+      FROM academic_years
+     ORDER BY start_year
+     LIMIT 1
+  ) owner
  WHERE NOT EXISTS (
    SELECT 1 FROM audit_logs
     WHERE action='HISTORICAL_SNAPSHOT_MIGRATION_EXECUTED'

@@ -57,7 +57,8 @@ async function createPrerequisiteSchema(client: PoolClient) {
     CREATE TABLE schedule_batches (
       id UUID PRIMARY KEY, status VARCHAR(30) NOT NULL,
       import_group_id UUID REFERENCES schedule_import_groups(id),
-      published_at TIMESTAMPTZ, created_by UUID NOT NULL REFERENCES users(id),
+      published_at TIMESTAMPTZ, published_by UUID REFERENCES users(id),
+      created_by UUID NOT NULL REFERENCES users(id),
       college_id UUID REFERENCES colleges(id), program_id UUID REFERENCES programs(id)
     );
     CREATE TABLE coordinator_schedule_items (
@@ -84,7 +85,10 @@ async function createPrerequisiteSchema(client: PoolClient) {
 
 async function seedHistoricalAppointments(client: PoolClient) {
   await client.query(`
-    INSERT INTO users (id) VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    INSERT INTO users (id) VALUES
+      ('00000000-0000-4000-8000-000000000001'),
+      ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+      ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
     INSERT INTO colleges (id,name,updated_at) VALUES
       ('11111111-1111-4111-8111-111111111111','Reliable College','2025-01-01'),
       ('22222222-2222-4222-8222-222222222222','Fallback College','2025-01-01');
@@ -100,20 +104,26 @@ async function seedHistoricalAppointments(client: PoolClient) {
        '2025-08-01','2025-08-02'),
       ('25-0002-02','Ben',NULL,'Fallback','Jr.',
        '22222222-2222-4222-8222-222222222222','44444444-4444-4444-8444-444444444444',3,
-       '2025-08-01','2025-10-01');
+       '2025-08-01','2025-10-01'),
+      ('24-0003-03','Cara',NULL,'Legacy',NULL,
+       '22222222-2222-4222-8222-222222222222','44444444-4444-4444-8444-444444444444',4,
+       '2024-08-01','2024-08-01');
     INSERT INTO schedule_import_groups (id,academic_year_start,accepted_at,created_by) VALUES
       ('55555555-5555-4555-8555-555555555555',2025,'2025-08-01','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
       ('66666666-6666-4666-8666-666666666666',2025,'2025-08-01','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
     INSERT INTO schedule_batches (
-      id,status,import_group_id,published_at,created_by,college_id,program_id
+      id,status,import_group_id,published_at,published_by,created_by,college_id,program_id
     ) VALUES
       ('77777777-7777-4777-8777-777777777777','PUBLISHED','55555555-5555-4555-8555-555555555555','2025-08-01',
-       'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','11111111-1111-4111-8111-111111111111','33333333-3333-4333-8333-333333333333'),
+       'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','11111111-1111-4111-8111-111111111111','33333333-3333-4333-8333-333333333333'),
       ('88888888-8888-4888-8888-888888888888','PUBLISHED','66666666-6666-4666-8666-666666666666','2025-08-01',
-       'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','22222222-2222-4222-8222-222222222222','44444444-4444-4444-8444-444444444444');
+       'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','22222222-2222-4222-8222-222222222222','44444444-4444-4444-8444-444444444444'),
+      ('99999999-9999-4999-8999-999999999990','PUBLISHED',NULL,'2024-08-01',
+       'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','22222222-2222-4222-8222-222222222222','44444444-4444-4444-8444-444444444444');
     INSERT INTO coordinator_schedule_items (id,batch_id,student_number,schedule_cycle_start) VALUES
       ('99999999-9999-4999-8999-999999999991','77777777-7777-4777-8777-777777777777','25-0001-01',2025),
-      ('99999999-9999-4999-8999-999999999992','88888888-8888-4888-8888-888888888888','25-0002-02',2025);
+      ('99999999-9999-4999-8999-999999999992','88888888-8888-4888-8888-888888888888','25-0002-02',2025),
+      ('99999999-9999-4999-8999-999999999993','99999999-9999-4999-8999-999999999990','24-0003-03',2024);
     INSERT INTO appointments (
       id,batch_id,schedule_item_id,student_number,schedule_type,
       schedule_cycle_start,appointment_date,is_published,created_by
@@ -121,7 +131,9 @@ async function seedHistoricalAppointments(client: PoolClient) {
       ('aaaaaaaa-0001-4001-8001-aaaaaaaa0001','77777777-7777-4777-8777-777777777777','99999999-9999-4999-8999-999999999991',
        '25-0001-01','LABORATORY',2025,'2025-09-01',TRUE,'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
       ('aaaaaaaa-0002-4002-8002-aaaaaaaa0002','88888888-8888-4888-8888-888888888888','99999999-9999-4999-8999-999999999992',
-       '25-0002-02','PHYSICAL_EXAM',2025,'2025-09-02',TRUE,'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+       '25-0002-02','PHYSICAL_EXAM',2025,'2025-09-02',TRUE,'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+      ('aaaaaaaa-0003-4003-8003-aaaaaaaa0003','99999999-9999-4999-8999-999999999990','99999999-9999-4999-8999-999999999993',
+       '24-0003-03','LABORATORY',2024,'2024-09-02',TRUE,'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
     INSERT INTO audit_logs (
       actor_user_id,action,entity_type,entity_id,metadata,created_at
     ) VALUES
@@ -145,13 +157,25 @@ describe("reports historical compliance migration", () => {
       await client.query(migration);
 
       const years = await client.query(
-        "SELECT start_year,label,closing_date::text FROM academic_years",
+        `SELECT start_year,label,closing_date::text,created_by,updated_by
+           FROM academic_years ORDER BY start_year`,
       );
-      expect(years.rows).toEqual([{
-        start_year: 2025,
-        label: "2025–2026",
-        closing_date: "2026-07-31",
-      }]);
+      expect(years.rows).toEqual([
+        {
+          start_year: 2024,
+          label: "2024–2025",
+          closing_date: "2025-07-31",
+          created_by: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          updated_by: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        },
+        {
+          start_year: 2025,
+          label: "2025–2026",
+          closing_date: "2026-07-31",
+          created_by: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          updated_by: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        },
+      ]);
 
       const snapshots = await client.query(
         `SELECT student_number,student_name,college_name,program_code,program_name,
@@ -159,6 +183,16 @@ describe("reports historical compliance migration", () => {
            FROM student_academic_snapshots ORDER BY student_number`,
       );
       expect(snapshots.rows).toEqual([
+        {
+          student_number: "24-0003-03",
+          student_name: "Legacy, Cara",
+          college_name: "Fallback College",
+          program_code: "FC",
+          program_name: "Fallback Course",
+          year_level: 4,
+          source_import_group_id: null,
+          source_type: "MIGRATED_INCOMPLETE",
+        },
         {
           student_number: "25-0001-01",
           student_name: "Reliable, Ana Maria",
@@ -187,10 +221,10 @@ describe("reports historical compliance migration", () => {
       );
       expect(audit.rows).toEqual([{
         metadata: expect.objectContaining({
-          academicYearCount: 1,
-          snapshotCount: 2,
+          academicYearCount: 2,
+          snapshotCount: 3,
           recoveredHistoricalCount: 1,
-          migratedIncompleteCount: 1,
+          migratedIncompleteCount: 2,
           closingDateRule: "JULY_31_OF_START_YEAR_PLUS_ONE",
         }),
       }]);
@@ -201,6 +235,38 @@ describe("reports historical compliance migration", () => {
       await expect(client.query(
         "DELETE FROM student_academic_snapshots",
       )).rejects.toThrow(/immutable/i);
+    });
+  });
+
+  it("rejects unsupported snapshot source types at the SQL boundary", async () => {
+    await inIsolatedSchema(async (client) => {
+      await createPrerequisiteSchema(client);
+      await seedHistoricalAppointments(client);
+      await client.query(await readFile(migrationPath, "utf8"));
+
+      await expect(client.query(
+        `INSERT INTO student_academic_snapshots (
+           student_number,academic_year_start,student_name,college_name,
+           program_name,source_type
+         ) VALUES ('90-0001-01',2025,'Invalid, Source','College','Program','UNTRUSTED')`,
+      )).rejects.toMatchObject({ code: "23514" });
+    });
+  });
+
+  it("rejects duplicate student and academic-year snapshots at the SQL boundary", async () => {
+    await inIsolatedSchema(async (client) => {
+      await createPrerequisiteSchema(client);
+      await seedHistoricalAppointments(client);
+      await client.query(await readFile(migrationPath, "utf8"));
+
+      await expect(client.query(
+        `INSERT INTO student_academic_snapshots (
+           student_number,academic_year_start,student_name,college_name,
+           program_name,source_type
+         ) VALUES (
+           '25-0001-01',2025,'Duplicate, Student','College','Program','RECOVERED_HISTORICAL'
+         )`,
+      )).rejects.toMatchObject({ code: "23505" });
     });
   });
 });
