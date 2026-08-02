@@ -41,7 +41,12 @@ export default async function ReportsPage({
 }: {
   searchParams: Promise<ReportsSearchParams>;
 }) {
-  await requireUser(["ADMIN"]);
+  try {
+    await requireUser(["ADMIN"]);
+  } catch (error) {
+    if (error instanceof AppError && error.status === 403) notFound();
+    throw error;
+  }
   const params = await searchParams;
   const parsed = parseHistoricalReportQuery(params);
 

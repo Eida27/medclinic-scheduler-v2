@@ -139,14 +139,15 @@ describe("ReportsPage", () => {
   });
 
   it.each(["COORDINATOR", "CLINIC_STAFF"])(
-    "denies %s before reading report data",
+    "cleanly denies %s before reading report data",
     async (role) => {
       const error = new AppError("FORBIDDEN", `${role} is forbidden`, 403);
       requireUser.mockRejectedValue(error);
 
-      await expect(ReportsPage({ searchParams: Promise.resolve({}) })).rejects.toBe(error);
+      await expect(ReportsPage({ searchParams: Promise.resolve({}) })).rejects.toThrow("NEXT_NOT_FOUND");
 
       expect(requireUser).toHaveBeenCalledWith(["ADMIN"]);
+      expect(notFound).toHaveBeenCalledOnce();
       expect(listAcademicYears).not.toHaveBeenCalled();
       expect(getHistoricalComplianceReport).not.toHaveBeenCalled();
     },

@@ -2,12 +2,18 @@ import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppError } from "@/lib/errors";
 
-const { listAcademicYears, requireUser } = vi.hoisted(() => ({
+const { listAcademicYears, notFound, requireUser } = vi.hoisted(() => ({
   listAcademicYears: vi.fn(),
+  notFound: vi.fn(() => {
+    throw new Error("NEXT_NOT_FOUND");
+  }),
   requireUser: vi.fn(),
 }));
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
+vi.mock("next/navigation", () => ({
+  notFound,
+  useRouter: () => ({ refresh: vi.fn() }),
+}));
 vi.mock("@/server/auth/current-user", () => ({ requireUser }));
 vi.mock("@/server/services/academic-years.service", () => ({ listAcademicYears }));
 
@@ -34,10 +40,16 @@ describe("AcademicYearsPage", () => {
     expect(screen.getByText("2025–2026")).toBeVisible();
   });
 
-  it("denies a non-administrator before reading academic years", async () => {
-    const error = new AppError("FORBIDDEN", "Forbidden", 403);
-    requireUser.mockRejectedValue(error);
-    await expect(AcademicYearsPage()).rejects.toBe(error);
-    expect(listAcademicYears).not.toHaveBeenCalled();
-  });
+  it.each(["COORDINATOR", "CLINIC_STAFF"])(
+    "cleanly denies %s before reading academic years",
+    async (role) => {
+      requireUser.mockRejectedValue(new AppError("FORBIDDEN", `${role} is forbidden`, 403));
+
+      await expect(AcademicYearsPage()).rejects.toThrow("NEXT_NOT_FOUND");
+
+      expect(requireUser).toHaveBeenCalledWith(["ADMIN"]);
+      expect(notFound).toHaveBeenCalledOnce();
+      expect(listAcademicYears).not.toHaveBeenCalled();
+    },
+  );
 });
