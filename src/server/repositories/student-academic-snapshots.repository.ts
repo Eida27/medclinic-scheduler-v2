@@ -92,7 +92,11 @@ export async function ensureStudentAcademicSnapshotsWithClient(
   const candidates = [...candidatesByKey.values()];
   const academicYears = [...new Set(candidates.map((candidate) => candidate.academicYearStart))];
   const configured = await client.query<{ start_year: number }>(
-    "SELECT start_year FROM academic_years WHERE start_year=ANY($1::integer[])",
+    `SELECT start_year
+       FROM academic_years
+      WHERE start_year=ANY($1::integer[])
+      ORDER BY start_year
+      FOR KEY SHARE`,
     [academicYears],
   );
   const configuredYears = new Set(configured.rows.map((year) => year.start_year));
@@ -161,6 +165,7 @@ type BatchSnapshotRow = {
   year_level: number | null;
   source_import_group_id: string | null;
   source_type: StudentAcademicSnapshotSource;
+  evidence_time: Date | null;
 };
 
 export async function ensureBatchStudentAcademicSnapshotsWithClient(
@@ -176,10 +181,26 @@ export async function ensureBatchStudentAcademicSnapshotsWithClient(
             student.year_level,
             CASE WHEN import_group.academic_year_start=appointment.schedule_cycle_start
               THEN import_group.id ELSE NULL END AS source_import_group_id,
-            CASE WHEN import_group.academic_year_start=appointment.schedule_cycle_start
-              THEN 'VERIFIED_HISTORICAL'
+            CASE
+              WHEN import_group.academic_year_start=appointment.schedule_cycle_start
+               AND college.updated_at <= import_group.accepted_at
+               AND program.updated_at <= import_group.accepted_at
+               AND NOT EXISTS (
+                 SELECT 1
+                   FROM audit_logs audit
+                  WHERE audit.entity_type='student'
+                    AND audit.entity_id=appointment.student_number
+                    AND audit.created_at > import_group.accepted_at
+                    AND NOT (
+                      audit.action='STUDENT_PROFILE_UPDATED_BY_IMPORT'
+                      AND audit.metadata->>'importId'=import_group.id::text
+                    )
+               )
+                THEN 'RECOVERED_HISTORICAL'
               ELSE 'MIGRATED_INCOMPLETE'
-            END AS source_type
+            END AS source_type,
+            CASE WHEN import_group.academic_year_start=appointment.schedule_cycle_start
+              THEN import_group.accepted_at ELSE NULL END AS evidence_time
        FROM appointments appointment
        JOIN students student ON student.student_number=appointment.student_number
        JOIN colleges college ON college.id=student.college_id
@@ -205,9 +226,11 @@ export async function ensureBatchStudentAcademicSnapshotsWithClient(
       sourceImportGroupId: row.source_import_group_id,
       sourceType: row.source_type,
       sourceMetadata: {
-        provenance: row.source_type === "VERIFIED_HISTORICAL"
-          ? "AUTHORITATIVE_IMPORT_PUBLICATION"
+        provenance: row.source_type === "RECOVERED_HISTORICAL"
+          ? "ACCEPTED_IMPORT_GROUP_RECOVERY"
           : "CURRENT_PROFILE_AT_LEGACY_PUBLICATION",
+        historicalEvidenceComplete: row.source_type === "RECOVERED_HISTORICAL",
+        evidenceTime: row.evidence_time?.toISOString() ?? null,
         publicationBatchIds: input.batchIds,
       },
     })),

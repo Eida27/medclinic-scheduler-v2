@@ -4,7 +4,11 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const backLinks = {
-  appointments: { href: "/appointments", label: "Back to appointments" },
+  laboratory: { href: "/laboratory", label: "Back to Laboratory" },
+  "physical-exam": {
+    href: "/physical-exam",
+    label: "Back to Physical Examination",
+  },
   students: { href: "/students", label: "Back to students" },
   "coordinator-schedules": {
     href: "/coordinator-schedules",

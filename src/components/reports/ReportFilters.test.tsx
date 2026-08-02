@@ -48,4 +48,27 @@ describe("ReportFilters", () => {
     expect(within(program).queryByRole("option", { name: "BSCE — Civil Engineering" })).not.toBeInTheDocument();
     expect(within(program).getByRole("option", { name: "BSCS — Computer Science" })).toBeVisible();
   });
+
+  it("renders one deterministic option value for every reassigned historical program ID", () => {
+    render(<ReportFilters
+      years={[{ startYear: 2025, label: "2025-2026" }]}
+      filters={{ ...filters, programId: computerScienceId }}
+      dimensions={{
+        ...dimensions,
+        programs: [
+          { id: computerScienceId, collegeId: engineeringId, code: "NEW", name: "Renamed Program" },
+          { id: computerScienceId, collegeId, code: "OLD", name: "Legacy Program" },
+          { id: civilEngineeringId, collegeId: engineeringId, code: "BSCE", name: "Civil Engineering" },
+        ],
+      }}
+    />);
+
+    const program = screen.getByRole("combobox", { name: "Program" });
+    const reassigned = within(program).getAllByRole("option")
+      .filter((option) => (option as HTMLOptionElement).value === computerScienceId);
+    expect(reassigned).toHaveLength(1);
+    expect(reassigned[0].textContent).toBe(
+      "OLD — Legacy Program (College of Computer Studies) / NEW — Renamed Program (College of Engineering)",
+    );
+  });
 });

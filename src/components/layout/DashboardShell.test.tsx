@@ -17,12 +17,20 @@ const user = {
 };
 
 describe("DashboardShell", () => {
-  beforeEach(() => usePathname.mockReturnValue("/appointments/appointment-123"));
+  beforeEach(() => usePathname.mockReturnValue("/laboratory/appointment-123"));
 
-  it("shows an accessible link back to the appointments list on appointment details", () => {
+  it("shows an accessible link back to Laboratory on its appointment details", () => {
     render(<DashboardShell user={user}>Appointment details</DashboardShell>);
 
-    expect(screen.getByRole("link", { name: "Back to appointments" })).toHaveAttribute("href", "/appointments");
+    expect(screen.getByRole("link", { name: "Back to Laboratory" })).toHaveAttribute("href", "/laboratory");
+  });
+
+  it("shows an accessible link back to Physical Examination on its appointment details", () => {
+    usePathname.mockReturnValue("/physical-exam/appointment-123");
+
+    render(<DashboardShell user={user}>Appointment details</DashboardShell>);
+
+    expect(screen.getByRole("link", { name: "Back to Physical Examination" })).toHaveAttribute("href", "/physical-exam");
   });
 
   it("shows an accessible link back to the students list on student details", () => {
@@ -60,6 +68,7 @@ describe("DashboardShell", () => {
 
   it.each([
     "/appointments",
+    "/appointments/appointment-123",
     "/students",
     "/coordinator-schedules",
     "/students/new",

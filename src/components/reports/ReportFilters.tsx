@@ -22,6 +22,64 @@ type ReportDimensions = {
   yearLevels: number[];
 };
 
+function compareText(left: string, right: string) {
+  return left.localeCompare(right, "en", { sensitivity: "base" }) || left.localeCompare(right);
+}
+
+function collegeOptions(colleges: ReportDimensions["colleges"]) {
+  const namesById = new Map<string, Set<string>>();
+  for (const college of colleges) {
+    const names = namesById.get(college.id) ?? new Set<string>();
+    names.add(college.name);
+    namesById.set(college.id, names);
+  }
+  return [...namesById].map(([id, names]) => ({
+    id,
+    name: [...names].sort(compareText).join(" / "),
+  })).sort((left, right) => compareText(left.name, right.name) || left.id.localeCompare(right.id));
+}
+
+function programOptions(
+  dimensions: ReportDimensions,
+  selectedCollegeId: string,
+) {
+  const available = selectedCollegeId
+    ? dimensions.programs.filter((program) => program.collegeId === selectedCollegeId)
+    : dimensions.programs;
+  const namesByCollegeId = new Map(
+    collegeOptions(dimensions.colleges).map((college) => [college.id, college.name]),
+  );
+  const variantsById = new Map<string, typeof available>();
+  for (const program of available) {
+    const variants = variantsById.get(program.id) ?? [];
+    if (!variants.some((variant) => (
+      variant.collegeId === program.collegeId
+      && variant.code === program.code
+      && variant.name === program.name
+    ))) variants.push(program);
+    variantsById.set(program.id, variants);
+  }
+  return [...variantsById].map(([id, variants]) => {
+    variants.sort((left, right) => (
+      compareText(namesByCollegeId.get(left.collegeId) ?? left.collegeId,
+        namesByCollegeId.get(right.collegeId) ?? right.collegeId)
+      || compareText(left.code, right.code)
+      || compareText(left.name, right.name)
+      || left.collegeId.localeCompare(right.collegeId)
+    ));
+    const spansColleges = new Set(variants.map((variant) => variant.collegeId)).size > 1;
+    return {
+      id,
+      label: variants.map((variant) => {
+        const programLabel = `${variant.code} — ${variant.name}`;
+        return spansColleges
+          ? `${programLabel} (${namesByCollegeId.get(variant.collegeId) ?? variant.collegeId})`
+          : programLabel;
+      }).join(" / "),
+    };
+  }).sort((left, right) => compareText(left.label, right.label) || left.id.localeCompare(right.id));
+}
+
 const requirementStatuses: HistoricalRequirementStatus[] = [
   "UNSCHEDULED",
   "PENDING",
@@ -74,9 +132,8 @@ export function ReportFilters({
 }) {
   const [collegeId, setCollegeId] = useState(filters.collegeId ?? "");
   const [programId, setProgramId] = useState(filters.programId ?? "");
-  const programs = collegeId
-    ? dimensions.programs.filter((program) => program.collegeId === collegeId)
-    : dimensions.programs;
+  const colleges = collegeOptions(dimensions.colleges);
+  const programs = programOptions(dimensions, collegeId);
   const resetHref = filters.academicYearStart === null
     ? "/reports"
     : `/reports?academicYearStart=${filters.academicYearStart}`;
@@ -141,7 +198,7 @@ export function ReportFilters({
             }}
           >
             <option value="">Any college</option>
-            {dimensions.colleges.map((college) => (
+            {colleges.map((college) => (
               <option key={college.id} value={college.id}>{college.name}</option>
             ))}
           </Select>
@@ -150,7 +207,7 @@ export function ReportFilters({
           <Select name="programId" value={programId} onChange={(event) => setProgramId(event.target.value)}>
             <option value="">Any program</option>
             {programs.map((program) => (
-              <option key={program.id} value={program.id}>{program.code} — {program.name}</option>
+              <option key={program.id} value={program.id}>{program.label}</option>
             ))}
           </Select>
         </Field>

@@ -85,12 +85,11 @@ export default async function ReportsPage({
     throw error;
   }
 
-  const selectedProgram = report.dimensions.programs.find((program) => (
-    program.id === report.filters.programId
-  ));
   const programIsInvalid = report.filters.programId && (
-    !selectedProgram
-    || (report.filters.collegeId && selectedProgram.collegeId !== report.filters.collegeId)
+    !report.dimensions.programs.some((program) => (
+      program.id === report.filters.programId
+      && (!report.filters.collegeId || program.collegeId === report.filters.collegeId)
+    ))
   );
   if (programIsInvalid) {
     redirect(reportHref(report.filters, { programId: undefined, page: 1 }));

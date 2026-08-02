@@ -36,4 +36,45 @@ describe("ReportBreakdowns", () => {
     const incompatible = new URL(screen.getByRole("link", { name: "Filter by Engineering" }).getAttribute("href")!, "http://localhost");
     expect(incompatible.searchParams.has("programId")).toBe(false);
   });
+
+  it("preserves a reassigned program only for a college with an exact historical tuple", () => {
+    render(<ReportBreakdowns
+      state="CLOSED"
+      filters={{
+        academicYearStart: 2025,
+        collegeId: engineeringCollegeId,
+        programId: computerProgramId,
+        sort: "name_asc",
+        page: 2,
+        limit: 150,
+        offset: 150,
+      }}
+      programs={[
+        { id: computerProgramId, collegeId: computerCollegeId },
+        { id: computerProgramId, collegeId: engineeringCollegeId },
+      ]}
+      breakdowns={{
+        colleges: [
+          { collegeId: computerCollegeId, collegeName: "Computer Studies", totalStudents: 4, fullyComplied: 3, attentionStudents: 1, complianceRate: 75 },
+          { collegeId: engineeringCollegeId, collegeName: "Engineering", totalStudents: 5, fullyComplied: 4, attentionStudents: 1, complianceRate: 80 },
+        ],
+        programs: [
+          { collegeId: computerCollegeId, collegeName: "Computer Studies", programId: computerProgramId, programCode: "OLD", programName: "Former Program", totalStudents: 4, fullyComplied: 3, attentionStudents: 1, complianceRate: 75 },
+          { collegeId: engineeringCollegeId, collegeName: "Engineering", programId: computerProgramId, programCode: "NEW", programName: "Current Program", totalStudents: 5, fullyComplied: 4, attentionStudents: 1, complianceRate: 80 },
+        ],
+        yearLevels: [],
+      }}
+    />);
+
+    const engineering = new URL(
+      screen.getByRole("link", { name: "Filter by Engineering" }).getAttribute("href")!,
+      "http://localhost",
+    );
+    expect(engineering.searchParams.get("programId")).toBe(computerProgramId);
+    const computer = new URL(
+      screen.getByRole("link", { name: "Filter by Computer Studies" }).getAttribute("href")!,
+      "http://localhost",
+    );
+    expect(computer.searchParams.get("programId")).toBe(computerProgramId);
+  });
 });

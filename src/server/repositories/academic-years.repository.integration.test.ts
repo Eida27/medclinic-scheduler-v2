@@ -4,6 +4,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { deleteAcademicYear } from "@/server/services/academic-years.service";
 import { pool } from "@/server/db/pool";
 import { TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
+import { ensureStudentAcademicSnapshotsWithClient } from "./student-academic-snapshots.repository";
 import {
   createAcademicYearWithClient,
   deleteAcademicYearWithClient,
@@ -17,6 +18,7 @@ afterAll(async () => {
 });
 
 const concurrentYear = 2096;
+const reverseConcurrentYear = 2095;
 
 async function waitForAcademicYearDeleteToBlock(
   observer: PoolClient,
@@ -82,7 +84,134 @@ async function cleanupConcurrentYear() {
   }
 }
 
+async function cleanupReverseConcurrentYear() {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      "ALTER TABLE student_academic_snapshots DISABLE TRIGGER student_academic_snapshots_immutable",
+    );
+    await client.query(
+      `DELETE FROM student_academic_snapshots
+        WHERE student_number='95-RACE-0001' AND academic_year_start=$1`,
+      [reverseConcurrentYear],
+    );
+    await client.query(
+      "ALTER TABLE student_academic_snapshots ENABLE TRIGGER student_academic_snapshots_immutable",
+    );
+    await client.query(
+      `DELETE FROM audit_logs
+        WHERE entity_type IN ('academic_year','student_academic_snapshot')
+          AND (entity_id=$1 OR metadata->>'academicYearStart'=$1)`,
+      [String(reverseConcurrentYear)],
+    );
+    await client.query("DELETE FROM academic_years WHERE start_year=$1", [reverseConcurrentYear]);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 describe("academic-years repository", () => {
+  it("returns the configured-year domain conflict when deletion locks and commits first", async () => {
+    await cleanupReverseConcurrentYear();
+    await pool.query(
+      `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+       VALUES ($1,'2096-07-31',$2,$2)`,
+      [reverseConcurrentYear, TEST_REFERENCE_IDS.adminUser],
+    );
+    const deleter = await pool.connect();
+    const importer = await pool.connect();
+    let deleterCommitted = false;
+    let importerSettled = false;
+    try {
+      await deleter.query("BEGIN");
+      await deleter.query(
+        "SELECT start_year FROM academic_years WHERE start_year=$1 FOR UPDATE",
+        [reverseConcurrentYear],
+      );
+      const blocker = await deleter.query<{ transaction_id: string }>(
+        "SELECT txid_current()::text AS transaction_id",
+      );
+
+      await importer.query("BEGIN");
+      const snapshotAttempt = ensureStudentAcademicSnapshotsWithClient(importer, {
+        actorUserId: TEST_REFERENCE_IDS.adminUser,
+        candidates: [{
+          studentNumber: "95-RACE-0001",
+          academicYearStart: reverseConcurrentYear,
+          studentName: "Race, Reverse Order",
+          collegeId: null,
+          collegeName: "Historical College",
+          programId: null,
+          programCode: null,
+          programName: "Historical Program",
+          yearLevel: 3,
+          sourceImportGroupId: null,
+          sourceType: "MIGRATED_INCOMPLETE",
+          sourceMetadata: { fixture: "reverse-year-delete" },
+        }],
+      }).then(
+        async (value) => {
+          await importer.query("COMMIT");
+          importerSettled = true;
+          return { outcome: "resolved" as const, value };
+        },
+        async (error: unknown) => {
+          await importer.query("ROLLBACK");
+          importerSettled = true;
+          return { outcome: "rejected" as const, error };
+        },
+      );
+
+      await waitForAcademicYearDeleteToBlock(
+        deleter,
+        blocker.rows[0].transaction_id,
+      );
+      await deleteAcademicYearWithClient(deleter, reverseConcurrentYear);
+      await deleter.query("COMMIT");
+      deleterCommitted = true;
+
+      await expect(snapshotAttempt).resolves.toEqual({
+        outcome: "rejected",
+        error: expect.objectContaining({
+          name: "AppError",
+          code: "ACADEMIC_YEAR_NOT_CONFIGURED",
+          status: 409,
+          details: { academicYearStart: [reverseConcurrentYear] },
+        }),
+      });
+      const writes = await pool.query(
+        `SELECT
+           (SELECT COUNT(*)::integer FROM academic_years WHERE start_year=$1) AS years,
+           (SELECT COUNT(*)::integer FROM student_academic_snapshots
+             WHERE student_number='95-RACE-0001' AND academic_year_start=$1) AS snapshots,
+           (SELECT COUNT(*)::integer FROM students WHERE student_number='95-RACE-0001') AS students,
+           (SELECT COUNT(*)::integer FROM appointments WHERE student_number='95-RACE-0001') AS appointments,
+           (SELECT COUNT(*)::integer FROM audit_logs
+             WHERE entity_id='95-RACE-0001:2095'
+                OR metadata->>'academicYearStart'=$1::text) AS audits`,
+        [reverseConcurrentYear],
+      );
+      expect(writes.rows[0]).toEqual({
+        years: 0,
+        snapshots: 0,
+        students: 0,
+        appointments: 0,
+        audits: 0,
+      });
+    } finally {
+      if (!deleterCommitted) await deleter.query("ROLLBACK");
+      if (!importerSettled) await importer.query("ROLLBACK");
+      deleter.release();
+      importer.release();
+      await cleanupReverseConcurrentYear();
+    }
+  });
+
   it("returns an in-use conflict when a snapshot commits while deletion waits for the parent row", async () => {
     await cleanupConcurrentYear();
     await pool.query(

@@ -145,4 +145,26 @@ describe("AppointmentActions automatic no-show correction", () => {
     await waitFor(() => expect(push).toHaveBeenCalledWith("/laboratory/replacement-2"));
     expect(refresh).not.toHaveBeenCalled();
   });
+
+  it("keeps physical-exam replacement navigation in the physical-exam workflow", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      data: { id: "replacement-physical", status: "PENDING" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(
+      <AppointmentActions
+        id="appointment-physical"
+        status="PENDING"
+        basePath="/physical-exam"
+      />,
+    );
+
+    await user.type(screen.getByLabelText("Replacement appointment date"), "2026-08-25");
+    await user.type(screen.getByLabelText("Reason for rescheduling"), "Physical clinic follow-up");
+    await user.click(screen.getByRole("button", { name: "Create replacement" }));
+
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/physical-exam/replacement-physical"));
+    expect(refresh).not.toHaveBeenCalled();
+  });
 });

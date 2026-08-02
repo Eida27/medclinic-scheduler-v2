@@ -117,7 +117,10 @@ export function buildHistoricalCompliancePdfModel(
   generatedAt: Date,
 ) {
   const college = report.dimensions.colleges.find(({ id }) => id === report.filters.collegeId);
-  const program = report.dimensions.programs.find(({ id }) => id === report.filters.programId);
+  const program = report.dimensions.programs.find(({ id, collegeId }) => (
+    id === report.filters.programId
+    && (!report.filters.collegeId || collegeId === report.filters.collegeId)
+  ));
   const programLabel = program
     ? `${program.code ? `${program.code} - ` : ""}${program.name}`
     : "All";

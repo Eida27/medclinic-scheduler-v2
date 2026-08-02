@@ -87,7 +87,15 @@ export function AcademicYearsManager({ years }: { years: AcademicYearItem[] }) {
 
   async function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    await send("POST", { startYear, closingDate: newClosingDate }, "Academic year created.");
+    const form = new FormData(event.currentTarget);
+    const submittedStartYear = form.get("startYear");
+    const submittedClosingDate = form.get("closingDate");
+    if (typeof submittedStartYear !== "string" || typeof submittedClosingDate !== "string") return;
+    await send(
+      "POST",
+      { startYear: Number(submittedStartYear), closingDate: submittedClosingDate },
+      "Academic year created.",
+    );
   }
 
   async function update(event: FormEvent<HTMLFormElement>, year: AcademicYearItem) {
@@ -122,6 +130,7 @@ export function AcademicYearsManager({ years }: { years: AcademicYearItem[] }) {
             Academic-year start year
             <Input
               aria-label="Academic-year start year"
+              name="startYear"
               type="number"
               min={2020}
               max={2100}
@@ -138,6 +147,7 @@ export function AcademicYearsManager({ years }: { years: AcademicYearItem[] }) {
             Closing date
             <Input
               aria-label="New academic-year closing date"
+              name="closingDate"
               type="date"
               value={newClosingDate}
               onChange={(event) => setNewClosingDate(event.target.value)}

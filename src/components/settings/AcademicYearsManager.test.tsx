@@ -53,6 +53,33 @@ describe("AcademicYearsManager", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Academic year created.");
   });
 
+  it("submits the create values currently displayed by native inputs", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: {} }, 201));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AcademicYearsManager years={years} />);
+
+    const startYear = screen.getByLabelText("Academic-year start year") as HTMLInputElement;
+    const closingDate = screen.getByLabelText("New academic-year closing date") as HTMLInputElement;
+    startYear.value = "2031";
+    startYear.dispatchEvent(new Event("input", { bubbles: true }));
+    startYear.dispatchEvent(new Event("blur", { bubbles: true }));
+    closingDate.value = "2032-06-30";
+    closingDate.dispatchEvent(new Event("input", { bubbles: true }));
+    closingDate.dispatchEvent(new Event("blur", { bubbles: true }));
+    expect(startYear).toHaveValue(2031);
+    expect(closingDate).toHaveValue("2032-06-30");
+
+    await user.click(screen.getByRole("button", { name: "Add academic year" }));
+
+    await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+    expect(fetchMock).toHaveBeenCalledWith("/api/settings/academic-years", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ startYear: 2031, closingDate: "2032-06-30" }),
+    });
+  });
+
   it("updates the closing date and reports success", async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: {} }));

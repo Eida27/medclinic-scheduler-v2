@@ -260,7 +260,8 @@ export async function historicalComplianceReportRepository(
        ),
        'breakdowns',jsonb_build_object(
          'colleges',(
-           SELECT COALESCE(jsonb_agg(to_jsonb(grouped) ORDER BY LOWER(grouped."collegeName")),'[]'::jsonb)
+           SELECT COALESCE(jsonb_agg(to_jsonb(grouped) ORDER BY LOWER(grouped."collegeName"),
+                    grouped."collegeId" NULLS LAST),'[]'::jsonb)
              FROM (
                SELECT row."collegeId",row."collegeName",COUNT(*)::integer AS "totalStudents",
                       COUNT(*) FILTER (WHERE row."overallStatus"='COMPLIED')::integer AS "fullyComplied",
@@ -271,7 +272,9 @@ export async function historicalComplianceReportRepository(
              ) grouped
          ),
          'programs',(
-           SELECT COALESCE(jsonb_agg(to_jsonb(grouped) ORDER BY LOWER(grouped."collegeName"),LOWER(grouped."programName")),'[]'::jsonb)
+           SELECT COALESCE(jsonb_agg(to_jsonb(grouped) ORDER BY LOWER(grouped."collegeName"),
+                    LOWER(grouped."programName"),grouped."collegeId" NULLS LAST,
+                    grouped."programId" NULLS LAST,LOWER(grouped."programCode") NULLS LAST),'[]'::jsonb)
              FROM (
                SELECT row."collegeId",row."collegeName",row."programId",row."programCode",row."programName",
                       COUNT(*)::integer AS "totalStudents",
@@ -298,7 +301,7 @@ export async function historicalComplianceReportRepository(
        'dimensions',jsonb_build_object(
          'colleges',(
            SELECT COALESCE(jsonb_agg(jsonb_build_object('id',option."collegeId",'name',option."collegeName")
-                    ORDER BY LOWER(option."collegeName")),'[]'::jsonb)
+                    ORDER BY LOWER(option."collegeName"),option."collegeId",option."collegeName"),'[]'::jsonb)
              FROM (SELECT DISTINCT row."collegeId",row."collegeName" FROM reporting_rows row
                     WHERE row."collegeId" IS NOT NULL) option
          ),
@@ -306,7 +309,9 @@ export async function historicalComplianceReportRepository(
            SELECT COALESCE(jsonb_agg(jsonb_build_object(
                     'id',option."programId",'collegeId',option."collegeId",
                     'code',option."programCode",'name',option."programName"
-                  ) ORDER BY LOWER(option."collegeName"),LOWER(option."programName")),'[]'::jsonb)
+                  ) ORDER BY LOWER(option."collegeName"),LOWER(option."programName"),
+                    option."collegeId",option."programId",LOWER(option."programCode"),
+                    option."collegeName",option."programName") ,'[]'::jsonb)
              FROM (SELECT DISTINCT row."programId",row."collegeId",row."collegeName",
                           row."programCode",row."programName" FROM reporting_rows row
                     WHERE row."programId" IS NOT NULL AND row."collegeId" IS NOT NULL) option

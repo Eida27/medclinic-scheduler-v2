@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTOMATIC_NO_SHOW_NOTE } from "@/server/appointments/automatic-no-show";
 
-const { appointmentActions, appointmentDetail, appointmentProtectionPanel, completedStatusCorrection, getPublishedAppointment, notFound, requireUser } = vi.hoisted(() => ({
+const { appointmentActions, appointmentDetail, appointmentProtectionPanel, completedStatusCorrection, getPublishedAppointment, notFound, redirect, requireUser } = vi.hoisted(() => ({
   appointmentActions: vi.fn(() => null),
   appointmentDetail: vi.fn(() => null),
   appointmentProtectionPanel: vi.fn(() => null),
@@ -10,6 +10,9 @@ const { appointmentActions, appointmentDetail, appointmentProtectionPanel, compl
   getPublishedAppointment: vi.fn(),
   notFound: vi.fn(() => {
     throw new Error("NEXT_NOT_FOUND");
+  }),
+  redirect: vi.fn(() => {
+    throw new Error("NEXT_REDIRECT");
   }),
   requireUser: vi.fn(),
 }));
@@ -26,7 +29,7 @@ vi.mock("@/components/appointments/AppointmentProtectionPanel", () => ({
 vi.mock("@/components/appointments/CompletedStatusCorrection", () => ({
   CompletedStatusCorrection: completedStatusCorrection,
 }));
-vi.mock("next/navigation", () => ({ notFound }));
+vi.mock("next/navigation", () => ({ notFound, redirect }));
 vi.mock("@/server/auth/current-user", () => ({ requireUser }));
 vi.mock("@/server/repositories/appointments.repository", () => ({ getPublishedAppointment }));
 
@@ -85,7 +88,7 @@ describe("AppointmentDetail", () => {
   it("renders a published appointment after enforcing the allowed roles", async () => {
     const AppointmentDetail = await getActualAppointmentDetail();
 
-    render(await AppointmentDetail({ appointmentId: "appointment-1", source: "APPOINTMENTS" }));
+    render(await AppointmentDetail({ appointmentId: "appointment-1", source: "LABORATORY" }));
 
     expect(requireUser).toHaveBeenCalledWith(["ADMIN", "CLINIC_STAFF"]);
     expect(getPublishedAppointment).toHaveBeenCalledWith("appointment-1");
@@ -130,7 +133,7 @@ describe("AppointmentDetail", () => {
     });
     const AppointmentDetail = await getActualAppointmentDetail();
 
-    render(await AppointmentDetail({ appointmentId: "appointment-1", source: "APPOINTMENTS" }));
+    render(await AppointmentDetail({ appointmentId: "appointment-1", source: "LABORATORY" }));
 
     expect(screen.getByText("No-show")).toBeVisible();
     expect(screen.getByText("Pending → No-show")).toBeVisible();
@@ -140,7 +143,7 @@ describe("AppointmentDetail", () => {
       status: "NO_SHOW",
       canCorrectNoShow: true,
       isManuallyLocked: true,
-      basePath: "/appointments",
+      basePath: "/laboratory",
     }, undefined);
   });
 
@@ -163,7 +166,7 @@ describe("AppointmentDetail", () => {
   it("does not render completed correction for an ordinary pending appointment", async () => {
     const AppointmentDetail = await getActualAppointmentDetail();
 
-    render(await AppointmentDetail({ appointmentId: "appointment-1", source: "APPOINTMENTS" }));
+    render(await AppointmentDetail({ appointmentId: "appointment-1", source: "LABORATORY" }));
 
     expect(completedStatusCorrection).not.toHaveBeenCalled();
   });
@@ -209,7 +212,7 @@ describe("AppointmentDetail", () => {
     requireUser.mockResolvedValue({ role: "ADMIN", clinicId: null });
     const AppointmentDetail = await getActualAppointmentDetail();
 
-    render(await AppointmentDetail({ appointmentId: "appointment-1", source: "APPOINTMENTS" }));
+    render(await AppointmentDetail({ appointmentId: "appointment-1", source: "LABORATORY" }));
 
     expect(screen.getByRole("heading", { level: 1, name: "Santos, Ana Maria Angela (Jr.)" })).toBeVisible();
     expect(notFound).not.toHaveBeenCalled();
@@ -218,4 +221,30 @@ describe("AppointmentDetail", () => {
       undefined,
     );
   });
+
+  it.each([
+    ["CLINIC_STAFF", "LABORATORY", "clinic-1", "/laboratory/appointment-1"],
+    ["CLINIC_STAFF", "PHYSICAL_EXAM", "clinic-2", "/physical-exam/appointment-1"],
+    ["ADMIN", "LABORATORY", null, "/laboratory/appointment-1"],
+    ["ADMIN", "PHYSICAL_EXAM", null, "/physical-exam/appointment-1"],
+  ] as const)(
+    "redirects %s legacy %s detail access into its operational clinic flow",
+    async (role, scheduleType, clinicId, target) => {
+      requireUser.mockResolvedValue({ role, clinicId });
+      getPublishedAppointment.mockResolvedValue({
+        ...publishedAppointment,
+        scheduleType,
+        clinicId: scheduleType === "LABORATORY" ? "clinic-1" : "clinic-2",
+      });
+      const AppointmentDetail = await getActualAppointmentDetail();
+
+      await expect(AppointmentDetail({
+        appointmentId: "appointment-1",
+        source: "APPOINTMENTS",
+      })).rejects.toThrow("NEXT_REDIRECT");
+
+      expect(redirect).toHaveBeenCalledWith(target);
+      expect(appointmentActions).not.toHaveBeenCalled();
+    },
+  );
 });

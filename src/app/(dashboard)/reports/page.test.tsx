@@ -246,6 +246,34 @@ describe("ReportsPage", () => {
     expect(screen.getByRole("combobox", { name: "Program" })).toHaveValue(programId);
   });
 
+  it("preserves a bookmarked college-program pair when a reassigned program has another tuple first", async () => {
+    getHistoricalComplianceReport.mockResolvedValue({
+      ...report,
+      filters: {
+        ...report.filters,
+        collegeId,
+        programId,
+        page: 1,
+        offset: 0,
+      },
+      dimensions: {
+        ...report.dimensions,
+        programs: [
+          { id: programId, collegeId: otherCollegeId, code: "OLD", name: "Former Program" },
+          { id: programId, collegeId, code: "BSCS", name: "Computer Science" },
+        ],
+      },
+    });
+
+    render(await ReportsPage({
+      searchParams: Promise.resolve({ academicYearStart: "2025", collegeId, programId }),
+    }));
+
+    expect(redirect).not.toHaveBeenCalled();
+    expect(screen.getByRole("combobox", { name: "College" })).toHaveValue(collegeId);
+    expect(screen.getByRole("combobox", { name: "Program" })).toHaveValue(programId);
+  });
+
   it("redirects pages beyond the last result page while preserving normalized filters", async () => {
     getHistoricalComplianceReport.mockResolvedValue({
       ...report,

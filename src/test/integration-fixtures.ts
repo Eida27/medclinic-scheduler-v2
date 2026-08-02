@@ -74,7 +74,11 @@ export async function cleanupTestFixtures(
   await transaction(async (client) => {
     await client.query(
       `CREATE TEMP TABLE test_fixture_students ON COMMIT DROP AS
-       SELECT student_number FROM students WHERE student_number LIKE $1`,
+       SELECT student_number FROM students WHERE student_number LIKE $1
+       UNION
+       SELECT student_number
+         FROM student_academic_snapshots
+        WHERE student_number LIKE $1`,
       [studentNumberPattern],
     );
     await client.query("ALTER TABLE test_fixture_students ADD PRIMARY KEY (student_number)");
@@ -124,6 +128,22 @@ export async function cleanupTestFixtures(
                AND audit.entity_id IN (SELECT student_number FROM test_fixture_students))
            OR (audit.entity_type='appointment'
                AND audit.entity_id IN (SELECT id::text FROM test_fixture_appointments))
+           OR (audit.entity_type='student_academic_snapshot' AND (
+                SPLIT_PART(COALESCE(audit.entity_id,''),':',1)
+                  IN (SELECT student_number FROM test_fixture_students)
+                OR EXISTS (
+                  SELECT 1
+                    FROM jsonb_array_elements(
+                      CASE
+                        WHEN jsonb_typeof(audit.metadata->'conflicts')='array'
+                          THEN audit.metadata->'conflicts'
+                        ELSE '[]'::jsonb
+                      END
+                    ) metadata_conflict
+                    JOIN test_fixture_students fixture_student
+                      ON fixture_student.student_number=metadata_conflict->>'studentNumber'
+                )
+              ))
            OR audit.metadata->>'studentNumber' IN (SELECT student_number FROM test_fixture_students)
            OR audit.metadata->>'batchId' IN (SELECT id::text FROM test_fixture_batches)
            OR audit.metadata->>'replacementId' IN (SELECT id::text FROM test_fixture_appointments)
@@ -182,6 +202,16 @@ export async function cleanupTestFixtures(
     );
     await client.query("DELETE FROM schedule_batches WHERE id IN (SELECT id FROM test_fixture_batches)");
     await client.query("DELETE FROM schedule_import_groups WHERE id IN (SELECT id FROM test_fixture_import_groups)");
+    await client.query(
+      "ALTER TABLE student_academic_snapshots DISABLE TRIGGER student_academic_snapshots_immutable",
+    );
+    await client.query(
+      `DELETE FROM student_academic_snapshots
+        WHERE student_number IN (SELECT student_number FROM test_fixture_students)`,
+    );
+    await client.query(
+      "ALTER TABLE student_academic_snapshots ENABLE TRIGGER student_academic_snapshots_immutable",
+    );
     await client.query("DELETE FROM students WHERE student_number IN (SELECT student_number FROM test_fixture_students)");
   });
 }

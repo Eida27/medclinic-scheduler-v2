@@ -1,4 +1,4 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { AppointmentActions } from "@/components/appointments/AppointmentActions";
 import { AppointmentProtectionPanel } from "@/components/appointments/AppointmentProtectionPanel";
 import { CompletedStatusCorrection } from "@/components/appointments/CompletedStatusCorrection";
@@ -44,6 +44,13 @@ export async function AppointmentDetail({
   if (!appointment) notFound();
   if (expectedScheduleType && appointment.scheduleType !== expectedScheduleType) notFound();
   if (user.role === "CLINIC_STAFF" && user.clinicId !== appointment.clinicId) notFound();
+  if (source === "APPOINTMENTS") {
+    redirect(
+      appointment.scheduleType === "LABORATORY"
+        ? `/laboratory/${appointment.id}`
+        : `/physical-exam/${appointment.id}`,
+    );
+  }
   const statusLogs = appointment.statusLogs as Log[];
   const canCorrectNoShow = appointment.status === "NO_SHOW"
     && (user.role === "ADMIN" || user.clinicId === appointment.clinicId)
@@ -90,11 +97,7 @@ export async function AppointmentDetail({
             status={String(appointment.status)}
             canCorrectNoShow={canCorrectNoShow}
             isManuallyLocked={Boolean(appointment.isManuallyLocked)}
-            basePath={source === "LABORATORY"
-              ? "/laboratory"
-              : source === "PHYSICAL_EXAM"
-                ? "/physical-exam"
-                : "/appointments"}
+            basePath={source === "LABORATORY" ? "/laboratory" : "/physical-exam"}
           />
           {appointment.status === "COMPLETED" ? (
             <div className="mt-5">

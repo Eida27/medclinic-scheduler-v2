@@ -135,6 +135,8 @@ beforeAll(async () => {
     ["RPT-STATE-PHYS", "State", "Physical", true],
     ["RPT-STATE-BOTH", "State", "Both", true],
     ["RPT-STATE-COMPLIED", "State", "Complied", true],
+    ["RPT-TUPLE-ALPHA", "Tuple", "Alpha", true],
+    ["RPT-TUPLE-BETA", "Tuple", "Beta", true],
   ];
   await client.query(
     `INSERT INTO students (
@@ -175,6 +177,18 @@ beforeAll(async () => {
     collegeId: colleges.beta, collegeName: "Historic Beta College",
     programId: programs.beta, programCode: "BETA", programName: "Beta Program",
     yearLevel: 2,
+  });
+  await insertSnapshot({
+    studentNumber: "RPT-TUPLE-ALPHA", name: "Tuple, Alpha",
+    collegeId: colleges.alpha, collegeName: "Historic Alpha College",
+    programId: programs.alpha, programCode: "ALPHA", programName: "Alpha Program",
+    yearLevel: 2,
+  });
+  await insertSnapshot({
+    studentNumber: "RPT-TUPLE-BETA", name: "Tuple, Beta",
+    collegeId: colleges.beta, collegeName: "Historic Beta College",
+    programId: programs.alpha, programCode: "REASSIGNED", programName: "Reassigned Program",
+    yearLevel: 3,
   });
 
   const sortSnapshots = [
@@ -232,6 +246,8 @@ beforeAll(async () => {
   await insertAppointment({
     studentNumber: "RPT-YEAR-0001", cycle: NEXT_YEAR, type: "PHYSICAL_EXAM", date: "2089-12-01", status: "COMPLETED",
   });
+  await insertAppointment({ studentNumber: "RPT-TUPLE-ALPHA", type: "LABORATORY", date: "2088-10-01", status: "PENDING" });
+  await insertAppointment({ studentNumber: "RPT-TUPLE-BETA", type: "LABORATORY", date: "2088-10-02", status: "PENDING" });
 
   for (const number of ["RPT-SORT-A", "RPT-SORT-D"]) {
     await insertAppointment({ studentNumber: number, type: "LABORATORY", date: "2088-09-01", status: "COMPLETED" });
@@ -487,6 +503,35 @@ describe("historical compliance report service", () => {
       overallStatus: "DID_NOT_COMPLY",
     }, closedNow, client);
     expect(report.items.map((row) => row.studentNumber)).toEqual(["RPT-CORE-0002"]);
+  });
+
+  it("keeps every historical college-program tuple when one program ID was reassigned", async () => {
+    const unfiltered = await getHistoricalComplianceReport({
+      academicYearStart: String(YEAR), search: "RPT-TUPLE-", sort: "name_asc",
+    }, closedNow, client);
+    expect(unfiltered.dimensions.programs.filter((program) => program.id === programs.alpha))
+      .toEqual(expect.arrayContaining([
+        {
+          id: programs.alpha,
+          collegeId: colleges.alpha,
+          code: "ALPHA",
+          name: "Alpha Program",
+        },
+        {
+          id: programs.alpha,
+          collegeId: colleges.beta,
+          code: "REASSIGNED",
+          name: "Reassigned Program",
+        },
+      ]));
+
+    const reassigned = await getHistoricalComplianceReport({
+      academicYearStart: String(YEAR),
+      search: "RPT-TUPLE-",
+      collegeId: colleges.beta,
+      programId: programs.alpha,
+    }, closedNow, client);
+    expect(reassigned.items.map((row) => row.studentNumber)).toEqual(["RPT-TUPLE-BETA"]);
   });
 
   it.each([

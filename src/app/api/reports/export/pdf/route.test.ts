@@ -141,7 +141,16 @@ describe("GET /api/reports/export/pdf", () => {
   });
 
   it("audits a successful finalized export with actor, normalized filters, sort, count, and timing", async () => {
-    await GET(request());
+    const source = new Readable({ read() {} });
+    renderHistoricalCompliancePdf.mockReturnValue(source);
+    const response = await GET(request());
+
+    expect(writeAudit).not.toHaveBeenCalled();
+    const consumption = response.arrayBuffer();
+    source.push(Buffer.from("%PDF-complete"));
+    vi.setSystemTime(new Date("2026-08-02T02:03:04.125Z"));
+    source.push(null);
+    await consumption;
 
     expect(writeAudit).toHaveBeenCalledWith(
       "admin-1",
@@ -158,7 +167,8 @@ describe("GET /api/reports/export/pdf", () => {
         sort: "name_asc",
         rowCount: 2,
         generatedAt: "2026-08-02T02:03:04.000Z",
-        generationDurationMs: 0,
+        generationDurationMs: 125,
+        outcome: "SUCCESS",
       },
     );
     expect(renderHistoricalCompliancePdf.mock.invocationCallOrder[0])
@@ -241,6 +251,85 @@ describe("GET /api/reports/export/pdf", () => {
 
     expect(response.status).toBe(500);
     expect(response.headers.get("content-type")).toContain("application/json");
-    expect(writeAudit).not.toHaveBeenCalled();
+    expect(writeAudit).toHaveBeenCalledOnce();
+    expect(writeAudit).toHaveBeenCalledWith(
+      "admin-1",
+      "HISTORICAL_COMPLIANCE_PDF_EXPORTED",
+      "academic_year",
+      "2025",
+      expect.objectContaining({
+        outcome: "FAILURE",
+        failureStage: "RENDER_SETUP",
+        failureCode: "PDF_RENDER_SETUP_ERROR",
+      }),
+    );
+  });
+
+  it("audits an asynchronous PDF source error as failure and never as success", async () => {
+    const source = new Readable({ read() {} });
+    renderHistoricalCompliancePdf.mockReturnValue(source);
+    const response = await GET(request());
+
+    const consumption = response.arrayBuffer();
+    source.push(Buffer.from("%PDF-truncated"));
+    vi.setSystemTime(new Date("2026-08-02T02:03:04.250Z"));
+    source.destroy(new Error("late PDF failure"));
+
+    await expect(consumption).rejects.toThrow("late PDF failure");
+    expect(writeAudit).toHaveBeenCalledOnce();
+    expect(writeAudit).toHaveBeenCalledWith(
+      "admin-1",
+      "HISTORICAL_COMPLIANCE_PDF_EXPORTED",
+      "academic_year",
+      "2025",
+      expect.objectContaining({
+        outcome: "FAILURE",
+        failureStage: "STREAM",
+        failureCode: "PDF_STREAM_ERROR",
+        generationDurationMs: 250,
+      }),
+    );
+    expect(writeAudit.mock.calls.some((call) => call[4]?.outcome === "SUCCESS")).toBe(false);
+  });
+
+  it("records client cancellation as failure exactly once", async () => {
+    const source = new Readable({ read() {} });
+    renderHistoricalCompliancePdf.mockReturnValue(source);
+    const response = await GET(request());
+    const reader = response.body!.getReader();
+    source.push(Buffer.from("%PDF-partial"));
+    await reader.read();
+
+    await reader.cancel("download cancelled");
+
+    expect(writeAudit).toHaveBeenCalledOnce();
+    expect(writeAudit).toHaveBeenCalledWith(
+      "admin-1",
+      "HISTORICAL_COMPLIANCE_PDF_EXPORTED",
+      "academic_year",
+      "2025",
+      expect.objectContaining({
+        outcome: "FAILURE",
+        failureStage: "CLIENT",
+        failureCode: "CLIENT_CANCELLED",
+      }),
+    );
+  });
+
+  it("does not corrupt completed PDF bytes when the audit write itself fails", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    writeAudit.mockRejectedValue(new Error("audit unavailable"));
+
+    const response = await GET(request());
+
+    await expect(response.arrayBuffer()).resolves.toEqual(
+      Uint8Array.from(Buffer.from("%PDF-route")).buffer,
+    );
+    expect(writeAudit).toHaveBeenCalledOnce();
+    expect(consoleError).toHaveBeenCalledWith(
+      "Historical compliance PDF audit write failed.",
+      expect.any(Error),
+    );
+    consoleError.mockRestore();
   });
 });

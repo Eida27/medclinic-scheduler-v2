@@ -65,7 +65,6 @@ export function ReportBreakdowns({
   programs: Array<{ id: string; collegeId: string }>;
   state: AcademicYearState;
 }) {
-  const selectedProgram = programs.find((program) => program.id === filters.programId);
   return (
     <section aria-label="Academic breakdowns" className="grid gap-5 xl:grid-cols-3">
       <BreakdownTable
@@ -74,12 +73,14 @@ export function ReportBreakdowns({
         state={state}
         rows={breakdowns.colleges.map((row) => ({
           ...row,
-          key: row.collegeId ?? row.collegeName,
+          key: `${row.collegeId ?? "unassigned"}:${row.collegeName}`,
           content: row.collegeId ? (
             <Link
               href={reportHref(filters, {
                 collegeId: row.collegeId,
-                programId: selectedProgram?.collegeId === row.collegeId
+                programId: programs.some((program) => (
+                  program.id === filters.programId && program.collegeId === row.collegeId
+                ))
                   ? filters.programId
                   : undefined,
                 page: 1,
@@ -98,7 +99,13 @@ export function ReportBreakdowns({
         state={state}
         rows={breakdowns.programs.map((row) => ({
           ...row,
-          key: row.programId ?? `${row.collegeName}:${row.programName}`,
+          key: [
+            row.collegeId ?? "unassigned-college",
+            row.collegeName,
+            row.programId ?? "unassigned-program",
+            row.programCode ?? "",
+            row.programName,
+          ].join(":"),
           content: `${row.programCode ? `${row.programCode} — ` : ""}${row.programName}`,
         }))}
       />

@@ -158,4 +158,31 @@ describe("historical compliance PDF document model", () => {
       dataQuality: "Migrated - Incomplete Historical Data",
     })]);
   });
+
+  it("labels a reassigned program from the selected historical college tuple", () => {
+    const model = buildHistoricalCompliancePdfModel(
+      {
+        ...report,
+        dimensions: {
+          ...report.dimensions,
+          programs: [
+            {
+              id: report.filters.programId,
+              collegeId: "10000000-0000-4000-8000-000000000099",
+              code: "OLD",
+              name: "Former Program",
+            },
+            ...report.dimensions.programs,
+          ],
+        },
+      },
+      { userId: "admin-1", fullName: "Administrator" },
+      new Date("2026-08-02T02:03:04.000Z"),
+    );
+
+    expect(model.appliedFilters.find((filter) => filter.label === "Program")).toEqual({
+      label: "Program",
+      value: "BSChE - Bachelor of Science in Chemical Engineering",
+    });
+  });
 });

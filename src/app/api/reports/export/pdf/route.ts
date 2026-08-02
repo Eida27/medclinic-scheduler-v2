@@ -21,6 +21,111 @@ function auditFilters(filters: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(filters).filter(([key]) => !exportContext.has(key)));
 }
 
+type PdfExportAuditContext = {
+  actorUserId: string;
+  academicYearStart: number;
+  academicYearLabel: string;
+  filters: Record<string, unknown>;
+  sort: string;
+  rowCount: number;
+  generatedAt: Date;
+  startedAt: number;
+};
+
+type PdfExportAuditOutcome =
+  | { outcome: "SUCCESS" }
+  | {
+      outcome: "FAILURE";
+      failureStage: "RENDER_SETUP" | "STREAM" | "CLIENT";
+      failureCode: "PDF_RENDER_SETUP_ERROR" | "PDF_STREAM_ERROR" | "CLIENT_CANCELLED";
+    };
+
+async function writePdfExportAudit(
+  context: PdfExportAuditContext,
+  outcome: PdfExportAuditOutcome,
+) {
+  try {
+    await writeAudit(
+      context.actorUserId,
+      "HISTORICAL_COMPLIANCE_PDF_EXPORTED",
+      "academic_year",
+      String(context.academicYearStart),
+      {
+        academicYearStart: context.academicYearStart,
+        academicYearLabel: context.academicYearLabel,
+        filters: context.filters,
+        sort: context.sort,
+        rowCount: context.rowCount,
+        generatedAt: context.generatedAt.toISOString(),
+        generationDurationMs: Date.now() - context.startedAt,
+        ...outcome,
+      },
+    );
+  } catch (error) {
+    // The PDF outcome has already occurred. Audit storage must not turn a
+    // complete download into a truncated one or replace the source stream error.
+    console.error("Historical compliance PDF audit write failed.", error);
+  }
+}
+
+function pdfChunk(value: unknown): Uint8Array {
+  if (typeof value === "string") return new TextEncoder().encode(value);
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  }
+  throw new TypeError("PDF stream emitted an unsupported chunk.");
+}
+
+function completionAwarePdfStream(
+  source: Readable,
+  audit: (outcome: PdfExportAuditOutcome) => Promise<void>,
+) {
+  const iterator = source[Symbol.asyncIterator]();
+  let settled = false;
+  const settle = async (outcome: PdfExportAuditOutcome) => {
+    if (settled) return;
+    settled = true;
+    await audit(outcome);
+  };
+
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const next = await iterator.next();
+        if (next.done) {
+          await settle({ outcome: "SUCCESS" });
+          controller.close();
+          return;
+        }
+        controller.enqueue(pdfChunk(next.value));
+      } catch (error) {
+        await settle({
+          outcome: "FAILURE",
+          failureStage: "STREAM",
+          failureCode: "PDF_STREAM_ERROR",
+        });
+        controller.error(error);
+      }
+    },
+    async cancel() {
+      try {
+        await iterator.return?.();
+      } catch {
+        // Cancellation owns the final outcome even if stream cleanup also errors.
+      } finally {
+        if (!source.destroyed) source.destroy();
+      }
+      await settle({
+        outcome: "FAILURE",
+        failureStage: "CLIENT",
+        failureCode: "CLIENT_CANCELLED",
+      });
+    },
+  });
+}
+
 export async function GET(request: Request) {
   try {
     const actor = await requireUser(["ADMIN"]);
@@ -44,25 +149,32 @@ export async function GET(request: Request) {
       overallStatus: report.filters.overallStatus,
       generatedAt,
     });
-    const pdf = renderHistoricalCompliancePdf(model);
+    const auditContext: PdfExportAuditContext = {
+      actorUserId: actor.userId,
+      academicYearStart: report.academicYear.startYear,
+      academicYearLabel: report.academicYear.label,
+      filters: auditFilters(report.filters),
+      sort: report.filters.sort,
+      rowCount: report.items.length,
+      generatedAt,
+      startedAt,
+    };
+    let pdf: Readable;
+    try {
+      pdf = renderHistoricalCompliancePdf(model);
+    } catch (error) {
+      await writePdfExportAudit(auditContext, {
+        outcome: "FAILURE",
+        failureStage: "RENDER_SETUP",
+        failureCode: "PDF_RENDER_SETUP_ERROR",
+      });
+      throw error;
+    }
 
-    await writeAudit(
-      actor.userId,
-      "HISTORICAL_COMPLIANCE_PDF_EXPORTED",
-      "academic_year",
-      String(report.academicYear.startYear),
-      {
-        academicYearStart: report.academicYear.startYear,
-        academicYearLabel: report.academicYear.label,
-        filters: auditFilters(report.filters),
-        sort: report.filters.sort,
-        rowCount: report.items.length,
-        generatedAt: generatedAt.toISOString(),
-        generationDurationMs: Date.now() - startedAt,
-      },
+    const body = completionAwarePdfStream(
+      pdf,
+      (outcome) => writePdfExportAudit(auditContext, outcome),
     );
-
-    const body = Readable.toWeb(pdf) as ReadableStream<Uint8Array>;
     return new Response(body, {
       status: 200,
       headers: {
