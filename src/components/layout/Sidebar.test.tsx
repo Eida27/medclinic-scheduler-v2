@@ -9,7 +9,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 describe("Sidebar", () => {
-  beforeEach(() => usePathname.mockReturnValue("/appointments"));
+  beforeEach(() => usePathname.mockReturnValue("/reports"));
 
   it("pins the sidebar to the viewport only on desktop", () => {
     render(
@@ -25,16 +25,17 @@ describe("Sidebar", () => {
     );
   });
 
-  it("marks the active destination for assistive technology", () => {
+  it("keeps operational links while hiding reports and appointments from clinic staff", () => {
     render(
       <Sidebar user={{ userId: "1", fullName: "Clinic User", email: "clinic@example.com", role: "CLINIC_STAFF" }} />,
     );
 
-    expect(screen.getByRole("link", { name: "Appointments" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "Dashboard" })).not.toHaveAttribute("aria-current");
     expect(screen.getByRole("link", { name: "Laboratory" })).toHaveAttribute("href", "/laboratory");
     expect(screen.getByRole("link", { name: "Physical exam" })).toHaveAttribute("href", "/physical-exam");
     expect(screen.getByRole("link", { name: "Students & Schedules" })).toHaveAttribute("href", "/students");
+    expect(screen.queryByRole("link", { name: "Reports" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Appointments" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Compliance" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Students" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Coordinator schedules" })).not.toBeInTheDocument();
@@ -42,14 +43,14 @@ describe("Sidebar", () => {
     expect(screen.getByRole("navigation", { name: "Dashboard navigation" })).toHaveClass("scrollbar-none");
   });
 
-  it("keeps a parent destination active on detail routes", () => {
-    usePathname.mockReturnValue("/appointments/appointment-123");
+  it("marks Reports active for an administrator", () => {
+    usePathname.mockReturnValue("/reports/history");
 
     render(
-      <Sidebar user={{ userId: "1", fullName: "Clinic User", email: "clinic@example.com", role: "CLINIC_STAFF" }} />,
+      <Sidebar user={{ userId: "1", fullName: "Admin User", email: "admin@example.com", role: "ADMIN" }} />,
     );
 
-    expect(screen.getByRole("link", { name: "Appointments" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Reports" })).toHaveAttribute("aria-current", "page");
   });
 
   it("shows administration destinations only to administrators", () => {
@@ -68,6 +69,8 @@ describe("Sidebar", () => {
     );
 
     expect(screen.getByRole("link", { name: "Users" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Reports" })).toHaveAttribute("href", "/reports");
+    expect(screen.queryByRole("link", { name: "Appointments" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Reference data" })).toBeVisible();
     expect(screen.getByRole("link", { name: "Academic years" })).toHaveAttribute(
       "href",
@@ -96,6 +99,7 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("link", { name: "Laboratory" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Physical exam" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Appointments" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Reports" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Results" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Academic years" })).not.toBeInTheDocument();

@@ -39,6 +39,7 @@ export const config = {
     "/coordinator-schedules/:path*",
     "/appointments/:path*",
     "/compliance/:path*",
+    "/reports/:path*",
     "/results/:path*",
     "/settings/:path*",
     "/student/:path*",

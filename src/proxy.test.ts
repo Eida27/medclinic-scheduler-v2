@@ -16,7 +16,7 @@ vi.mock("@/server/auth/student-session", () => ({
   verifyStudentSessionToken,
 }));
 
-import { proxy } from "./proxy";
+import { config, proxy } from "./proxy";
 
 describe("proxy route boundaries", () => {
   beforeEach(() => {
@@ -46,5 +46,10 @@ describe("proxy route boundaries", () => {
 
     expect(verifyStudentSessionToken).toHaveBeenCalledWith("student-token");
     expect(verifySessionToken).not.toHaveBeenCalled();
+  });
+
+  it("authenticates reports while retaining appointment route matching", () => {
+    expect(config.matcher).toContain("/reports/:path*");
+    expect(config.matcher).toContain("/appointments/:path*");
   });
 });

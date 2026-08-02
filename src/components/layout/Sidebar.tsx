@@ -11,10 +11,10 @@ const primaryLinks = [
   ["Laboratory", "/laboratory"],
   ["Physical exam", "/physical-exam"],
   ["Students & Schedules", "/students"],
-  ["Appointments", "/appointments"],
 ] as const;
 
 const adminLinks = [
+  ["Reports", "/reports"],
   ["Users", "/settings/users"],
   ["Reference data", "/settings/reference-data"],
   ["Academic years", "/settings/academic-years"],

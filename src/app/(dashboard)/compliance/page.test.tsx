@@ -1,54 +1,34 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { complianceReport, listColleges, listPriorityGroups, listPrograms, redirect } = vi.hoisted(() => ({
-  complianceReport: vi.fn(),
-  listColleges: vi.fn(),
-  listPriorityGroups: vi.fn(),
-  listPrograms: vi.fn(),
-  redirect: vi.fn(),
-}));
+const { redirect } = vi.hoisted(() => ({ redirect: vi.fn() }));
 
 vi.mock("next/navigation", () => ({ redirect }));
-vi.mock("@/server/repositories/tracking.repository", () => ({ complianceReport }));
-vi.mock("@/server/repositories/reference-data.repository", () => ({
-  listColleges,
-  listPriorityGroups,
-  listPrograms,
-}));
 
 import CompliancePage from "./page";
 
-describe("CompliancePage", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    complianceReport.mockResolvedValue({
-      items: [],
-      total: 0,
-      summary: { totalStudents: 0, physicalCompleted: 0, laboratoryCompleted: 0, pendingAny: 0 },
-    });
-    listColleges.mockResolvedValue([]);
-    listPriorityGroups.mockResolvedValue([]);
-    listPrograms.mockResolvedValue([]);
-  });
+describe("CompliancePage legacy redirect", () => {
+  beforeEach(() => vi.clearAllMocks());
 
-  it("redirects legacy filters to the combined Appointments page", async () => {
+  it("redirects compatible report parameters directly to Reports", async () => {
     await CompliancePage({
       searchParams: Promise.resolve({
+        academicYearStart: "2025",
         search: "Aaron Abad",
-        appointmentStatus: "PENDING",
+        overallStatus: "DID_NOT_COMPLY",
         physicalExamStatus: "COMPLETED",
-        laboratoryStatus: "PENDING_UPLOAD",
-        overallStatus: "INCOMPLETE",
-        priorityGroupId: "priority-1",
-        sort: "name_asc",
+        laboratoryStatus: "NO_SHOW",
+        collegeId: "11111111-1111-4111-8111-111111111111",
+        programId: "22222222-2222-4222-8222-222222222222",
+        yearLevel: "4",
+        dataQuality: "MIGRATED_INCOMPLETE",
+        sort: "attention_first",
         page: "2",
-        unknown: "discard-me",
+        priorityGroupId: "discard-me",
       }),
     });
 
     expect(redirect).toHaveBeenCalledWith(
-      "/appointments?studentNumber=Aaron+Abad&appointmentStatus=PENDING&priorityGroupId=priority-1&physicalExamStatus=COMPLETED&laboratoryStatus=PENDING_UPLOAD&overallStatus=INCOMPLETE&sort=name_asc&page=2",
+      "/reports?academicYearStart=2025&search=Aaron+Abad&overallStatus=DID_NOT_COMPLY&laboratoryStatus=NO_SHOW&physicalExamStatus=COMPLETED&collegeId=11111111-1111-4111-8111-111111111111&programId=22222222-2222-4222-8222-222222222222&yearLevel=4&dataQuality=MIGRATED_INCOMPLETE&sort=attention_first&page=2",
     );
-    expect(complianceReport).not.toHaveBeenCalled();
   });
 });
