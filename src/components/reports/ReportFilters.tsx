@@ -18,7 +18,7 @@ import { operationalStatusLabel } from "@/components/appointments/status-labels"
 type AcademicYearOption = { startYear: number; label: string };
 type ReportDimensions = {
   colleges: Array<{ id: string; name: string }>;
-  programs: Array<{ id: string; collegeId: string; code: string; name: string }>;
+  programs: Array<{ id: string; collegeId: string; code: string | null; name: string }>;
   yearLevels: number[];
 };
 
@@ -63,7 +63,7 @@ function programOptions(
     variants.sort((left, right) => (
       compareText(namesByCollegeId.get(left.collegeId) ?? left.collegeId,
         namesByCollegeId.get(right.collegeId) ?? right.collegeId)
-      || compareText(left.code, right.code)
+      || compareText(left.code ?? "", right.code ?? "")
       || compareText(left.name, right.name)
       || left.collegeId.localeCompare(right.collegeId)
     ));
@@ -71,7 +71,7 @@ function programOptions(
     return {
       id,
       label: variants.map((variant) => {
-        const programLabel = `${variant.code} — ${variant.name}`;
+        const programLabel = variant.code ? `${variant.code} — ${variant.name}` : variant.name;
         return spansColleges
           ? `${programLabel} (${namesByCollegeId.get(variant.collegeId) ?? variant.collegeId})`
           : programLabel;

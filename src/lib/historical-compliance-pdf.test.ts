@@ -185,4 +185,53 @@ describe("historical compliance PDF document model", () => {
       value: "BSChE - Bachelor of Science in Chemical Engineering",
     });
   });
+
+  it("combines every deterministic program and college label variant from the selected historical tuple", () => {
+    const selectedCollegeId = report.filters.collegeId;
+    const selectedProgramId = report.filters.programId;
+    const model = buildHistoricalCompliancePdfModel(
+      {
+        ...report,
+        dimensions: {
+          ...report.dimensions,
+          colleges: [
+            { id: selectedCollegeId, name: "School of Engineering" },
+            ...report.dimensions.colleges,
+          ],
+          programs: [
+            {
+              id: selectedProgramId,
+              collegeId: selectedCollegeId,
+              code: "ChE",
+              name: "Chemical Engineering",
+            },
+            {
+              id: selectedProgramId,
+              collegeId: selectedCollegeId,
+              code: "ChE",
+              name: "Chemical Engineering",
+            },
+            {
+              id: selectedProgramId,
+              collegeId: "10000000-0000-4000-8000-000000000099",
+              code: "OLD",
+              name: "Former Program",
+            },
+            ...report.dimensions.programs,
+          ],
+        },
+      },
+      { userId: "admin-1", fullName: "Administrator" },
+      new Date("2026-08-02T02:03:04.000Z"),
+    );
+
+    expect(model.appliedFilters.find((filter) => filter.label === "College")).toEqual({
+      label: "College",
+      value: "College of Engineering / School of Engineering",
+    });
+    expect(model.appliedFilters.find((filter) => filter.label === "Program")).toEqual({
+      label: "Program",
+      value: "BSChE - Bachelor of Science in Chemical Engineering / ChE - Chemical Engineering",
+    });
+  });
 });

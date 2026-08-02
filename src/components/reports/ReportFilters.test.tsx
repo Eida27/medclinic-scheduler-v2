@@ -71,4 +71,36 @@ describe("ReportFilters", () => {
       "OLD — Legacy Program (College of Computer Studies) / NEW — Renamed Program (College of Engineering)",
     );
   });
+
+  it("renders deterministic program variants without exposing a nullable program code", () => {
+    render(<ReportFilters
+      years={[{ startYear: 2025, label: "2025-2026" }]}
+      filters={{ ...filters, programId: computerScienceId }}
+      dimensions={{
+        ...dimensions,
+        programs: [
+          {
+            id: computerScienceId,
+            collegeId,
+            code: null,
+            name: "Applied Computing",
+          },
+          { id: computerScienceId, collegeId, code: "BSCS", name: "Computer Science" },
+          {
+            id: computerScienceId,
+            collegeId,
+            code: null,
+            name: "Applied Computing",
+          },
+          { id: civilEngineeringId, collegeId: engineeringId, code: "BSCE", name: "Civil Engineering" },
+        ],
+      }}
+    />);
+
+    const program = screen.getByRole("combobox", { name: "Program" });
+    const historicalOption = within(program).getAllByRole("option")
+      .find((option) => (option as HTMLOptionElement).value === computerScienceId);
+    expect(historicalOption).toHaveTextContent("Applied Computing / BSCS — Computer Science");
+    expect(historicalOption).not.toHaveTextContent("null —");
+  });
 });

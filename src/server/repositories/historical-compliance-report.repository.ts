@@ -65,7 +65,7 @@ export type HistoricalComplianceBreakdowns = {
 
 export type HistoricalReportDimensions = {
   colleges: Array<{ id: string; name: string }>;
-  programs: Array<{ id: string; collegeId: string; code: string; name: string }>;
+  programs: Array<{ id: string; collegeId: string; code: string | null; name: string }>;
   yearLevels: number[];
 };
 
