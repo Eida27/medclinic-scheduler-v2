@@ -69,6 +69,10 @@ describe("Sidebar", () => {
 
     expect(screen.getByRole("link", { name: "Users" })).toBeVisible();
     expect(screen.getByRole("link", { name: "Reference data" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Academic years" })).toHaveAttribute(
+      "href",
+      "/settings/academic-years",
+    );
     expect(screen.getByRole("link", { name: "Capacity" })).toBeVisible();
     expect(screen.getByRole("link", { name: "Manual resolution" })).toHaveAttribute(
       "href",
@@ -94,6 +98,7 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("link", { name: "Appointments" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Results" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Academic years" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Clinic calendar" })).not.toBeInTheDocument();
   });
 });

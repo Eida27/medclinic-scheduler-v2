@@ -17,6 +17,7 @@ const primaryLinks = [
 const adminLinks = [
   ["Users", "/settings/users"],
   ["Reference data", "/settings/reference-data"],
+  ["Academic years", "/settings/academic-years"],
   ["Capacity", "/settings/capacity"],
   ["Clinic calendar", "/settings/clinic-unavailable-dates"],
   ["Manual resolution", "/settings/clinic-unavailable-dates/manual-resolution"],
