@@ -11,8 +11,10 @@ import {
   invalidateFinalizedSubmissionMetadata,
   loadAppointmentResultProtectionStates,
   lockCurrentFinalizedSubmissionForInvalidation,
+  lockExpectedStudentResultDraft,
   lockFinalizedSubmissionForInvalidation,
 } from "@/server/repositories/student-result-submissions.repository";
+import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import { publishBatch } from "@/server/repositories/appointments.repository";
 import { LocalResultStorage } from "@/server/storage/local-result-storage";
 import type { ResultStorage } from "@/server/storage/result-storage";
@@ -403,6 +405,82 @@ describe("student result drafts", () => {
       id: draft.id,
       fileCount: 6,
     });
+  });
+
+  it("does not deadlock invalidation against an expected-draft mutation lock", async () => {
+    const studentNumber = "99-9436-36";
+    await insertTestStudent({ studentNumber, firstName: "Lock", lastName: "Order", yearLevel: 3 });
+    const appointmentId = await appointment(studentNumber);
+    await addStudentResultFile(studentNumber, appointmentId, file("official.pdf"), storage);
+    const official = await finalizeStudentResultSubmission(studentNumber, appointmentId, storage);
+    const edit = await pool.query<{ id: string }>(
+      `INSERT INTO student_result_submissions (
+         appointment_id, student_number, result_type, based_on_submission_id
+       ) VALUES ($1,$2,'LABORATORY',$3)
+       RETURNING id`,
+      [appointmentId, studentNumber, official.id],
+    );
+    const mutationClient = await pool.connect();
+    const invalidationClient = await pool.connect();
+    const observer = await pool.connect();
+    let invalidationSettled = false;
+
+    try {
+      await Promise.all([
+        mutationClient.query("BEGIN"),
+        invalidationClient.query("BEGIN"),
+      ]);
+      await Promise.all([
+        mutationClient.query("SET LOCAL deadlock_timeout='100ms'"),
+        invalidationClient.query("SET LOCAL deadlock_timeout='100ms'"),
+      ]);
+      await lockEffectiveAppointmentScopes(mutationClient, [{
+        studentNumber,
+        scheduleType: "LABORATORY",
+      }]);
+      await mutationClient.query("SELECT id FROM appointments WHERE id=$1 FOR UPDATE", [appointmentId]);
+
+      const invalidationTask = lockCurrentFinalizedSubmissionForInvalidation(
+        invalidationClient,
+        official.id,
+      ).then(async (lock) => {
+        await invalidationClient.query("COMMIT");
+        return lock;
+      }).finally(() => { invalidationSettled = true; });
+      await waitForAdvisoryLockWaiter(observer, () => invalidationSettled);
+
+      const mutationTask = lockExpectedStudentResultDraft(
+        mutationClient,
+        studentNumber,
+        appointmentId,
+        edit.rows[0].id,
+      ).then(async (lock) => {
+        await mutationClient.query("COMMIT");
+        return lock;
+      });
+      const [mutationOutcome, invalidationOutcome] = await Promise.allSettled([
+        mutationTask,
+        invalidationTask,
+      ]);
+
+      if (mutationOutcome.status === "rejected") throw mutationOutcome.reason;
+      if (invalidationOutcome.status === "rejected") throw invalidationOutcome.reason;
+
+      expect(mutationOutcome).toMatchObject({
+        status: "fulfilled",
+        value: { type: "draft", draft: { id: edit.rows[0].id } },
+      });
+      expect(invalidationOutcome).toMatchObject({
+        status: "fulfilled",
+        value: { type: "ready", submission: { id: official.id } },
+      });
+    } finally {
+      await mutationClient.query("ROLLBACK").catch(() => undefined);
+      await invalidationClient.query("ROLLBACK").catch(() => undefined);
+      mutationClient.release();
+      invalidationClient.release();
+      observer.release();
+    }
   });
 
   it("does not let a stale tab upload, remove, or finalize a replacement draft", async () => {

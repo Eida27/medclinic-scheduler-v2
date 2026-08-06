@@ -1066,8 +1066,7 @@ export async function lockCurrentFinalizedSubmissionForInvalidation(
     `SELECT id, appointment_id AS "appointmentId", student_number AS "studentNumber",
             result_type AS "resultType"
        FROM student_result_submissions
-      WHERE id=$1
-      FOR UPDATE`,
+      WHERE id=$1`,
     [submissionId],
   );
   if (!identity.rowCount) return { type: "not_found" as const };
@@ -1075,6 +1074,18 @@ export async function lockCurrentFinalizedSubmissionForInvalidation(
     studentNumber: identity.rows[0].studentNumber,
     scheduleType: identity.rows[0].resultType,
   }]);
+  const appointment = await client.query<{ id: string }>(
+    `SELECT id
+       FROM appointments
+      WHERE id=$1 AND student_number=$2 AND schedule_type=$3
+      FOR UPDATE`,
+    [
+      identity.rows[0].appointmentId,
+      identity.rows[0].studentNumber,
+      identity.rows[0].resultType,
+    ],
+  );
+  if (!appointment.rowCount) return { type: "conflict" as const };
 
   const submission = await client.query<{
     id: string;
@@ -1097,13 +1108,39 @@ export async function lockCurrentFinalizedSubmissionForInvalidation(
                  AND current_appointment."studentNumber"=submission.student_number
                  AND current_appointment."scheduleType"=submission.result_type
             ) AS "isCurrent"
-      FROM student_result_submissions submission
-      WHERE submission.id=$1`,
+       FROM student_result_submissions submission
+      WHERE submission.id=$1
+      FOR UPDATE OF submission`,
     [submissionId],
   );
   const locked = submission.rows[0];
-  if (locked.status !== "FINALIZED" || !locked.isCurrent) {
+  if (
+    !locked
+    || locked.appointmentId !== identity.rows[0].appointmentId
+    || locked.studentNumber !== identity.rows[0].studentNumber
+    || locked.resultType !== identity.rows[0].resultType
+    || locked.status !== "FINALIZED"
+    || !locked.isCurrent
+  ) {
     return { type: "conflict" as const };
+  }
+  const activeDraft = await client.query<{ id: string }>(
+    `SELECT id
+       FROM student_result_submissions
+      WHERE appointment_id=$1 AND student_number=$2
+        AND status='DRAFT' AND discarded_at IS NULL
+      FOR UPDATE`,
+    [locked.appointmentId, locked.studentNumber],
+  );
+  if (activeDraft.rowCount) {
+    await client.query(
+      `SELECT id
+         FROM student_result_files
+        WHERE submission_id=$1 AND deleted_at IS NULL
+          AND storage_delete_pending=FALSE
+        FOR UPDATE`,
+      [activeDraft.rows[0].id],
+    );
   }
   const files = await client.query<{ id: string; storageKey: string }>(
     `SELECT id, storage_key AS "storageKey"
