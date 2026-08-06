@@ -15,14 +15,15 @@ import {
 } from "@/server/repositories/student-result-submissions.repository";
 import { publishBatch } from "@/server/repositories/appointments.repository";
 import { LocalResultStorage } from "@/server/storage/local-result-storage";
+import type { ResultStorage } from "@/server/storage/result-storage";
 import { cleanupTestFixtures, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import type { SessionUser } from "@/types/roles";
 import { updateAppointment } from "./appointments.service";
 import {
-  addStudentResultFile,
+  addStudentResultFiles,
   createAdminSubmissionZip,
   createAdminSubmissionZipStream,
-  finalizeStudentResultSubmission,
+  finalizeStudentResultSubmission as finalizeExpectedStudentResultSubmission,
   getAdminStudentResultProfile,
   getAdminStudentResultFile,
   getAdminSubmissionStudentNumber,
@@ -30,7 +31,7 @@ import {
   getStudentResultSubmission,
   invalidateStudentResultSubmission,
   listAdminStudentResultProfiles,
-  removeStudentResultFile,
+  removeStudentResultFile as removeExpectedStudentResultFile,
 } from "./student-result-submissions.service";
 
 const studentPattern = "99-94%";
@@ -92,6 +93,66 @@ async function appointment(
 
 function file(filename = "result.pdf", body = "%PDF-1.7\nsynthetic result") {
   return { filename, declaredMimeType: "application/pdf", bytes: Buffer.from(body) };
+}
+
+function textFile(filename = "notes.txt") {
+  return { filename, declaredMimeType: "text/plain", bytes: Buffer.from("synthetic notes") };
+}
+
+function pdfOfSize(filename: string, byteSize: number) {
+  const bytes = Buffer.alloc(byteSize, 0x78);
+  bytes.write("%PDF-", 0, "ascii");
+  return { filename, declaredMimeType: "application/pdf", bytes };
+}
+
+async function addStudentResultFile(
+  studentNumber: string,
+  appointmentId: string,
+  upload: ReturnType<typeof file>,
+  targetStorage: ResultStorage = storage,
+) {
+  const before = await getStudentResultSubmission(studentNumber, appointmentId);
+  const knownFileIds = new Set(before.files.map((existing) => existing.id));
+  const refreshed = await addStudentResultFiles(
+    studentNumber,
+    appointmentId,
+    before.id,
+    [upload],
+    targetStorage,
+  );
+  const added = refreshed.files.find((candidate) => !knownFileIds.has(candidate.id));
+  if (!added) throw new Error("Expected the single-file test helper to add one result file.");
+  return added;
+}
+
+async function removeStudentResultFile(
+  studentNumber: string,
+  appointmentId: string,
+  fileId: string,
+  targetStorage: ResultStorage = storage,
+) {
+  const current = await getStudentResultSubmission(studentNumber, appointmentId);
+  return removeExpectedStudentResultFile(
+    studentNumber,
+    appointmentId,
+    current.id,
+    fileId,
+    targetStorage,
+  );
+}
+
+async function finalizeStudentResultSubmission(
+  studentNumber: string,
+  appointmentId: string,
+  targetStorage: ResultStorage = storage,
+) {
+  const current = await getStudentResultSubmission(studentNumber, appointmentId);
+  return finalizeExpectedStudentResultSubmission(
+    studentNumber,
+    appointmentId,
+    current.id,
+    targetStorage,
+  );
 }
 
 async function invalidationSnapshot(submissionId: string) {
@@ -188,6 +249,208 @@ afterAll(async () => {
 });
 
 describe("student result drafts", () => {
+  it("rejects a mixed-invalid batch without file rows or storage residue", async () => {
+    const studentNumber = "99-9430-30";
+    await insertTestStudent({ studentNumber, firstName: "Mixed", lastName: "Batch", yearLevel: 3 });
+    const appointmentId = await appointment(studentNumber);
+    const before = await getStudentResultSubmission(studentNumber, appointmentId);
+    let writeCalls = 0;
+    const trackingStorage = {
+      write: async () => { writeCalls += 1; },
+      read: storage.read.bind(storage),
+      delete: storage.delete.bind(storage),
+    };
+
+    await expect(addStudentResultFiles(
+      studentNumber,
+      appointmentId,
+      before.id,
+      [file("valid.pdf"), textFile()],
+      trackingStorage,
+    )).rejects.toMatchObject({ code: "RESULT_FILE_TYPE_NOT_ALLOWED", status: 422 });
+
+    expect(writeCalls).toBe(0);
+    expect((await getStudentResultSubmission(studentNumber, appointmentId)).files).toEqual([]);
+    expect(await readdir(storageRoot)).toEqual([]);
+  });
+
+  it("rejects a batch whose resulting file count exceeds ten before writing storage", async () => {
+    const studentNumber = "99-9431-31";
+    await insertTestStudent({ studentNumber, firstName: "Count", lastName: "Batch", yearLevel: 3 });
+    const appointmentId = await appointment(studentNumber);
+    const draft = await getStudentResultSubmission(studentNumber, appointmentId);
+    let writeCalls = 0;
+    const trackingStorage = {
+      write: async () => { writeCalls += 1; },
+      read: storage.read.bind(storage),
+      delete: storage.delete.bind(storage),
+    };
+
+    await expect(addStudentResultFiles(
+      studentNumber,
+      appointmentId,
+      draft.id,
+      Array.from({ length: 11 }, (_, index) => file(`count-${index}.pdf`)),
+      trackingStorage,
+    )).rejects.toMatchObject({ code: "RESULT_FILE_COUNT_LIMIT", status: 422 });
+
+    expect(writeCalls).toBe(0);
+    expect((await getStudentResultSubmission(studentNumber, appointmentId)).files).toEqual([]);
+  });
+
+  it("rejects a batch whose resulting bytes exceed 50 MB before writing storage", async () => {
+    const studentNumber = "99-9432-32";
+    await insertTestStudent({ studentNumber, firstName: "Bytes", lastName: "Batch", yearLevel: 3 });
+    const appointmentId = await appointment(studentNumber);
+    const draft = await getStudentResultSubmission(studentNumber, appointmentId);
+    let writeCalls = 0;
+    const trackingStorage = {
+      write: async () => { writeCalls += 1; },
+      read: storage.read.bind(storage),
+      delete: storage.delete.bind(storage),
+    };
+
+    await expect(addStudentResultFiles(
+      studentNumber,
+      appointmentId,
+      draft.id,
+      [
+        pdfOfSize("large-1.pdf", 18 * 1024 * 1024),
+        pdfOfSize("large-2.pdf", 18 * 1024 * 1024),
+        pdfOfSize("large-3.pdf", 18 * 1024 * 1024),
+      ],
+      trackingStorage,
+    )).rejects.toMatchObject({ code: "RESULT_TOTAL_SIZE_LIMIT", status: 422 });
+
+    expect(writeCalls).toBe(0);
+    expect((await getStudentResultSubmission(studentNumber, appointmentId)).files).toEqual([]);
+  }, 30000);
+
+  it("cleans every generated batch key after a partial storage failure without deleting existing files", async () => {
+    const studentNumber = "99-9433-33";
+    await insertTestStudent({ studentNumber, firstName: "Rollback", lastName: "Batch", yearLevel: 3 });
+    const appointmentId = await appointment(studentNumber);
+    const draft = await getStudentResultSubmission(studentNumber, appointmentId);
+    const objects = new Map<string, Buffer>();
+    const writeKeys: string[] = [];
+    const deleteKeys: string[] = [];
+    let failOnWrite = Number.POSITIVE_INFINITY;
+    const trackingStorage = {
+      write: async (storageKey: string, bytes: Buffer) => {
+        writeKeys.push(storageKey);
+        if (writeKeys.length === failOnWrite) throw new Error("synthetic batch write failure");
+        objects.set(storageKey, bytes);
+      },
+      read: async (storageKey: string) => {
+        const bytes = objects.get(storageKey);
+        if (!bytes) throw new Error("missing synthetic object");
+        return bytes;
+      },
+      delete: async (storageKey: string) => {
+        deleteKeys.push(storageKey);
+        objects.delete(storageKey);
+      },
+    };
+    const initial = await addStudentResultFiles(
+      studentNumber,
+      appointmentId,
+      draft.id,
+      [file("existing.pdf")],
+      trackingStorage,
+    );
+    const existingKey = initial.files[0].storageKey;
+    failOnWrite = writeKeys.length + 2;
+
+    await expect(addStudentResultFiles(
+      studentNumber,
+      appointmentId,
+      draft.id,
+      [file("batch-1.pdf"), file("batch-2.pdf"), file("batch-3.pdf")],
+      trackingStorage,
+    )).rejects.toThrow("synthetic batch write failure");
+
+    const generatedBatchKeys = deleteKeys.slice(-3);
+    expect(generatedBatchKeys).toHaveLength(3);
+    expect(new Set(generatedBatchKeys).size).toBe(3);
+    expect(generatedBatchKeys).not.toContain(existingKey);
+    expect([...objects.keys()]).toEqual([existingKey]);
+    await expect(getStudentResultSubmission(studentNumber, appointmentId)).resolves.toMatchObject({
+      id: draft.id,
+      fileCount: 1,
+      files: [{ originalFilename: "existing.pdf" }],
+    });
+  });
+
+  it("serializes concurrent batches so only one batch can consume the remaining file limit", async () => {
+    const studentNumber = "99-9434-34";
+    await insertTestStudent({ studentNumber, firstName: "Concurrent", lastName: "Batch", yearLevel: 3 });
+    const appointmentId = await appointment(studentNumber);
+    const draft = await getStudentResultSubmission(studentNumber, appointmentId);
+    const batches = ["first", "second"].map((prefix) => addStudentResultFiles(
+      studentNumber,
+      appointmentId,
+      draft.id,
+      Array.from({ length: 6 }, (_, index) => file(`${prefix}-${index}.pdf`)),
+      storage,
+    ));
+
+    const outcomes = await Promise.allSettled(batches);
+    expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+    expect(outcomes.filter((outcome) => (
+      outcome.status === "rejected" && outcome.reason?.code === "RESULT_FILE_COUNT_LIMIT"
+    ))).toHaveLength(1);
+    await expect(getStudentResultSubmission(studentNumber, appointmentId)).resolves.toMatchObject({
+      id: draft.id,
+      fileCount: 6,
+    });
+  });
+
+  it("does not let a stale tab upload, remove, or finalize a replacement draft", async () => {
+    const studentNumber = "99-9435-35";
+    await insertTestStudent({ studentNumber, firstName: "Stale", lastName: "Tab", yearLevel: 3 });
+    const appointmentId = await appointment(studentNumber);
+    const retired = await getStudentResultSubmission(studentNumber, appointmentId);
+    await pool.query(
+      "UPDATE student_result_submissions SET discarded_at=NOW() WHERE id=$1",
+      [retired.id],
+    );
+    const replacement = await pool.query<{ id: string }>(
+      `INSERT INTO student_result_submissions (appointment_id, student_number, result_type)
+       VALUES ($1,$2,'LABORATORY') RETURNING id`,
+      [appointmentId, studentNumber],
+    );
+    const current = await addStudentResultFiles(
+      studentNumber,
+      appointmentId,
+      replacement.rows[0].id,
+      [file("replacement.pdf")],
+      storage,
+    );
+    const replacementFileId = current.files[0].id;
+
+    await expect(addStudentResultFiles(
+      studentNumber,
+      appointmentId,
+      retired.id,
+      [file("stale-upload.pdf")],
+      storage,
+    )).rejects.toMatchObject({ code: "RESULT_EDIT_STALE", status: 409 });
+    await expect(removeExpectedStudentResultFile(
+      studentNumber,
+      appointmentId,
+      retired.id,
+      replacementFileId,
+      storage,
+    )).rejects.toMatchObject({ code: "RESULT_EDIT_STALE", status: 409 });
+    await expect(finalizeExpectedStudentResultSubmission(
+      studentNumber,
+      appointmentId,
+      retired.id,
+      storage,
+    )).rejects.toMatchObject({ code: "RESULT_EDIT_STALE", status: 409 });
+    await expect(getStudentResultSubmission(studentNumber, appointmentId)).resolves.toEqual(current);
+  });
+
   it("resumes a draft, adds/removes files, and never uses original names in storage keys", async () => {
     await insertTestStudent({ studentNumber: "99-9401-01", firstName: "Draft", lastName: "Owner", yearLevel: 3 });
     const appointmentId = await appointment("99-9401-01");
@@ -326,9 +589,9 @@ describe("student result drafts", () => {
     });
     expect(JSON.stringify(audit.rows[0].metadata)).not.toMatch(/filename|birth|content/i);
     await expect(addStudentResultFile("99-9408-08", appointmentId, file("late.pdf"), storage))
-      .rejects.toMatchObject({ code: "RESULT_SUBMISSION_FINALIZED", status: 409 });
+      .rejects.toMatchObject({ code: "RESULT_EDIT_STALE", status: 409 });
     await expect(removeStudentResultFile("99-9408-08", appointmentId, first.id, storage))
-      .rejects.toMatchObject({ code: "RESULT_FILE_NOT_FOUND", status: 404 });
+      .rejects.toMatchObject({ code: "RESULT_EDIT_STALE", status: 409 });
   });
 
   it("enforces student ownership and admin-only individual/ZIP access", async () => {

@@ -5,8 +5,9 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { pool } from "@/server/db/pool";
 import {
-  addStudentResultFile,
+  addStudentResultFiles,
   finalizeStudentResultSubmission,
+  getStudentResultSubmission,
   invalidateStudentResultSubmission,
   removeStudentResultFile,
 } from "@/server/services/student-result-submissions.service";
@@ -48,11 +49,19 @@ async function draft(studentNumber: string, filename = "draft.pdf") {
      ) VALUES ($1,$2,'LABORATORY','2027-08-02','COMPLETED',TRUE,$3) RETURNING id`,
     [TEST_REFERENCE_IDS.laboratoryClinic, studentNumber, TEST_REFERENCE_IDS.adminUser],
   );
-  const file = await addStudentResultFile(studentNumber, appointment.rows[0].id, {
-    filename,
-    declaredMimeType: "application/pdf",
-    bytes: Buffer.from("%PDF-1.7\ncleanup"),
-  }, storage);
+  const draft = await getStudentResultSubmission(studentNumber, appointment.rows[0].id);
+  const refreshed = await addStudentResultFiles(
+    studentNumber,
+    appointment.rows[0].id,
+    draft.id,
+    [{
+      filename,
+      declaredMimeType: "application/pdf",
+      bytes: Buffer.from("%PDF-1.7\ncleanup"),
+    }],
+    storage,
+  );
+  const file = refreshed.files[0];
   return { appointmentId: appointment.rows[0].id, file };
 }
 
@@ -93,7 +102,12 @@ describe("result draft cleanup", () => {
   it("retains active and finalized submissions", async () => {
     const active = await draft("99-9302-02", "active.pdf");
     const finalized = await draft("99-9303-03", "final.pdf");
-    await finalizeStudentResultSubmission("99-9303-03", finalized.appointmentId, storage);
+    await finalizeStudentResultSubmission(
+      "99-9303-03",
+      finalized.appointmentId,
+      finalized.file.submissionId,
+      storage,
+    );
     const now = new Date("2027-09-08T00:00:00.000Z");
     await pool.query(
       `UPDATE student_result_submissions
@@ -134,7 +148,12 @@ describe("result draft cleanup", () => {
 
   it("retries physical deletion markers left by invalidation", async () => {
     const fixture = await draft("99-9305-05", "invalidated.pdf");
-    const finalized = await finalizeStudentResultSubmission("99-9305-05", fixture.appointmentId, storage);
+    const finalized = await finalizeStudentResultSubmission(
+      "99-9305-05",
+      fixture.appointmentId,
+      fixture.file.submissionId,
+      storage,
+    );
     const failingStorage = {
       write: storage.write.bind(storage),
       read: storage.read.bind(storage),
@@ -160,6 +179,7 @@ describe("result draft cleanup", () => {
     await removeStudentResultFile(
       "99-9306-06",
       fixture.appointmentId,
+      fixture.file.submissionId,
       fixture.file.id,
       failingStorage,
     );

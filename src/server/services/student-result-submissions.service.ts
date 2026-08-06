@@ -20,14 +20,13 @@ import {
   getStudentNumberForSubmission,
   getStudentResultSubmissionRow,
   invalidateFinalizedSubmissionMetadata,
-  insertStudentResultFile,
+  insertStudentResultFiles,
   listAdminStudentResultProfileRows,
   listAdminStudentResultSubmissionRows,
   listDraftFilesForUpdate,
   lockCurrentFinalizedSubmissionForInvalidation,
+  lockExpectedStudentResultDraft,
   lockOrCreateStudentResultDraft,
-  lockOwnedDraftForFinalization,
-  lockOwnedDraftFile,
   markStudentResultFileForDeletion,
   recordResultFileDeletion,
 } from "@/server/repositories/student-result-submissions.repository";
@@ -53,6 +52,15 @@ function draftError(type: "not_found" | "unavailable" | "finalized") {
   );
 }
 
+function expectedDraftError(type: "not_found" | "unavailable" | "stale") {
+  if (type === "not_found" || type === "unavailable") return draftError(type);
+  return new AppError(
+    "RESULT_EDIT_STALE",
+    "This result draft changed. Refresh and try again.",
+    409,
+  );
+}
+
 export async function getStudentResultSubmission(studentNumber: string, appointmentId: string) {
   const existing = await getStudentResultSubmissionRow(studentNumber, appointmentId);
   if (existing) return existing;
@@ -63,38 +71,62 @@ export async function getStudentResultSubmission(studentNumber: string, appointm
   return (await getStudentResultSubmissionRow(studentNumber, appointmentId))!;
 }
 
-export async function addStudentResultFile(
+export async function addStudentResultFiles(
   studentNumber: string,
   appointmentId: string,
-  upload: Upload,
+  submissionId: string,
+  uploads: Upload[],
   storage: ResultStorage = localResultStorage,
 ) {
-  const validated = validateResultFile(upload);
-  let storageKey: string | null = null;
+  if (!uploads.length) {
+    throw new AppError("RESULT_FILES_REQUIRED", "Select at least one result file to upload.", 400);
+  }
+  const generatedStorageKeys: string[] = [];
   try {
     return await transaction(async (client) => {
-      const outcome = await lockOrCreateStudentResultDraft(client, studentNumber, appointmentId);
-      if (outcome.type !== "draft") throw draftError(outcome.type);
+      const outcome = await lockExpectedStudentResultDraft(
+        client,
+        studentNumber,
+        appointmentId,
+        submissionId,
+      );
+      if (outcome.type !== "draft") throw expectedDraftError(outcome.type);
       const existingFiles = await listDraftFilesForUpdate(client, outcome.draft.id);
-      if (existingFiles.length >= RESULT_SUBMISSION_MAX_FILES) {
+      const validatedUploads = uploads.map((upload) => ({
+        upload,
+        validated: validateResultFile(upload),
+      }));
+      if (existingFiles.length + validatedUploads.length > RESULT_SUBMISSION_MAX_FILES) {
         throw new AppError("RESULT_FILE_COUNT_LIMIT", "A result submission may contain at most 10 files.", 422);
       }
       const currentBytes = existingFiles.reduce((sum, file) => sum + file.byteSize, 0);
-      if (currentBytes + validated.byteSize > RESULT_SUBMISSION_MAX_BYTES) {
+      const uploadedBytes = validatedUploads.reduce(
+        (sum, input) => sum + input.validated.byteSize,
+        0,
+      );
+      if (currentBytes + uploadedBytes > RESULT_SUBMISSION_MAX_BYTES) {
         throw new AppError("RESULT_TOTAL_SIZE_LIMIT", "A result submission may contain at most 50 MB.", 422);
       }
-      storageKey = `${outcome.draft.id}/${randomUUID()}.${validated.extension}`;
-      const inserted = await insertStudentResultFile(client, {
+      const pendingFiles = validatedUploads.map(({ upload, validated }) => ({
         submissionId: outcome.draft.id,
-        storageKey,
+        storageKey: `${outcome.draft.id}/${randomUUID()}.${validated.extension}`,
         originalFilename: upload.filename,
+        bytes: upload.bytes,
         ...validated,
-      });
-      await storage.write(storageKey, upload.bytes);
-      return inserted;
+      }));
+      generatedStorageKeys.push(...pendingFiles.map((file) => file.storageKey));
+      for (const pending of pendingFiles) {
+        await storage.write(pending.storageKey, pending.bytes);
+      }
+      await insertStudentResultFiles(client, pendingFiles);
+      const refreshed = await getStudentResultSubmissionRow(studentNumber, appointmentId, client);
+      if (!refreshed || refreshed.id !== submissionId) {
+        throw new Error("Result draft disappeared during batch upload.");
+      }
+      return refreshed;
     });
   } catch (error) {
-    if (storageKey) await storage.delete(storageKey).catch(() => undefined);
+    await Promise.allSettled(generatedStorageKeys.map((storageKey) => storage.delete(storageKey)));
     throw error;
   }
 }
@@ -102,13 +134,22 @@ export async function addStudentResultFile(
 export async function removeStudentResultFile(
   studentNumber: string,
   appointmentId: string,
+  submissionId: string,
   fileId: string,
   storage: ResultStorage = localResultStorage,
 ) {
   const file = await transaction(async (client) => {
-    const file = await lockOwnedDraftFile(client, studentNumber, appointmentId, fileId);
+    const outcome = await lockExpectedStudentResultDraft(
+      client,
+      studentNumber,
+      appointmentId,
+      submissionId,
+    );
+    if (outcome.type !== "draft") throw expectedDraftError(outcome.type);
+    const files = await listDraftFilesForUpdate(client, outcome.draft.id);
+    const file = files.find((candidate) => candidate.id === fileId);
     if (!file) throw new AppError("RESULT_FILE_NOT_FOUND", "Result file not found.", 404);
-    await markStudentResultFileForDeletion(client, file.id, file.submissionId);
+    await markStudentResultFileForDeletion(client, file.id, submissionId);
     return file;
   });
   try {
@@ -126,17 +167,18 @@ export async function removeStudentResultFile(
 export async function finalizeStudentResultSubmission(
   studentNumber: string,
   appointmentId: string,
+  submissionId: string,
   storage: ResultStorage = localResultStorage,
 ) {
   await transaction(async (client) => {
-    const draft = await lockOwnedDraftForFinalization(client, studentNumber, appointmentId);
-    if (!draft) {
-      const existing = await getStudentResultSubmissionRow(studentNumber, appointmentId);
-      if (existing?.status === "FINALIZED") {
-        throw new AppError("RESULT_SUBMISSION_FINALIZED", "This result submission is already finalized.", 409);
-      }
-      throw new AppError("RESULT_DRAFT_NOT_FOUND", "Result draft not found.", 404);
-    }
+    const outcome = await lockExpectedStudentResultDraft(
+      client,
+      studentNumber,
+      appointmentId,
+      submissionId,
+    );
+    if (outcome.type !== "draft") throw expectedDraftError(outcome.type);
+    const draft = outcome.draft;
     const files = await listDraftFilesForUpdate(client, draft.id);
     if (!files.length) throw new AppError("RESULT_FILES_REQUIRED", "Add at least one file before final submission.", 422);
     const totalBytes = files.reduce((sum, file) => sum + file.byteSize, 0);

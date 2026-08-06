@@ -67,6 +67,12 @@ type DraftRow = {
   lastActivityAt: Date;
 };
 
+type LockedResultAppointment = {
+  id: string;
+  status: string;
+  scheduleType: "LABORATORY" | "PHYSICAL_EXAM";
+};
+
 type AppointmentResultProtectionRow = {
   appointmentId: string;
   scheduleType: ScheduleType;
@@ -245,26 +251,23 @@ export async function lockOrCreateStudentResultDraft(
   studentNumber: string,
   appointmentId: string,
 ) {
-  const appointment = await client.query<{
-    id: string;
-    status: string;
-    scheduleType: "LABORATORY" | "PHYSICAL_EXAM";
-  }>(
-    `SELECT id, status, schedule_type AS "scheduleType"
-       FROM appointments
-      WHERE id=$1 AND student_number=$2 AND is_published=TRUE
-      FOR UPDATE`,
-    [appointmentId, studentNumber],
+  const appointment = await lockOwnedResultAppointment(
+    client,
+    studentNumber,
+    appointmentId,
   );
-  if (!appointment.rowCount) return { type: "not_found" as const };
-  if (appointment.rows[0].status !== "COMPLETED") return { type: "unavailable" as const };
-  const finalized = await client.query(
+  if (!appointment) return { type: "not_found" as const };
+  if (appointment.status !== "COMPLETED") return { type: "unavailable" as const };
+  const finalized = await client.query<{ id: string }>(
     `SELECT id FROM student_result_submissions
-      WHERE appointment_id=$1 AND status='FINALIZED' FOR UPDATE`,
+      WHERE appointment_id=$1 AND status='FINALIZED'
+      FOR UPDATE`,
     [appointmentId],
   );
+  const existing = await lockActiveStudentResultDraft(client, studentNumber, appointmentId);
+  if (existing) return { type: "draft" as const, draft: existing };
   if (finalized.rowCount) return { type: "finalized" as const };
-  const resultTable = appointment.rows[0].scheduleType === "LABORATORY"
+  const resultTable = appointment.scheduleType === "LABORATORY"
     ? "laboratory_results"
     : "exam_results";
   const resultStatus = await client.query<{ resultStatus: string }>(
@@ -274,24 +277,97 @@ export async function lockOrCreateStudentResultDraft(
   if (resultStatus.rowCount && resultStatus.rows[0].resultStatus !== "PENDING_UPLOAD") {
     return { type: "unavailable" as const };
   }
-  const existing = await client.query<DraftRow>(
-    `SELECT id, appointment_id AS "appointmentId", student_number AS "studentNumber",
-            result_type AS "resultType", status, last_activity_at AS "lastActivityAt"
-       FROM student_result_submissions
-      WHERE appointment_id=$1 AND status='DRAFT'
-      FOR UPDATE`,
-    [appointmentId],
-  );
-  if (existing.rowCount) return { type: "draft" as const, draft: existing.rows[0] };
   const inserted = await client.query<DraftRow>(
     `INSERT INTO student_result_submissions (
        appointment_id, student_number, result_type
      ) VALUES ($1,$2,$3)
      RETURNING id, appointment_id AS "appointmentId", student_number AS "studentNumber",
                result_type AS "resultType", status, last_activity_at AS "lastActivityAt"`,
-    [appointmentId, studentNumber, appointment.rows[0].scheduleType],
+    [appointmentId, studentNumber, appointment.scheduleType],
   );
   return { type: "draft" as const, draft: inserted.rows[0] };
+}
+
+async function lockOwnedResultAppointment(
+  client: PoolClient,
+  studentNumber: string,
+  appointmentId: string,
+): Promise<LockedResultAppointment | null> {
+  const scope = await client.query<{ scheduleType: "LABORATORY" | "PHYSICAL_EXAM" }>(
+    `SELECT schedule_type AS "scheduleType"
+       FROM appointments
+      WHERE id=$1 AND student_number=$2 AND is_published=TRUE`,
+    [appointmentId, studentNumber],
+  );
+  if (!scope.rowCount) return null;
+  await lockEffectiveAppointmentScopes(client, [{
+    studentNumber,
+    scheduleType: scope.rows[0].scheduleType,
+  }]);
+  const appointment = await client.query<LockedResultAppointment>(
+    `SELECT id, status, schedule_type AS "scheduleType"
+       FROM appointments
+      WHERE id=$1 AND student_number=$2 AND is_published=TRUE
+      FOR UPDATE`,
+    [appointmentId, studentNumber],
+  );
+  return appointment.rows[0] ?? null;
+}
+
+async function lockActiveStudentResultDraft(
+  client: PoolClient,
+  studentNumber: string,
+  appointmentId: string,
+) {
+  const existing = await client.query<DraftRow>(
+    `SELECT id, appointment_id AS "appointmentId", student_number AS "studentNumber",
+            result_type AS "resultType", status, last_activity_at AS "lastActivityAt"
+       FROM student_result_submissions
+      WHERE appointment_id=$1 AND student_number=$2
+        AND status='DRAFT' AND discarded_at IS NULL
+      FOR UPDATE`,
+    [appointmentId, studentNumber],
+  );
+  return existing.rows[0] ?? null;
+}
+
+export async function lockExpectedStudentResultDraft(
+  client: PoolClient,
+  studentNumber: string,
+  appointmentId: string,
+  submissionId: string,
+) {
+  const appointment = await lockOwnedResultAppointment(
+    client,
+    studentNumber,
+    appointmentId,
+  );
+  if (!appointment) return { type: "not_found" as const };
+  if (appointment.status !== "COMPLETED") return { type: "unavailable" as const };
+
+  const finalized = await client.query<{ id: string }>(
+    `SELECT id FROM student_result_submissions
+      WHERE appointment_id=$1 AND status='FINALIZED'
+      FOR UPDATE`,
+    [appointmentId],
+  );
+  const draft = await lockActiveStudentResultDraft(client, studentNumber, appointmentId);
+  if (!draft || draft.id !== submissionId) return { type: "stale" as const };
+
+  if (!finalized.rowCount) {
+    const resultTable = appointment.scheduleType === "LABORATORY"
+      ? "laboratory_results"
+      : "exam_results";
+    const resultStatus = await client.query<{ resultStatus: string }>(
+      `SELECT result_status AS "resultStatus" FROM ${resultTable} WHERE appointment_id=$1`,
+      [appointmentId],
+    );
+    if (resultStatus.rowCount && resultStatus.rows[0].resultStatus !== "PENDING_UPLOAD") {
+      return { type: "unavailable" as const };
+    }
+  }
+
+  return { type: "draft" as const, draft };
 }
 
 export async function listDraftFilesForUpdate(client: PoolClient, submissionId: string) {
@@ -316,9 +392,9 @@ export async function listDraftFilesForUpdate(client: PoolClient, submissionId: 
   return result.rows.map((row) => ({ ...row, byteSize: Number(row.byteSize) }));
 }
 
-export async function insertStudentResultFile(
+export async function insertStudentResultFiles(
   client: PoolClient,
-  input: {
+  inputs: Array<{
     submissionId: string;
     storageKey: string;
     originalFilename: string;
@@ -326,65 +402,70 @@ export async function insertStudentResultFile(
     extension: string;
     byteSize: number;
     checksumSha256: string;
-  },
+  }>,
 ) {
-  const result = await client.query<{
-    id: string;
-    submissionId: string;
-    storageKey: string;
-    originalFilename: string;
-    detectedMimeType: string;
-    extension: string;
-    byteSize: string;
-    checksumSha256: string;
-    uploadedAt: Date;
-  }>(
+  await client.query(
     `INSERT INTO student_result_files (
        submission_id, storage_key, original_filename, detected_mime_type,
        extension, byte_size, checksum_sha256
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7)
-     RETURNING id, submission_id AS "submissionId", storage_key AS "storageKey",
-               original_filename AS "originalFilename", detected_mime_type AS "detectedMimeType",
-               extension, byte_size::text AS "byteSize", checksum_sha256 AS "checksumSha256",
-               uploaded_at AS "uploadedAt"`,
+     )
+     SELECT *
+       FROM UNNEST(
+         $1::uuid[], $2::text[], $3::text[], $4::text[],
+         $5::text[], $6::bigint[], $7::text[]
+       )`,
     [
-      input.submissionId,
-      input.storageKey,
-      input.originalFilename,
-      input.detectedMimeType,
-      input.extension,
-      input.byteSize,
-      input.checksumSha256,
+      inputs.map((input) => input.submissionId),
+      inputs.map((input) => input.storageKey),
+      inputs.map((input) => input.originalFilename),
+      inputs.map((input) => input.detectedMimeType),
+      inputs.map((input) => input.extension),
+      inputs.map((input) => input.byteSize),
+      inputs.map((input) => input.checksumSha256),
     ],
   );
   await client.query(
     "UPDATE student_result_submissions SET last_activity_at=NOW() WHERE id=$1",
-    [input.submissionId],
+    [inputs[0].submissionId],
   );
-  return { ...result.rows[0], byteSize: Number(result.rows[0].byteSize) };
 }
 
-export async function getStudentResultSubmissionRow(studentNumber: string, appointmentId: string) {
-  const submission = await query<{
+export async function getStudentResultSubmissionRow(
+  studentNumber: string,
+  appointmentId: string,
+  client?: PoolClient,
+) {
+  const submissionSql =
+    `SELECT submission.id, submission.appointment_id AS "appointmentId",
+            submission.student_number AS "studentNumber", submission.result_type AS "resultType",
+            submission.status, submission.last_activity_at AS "lastActivityAt"
+       FROM student_result_submissions submission
+      WHERE submission.appointment_id=$1 AND submission.student_number=$2
+        AND submission.discarded_at IS NULL
+        AND submission.status IN ('DRAFT','FINALIZED')
+      ORDER BY CASE WHEN submission.status='DRAFT' THEN 0 ELSE 1 END, submission.created_at DESC
+      LIMIT 1`;
+  type SubmissionRow = {
     id: string;
     appointmentId: string;
     studentNumber: string;
     resultType: "LABORATORY" | "PHYSICAL_EXAM";
     status: "DRAFT" | "FINALIZED" | "INVALIDATED";
     lastActivityAt: Date;
-  }>(
-    `SELECT submission.id, submission.appointment_id AS "appointmentId",
-            submission.student_number AS "studentNumber", submission.result_type AS "resultType",
-            submission.status, submission.last_activity_at AS "lastActivityAt"
-       FROM student_result_submissions submission
-      WHERE submission.appointment_id=$1 AND submission.student_number=$2
-        AND submission.status IN ('DRAFT','FINALIZED')
-      ORDER BY CASE WHEN submission.status='DRAFT' THEN 0 ELSE 1 END, submission.created_at DESC
-      LIMIT 1`,
-    [appointmentId, studentNumber],
-  );
+  };
+  const submission = client
+    ? await client.query<SubmissionRow>(submissionSql, [appointmentId, studentNumber])
+    : await query<SubmissionRow>(submissionSql, [appointmentId, studentNumber]);
   if (!submission.rowCount) return null;
-  const files = await query<{
+  const filesSql =
+    `SELECT id, submission_id AS "submissionId", storage_key AS "storageKey",
+            original_filename AS "originalFilename", detected_mime_type AS "detectedMimeType",
+            extension, byte_size::text AS "byteSize", checksum_sha256 AS "checksumSha256",
+            uploaded_at AS "uploadedAt"
+       FROM student_result_files
+      WHERE submission_id=$1 AND deleted_at IS NULL AND storage_delete_pending=FALSE
+      ORDER BY uploaded_at, id`;
+  type FileRow = {
     id: string;
     submissionId: string;
     storageKey: string;
@@ -394,16 +475,10 @@ export async function getStudentResultSubmissionRow(studentNumber: string, appoi
     byteSize: string;
     checksumSha256: string;
     uploadedAt: Date;
-  }>(
-    `SELECT id, submission_id AS "submissionId", storage_key AS "storageKey",
-            original_filename AS "originalFilename", detected_mime_type AS "detectedMimeType",
-            extension, byte_size::text AS "byteSize", checksum_sha256 AS "checksumSha256",
-            uploaded_at AS "uploadedAt"
-       FROM student_result_files
-      WHERE submission_id=$1 AND deleted_at IS NULL AND storage_delete_pending=FALSE
-      ORDER BY uploaded_at, id`,
-    [submission.rows[0].id],
-  );
+  };
+  const files = client
+    ? await client.query<FileRow>(filesSql, [submission.rows[0].id])
+    : await query<FileRow>(filesSql, [submission.rows[0].id]);
   const mappedFiles = files.rows.map((file) => ({ ...file, byteSize: Number(file.byteSize) }));
   return {
     ...submission.rows[0],
@@ -411,25 +486,6 @@ export async function getStudentResultSubmissionRow(studentNumber: string, appoi
     fileCount: mappedFiles.length,
     totalBytes: mappedFiles.reduce((sum, file) => sum + file.byteSize, 0),
   } satisfies StudentResultSubmission;
-}
-
-export async function lockOwnedDraftFile(
-  client: PoolClient,
-  studentNumber: string,
-  appointmentId: string,
-  fileId: string,
-) {
-  const result = await client.query<{ id: string; submissionId: string; storageKey: string }>(
-    `SELECT file.id, file.submission_id AS "submissionId", file.storage_key AS "storageKey"
-       FROM student_result_files file
-       JOIN student_result_submissions submission ON submission.id=file.submission_id
-      WHERE file.id=$1 AND submission.appointment_id=$2
-        AND submission.student_number=$3 AND submission.status='DRAFT'
-        AND file.deleted_at IS NULL AND file.storage_delete_pending=FALSE
-      FOR UPDATE OF submission, file`,
-    [fileId, appointmentId, studentNumber],
-  );
-  return result.rows[0] ?? null;
 }
 
 export async function markStudentResultFileForDeletion(
@@ -447,30 +503,6 @@ export async function markStudentResultFileForDeletion(
     "UPDATE student_result_submissions SET last_activity_at=NOW() WHERE id=$1",
     [submissionId],
   );
-}
-
-export async function lockOwnedDraftForFinalization(
-  client: PoolClient,
-  studentNumber: string,
-  appointmentId: string,
-) {
-  const result = await client.query<{
-    id: string;
-    appointmentId: string;
-    studentNumber: string;
-    resultType: "LABORATORY" | "PHYSICAL_EXAM";
-  }>(
-    `SELECT submission.id, submission.appointment_id AS "appointmentId",
-            submission.student_number AS "studentNumber", submission.result_type AS "resultType"
-       FROM student_result_submissions submission
-       JOIN appointments appointment ON appointment.id=submission.appointment_id
-      WHERE submission.appointment_id=$1 AND submission.student_number=$2
-        AND submission.status='DRAFT' AND appointment.status='COMPLETED'
-        AND appointment.is_published=TRUE
-      FOR UPDATE OF submission, appointment`,
-    [appointmentId, studentNumber],
-  );
-  return result.rows[0] ?? null;
 }
 
 export async function finalizeStudentResultDraft(

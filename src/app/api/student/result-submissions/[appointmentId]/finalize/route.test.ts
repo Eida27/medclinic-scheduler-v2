@@ -21,7 +21,19 @@ const student = {
   firstName: "Aaron",
   lastName: "Abad",
 };
+const draftId = "10000000-0000-4000-8000-000000000001";
 const context = { params: Promise.resolve({ appointmentId: "appointment-1" }) };
+
+function request(body: unknown) {
+  return new Request(
+    "http://localhost/api/student/result-submissions/appointment-1/finalize",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+}
 
 describe("POST /api/student/result-submissions/[appointmentId]/finalize", () => {
   beforeEach(() => {
@@ -35,14 +47,12 @@ describe("POST /api/student/result-submissions/[appointmentId]/finalize", () => 
   });
 
   it("preserves the response and revalidates the exact list and encoded student paths", async () => {
-    const response = await POST(new Request(
-      "http://localhost/api/student/result-submissions/appointment-1/finalize",
-      { method: "POST" },
-    ), context);
+    const response = await POST(request({ submissionId: draftId }), context);
 
     expect(finalizeStudentResultSubmission).toHaveBeenCalledWith(
       student.studentNumber,
       "appointment-1",
+      draftId,
     );
     expect(revalidatePath).toHaveBeenNthCalledWith(
       1,
@@ -61,25 +71,38 @@ describe("POST /api/student/result-submissions/[appointmentId]/finalize", () => 
     });
   });
 
-  it("does not revalidate when finalization fails", async () => {
+  it.each([
+    ["missing", {}],
+    ["invalid", { submissionId: "submission-1" }],
+  ])("returns 400 for a %s submissionId without revalidating", async (_label, body) => {
+    const response = await POST(request(body), context);
+
+    expect(response.status).toBe(400);
+    expect(finalizeStudentResultSubmission).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "RESULT_SUBMISSION_ID_INVALID" },
+    });
+  });
+
+  it("does not revalidate or expose a replacement id for a stale finalization", async () => {
     finalizeStudentResultSubmission.mockRejectedValue(new AppError(
-      "RESULT_SUBMISSION_FINALIZED",
-      "This result submission is already finalized.",
+      "RESULT_EDIT_STALE",
+      "This result draft changed. Refresh and try again.",
       409,
     ));
 
-    const response = await POST(new Request(
-      "http://localhost/api/student/result-submissions/appointment-1/finalize",
-      { method: "POST" },
-    ), context);
+    const response = await POST(request({ submissionId: draftId }), context);
 
     expect(response.status).toBe(409);
     expect(revalidatePath).not.toHaveBeenCalled();
-    await expect(response.json()).resolves.toEqual({
+    const body = await response.json();
+    expect(body).toEqual({
       error: {
-        code: "RESULT_SUBMISSION_FINALIZED",
-        message: "This result submission is already finalized.",
+        code: "RESULT_EDIT_STALE",
+        message: "This result draft changed. Refresh and try again.",
       },
     });
+    expect(JSON.stringify(body)).not.toContain("20000000-0000-4000-8000-000000000002");
   });
 });
