@@ -6,7 +6,9 @@ export const RESULT_FILE_ALLOWED_EXTENSIONS = ["pdf", "jpg", "jpeg", "png"] as c
 export const RESULT_FILE_ACCEPT = ".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png";
 
 export function isAllowedResultFileName(name: string): boolean {
-  const extension = name.slice(name.lastIndexOf(".") + 1).toLowerCase();
+  const extensionStart = name.lastIndexOf(".");
+  if (extensionStart <= 0) return false;
+  const extension = name.slice(extensionStart + 1).toLowerCase();
   return RESULT_FILE_ALLOWED_EXTENSIONS.includes(
     extension as (typeof RESULT_FILE_ALLOWED_EXTENSIONS)[number],
   );

@@ -30,6 +30,13 @@ describe("result file validation", () => {
     }).byteSize).toBe(pdf.byteLength);
   });
 
+  it.each(["pdf", "jpg", "jpeg", "png", ".pdf"])(
+    "rejects extensionless or hidden file name %s",
+    (filename) => {
+      expect(isAllowedResultFileName(filename)).toBe(false);
+    },
+  );
+
   it.each([
     ["result.pdf", "application/pdf", pdf, "pdf"],
     ["result.png", "image/png", png, "png"],
