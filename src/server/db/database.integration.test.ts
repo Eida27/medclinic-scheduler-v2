@@ -40,6 +40,10 @@ describe("database constraints", () => {
     await expect(tableExists("appointment_reschedule_events")).resolves.toBe(true);
     await expect(tableExists("student_result_submissions")).resolves.toBe(true);
     await expect(tableExists("student_result_files")).resolves.toBe(true);
+    await expect(columnExists("student_result_submissions", "based_on_submission_id")).resolves.toBe(true);
+    await expect(columnExists("student_result_submissions", "superseded_at")).resolves.toBe(true);
+    await expect(columnExists("student_result_submissions", "superseded_by_submission_id")).resolves.toBe(true);
+    await expect(columnExists("student_result_submissions", "discarded_at")).resolves.toBe(true);
     await expect(tableExists("student_portal_notifications")).resolves.toBe(true);
     await expect(tableExists("email_outbox")).resolves.toBe(true);
   });
@@ -65,6 +69,8 @@ describe("database constraints", () => {
         indexdef: expect.stringContaining("student_number, appointment_id, last_activity_at DESC"),
       }),
     ]);
+    expect(indexes.rows.find((index) => index.indexname === "student_result_submissions_admin_profile_idx")?.indexdef)
+      .toContain("SUPERSEDED");
   });
 
   it("creates the unified closure, request, manual-case, and event-lineage schema", async () => {

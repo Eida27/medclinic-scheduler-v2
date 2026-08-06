@@ -2,10 +2,18 @@ import "server-only";
 import { createHash } from "node:crypto";
 import { extname } from "node:path";
 import { AppError } from "@/lib/errors";
+import {
+  RESULT_FILE_MAX_BYTES,
+  RESULT_SUBMISSION_MAX_BYTES,
+  RESULT_SUBMISSION_MAX_FILES,
+  isAllowedResultFileName,
+} from "@/shared/student-result-file-rules";
 
-export const RESULT_FILE_MAX_BYTES = 20 * 1024 * 1024;
-export const RESULT_SUBMISSION_MAX_BYTES = 50 * 1024 * 1024;
-export const RESULT_SUBMISSION_MAX_FILES = 10;
+export {
+  RESULT_FILE_MAX_BYTES,
+  RESULT_SUBMISSION_MAX_BYTES,
+  RESULT_SUBMISSION_MAX_FILES,
+} from "@/shared/student-result-file-rules";
 
 const allowedByExtension = {
   pdf: "application/pdf",
@@ -37,10 +45,10 @@ export function validateResultFile(input: {
     throw new AppError("RESULT_FILE_TOO_LARGE", "Each result file must be 20 MB or smaller.", 422);
   }
   const extension = extname(input.filename).slice(1).toLowerCase();
-  const expectedMime = allowedByExtension[extension as keyof typeof allowedByExtension];
-  if (!expectedMime) {
+  if (!isAllowedResultFileName(input.filename)) {
     throw new AppError("RESULT_FILE_TYPE_NOT_ALLOWED", "Upload a PDF, JPG, JPEG, or PNG file.", 422);
   }
+  const expectedMime = allowedByExtension[extension as keyof typeof allowedByExtension];
   const detected = detectedMimeType(input.bytes);
   if (!detected || detected !== expectedMime || input.declaredMimeType.toLowerCase() !== expectedMime) {
     throw new AppError(
