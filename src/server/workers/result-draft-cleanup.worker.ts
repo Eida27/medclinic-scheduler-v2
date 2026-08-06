@@ -1,23 +1,34 @@
 import "server-only";
 import type { PoolClient } from "pg";
 import { transaction } from "@/server/db/pool";
+import {
+  deleteRetiredStudentResultDraftIfClean,
+  lockExpiredStudentResultDraftForRetirement,
+  recordResultFileDeletion,
+  retireStudentResultDraft,
+} from "@/server/repositories/student-result-submissions.repository";
 import { localResultStorage } from "@/server/storage/local-result-storage";
 import type { ResultStorage } from "@/server/storage/result-storage";
 
 export const RESULT_DRAFT_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 export const RESULT_DRAFT_CLEANUP_RETRY_MS = 5 * 60 * 1000;
 
-type CleanupCandidate = { id: string };
-type CleanupFile = { id: string; storageKey: string; byteSize: number };
+type CleanupCandidate = {
+  id: string;
+  appointmentId: string;
+  studentNumber: string;
+  resultType: "LABORATORY" | "PHYSICAL_EXAM";
+};
 
 async function lockExpiredDrafts(client: PoolClient, now: Date) {
   const result = await client.query<CleanupCandidate>(
-    `SELECT id
+    `SELECT id, appointment_id AS "appointmentId", student_number AS "studentNumber",
+            result_type AS "resultType"
        FROM student_result_submissions
-      WHERE status='DRAFT' AND last_activity_at <= $1::timestamptz - INTERVAL '7 days'
+      WHERE status='DRAFT' AND discarded_at IS NULL
+        AND last_activity_at <= $1::timestamptz - INTERVAL '7 days'
       ORDER BY last_activity_at, id
-      LIMIT 50
-      FOR UPDATE SKIP LOCKED`,
+      LIMIT 50`,
     [now],
   );
   return result.rows;
@@ -27,85 +38,84 @@ export async function cleanupExpiredResultDrafts(
   now = new Date(),
   storage: ResultStorage = localResultStorage,
 ) {
-  return transaction(async (client) => {
-    let expiredDraftCount = 0;
-    let deletionFailureCount = 0;
-    const pendingDeletion = await client.query<{ id: string; storageKey: string }>(
-      `SELECT file.id, file.storage_key AS "storageKey"
-        FROM student_result_files file
-         JOIN student_result_submissions submission ON submission.id=file.submission_id
-        WHERE file.storage_delete_pending=TRUE AND file.deleted_at IS NULL
-        ORDER BY COALESCE(submission.invalidated_at, submission.last_activity_at),
-                 file.uploaded_at, file.id
-        LIMIT 100
-        FOR UPDATE OF file SKIP LOCKED`,
-    );
-    for (const file of pendingDeletion.rows) {
-      try {
-        await storage.delete(file.storageKey);
-        await client.query(
-          `UPDATE student_result_files
-              SET storage_delete_pending=FALSE, deleted_at=NOW(), delete_error=NULL
-            WHERE id=$1`,
-          [file.id],
-        );
-      } catch (error) {
-        deletionFailureCount += 1;
-        await client.query(
-          `UPDATE student_result_files SET delete_error=$2 WHERE id=$1`,
-          [
-            file.id,
-            (error instanceof Error ? error.message : "Unknown file deletion error").slice(0, 2000),
-          ],
-        );
-      }
-    }
-    const candidates = await lockExpiredDrafts(client, now);
-    for (const candidate of candidates) {
-      const files = await client.query<{ id: string; storageKey: string; byteSize: string }>(
-        `SELECT id, storage_key AS "storageKey", byte_size::text AS "byteSize"
-           FROM student_result_files WHERE submission_id=$1
-           ORDER BY uploaded_at, id FOR UPDATE`,
-        [candidate.id],
+  const candidates = await transaction((client) => lockExpiredDrafts(client, now));
+  for (const candidate of candidates) {
+    await transaction(async (client) => {
+      const locked = await lockExpiredStudentResultDraftForRetirement(
+        client,
+        candidate,
+        now,
       );
-      const mappedFiles: CleanupFile[] = files.rows.map((file) => ({
-        ...file,
-        byteSize: Number(file.byteSize),
-      }));
-      let deletionError: string | null = null;
-      for (const file of mappedFiles) {
-        try {
-          await storage.delete(file.storageKey);
-        } catch (error) {
-          deletionError = error instanceof Error ? error.message : "Unknown file deletion error";
-          await client.query(
-            `UPDATE student_result_files
-                SET storage_delete_pending=TRUE, delete_error=$2
-              WHERE id=$1`,
-            [file.id, deletionError.slice(0, 2000)],
-          );
-          break;
-        }
-      }
-      if (deletionError) {
-        deletionFailureCount += 1;
-        continue;
-      }
+      if (!locked || !await retireStudentResultDraft(client, locked.draft.id)) return;
       await client.query(
         `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
          VALUES (NULL,'STUDENT_RESULT_DRAFT_EXPIRED','student_result_submission',$1,
-                 jsonb_build_object('fileCount',$2::int,'totalBytes',$3::bigint))`,
+                  jsonb_build_object('fileCount',$2::int,'totalBytes',$3::bigint))`,
         [
-          candidate.id,
-          mappedFiles.length,
-          mappedFiles.reduce((sum, file) => sum + file.byteSize, 0),
+          locked.draft.id,
+          locked.files.length,
+          locked.files.reduce((sum, file) => sum + file.byteSize, 0),
         ],
       );
-      await client.query("DELETE FROM student_result_submissions WHERE id=$1 AND status='DRAFT'", [candidate.id]);
+    });
+  }
+
+  const staged = await transaction(async (client) => {
+    const pendingDeletion = await client.query<{
+      id: string;
+      submissionId: string;
+      storageKey: string;
+    }>(
+      `SELECT file.id, file.submission_id AS "submissionId",
+              file.storage_key AS "storageKey"
+         FROM student_result_files file
+         JOIN student_result_submissions submission ON submission.id=file.submission_id
+        WHERE file.storage_delete_pending=TRUE AND file.deleted_at IS NULL
+        ORDER BY COALESCE(
+                   submission.discarded_at,
+                   submission.invalidated_at,
+                   submission.last_activity_at
+                 ), file.uploaded_at, file.id
+        LIMIT 100
+        FOR UPDATE OF file SKIP LOCKED`,
+    );
+    const retiredDrafts = await client.query<{ id: string; expired: boolean }>(
+      `SELECT submission.id,
+              EXISTS (
+                SELECT 1
+                  FROM audit_logs audit
+                 WHERE audit.action='STUDENT_RESULT_DRAFT_EXPIRED'
+                   AND audit.entity_id=submission.id::text
+              ) AS expired
+         FROM student_result_submissions submission
+        WHERE submission.status='DRAFT' AND submission.discarded_at IS NOT NULL
+        ORDER BY submission.discarded_at, submission.id
+        LIMIT 200`,
+    );
+    return { pendingDeletion: pendingDeletion.rows, retiredDrafts: retiredDrafts.rows };
+  });
+
+  let deletionFailureCount = 0;
+  for (const file of staged.pendingDeletion) {
+    try {
+      await storage.delete(file.storageKey);
+      await recordResultFileDeletion(file.id, { success: true });
+    } catch (error) {
+      deletionFailureCount += 1;
+      await recordResultFileDeletion(file.id, {
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown file deletion error",
+      });
+    }
+  }
+
+  let expiredDraftCount = 0;
+  for (const retired of staged.retiredDrafts) {
+    if (await deleteRetiredStudentResultDraftIfClean(retired.id) && retired.expired) {
       expiredDraftCount += 1;
     }
-    return { expiredDraftCount, deletionFailureCount };
-  });
+  }
+  return { expiredDraftCount, deletionFailureCount };
 }
 
 type WorkerDependencies = {

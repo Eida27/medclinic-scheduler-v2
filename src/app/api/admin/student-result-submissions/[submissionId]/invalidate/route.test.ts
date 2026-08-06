@@ -48,6 +48,7 @@ describe("POST /api/admin/student-result-submissions/[submissionId]/invalidate",
 
   it("preserves compatibility fields and revalidates the exact list and encoded student paths", async () => {
     const response = await POST(request(), context);
+    const body = await response.json();
 
     expect(invalidateStudentResultSubmission).toHaveBeenCalledWith(
       "submission-1",
@@ -62,13 +63,15 @@ describe("POST /api/admin/student-result-submissions/[submissionId]/invalidate",
       2,
       "/settings/student-result-submissions/students/23%2F8200%2001",
     );
-    await expect(response.json()).resolves.toEqual({
+    expect(body).toEqual({
       data: {
         id: "submission-1",
         status: "INVALIDATED",
         studentNumber: "23/8200 01",
       },
     });
+    expect(Object.keys(body.data).sort()).toEqual(["id", "status", "studentNumber"].sort());
+    expect(body.data).not.toHaveProperty("retiredEditSubmissionId");
   });
 
   it("returns a stale conflict without revalidating", async () => {

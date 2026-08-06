@@ -51,7 +51,8 @@ export type StudentResultSubmission = {
   appointmentId: string;
   studentNumber: string;
   resultType: "LABORATORY" | "PHYSICAL_EXAM";
-  status: "DRAFT" | "FINALIZED" | "INVALIDATED";
+  status: "DRAFT" | "FINALIZED";
+  basedOnSubmissionId: string | null;
   lastActivityAt: Date;
   files: StudentResultFileMetadata[];
   fileCount: number;
@@ -64,7 +65,16 @@ type DraftRow = {
   studentNumber: string;
   resultType: "LABORATORY" | "PHYSICAL_EXAM";
   status: "DRAFT";
+  basedOnSubmissionId: string | null;
   lastActivityAt: Date;
+};
+
+type FinalizedRow = {
+  id: string;
+  appointmentId: string;
+  studentNumber: string;
+  resultType: "LABORATORY" | "PHYSICAL_EXAM";
+  status: "FINALIZED";
 };
 
 type LockedResultAppointment = {
@@ -124,9 +134,10 @@ export async function loadAppointmentResultProtectionStates(
                 COUNT(file.id)::int AS active_file_count
            FROM student_result_submissions submission
            JOIN student_result_files file ON file.submission_id=submission.id
-          WHERE submission.appointment_id=appointment.id
-            AND submission.status='DRAFT'
-            AND file.deleted_at IS NULL
+           WHERE submission.appointment_id=appointment.id
+             AND submission.status='DRAFT'
+             AND submission.discarded_at IS NULL
+             AND file.deleted_at IS NULL
             AND file.storage_delete_pending=FALSE
        ) draft ON TRUE
        LEFT JOIN laboratory_results laboratory
@@ -282,7 +293,9 @@ export async function lockOrCreateStudentResultDraft(
        appointment_id, student_number, result_type
      ) VALUES ($1,$2,$3)
      RETURNING id, appointment_id AS "appointmentId", student_number AS "studentNumber",
-               result_type AS "resultType", status, last_activity_at AS "lastActivityAt"`,
+               result_type AS "resultType", status,
+               based_on_submission_id::text AS "basedOnSubmissionId",
+               last_activity_at AS "lastActivityAt"`,
     [appointmentId, studentNumber, appointment.scheduleType],
   );
   return { type: "draft" as const, draft: inserted.rows[0] };
@@ -321,7 +334,9 @@ async function lockActiveStudentResultDraft(
 ) {
   const existing = await client.query<DraftRow>(
     `SELECT id, appointment_id AS "appointmentId", student_number AS "studentNumber",
-            result_type AS "resultType", status, last_activity_at AS "lastActivityAt"
+            result_type AS "resultType", status,
+            based_on_submission_id::text AS "basedOnSubmissionId",
+            last_activity_at AS "lastActivityAt"
        FROM student_result_submissions
       WHERE appointment_id=$1 AND student_number=$2
         AND status='DRAFT' AND discarded_at IS NULL
@@ -329,6 +344,66 @@ async function lockActiveStudentResultDraft(
     [appointmentId, studentNumber],
   );
   return existing.rows[0] ?? null;
+}
+
+export async function lockOrCreateStudentResultEditDraft(
+  client: PoolClient,
+  studentNumber: string,
+  appointmentId: string,
+) {
+  const appointment = await lockOwnedResultAppointment(
+    client,
+    studentNumber,
+    appointmentId,
+  );
+  if (!appointment) return { type: "not_found" as const };
+  if (appointment.status !== "COMPLETED") return { type: "unavailable" as const };
+
+  const official = await client.query<FinalizedRow>(
+    `SELECT id, appointment_id AS "appointmentId", student_number AS "studentNumber",
+            result_type AS "resultType", status
+       FROM student_result_submissions
+      WHERE appointment_id=$1 AND student_number=$2 AND status='FINALIZED'
+      FOR UPDATE`,
+    [appointmentId, studentNumber],
+  );
+  const currentOfficial = official.rows[0] ?? null;
+  const activeDraft = await lockActiveStudentResultDraft(client, studentNumber, appointmentId);
+  const officialFiles = currentOfficial
+    ? await listDraftFilesForUpdate(client, currentOfficial.id)
+    : [];
+
+  if (activeDraft) {
+    if (currentOfficial && activeDraft.basedOnSubmissionId === currentOfficial.id) {
+      return {
+        type: "edit" as const,
+        created: false,
+        draft: activeDraft,
+        official: currentOfficial,
+        officialFiles,
+      };
+    }
+    return { type: "conflict" as const };
+  }
+  if (!currentOfficial) return { type: "no_official" as const };
+
+  const inserted = await client.query<DraftRow>(
+    `INSERT INTO student_result_submissions (
+       appointment_id, student_number, result_type, based_on_submission_id
+     ) VALUES ($1,$2,$3,$4)
+     RETURNING id, appointment_id AS "appointmentId", student_number AS "studentNumber",
+               result_type AS "resultType", status,
+               based_on_submission_id::text AS "basedOnSubmissionId",
+               last_activity_at AS "lastActivityAt"`,
+    [appointmentId, studentNumber, appointment.scheduleType, currentOfficial.id],
+  );
+  return {
+    type: "edit" as const,
+    created: true,
+    draft: inserted.rows[0],
+    official: currentOfficial,
+    officialFiles,
+  };
 }
 
 export async function lockExpectedStudentResultDraft(
@@ -351,6 +426,7 @@ export async function lockExpectedStudentResultDraft(
       FOR UPDATE`,
     [appointmentId],
   );
+  const currentOfficial = finalized.rows[0] ?? null;
   const draft = await lockActiveStudentResultDraft(client, studentNumber, appointmentId);
   if (!draft || draft.id !== submissionId) return { type: "stale" as const };
 
@@ -367,7 +443,7 @@ export async function lockExpectedStudentResultDraft(
     }
   }
 
-  return { type: "draft" as const, draft };
+  return { type: "draft" as const, draft, currentOfficial };
 }
 
 export async function listDraftFilesForUpdate(client: PoolClient, submissionId: string) {
@@ -390,6 +466,166 @@ export async function listDraftFilesForUpdate(client: PoolClient, submissionId: 
     [submissionId],
   );
   return result.rows.map((row) => ({ ...row, byteSize: Number(row.byteSize) }));
+}
+
+export async function listResultFilesForCleanupForUpdate(
+  client: PoolClient,
+  submissionId: string,
+) {
+  const result = await client.query<{
+    id: string;
+    storageKey: string;
+    byteSize: string;
+  }>(
+    `SELECT id, storage_key AS "storageKey", byte_size::text AS "byteSize"
+       FROM student_result_files
+      WHERE submission_id=$1 AND deleted_at IS NULL
+      ORDER BY uploaded_at, id
+      FOR UPDATE`,
+    [submissionId],
+  );
+  return result.rows.map((row) => ({ ...row, byteSize: Number(row.byteSize) }));
+}
+
+export async function retireStudentResultDraft(
+  client: PoolClient,
+  submissionId: string,
+) {
+  const retired = await client.query(
+    `UPDATE student_result_submissions
+        SET discarded_at=NOW()
+      WHERE id=$1 AND status='DRAFT' AND discarded_at IS NULL
+      RETURNING id`,
+    [submissionId],
+  );
+  if (!retired.rowCount) return false;
+  await client.query(
+    `UPDATE student_result_files
+        SET storage_delete_pending=TRUE, delete_error=NULL
+      WHERE submission_id=$1 AND deleted_at IS NULL`,
+    [submissionId],
+  );
+  return true;
+}
+
+export async function persistStudentResultCopyRollbackCleanup(
+  client: PoolClient,
+  draft: DraftRow,
+  files: Array<{
+    storageKey: string;
+    originalFilename: string;
+    detectedMimeType: string;
+    extension: string;
+    byteSize: number;
+    checksumSha256: string;
+    deleteError: string;
+  }>,
+) {
+  if (!files.length) return;
+  await client.query(
+    `INSERT INTO student_result_submissions (
+       id, appointment_id, student_number, result_type,
+       based_on_submission_id, discarded_at
+     ) VALUES ($1,$2,$3,$4,$5,NOW())`,
+    [
+      draft.id,
+      draft.appointmentId,
+      draft.studentNumber,
+      draft.resultType,
+      draft.basedOnSubmissionId,
+    ],
+  );
+  await client.query(
+    `INSERT INTO student_result_files (
+       submission_id, storage_key, original_filename, detected_mime_type,
+       extension, byte_size, checksum_sha256, storage_delete_pending, delete_error
+     )
+     SELECT cleanup.submission_id, cleanup.storage_key, cleanup.original_filename,
+            cleanup.detected_mime_type, cleanup.extension, cleanup.byte_size,
+            cleanup.checksum_sha256, TRUE, cleanup.delete_error
+       FROM UNNEST(
+         $1::uuid[], $2::text[], $3::text[], $4::text[],
+         $5::text[], $6::bigint[], $7::text[], $8::text[]
+       ) AS cleanup(
+         submission_id, storage_key, original_filename, detected_mime_type,
+         extension, byte_size, checksum_sha256, delete_error
+       )`,
+    [
+      files.map(() => draft.id),
+      files.map((file) => file.storageKey),
+      files.map((file) => file.originalFilename),
+      files.map((file) => file.detectedMimeType),
+      files.map((file) => file.extension),
+      files.map((file) => file.byteSize),
+      files.map((file) => file.checksumSha256),
+      files.map((file) => file.deleteError),
+    ],
+  );
+}
+
+export async function deleteRetiredStudentResultDraftIfClean(submissionId: string) {
+  const deleted = await query(
+    `DELETE FROM student_result_submissions submission
+      WHERE submission.id=$1
+        AND submission.status='DRAFT'
+        AND submission.discarded_at IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1
+            FROM student_result_files file
+           WHERE file.submission_id=submission.id
+             AND file.deleted_at IS NULL
+        )
+      RETURNING submission.id`,
+    [submissionId],
+  );
+  return deleted.rowCount === 1;
+}
+
+export async function lockExpiredStudentResultDraftForRetirement(
+  client: PoolClient,
+  candidate: {
+    id: string;
+    appointmentId: string;
+    studentNumber: string;
+    resultType: "LABORATORY" | "PHYSICAL_EXAM";
+  },
+  now: Date,
+) {
+  await lockEffectiveAppointmentScopes(client, [{
+    studentNumber: candidate.studentNumber,
+    scheduleType: candidate.resultType,
+  }]);
+  const appointment = await client.query<{ id: string }>(
+    `SELECT id
+       FROM appointments
+      WHERE id=$1 AND student_number=$2 AND schedule_type=$3
+      FOR UPDATE`,
+    [candidate.appointmentId, candidate.studentNumber, candidate.resultType],
+  );
+  if (!appointment.rowCount) return null;
+  await client.query(
+    `SELECT id
+       FROM student_result_submissions
+      WHERE appointment_id=$1 AND status='FINALIZED'
+      FOR UPDATE`,
+    [candidate.appointmentId],
+  );
+  const activeDraft = await client.query<DraftRow>(
+    `SELECT id, appointment_id AS "appointmentId", student_number AS "studentNumber",
+            result_type AS "resultType", status,
+            based_on_submission_id::text AS "basedOnSubmissionId",
+            last_activity_at AS "lastActivityAt"
+       FROM student_result_submissions
+      WHERE appointment_id=$1 AND student_number=$2
+        AND status='DRAFT' AND discarded_at IS NULL
+        AND last_activity_at <= $3::timestamptz - INTERVAL '7 days'
+      FOR UPDATE`,
+    [candidate.appointmentId, candidate.studentNumber, now],
+  );
+  const draft = activeDraft.rows[0];
+  if (!draft || draft.id !== candidate.id) return null;
+  const files = await listResultFilesForCleanupForUpdate(client, draft.id);
+  return { draft, files };
 }
 
 export async function insertStudentResultFiles(
@@ -438,7 +674,9 @@ export async function getStudentResultSubmissionRow(
   const submissionSql =
     `SELECT submission.id, submission.appointment_id AS "appointmentId",
             submission.student_number AS "studentNumber", submission.result_type AS "resultType",
-            submission.status, submission.last_activity_at AS "lastActivityAt"
+            submission.status,
+            submission.based_on_submission_id::text AS "basedOnSubmissionId",
+            submission.last_activity_at AS "lastActivityAt"
        FROM student_result_submissions submission
       WHERE submission.appointment_id=$1 AND submission.student_number=$2
         AND submission.discarded_at IS NULL
@@ -450,7 +688,8 @@ export async function getStudentResultSubmissionRow(
     appointmentId: string;
     studentNumber: string;
     resultType: "LABORATORY" | "PHYSICAL_EXAM";
-    status: "DRAFT" | "FINALIZED" | "INVALIDATED";
+    status: "DRAFT" | "FINALIZED";
+    basedOnSubmissionId: string | null;
     lastActivityAt: Date;
   };
   const submission = client
@@ -536,6 +775,65 @@ export async function finalizeStudentResultDraft(
      VALUES (NULL,'STUDENT_RESULT_SUBMISSION_FINALIZED','student_result_submission',$1,
              jsonb_build_object('appointmentId',$2::text,'fileCount',$3::int,'totalBytes',$4::bigint))`,
     [submission.id, submission.appointmentId, fileCount, totalBytes],
+  );
+}
+
+export async function promoteStudentResultEditDraft(
+  client: PoolClient,
+  draft: DraftRow,
+  previousSubmissionId: string,
+  fileCount: number,
+  totalBytes: number,
+) {
+  const superseded = await client.query(
+    `UPDATE student_result_submissions
+        SET status='SUPERSEDED', superseded_at=NOW(),
+            superseded_by_submission_id=$2
+      WHERE id=$1 AND status='FINALIZED'
+      RETURNING id`,
+    [previousSubmissionId, draft.id],
+  );
+  if (superseded.rowCount !== 1) {
+    throw new AppError(
+      "RESULT_EDIT_STALE",
+      "This result draft changed. Refresh and try again.",
+      409,
+    );
+  }
+  const promoted = await client.query(
+    `UPDATE student_result_submissions
+        SET status='FINALIZED', finalized_at=NOW(), last_activity_at=NOW(),
+            based_on_submission_id=NULL
+      WHERE id=$1 AND status='DRAFT' AND discarded_at IS NULL
+        AND based_on_submission_id=$2
+      RETURNING id`,
+    [draft.id, previousSubmissionId],
+  );
+  if (promoted.rowCount !== 1) {
+    throw new AppError(
+      "RESULT_EDIT_STALE",
+      "This result draft changed. Refresh and try again.",
+      409,
+    );
+  }
+  await client.query(
+    `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
+     VALUES (NULL,'STUDENT_RESULT_SUBMISSION_REPLACED','student_result_submission',$1,
+             jsonb_build_object(
+               'appointmentId',$2::text,
+               'previousSubmissionId',$3::text,
+               'resultType',$4::text,
+               'fileCount',$5::int,
+               'totalBytes',$6::bigint
+             ))`,
+    [
+      draft.id,
+      draft.appointmentId,
+      previousSubmissionId,
+      draft.resultType,
+      fileCount,
+      totalBytes,
+    ],
   );
 }
 
@@ -1124,24 +1422,20 @@ export async function lockCurrentFinalizedSubmissionForInvalidation(
   ) {
     return { type: "conflict" as const };
   }
-  const activeDraft = await client.query<{ id: string }>(
-    `SELECT id
+  const activeDraft = await client.query<DraftRow>(
+    `SELECT id, appointment_id AS "appointmentId", student_number AS "studentNumber",
+            result_type AS "resultType", status,
+            based_on_submission_id::text AS "basedOnSubmissionId",
+            last_activity_at AS "lastActivityAt"
        FROM student_result_submissions
       WHERE appointment_id=$1 AND student_number=$2
         AND status='DRAFT' AND discarded_at IS NULL
       FOR UPDATE`,
     [locked.appointmentId, locked.studentNumber],
   );
-  if (activeDraft.rowCount) {
-    await client.query(
-      `SELECT id
-         FROM student_result_files
-        WHERE submission_id=$1 AND deleted_at IS NULL
-          AND storage_delete_pending=FALSE
-        FOR UPDATE`,
-      [activeDraft.rows[0].id],
-    );
-  }
+  const activeDraftFiles = activeDraft.rowCount
+    ? await listResultFilesForCleanupForUpdate(client, activeDraft.rows[0].id)
+    : [];
   const files = await client.query<{ id: string; storageKey: string }>(
     `SELECT id, storage_key AS "storageKey"
        FROM student_result_files
@@ -1158,6 +1452,9 @@ export async function lockCurrentFinalizedSubmissionForInvalidation(
       resultType: locked.resultType,
       files: files.rows,
     },
+    editDraft: activeDraft.rows[0]?.basedOnSubmissionId === locked.id
+      ? { ...activeDraft.rows[0], files: activeDraftFiles }
+      : null,
   };
 }
 

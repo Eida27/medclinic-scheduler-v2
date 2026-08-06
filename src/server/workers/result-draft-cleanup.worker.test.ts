@@ -4,8 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { pool } from "@/server/db/pool";
+import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import {
   addStudentResultFiles,
+  beginStudentResultEdit,
   finalizeStudentResultSubmission,
   getStudentResultSubmission,
   invalidateStudentResultSubmission,
@@ -63,6 +65,33 @@ async function draft(studentNumber: string, filename = "draft.pdf") {
   );
   const file = refreshed.files[0];
   return { appointmentId: appointment.rows[0].id, file };
+}
+
+async function editDraft(studentNumber: string) {
+  const initial = await draft(studentNumber, "official.pdf");
+  const official = await finalizeStudentResultSubmission(
+    studentNumber,
+    initial.appointmentId,
+    initial.file.submissionId,
+    storage,
+  );
+  const edit = await beginStudentResultEdit(studentNumber, initial.appointmentId, storage);
+  return { ...initial, official, edit };
+}
+
+async function waitForAdvisoryLockWaiter(taskSettled: () => boolean) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const locks = await pool.query<{ waiting: number }>(
+      `SELECT COUNT(*)::int AS waiting
+         FROM pg_locks
+        WHERE locktype='advisory' AND granted=FALSE`,
+    );
+    if (locks.rows[0].waiting > 0) return;
+    if (taskSettled()) throw new Error("Cleanup completed before waiting on the held advisory lock.");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for cleanup to block on the held advisory lock.");
 }
 
 beforeAll(async () => {
@@ -199,6 +228,126 @@ describe("result draft cleanup", () => {
       status: "DRAFT",
     }]);
     await expect(storage.read(fixture.file.storageKey)).rejects.toThrow();
+  });
+
+  it("retires a seven-day edit before retrying cleanup without touching its official submission", async () => {
+    const fixture = await editDraft("99-9307-07");
+    const now = new Date("2027-09-08T00:00:00.000Z");
+    await pool.query(
+      "UPDATE student_result_submissions SET last_activity_at='2027-09-01T00:00:00Z' WHERE id=$1",
+      [fixture.edit.id],
+    );
+    const failingStorage = {
+      write: storage.write.bind(storage),
+      read: storage.read.bind(storage),
+      delete: async () => { throw new Error("synthetic expired edit delete failure"); },
+    };
+
+    await expect(cleanupExpiredResultDrafts(now, failingStorage)).resolves.toEqual({
+      expiredDraftCount: 0,
+      deletionFailureCount: 1,
+    });
+
+    const state = await pool.query(
+      `SELECT submission.id, submission.status,
+              submission.discarded_at IS NOT NULL AS discarded,
+              file.storage_key AS "storageKey",
+              file.storage_delete_pending AS "storageDeletePending",
+              file.deleted_at IS NOT NULL AS deleted
+         FROM student_result_submissions submission
+         JOIN student_result_files file ON file.submission_id=submission.id
+        WHERE submission.id = ANY($1::uuid[])
+        ORDER BY submission.id`,
+      [[fixture.official.id, fixture.edit.id]],
+    );
+    expect(state.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: fixture.official.id,
+        status: "FINALIZED",
+        discarded: false,
+        storageDeletePending: false,
+        deleted: false,
+      }),
+      expect.objectContaining({
+        id: fixture.edit.id,
+        status: "DRAFT",
+        discarded: true,
+        storageDeletePending: true,
+        deleted: false,
+      }),
+    ]));
+    await expect(getStudentResultSubmission("99-9307-07", fixture.appointmentId))
+      .resolves.toMatchObject({ id: fixture.official.id, status: "FINALIZED" });
+    await expect(storage.read(fixture.file.storageKey)).resolves.toEqual(
+      Buffer.from("%PDF-1.7\ncleanup"),
+    );
+    await expect(storage.read(fixture.edit.files[0].storageKey)).resolves.toEqual(
+      Buffer.from("%PDF-1.7\ncleanup"),
+    );
+
+    await expect(cleanupExpiredResultDrafts(now, storage)).resolves.toEqual({
+      expiredDraftCount: 1,
+      deletionFailureCount: 0,
+    });
+    await expect(pool.query(
+      "SELECT id FROM student_result_submissions WHERE id=$1",
+      [fixture.edit.id],
+    )).resolves.toMatchObject({ rowCount: 0 });
+    await expect(storage.read(fixture.edit.files[0].storageKey)).rejects.toThrow();
+    await expect(storage.read(fixture.file.storageKey)).resolves.toEqual(
+      Buffer.from("%PDF-1.7\ncleanup"),
+    );
+  });
+
+  it("commits one expired scope before waiting on another scope's advisory lock", async () => {
+    const first = await draft("99-9308-08", "first-scope.pdf");
+    const second = await draft("99-9309-09", "second-scope.pdf");
+    const now = new Date("2027-09-08T00:00:00.000Z");
+    await pool.query(
+      `UPDATE student_result_submissions
+          SET last_activity_at=CASE
+            WHEN id=$1 THEN '2027-08-30T00:00:00Z'::timestamptz
+            ELSE '2027-08-31T00:00:00Z'::timestamptz
+          END
+        WHERE id = ANY($2::uuid[])`,
+      [first.file.submissionId, [first.file.submissionId, second.file.submissionId]],
+    );
+    const advisoryBlocker = await pool.connect();
+    const firstAppointmentProbe = await pool.connect();
+    let cleanupSettled = false;
+    let cleanupTask: Promise<{ expiredDraftCount: number; deletionFailureCount: number }> | null = null;
+
+    try {
+      await Promise.all([
+        advisoryBlocker.query("BEGIN"),
+        firstAppointmentProbe.query("BEGIN"),
+      ]);
+      await lockEffectiveAppointmentScopes(advisoryBlocker, [{
+        studentNumber: "99-9309-09",
+        scheduleType: "LABORATORY",
+      }]);
+      await firstAppointmentProbe.query("SET LOCAL lock_timeout='300ms'");
+
+      cleanupTask = cleanupExpiredResultDrafts(now, storage)
+        .finally(() => { cleanupSettled = true; });
+      await waitForAdvisoryLockWaiter(() => cleanupSettled);
+
+      await expect(firstAppointmentProbe.query(
+        "SELECT id FROM appointments WHERE id=$1 FOR UPDATE",
+        [first.appointmentId],
+      )).resolves.toMatchObject({ rowCount: 1 });
+    } finally {
+      await firstAppointmentProbe.query("ROLLBACK").catch(() => undefined);
+      await advisoryBlocker.query("ROLLBACK").catch(() => undefined);
+      firstAppointmentProbe.release();
+      advisoryBlocker.release();
+      await cleanupTask?.catch(() => undefined);
+    }
+
+    await expect(cleanupTask).resolves.toEqual({
+      expiredDraftCount: 2,
+      deletionFailureCount: 0,
+    });
   });
 });
 

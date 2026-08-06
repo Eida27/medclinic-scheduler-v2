@@ -12,6 +12,7 @@ import {
 } from "@/server/files/result-file-validation";
 import { transaction } from "@/server/db/pool";
 import {
+  deleteRetiredStudentResultDraftIfClean,
   finalizeStudentResultDraft,
   getAccessibleStudentResultFileRow,
   getAdminStudentResultProfileRow,
@@ -24,11 +25,16 @@ import {
   listAdminStudentResultProfileRows,
   listAdminStudentResultSubmissionRows,
   listDraftFilesForUpdate,
+  listResultFilesForCleanupForUpdate,
   lockCurrentFinalizedSubmissionForInvalidation,
   lockExpectedStudentResultDraft,
   lockOrCreateStudentResultDraft,
+  lockOrCreateStudentResultEditDraft,
   markStudentResultFileForDeletion,
+  persistStudentResultCopyRollbackCleanup,
+  promoteStudentResultEditDraft,
   recordResultFileDeletion,
+  retireStudentResultDraft,
 } from "@/server/repositories/student-result-submissions.repository";
 import { localResultStorage } from "@/server/storage/local-result-storage";
 import type { ResultStorage } from "@/server/storage/result-storage";
@@ -37,6 +43,24 @@ import { writeAudit } from "@/server/repositories/audit.repository";
 import type { SessionUser } from "@/types/roles";
 
 type Upload = { filename: string; declaredMimeType: string; bytes: Buffer };
+type CopiedResultFile = {
+  submissionId: string;
+  storageKey: string;
+  originalFilename: string;
+  detectedMimeType: string;
+  extension: string;
+  byteSize: number;
+  checksumSha256: string;
+};
+type RollbackEditDraft = {
+  id: string;
+  appointmentId: string;
+  studentNumber: string;
+  resultType: "LABORATORY" | "PHYSICAL_EXAM";
+  status: "DRAFT";
+  basedOnSubmissionId: string | null;
+  lastActivityAt: Date;
+};
 
 function draftError(type: "not_found" | "unavailable" | "finalized") {
   if (type === "not_found") {
@@ -61,6 +85,18 @@ function expectedDraftError(type: "not_found" | "unavailable" | "stale") {
   );
 }
 
+function beginEditError(type: "not_found" | "unavailable" | "no_official" | "conflict") {
+  if (type === "not_found" || type === "unavailable") return draftError(type);
+  if (type === "no_official") {
+    return new AppError(
+      "RESULT_EDIT_NOT_AVAILABLE",
+      "Only a finalized result submission can be edited.",
+      409,
+    );
+  }
+  return expectedDraftError("stale");
+}
+
 export async function getStudentResultSubmission(studentNumber: string, appointmentId: string) {
   const existing = await getStudentResultSubmissionRow(studentNumber, appointmentId);
   if (existing) return existing;
@@ -69,6 +105,184 @@ export async function getStudentResultSubmission(studentNumber: string, appointm
   ));
   if (outcome.type !== "draft") throw draftError(outcome.type);
   return (await getStudentResultSubmissionRow(studentNumber, appointmentId))!;
+}
+
+export async function beginStudentResultEdit(
+  studentNumber: string,
+  appointmentId: string,
+  storage: ResultStorage = localResultStorage,
+) {
+  const generatedFiles: CopiedResultFile[] = [];
+  let rollbackDraft: RollbackEditDraft | null = null;
+  try {
+    return await transaction(async (client) => {
+      const outcome = await lockOrCreateStudentResultEditDraft(
+        client,
+        studentNumber,
+        appointmentId,
+      );
+      if (outcome.type !== "edit") throw beginEditError(outcome.type);
+      if (outcome.created) {
+        rollbackDraft = outcome.draft;
+        const copiedFiles: CopiedResultFile[] = [];
+        for (const officialFile of outcome.officialFiles) {
+          let bytes: Buffer;
+          try {
+            bytes = await storage.read(officialFile.storageKey);
+          } catch {
+            throw new AppError(
+              "RESULT_FILE_INTEGRITY_ERROR",
+              "A submitted result file failed its integrity check.",
+              500,
+            );
+          }
+          const checksumSha256 = createHash("sha256").update(bytes).digest("hex");
+          if (checksumSha256 !== officialFile.checksumSha256) {
+            throw new AppError(
+              "RESULT_FILE_INTEGRITY_ERROR",
+              "A submitted result file failed its integrity check.",
+              500,
+            );
+          }
+          const storageKey = `${outcome.draft.id}/${randomUUID()}.${officialFile.extension}`;
+          const copiedFile = {
+            submissionId: outcome.draft.id,
+            storageKey,
+            originalFilename: officialFile.originalFilename,
+            detectedMimeType: officialFile.detectedMimeType,
+            extension: officialFile.extension,
+            byteSize: officialFile.byteSize,
+            checksumSha256: officialFile.checksumSha256,
+          };
+          generatedFiles.push(copiedFile);
+          await storage.write(storageKey, bytes);
+          copiedFiles.push(copiedFile);
+        }
+        if (copiedFiles.length) await insertStudentResultFiles(client, copiedFiles);
+        await client.query(
+          `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
+           VALUES (NULL,'STUDENT_RESULT_EDIT_STARTED','student_result_submission',$1,
+                   jsonb_build_object(
+                     'appointmentId',$2::text,
+                     'basedOnSubmissionId',$3::text,
+                     'resultType',$4::text,
+                     'fileCount',$5::int,
+                     'totalBytes',$6::bigint
+                   ))`,
+          [
+            outcome.draft.id,
+            outcome.draft.appointmentId,
+            outcome.official.id,
+            outcome.draft.resultType,
+            copiedFiles.length,
+            copiedFiles.reduce((sum, file) => sum + file.byteSize, 0),
+          ],
+        );
+      }
+      const refreshed = await getStudentResultSubmissionRow(studentNumber, appointmentId, client);
+      if (!refreshed || refreshed.id !== outcome.draft.id) {
+        throw new Error("Result edit draft disappeared during creation.");
+      }
+      return refreshed;
+    });
+  } catch (error) {
+    const cleanupResults = await Promise.allSettled(
+      generatedFiles.map((file) => storage.delete(file.storageKey)),
+    );
+    const failedCleanupFiles = cleanupResults.flatMap((result, index) => {
+      if (result.status === "fulfilled") return [];
+      return [{
+        ...generatedFiles[index],
+        deleteError: result.reason instanceof Error
+          ? result.reason.message
+          : "Unknown rollback deletion error",
+      }];
+    });
+    const cleanupDraft = rollbackDraft;
+    if (cleanupDraft && failedCleanupFiles.length) {
+      try {
+        await transaction((client) => persistStudentResultCopyRollbackCleanup(
+          client,
+          cleanupDraft,
+          failedCleanupFiles,
+        ));
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "Result edit copy failed and rollback cleanup could not be persisted.",
+        );
+      }
+    }
+    throw error;
+  }
+}
+
+async function cleanupRetiredStudentResultDraft(
+  submissionId: string,
+  files: Array<{ id: string; storageKey: string }>,
+  storage: ResultStorage,
+) {
+  for (const file of files) {
+    try {
+      await storage.delete(file.storageKey);
+      await recordResultFileDeletion(file.id, { success: true });
+    } catch (error) {
+      await recordResultFileDeletion(file.id, {
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown file deletion error",
+      });
+    }
+  }
+  await deleteRetiredStudentResultDraftIfClean(submissionId);
+}
+
+export async function cancelStudentResultEdit(
+  studentNumber: string,
+  appointmentId: string,
+  submissionId: string,
+  storage: ResultStorage = localResultStorage,
+) {
+  const retired = await transaction(async (client) => {
+    const outcome = await lockExpectedStudentResultDraft(
+      client,
+      studentNumber,
+      appointmentId,
+      submissionId,
+    );
+    if (outcome.type !== "draft") throw expectedDraftError(outcome.type);
+    if (
+      !outcome.currentOfficial
+      || outcome.draft.basedOnSubmissionId !== outcome.currentOfficial.id
+    ) {
+      throw expectedDraftError("stale");
+    }
+    const files = await listResultFilesForCleanupForUpdate(client, outcome.draft.id);
+    if (!await retireStudentResultDraft(client, outcome.draft.id)) {
+      throw expectedDraftError("stale");
+    }
+    await client.query(
+      `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
+       VALUES (NULL,'STUDENT_RESULT_EDIT_CANCELLED','student_result_submission',$1,
+               jsonb_build_object(
+                 'appointmentId',$2::text,
+                 'basedOnSubmissionId',$3::text,
+                 'resultType',$4::text,
+                 'fileCount',$5::int,
+                 'totalBytes',$6::bigint
+               ))`,
+      [
+        outcome.draft.id,
+        outcome.draft.appointmentId,
+        outcome.draft.basedOnSubmissionId,
+        outcome.draft.resultType,
+        files.length,
+        files.reduce((sum, file) => sum + file.byteSize, 0),
+      ],
+    );
+    return { id: outcome.draft.id, files };
+  });
+  await cleanupRetiredStudentResultDraft(retired.id, retired.files, storage);
+  return { success: true };
 }
 
 export async function addStudentResultFiles(
@@ -179,6 +393,7 @@ export async function finalizeStudentResultSubmission(
     );
     if (outcome.type !== "draft") throw expectedDraftError(outcome.type);
     const draft = outcome.draft;
+    if (draft.basedOnSubmissionId) throw expectedDraftError("stale");
     const files = await listDraftFilesForUpdate(client, draft.id);
     if (!files.length) throw new AppError("RESULT_FILES_REQUIRED", "Add at least one file before final submission.", 422);
     const totalBytes = files.reduce((sum, file) => sum + file.byteSize, 0);
@@ -212,6 +427,81 @@ export async function finalizeStudentResultSubmission(
     await finalizeStudentResultDraft(client, draft, files.length, totalBytes);
   });
   return (await getStudentResultSubmissionRow(studentNumber, appointmentId))!;
+}
+
+export async function submitStudentResultChanges(
+  studentNumber: string,
+  appointmentId: string,
+  submissionId: string,
+  storage: ResultStorage = localResultStorage,
+) {
+  return transaction(async (client) => {
+    const outcome = await lockExpectedStudentResultDraft(
+      client,
+      studentNumber,
+      appointmentId,
+      submissionId,
+    );
+    if (outcome.type !== "draft") throw expectedDraftError(outcome.type);
+    if (
+      !outcome.currentOfficial
+      || outcome.draft.basedOnSubmissionId !== outcome.currentOfficial.id
+    ) {
+      throw expectedDraftError("stale");
+    }
+    const files = await listDraftFilesForUpdate(client, outcome.draft.id);
+    if (!files.length) {
+      throw new AppError(
+        "RESULT_FILES_REQUIRED",
+        "Add at least one file before submitting changes.",
+        422,
+      );
+    }
+    const totalBytes = files.reduce((sum, file) => sum + file.byteSize, 0);
+    if (files.length > RESULT_SUBMISSION_MAX_FILES || totalBytes > RESULT_SUBMISSION_MAX_BYTES) {
+      throw new AppError(
+        "RESULT_DRAFT_LIMIT_INVALID",
+        "This draft exceeds the result upload limits.",
+        422,
+      );
+    }
+    for (const file of files) {
+      try {
+        const bytes = await storage.read(file.storageKey);
+        const validated = validateResultFile({
+          filename: file.originalFilename,
+          declaredMimeType: file.detectedMimeType,
+          bytes,
+        });
+        if (
+          validated.detectedMimeType !== file.detectedMimeType
+          || validated.extension !== file.extension
+          || validated.byteSize !== file.byteSize
+          || validated.checksumSha256 !== file.checksumSha256
+        ) {
+          throw new Error("Stored edit file metadata changed.");
+        }
+      } catch {
+        throw new AppError(
+          "RESULT_FILE_INTEGRITY_ERROR",
+          "A stored edit file failed validation. Remove it and upload the file again.",
+          500,
+        );
+      }
+    }
+    await promoteStudentResultEditDraft(
+      client,
+      outcome.draft,
+      outcome.currentOfficial.id,
+      files.length,
+      totalBytes,
+    );
+    const refreshed = await getStudentResultSubmissionRow(studentNumber, appointmentId, client);
+    if (!refreshed || refreshed.id !== outcome.draft.id || refreshed.status !== "FINALIZED") {
+      throw new Error("Promoted result submission disappeared before commit.");
+    }
+    return refreshed;
+  });
 }
 
 async function readVerifiedResultFile(
@@ -415,7 +705,36 @@ export async function invalidateStudentResultSubmission(
         409,
       );
     }
-    const { submission } = lock;
+    const { submission, editDraft } = lock;
+    if (editDraft && !await retireStudentResultDraft(client, editDraft.id)) {
+      throw new AppError(
+        "RESULT_SUBMISSION_CONFLICT",
+        "This result submission changed while it was being invalidated. Refresh the student profile and try again.",
+        409,
+      );
+    }
+    if (editDraft) {
+      await client.query(
+        `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
+         VALUES ($1,'STUDENT_RESULT_EDIT_CANCELLED_BY_INVALIDATION','student_result_submission',$2,
+                 jsonb_build_object(
+                   'appointmentId',$3::text,
+                   'basedOnSubmissionId',$4::text,
+                   'resultType',$5::text,
+                   'fileCount',$6::int,
+                   'totalBytes',$7::bigint
+                 ))`,
+        [
+          actor.userId,
+          editDraft.id,
+          editDraft.appointmentId,
+          editDraft.basedOnSubmissionId,
+          editDraft.resultType,
+          editDraft.files.length,
+          editDraft.files.reduce((sum, file) => sum + file.byteSize, 0),
+        ],
+      );
+    }
     await invalidateFinalizedSubmissionMetadata(client, submission, actor.userId, reason);
     await createStudentNotification(client, {
       studentNumber: submission.studentNumber,
@@ -427,12 +746,12 @@ export async function invalidateStudentResultSubmission(
     await client.query(
       `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
        VALUES ($1,'STUDENT_RESULT_SUBMISSION_INVALIDATED','student_result_submission',$2,
-               jsonb_build_object('appointmentId',$3::text,'reason',$4::text,'fileCount',$5::int))`,
-      [actor.userId, submissionId, submission.appointmentId, reason, submission.files.length],
+                jsonb_build_object('appointmentId',$3::text,'fileCount',$4::int))`,
+      [actor.userId, submissionId, submission.appointmentId, submission.files.length],
     );
-    return submission;
+    return { submission, editDraft };
   });
-  for (const file of invalidated.files) {
+  for (const file of invalidated.submission.files) {
     try {
       await storage.delete(file.storageKey);
       await recordResultFileDeletion(file.id, { success: true });
@@ -443,9 +762,16 @@ export async function invalidateStudentResultSubmission(
       });
     }
   }
+  if (invalidated.editDraft) {
+    await cleanupRetiredStudentResultDraft(
+      invalidated.editDraft.id,
+      invalidated.editDraft.files,
+      storage,
+    );
+  }
   return {
     id: submissionId,
     status: "INVALIDATED" as const,
-    studentNumber: invalidated.studentNumber,
+    studentNumber: invalidated.submission.studentNumber,
   };
 }

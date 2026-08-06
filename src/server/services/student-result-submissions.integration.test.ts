@@ -23,6 +23,8 @@ import type { SessionUser } from "@/types/roles";
 import { updateAppointment } from "./appointments.service";
 import {
   addStudentResultFiles,
+  beginStudentResultEdit,
+  cancelStudentResultEdit,
   createAdminSubmissionZip,
   createAdminSubmissionZipStream,
   finalizeStudentResultSubmission as finalizeExpectedStudentResultSubmission,
@@ -34,7 +36,9 @@ import {
   invalidateStudentResultSubmission,
   listAdminStudentResultProfiles,
   removeStudentResultFile as removeExpectedStudentResultFile,
+  submitStudentResultChanges,
 } from "./student-result-submissions.service";
+import { cleanupExpiredResultDrafts } from "@/server/workers/result-draft-cleanup.worker";
 
 const studentPattern = "99-94%";
 let storageRoot = "";
@@ -157,6 +161,38 @@ async function finalizeStudentResultSubmission(
   );
 }
 
+async function finalizedResultFixture(
+  studentNumber: string,
+  filenames: string[],
+  scheduleType: "LABORATORY" | "PHYSICAL_EXAM" = "LABORATORY",
+) {
+  await insertTestStudent({
+    studentNumber,
+    firstName: "Editing",
+    lastName: "Student",
+    yearLevel: 3,
+  });
+  const appointmentId = await appointment(studentNumber, "COMPLETED", scheduleType);
+  const draft = await getStudentResultSubmission(studentNumber, appointmentId);
+  const uploads = filenames.map((filename, index) => (
+    file(filename, `%PDF-1.7\n${filename}-${index}`)
+  ));
+  const withFiles = await addStudentResultFiles(
+    studentNumber,
+    appointmentId,
+    draft.id,
+    uploads,
+    storage,
+  );
+  const official = await finalizeExpectedStudentResultSubmission(
+    studentNumber,
+    appointmentId,
+    withFiles.id,
+    storage,
+  );
+  return { appointmentId, official, uploads };
+}
+
 async function invalidationSnapshot(submissionId: string) {
   const result = await pool.query(
     `SELECT submission.status,
@@ -248,6 +284,932 @@ afterAll(async () => {
   await cleanupTestFixtures(studentPattern, "TEST-RESULT-DRAFT%", "TEST-RESULT-DRAFT%");
   await rm(storageRoot, { recursive: true, force: true });
   await pool.end();
+});
+
+describe("student result edit creation", () => {
+  it("copies every verified official file into one idempotent edit draft", async () => {
+    const studentNumber = "99-9440-40";
+    const fixture = await finalizedResultFixture(
+      studentNumber,
+      ["official-first.pdf", "official-second.pdf"],
+    );
+
+    const first = await beginStudentResultEdit(studentNumber, fixture.appointmentId, storage);
+    const repeated = await beginStudentResultEdit(studentNumber, fixture.appointmentId, storage);
+
+    expect(repeated.id).toBe(first.id);
+    expect(first).toMatchObject({
+      status: "DRAFT",
+      basedOnSubmissionId: fixture.official.id,
+      fileCount: 2,
+    });
+    expect(first.files.map((copied) => copied.originalFilename).sort()).toEqual([
+      "official-first.pdf",
+      "official-second.pdf",
+    ].sort());
+    expect(first.files.map((copied) => copied.storageKey)).not.toEqual(
+      fixture.official.files.map((official) => official.storageKey),
+    );
+    await expect(getStudentResultFile(
+      studentNumber,
+      fixture.official.files[0].id,
+      storage,
+    )).resolves.toMatchObject({ filename: fixture.official.files[0].originalFilename });
+    const rows = await pool.query<{ draftCount: number; finalizedCount: number }>(
+      `SELECT COUNT(*) FILTER (
+                WHERE status='DRAFT' AND discarded_at IS NULL
+              )::int AS "draftCount",
+              COUNT(*) FILTER (WHERE status='FINALIZED')::int AS "finalizedCount"
+         FROM student_result_submissions
+        WHERE appointment_id=$1`,
+      [fixture.appointmentId],
+    );
+    expect(rows.rows).toEqual([{ draftCount: 1, finalizedCount: 1 }]);
+    const audits = await pool.query<{
+      actorUserId: string | null;
+      entityId: string;
+      metadata: Record<string, unknown>;
+    }>(
+      `SELECT actor_user_id::text AS "actorUserId", entity_id AS "entityId", metadata
+         FROM audit_logs
+        WHERE action='STUDENT_RESULT_EDIT_STARTED' AND entity_id=$1`,
+      [first.id],
+    );
+    expect(audits.rows).toEqual([{
+      actorUserId: null,
+      entityId: first.id,
+      metadata: {
+        appointmentId: fixture.appointmentId,
+        basedOnSubmissionId: fixture.official.id,
+        resultType: "LABORATORY",
+        fileCount: first.fileCount,
+        totalBytes: first.totalBytes,
+      },
+    }]);
+    expect(JSON.stringify(audits.rows[0].metadata)).not.toMatch(/filename|checksum|content/i);
+  });
+
+  it("rolls back the edit draft and every generated key after a partial copy write failure", async () => {
+    const studentNumber = "99-9441-41";
+    const fixture = await finalizedResultFixture(
+      studentNumber,
+      ["copy-first.pdf", "copy-second.pdf", "copy-third.pdf"],
+    );
+    const writeKeys: string[] = [];
+    const deleteKeys: string[] = [];
+    const failingStorage: ResultStorage = {
+      read: storage.read.bind(storage),
+      write: async (storageKey, bytes) => {
+        writeKeys.push(storageKey);
+        if (writeKeys.length === 2) throw new Error("synthetic edit copy failure");
+        await storage.write(storageKey, bytes);
+      },
+      delete: async (storageKey) => {
+        deleteKeys.push(storageKey);
+        await storage.delete(storageKey);
+      },
+    };
+
+    await expect(beginStudentResultEdit(
+      studentNumber,
+      fixture.appointmentId,
+      failingStorage,
+    )).rejects.toThrow("synthetic edit copy failure");
+
+    expect(writeKeys).toHaveLength(2);
+    expect(new Set(deleteKeys)).toEqual(new Set(writeKeys));
+    for (const storageKey of writeKeys) {
+      await expect(storage.read(storageKey)).rejects.toThrow();
+    }
+    const draftRows = await pool.query(
+      `SELECT submission.id
+         FROM student_result_submissions submission
+        WHERE submission.appointment_id=$1
+          AND submission.status='DRAFT'`,
+      [fixture.appointmentId],
+    );
+    expect(draftRows.rows).toEqual([]);
+    const preservedOfficialBodies = await Promise.all(
+      fixture.official.files.map(async (officialFile) => (
+        (await storage.read(officialFile.storageKey)).toString("utf8")
+      )),
+    );
+    expect(preservedOfficialBodies.sort()).toEqual(
+      fixture.uploads.map((upload) => upload.bytes.toString("utf8")).sort(),
+    );
+  });
+
+  it("durably retries a copied key when rollback deletion fails", async () => {
+    const studentNumber = "99-9449-49";
+    const fixture = await finalizedResultFixture(
+      studentNumber,
+      ["rollback-first.pdf", "rollback-second.pdf"],
+    );
+    const writeKeys: string[] = [];
+    let failRollbackDelete = true;
+    const failingStorage: ResultStorage = {
+      read: storage.read.bind(storage),
+      write: async (storageKey, bytes) => {
+        writeKeys.push(storageKey);
+        if (writeKeys.length === 2) throw new Error("synthetic edit copy failure");
+        await storage.write(storageKey, bytes);
+      },
+      delete: async (storageKey) => {
+        if (failRollbackDelete && storageKey === writeKeys[0]) {
+          throw new Error("synthetic rollback delete failure");
+        }
+        await storage.delete(storageKey);
+      },
+    };
+
+    await expect(beginStudentResultEdit(
+      studentNumber,
+      fixture.appointmentId,
+      failingStorage,
+    )).rejects.toThrow("synthetic edit copy failure");
+
+    const cleanupMarker = await pool.query<{
+      id: string;
+      storageKey: string;
+      storageDeletePending: boolean;
+      deleteError: string | null;
+    }>(
+      `SELECT submission.id, file.storage_key AS "storageKey",
+              file.storage_delete_pending AS "storageDeletePending",
+              file.delete_error AS "deleteError"
+         FROM student_result_submissions submission
+         JOIN student_result_files file ON file.submission_id=submission.id
+        WHERE submission.appointment_id=$1 AND submission.status='DRAFT'
+          AND submission.discarded_at IS NOT NULL`,
+      [fixture.appointmentId],
+    );
+    expect(cleanupMarker.rows).toEqual([{
+      id: expect.any(String),
+      storageKey: writeKeys[0],
+      storageDeletePending: true,
+      deleteError: "synthetic rollback delete failure",
+    }]);
+    await expect(storage.read(writeKeys[0])).resolves.toEqual(fixture.uploads[0].bytes);
+
+    failRollbackDelete = false;
+    await expect(cleanupExpiredResultDrafts(new Date(), failingStorage)).resolves.toEqual({
+      expiredDraftCount: 0,
+      deletionFailureCount: 0,
+    });
+    await expect(storage.read(writeKeys[0])).rejects.toThrow();
+    const afterRetry = await pool.query(
+      "SELECT id FROM student_result_submissions WHERE id=$1",
+      [cleanupMarker.rows[0].id],
+    );
+    expect(afterRetry.rows).toEqual([]);
+    await expect(storage.read(fixture.official.files[0].storageKey)).resolves.toEqual(
+      fixture.uploads[0].bytes,
+    );
+  });
+
+  it("rejects an edit when an official object checksum no longer matches without copying anything", async () => {
+    const studentNumber = "99-9442-42";
+    const fixture = await finalizedResultFixture(
+      studentNumber,
+      ["checksum-first.pdf", "checksum-second.pdf"],
+    );
+    await storage.write(
+      fixture.official.files[1].storageKey,
+      Buffer.from("%PDF-1.7\nchanged official bytes"),
+    );
+    const writeKeys: string[] = [];
+    const deleteKeys: string[] = [];
+    const trackingStorage: ResultStorage = {
+      read: storage.read.bind(storage),
+      write: async (storageKey, bytes) => {
+        writeKeys.push(storageKey);
+        await storage.write(storageKey, bytes);
+      },
+      delete: async (storageKey) => {
+        deleteKeys.push(storageKey);
+        await storage.delete(storageKey);
+      },
+    };
+
+    await expect(beginStudentResultEdit(
+      studentNumber,
+      fixture.appointmentId,
+      trackingStorage,
+    )).rejects.toMatchObject({ code: "RESULT_FILE_INTEGRITY_ERROR", status: 500 });
+
+    expect(writeKeys).toHaveLength(1);
+    expect(deleteKeys).toEqual(writeKeys);
+    await expect(storage.read(writeKeys[0])).rejects.toThrow();
+    const drafts = await pool.query(
+      `SELECT id FROM student_result_submissions
+        WHERE appointment_id=$1 AND status='DRAFT'`,
+      [fixture.appointmentId],
+    );
+    expect(drafts.rows).toEqual([]);
+  });
+
+  it("rejects a repeated edit request whose draft is based on a replaced official", async () => {
+    const studentNumber = "99-9443-43";
+    const fixture = await finalizedResultFixture(studentNumber, ["old-official.pdf"]);
+    const edit = await beginStudentResultEdit(studentNumber, fixture.appointmentId, storage);
+    const replacement = await transaction(async (client) => {
+      await client.query(
+        `UPDATE student_result_submissions
+            SET status='SUPERSEDED', superseded_at=NOW(), superseded_by_submission_id=$2
+          WHERE id=$1`,
+        [fixture.official.id, edit.id],
+      );
+      return client.query<{ id: string }>(
+        `INSERT INTO student_result_submissions (
+           appointment_id, student_number, result_type, status, finalized_at
+         ) VALUES ($1,$2,'LABORATORY','FINALIZED',NOW())
+         RETURNING id`,
+        [fixture.appointmentId, studentNumber],
+      );
+    });
+
+    await expect(beginStudentResultEdit(
+      studentNumber,
+      fixture.appointmentId,
+      storage,
+    )).rejects.toMatchObject({ code: "RESULT_EDIT_STALE", status: 409 });
+    await expect(cancelStudentResultEdit(
+      studentNumber,
+      fixture.appointmentId,
+      edit.id,
+      storage,
+    )).rejects.toMatchObject({ code: "RESULT_EDIT_STALE", status: 409 });
+
+    const active = await pool.query(
+      `SELECT id, based_on_submission_id::text AS "basedOnSubmissionId"
+         FROM student_result_submissions
+        WHERE appointment_id=$1 AND status='DRAFT' AND discarded_at IS NULL`,
+      [fixture.appointmentId],
+    );
+    expect(active.rows).toEqual([{
+      id: edit.id,
+      basedOnSubmissionId: fixture.official.id,
+    }]);
+    expect(replacement.rows[0].id).not.toBe(fixture.official.id);
+  });
+
+  it("denies an edit request for another student's appointment before storage access", async () => {
+    const studentNumber = "99-9444-44";
+    const otherStudentNumber = "99-9445-45";
+    const fixture = await finalizedResultFixture(studentNumber, ["owned.pdf"]);
+    await insertTestStudent({
+      studentNumber: otherStudentNumber,
+      firstName: "Other",
+      lastName: "Student",
+      yearLevel: 3,
+    });
+    let storageCalls = 0;
+    const trackingStorage: ResultStorage = {
+      read: async () => {
+        storageCalls += 1;
+        throw new Error("unexpected read");
+      },
+      write: async () => { storageCalls += 1; },
+      delete: async () => { storageCalls += 1; },
+    };
+
+    await expect(beginStudentResultEdit(
+      otherStudentNumber,
+      fixture.appointmentId,
+      trackingStorage,
+    )).rejects.toMatchObject({ code: "RESULT_APPOINTMENT_NOT_FOUND", status: 404 });
+    expect(storageCalls).toBe(0);
+  });
+
+  it("rejects a conflicting normal draft before edit storage access", async () => {
+    const studentNumber = "99-9461-61";
+    await insertTestStudent({
+      studentNumber,
+      firstName: "Normal",
+      lastName: "Draft",
+      yearLevel: 3,
+    });
+    const appointmentId = await appointment(studentNumber);
+    const normalDraft = await getStudentResultSubmission(studentNumber, appointmentId);
+    let storageCalls = 0;
+    const trackingStorage: ResultStorage = {
+      read: async () => {
+        storageCalls += 1;
+        throw new Error("unexpected read");
+      },
+      write: async () => { storageCalls += 1; },
+      delete: async () => { storageCalls += 1; },
+    };
+
+    await expect(beginStudentResultEdit(
+      studentNumber,
+      appointmentId,
+      trackingStorage,
+    )).rejects.toMatchObject({ code: "RESULT_EDIT_STALE", status: 409 });
+    expect(storageCalls).toBe(0);
+    await expect(getStudentResultSubmission(studentNumber, appointmentId)).resolves.toEqual(normalDraft);
+  });
+
+  it("serializes simultaneous edit creation into one copied draft", async () => {
+    const studentNumber = "99-9446-46";
+    const fixture = await finalizedResultFixture(
+      studentNumber,
+      ["concurrent-first.pdf", "concurrent-second.pdf"],
+    );
+    let writeCalls = 0;
+    const trackingStorage: ResultStorage = {
+      read: storage.read.bind(storage),
+      write: async (storageKey, bytes) => {
+        writeCalls += 1;
+        await storage.write(storageKey, bytes);
+      },
+      delete: storage.delete.bind(storage),
+    };
+
+    const [first, second] = await Promise.all([
+      beginStudentResultEdit(studentNumber, fixture.appointmentId, trackingStorage),
+      beginStudentResultEdit(studentNumber, fixture.appointmentId, trackingStorage),
+    ]);
+
+    expect(second.id).toBe(first.id);
+    expect(first).toMatchObject({ fileCount: 2, basedOnSubmissionId: fixture.official.id });
+    expect(writeCalls).toBe(2);
+    const drafts = await pool.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count
+         FROM student_result_submissions
+        WHERE appointment_id=$1 AND status='DRAFT' AND discarded_at IS NULL`,
+      [fixture.appointmentId],
+    );
+    expect(drafts.rows).toEqual([{ count: 1 }]);
+  });
+});
+
+describe("student result edit retirement", () => {
+  it("cancels only the edit draft and removes its copied objects after successful cleanup", async () => {
+    const studentNumber = "99-9447-47";
+    const fixture = await finalizedResultFixture(
+      studentNumber,
+      ["cancel-first.pdf", "cancel-second.pdf"],
+    );
+    const edit = await beginStudentResultEdit(studentNumber, fixture.appointmentId, storage);
+    const copiedKeys = edit.files.map((copied) => copied.storageKey);
+    const officialBodies = await Promise.all(fixture.official.files.map(async (officialFile) => (
+      storage.read(officialFile.storageKey)
+    )));
+
+    await expect(cancelStudentResultEdit(
+      studentNumber,
+      fixture.appointmentId,
+      edit.id,
+      storage,
+    )).resolves.toEqual({ success: true });
+
+    const submissions = await pool.query(
+      `SELECT id, status, discarded_at::text AS "discardedAt"
+         FROM student_result_submissions
+        WHERE appointment_id=$1
+        ORDER BY status, id`,
+      [fixture.appointmentId],
+    );
+    expect(submissions.rows).toEqual([{
+      id: fixture.official.id,
+      status: "FINALIZED",
+      discardedAt: null,
+    }]);
+    for (const copiedKey of copiedKeys) {
+      await expect(storage.read(copiedKey)).rejects.toThrow();
+    }
+    for (const [index, officialFile] of fixture.official.files.entries()) {
+      await expect(storage.read(officialFile.storageKey)).resolves.toEqual(officialBodies[index]);
+    }
+    const audit = await pool.query<{ actorUserId: string | null; metadata: Record<string, unknown> }>(
+      `SELECT actor_user_id::text AS "actorUserId", metadata
+         FROM audit_logs
+        WHERE action='STUDENT_RESULT_EDIT_CANCELLED' AND entity_id=$1`,
+      [edit.id],
+    );
+    expect(audit.rows).toEqual([{
+      actorUserId: null,
+      metadata: {
+        appointmentId: fixture.appointmentId,
+        basedOnSubmissionId: fixture.official.id,
+        resultType: "LABORATORY",
+        fileCount: edit.fileCount,
+        totalBytes: edit.totalBytes,
+      },
+    }]);
+    expect(JSON.stringify(audit.rows[0].metadata)).not.toMatch(/filename|checksum|content/i);
+  });
+
+  it("tombstones a cancelled edit with retryable file cleanup and rejects its stale tab", async () => {
+    const studentNumber = "99-9448-48";
+    const fixture = await finalizedResultFixture(studentNumber, ["cancel-retry.pdf"]);
+    const edit = await beginStudentResultEdit(studentNumber, fixture.appointmentId, storage);
+    const failingStorage: ResultStorage = {
+      read: storage.read.bind(storage),
+      write: storage.write.bind(storage),
+      delete: async () => { throw new Error("synthetic edit cancellation delete failure"); },
+    };
+
+    await expect(cancelStudentResultEdit(
+      studentNumber,
+      fixture.appointmentId,
+      edit.id,
+      failingStorage,
+    )).resolves.toEqual({ success: true });
+
+    const retired = await pool.query(
+      `SELECT submission.discarded_at IS NOT NULL AS discarded,
+              file.storage_delete_pending AS "storageDeletePending",
+              file.deleted_at::text AS "deletedAt",
+              file.delete_error AS "deleteError"
+         FROM student_result_submissions submission
+         JOIN student_result_files file ON file.submission_id=submission.id
+        WHERE submission.id=$1`,
+      [edit.id],
+    );
+    expect(retired.rows).toEqual([{
+      discarded: true,
+      storageDeletePending: true,
+      deletedAt: null,
+      deleteError: "synthetic edit cancellation delete failure",
+    }]);
+    await expect(getStudentResultSubmission(studentNumber, fixture.appointmentId)).resolves.toMatchObject({
+      id: fixture.official.id,
+      status: "FINALIZED",
+    });
+
+    const replacementEdit = await beginStudentResultEdit(studentNumber, fixture.appointmentId, storage);
+    await expect(cancelStudentResultEdit(
+      studentNumber,
+      fixture.appointmentId,
+      edit.id,
+      storage,
+    )).rejects.toMatchObject({ code: "RESULT_EDIT_STALE", status: 409 });
+    await expect(getStudentResultSubmission(studentNumber, fixture.appointmentId)).resolves.toMatchObject({
+      id: replacementEdit.id,
+      basedOnSubmissionId: fixture.official.id,
+      fileCount: 1,
+    });
+
+    await cleanupExpiredResultDrafts(new Date(), storage);
+    await expect(pool.query(
+      "SELECT id FROM student_result_submissions WHERE id=$1",
+      [edit.id],
+    )).resolves.toMatchObject({ rowCount: 0 });
+    await expect(storage.read(edit.files[0].storageKey)).rejects.toThrow();
+    await expect(storage.read(replacementEdit.files[0].storageKey)).resolves.toEqual(
+      fixture.uploads[0].bytes,
+    );
+  });
+
+  it("retires the related edit when an administrator invalidates its official submission", async () => {
+    const studentNumber = "99-9449-49";
+    const fixture = await finalizedResultFixture(studentNumber, ["invalidation-official.pdf"]);
+    const edit = await beginStudentResultEdit(studentNumber, fixture.appointmentId, storage);
+
+    await expect(invalidateStudentResultSubmission(
+      fixture.official.id,
+      "Document belongs to another student",
+      admin,
+      storage,
+    )).resolves.toMatchObject({ id: fixture.official.id, status: "INVALIDATED" });
+
+    const lifecycle = await pool.query(
+      `SELECT id, status, discarded_at::text AS "discardedAt"
+         FROM student_result_submissions
+        WHERE appointment_id=$1
+        ORDER BY status, id`,
+      [fixture.appointmentId],
+    );
+    expect(lifecycle.rows).toEqual([{
+      id: fixture.official.id,
+      status: "INVALIDATED",
+      discardedAt: null,
+    }]);
+    await expect(storage.read(edit.files[0].storageKey)).rejects.toThrow();
+
+    const replacement = await getStudentResultSubmission(studentNumber, fixture.appointmentId);
+    expect(replacement).toMatchObject({
+      status: "DRAFT",
+      basedOnSubmissionId: null,
+      fileCount: 0,
+    });
+    await expect(cancelStudentResultEdit(
+      studentNumber,
+      fixture.appointmentId,
+      edit.id,
+      storage,
+    )).rejects.toMatchObject({ code: "RESULT_EDIT_STALE", status: 409 });
+    await expect(getStudentResultSubmission(studentNumber, fixture.appointmentId)).resolves.toEqual(replacement);
+    const audit = await pool.query<{
+      actorUserId: string | null;
+      metadata: Record<string, unknown>;
+    }>(
+      `SELECT actor_user_id::text AS "actorUserId", metadata
+         FROM audit_logs
+        WHERE action='STUDENT_RESULT_EDIT_CANCELLED_BY_INVALIDATION' AND entity_id=$1`,
+      [edit.id],
+    );
+    expect(audit.rows).toEqual([{
+      actorUserId: admin.userId,
+      metadata: {
+        appointmentId: fixture.appointmentId,
+        basedOnSubmissionId: fixture.official.id,
+        resultType: "LABORATORY",
+        fileCount: edit.fileCount,
+        totalBytes: edit.totalBytes,
+      },
+    }]);
+    expect(JSON.stringify(audit.rows[0].metadata)).not.toMatch(/filename|checksum|content/i);
+  });
+});
+
+describe("student result edit promotion", () => {
+  it("rejects cross-student cancel and submit attempts before storage access", async () => {
+    const studentNumber = "99-9462-62";
+    const otherStudentNumber = "99-9463-63";
+    const fixture = await finalizedResultFixture(studentNumber, ["owner-only.pdf"]);
+    await insertTestStudent({
+      studentNumber: otherStudentNumber,
+      firstName: "Other",
+      lastName: "Editor",
+      yearLevel: 3,
+    });
+    const edit = await beginStudentResultEdit(studentNumber, fixture.appointmentId, storage);
+    let storageCalls = 0;
+    const trackingStorage: ResultStorage = {
+      read: async () => {
+        storageCalls += 1;
+        throw new Error("unexpected read");
+      },
+      write: async () => { storageCalls += 1; },
+      delete: async () => { storageCalls += 1; },
+    };
+
+    await expect(cancelStudentResultEdit(
+      otherStudentNumber,
+      fixture.appointmentId,
+      edit.id,
+      trackingStorage,
+    )).rejects.toMatchObject({ code: "RESULT_APPOINTMENT_NOT_FOUND", status: 404 });
+    await expect(submitStudentResultChanges(
+      otherStudentNumber,
+      fixture.appointmentId,
+      edit.id,
+      trackingStorage,
+    )).rejects.toMatchObject({ code: "RESULT_APPOINTMENT_NOT_FOUND", status: 404 });
+
+    expect(storageCalls).toBe(0);
+    await expect(getStudentResultSubmission(studentNumber, fixture.appointmentId)).resolves.toMatchObject({
+      id: edit.id,
+      basedOnSubmissionId: fixture.official.id,
+    });
+  });
+
+  it("atomically supersedes the official and promotes the complete edit on submit changes", async () => {
+    const studentNumber = "99-9450-50";
+    const fixture = await finalizedResultFixture(
+      studentNumber,
+      ["promote-first.pdf", "promote-second.pdf"],
+    );
+    const edit = await beginStudentResultEdit(studentNumber, fixture.appointmentId, storage);
+    const officialBodies = await Promise.all(fixture.official.files.map(async (officialFile) => (
+      storage.read(officialFile.storageKey)
+    )));
+
+    const promoted = await submitStudentResultChanges(
+      studentNumber,
+      fixture.appointmentId,
+      edit.id,
+      storage,
+    );
+
+    expect(promoted).toMatchObject({
+      id: edit.id,
+      status: "FINALIZED",
+      basedOnSubmissionId: null,
+      fileCount: 2,
+    });
+    const lifecycle = await pool.query(
+      `SELECT id, status, based_on_submission_id::text AS "basedOnSubmissionId",
+              superseded_at IS NOT NULL AS superseded,
+              superseded_by_submission_id::text AS "supersededBySubmissionId"
+         FROM student_result_submissions
+        WHERE appointment_id=$1
+        ORDER BY status, id`,
+      [fixture.appointmentId],
+    );
+    expect(lifecycle.rows).toEqual(expect.arrayContaining([
+      {
+        id: promoted.id,
+        status: "FINALIZED",
+        basedOnSubmissionId: null,
+        superseded: false,
+        supersededBySubmissionId: null,
+      },
+      {
+        id: fixture.official.id,
+        status: "SUPERSEDED",
+        basedOnSubmissionId: null,
+        superseded: true,
+        supersededBySubmissionId: promoted.id,
+      },
+    ]));
+    for (const [index, officialFile] of fixture.official.files.entries()) {
+      await expect(storage.read(officialFile.storageKey)).resolves.toEqual(officialBodies[index]);
+      await expect(getStudentResultFile(studentNumber, officialFile.id, storage))
+        .rejects.toMatchObject({ code: "RESULT_FILE_NOT_FOUND", status: 404 });
+    }
+    await expect(getStudentResultFile(studentNumber, promoted.files[0].id, storage))
+      .resolves.toMatchObject({ filename: promoted.files[0].originalFilename });
+    const result = await pool.query(
+      `SELECT result_status, completed_at::text AS "completedAt"
+         FROM laboratory_results WHERE appointment_id=$1`,
+      [fixture.appointmentId],
+    );
+    expect(result.rows).toEqual([{
+      result_status: "COMPLETED",
+      completedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+    }]);
+    const audit = await pool.query<{ actorUserId: string | null; metadata: Record<string, unknown> }>(
+      `SELECT actor_user_id::text AS "actorUserId", metadata
+         FROM audit_logs
+        WHERE action='STUDENT_RESULT_SUBMISSION_REPLACED' AND entity_id=$1`,
+      [promoted.id],
+    );
+    expect(audit.rows).toEqual([{
+      actorUserId: null,
+      metadata: {
+        appointmentId: fixture.appointmentId,
+        previousSubmissionId: fixture.official.id,
+        resultType: "LABORATORY",
+        fileCount: promoted.fileCount,
+        totalBytes: promoted.totalBytes,
+      },
+    }]);
+    expect(JSON.stringify(audit.rows[0].metadata)).not.toMatch(/filename|checksum|content/i);
+  });
+
+  it("rejects an edit draft through the initial finalize operation", async () => {
+    const studentNumber = "99-9451-51";
+    const fixture = await finalizedResultFixture(studentNumber, ["wrong-finalize-path.pdf"]);
+    const edit = await beginStudentResultEdit(studentNumber, fixture.appointmentId, storage);
+
+    await expect(finalizeExpectedStudentResultSubmission(
+      studentNumber,
+      fixture.appointmentId,
+      edit.id,
+      storage,
+    )).rejects.toMatchObject({ code: "RESULT_EDIT_STALE", status: 409 });
+
+    await expect(getStudentResultSubmission(studentNumber, fixture.appointmentId)).resolves.toMatchObject({
+      id: edit.id,
+      status: "DRAFT",
+      basedOnSubmissionId: fixture.official.id,
+    });
+  });
+
+  it("rejects submit changes when the edit contains zero active files", async () => {
+    const studentNumber = "99-9452-52";
+    const fixture = await finalizedResultFixture(studentNumber, ["remove-before-submit.pdf"]);
+    const edit = await beginStudentResultEdit(studentNumber, fixture.appointmentId, storage);
+    await removeExpectedStudentResultFile(
+      studentNumber,
+      fixture.appointmentId,
+      edit.id,
+      edit.files[0].id,
+      storage,
+    );
+
+    await expect(submitStudentResultChanges(
+      studentNumber,
+      fixture.appointmentId,
+      edit.id,
+      storage,
+    )).rejects.toMatchObject({ code: "RESULT_FILES_REQUIRED", status: 422 });
+
+    const statuses = await pool.query(
+      "SELECT status FROM student_result_submissions WHERE appointment_id=$1 ORDER BY status",
+      [fixture.appointmentId],
+    );
+    expect(statuses.rows).toEqual([{ status: "DRAFT" }, { status: "FINALIZED" }]);
+  });
+
+  it("rejects submit changes when a stored edit object is missing", async () => {
+    const studentNumber = "99-9453-53";
+    const fixture = await finalizedResultFixture(studentNumber, ["missing-edit-object.pdf"]);
+    const edit = await beginStudentResultEdit(studentNumber, fixture.appointmentId, storage);
+    await storage.delete(edit.files[0].storageKey);
+
+    await expect(submitStudentResultChanges(
+      studentNumber,
+      fixture.appointmentId,
+      edit.id,
+      storage,
+    )).rejects.toMatchObject({ code: "RESULT_FILE_INTEGRITY_ERROR", status: 500 });
+
+    const statuses = await pool.query(
+      "SELECT status FROM student_result_submissions WHERE appointment_id=$1 ORDER BY status",
+      [fixture.appointmentId],
+    );
+    expect(statuses.rows).toEqual([{ status: "DRAFT" }, { status: "FINALIZED" }]);
+  });
+
+  it("rejects submit changes when an edit object checksum no longer matches", async () => {
+    const studentNumber = "99-9454-54";
+    const fixture = await finalizedResultFixture(studentNumber, ["changed-edit-object.pdf"]);
+    const edit = await beginStudentResultEdit(studentNumber, fixture.appointmentId, storage);
+    await storage.write(
+      edit.files[0].storageKey,
+      Buffer.from("%PDF-1.7\nchanged after edit creation"),
+    );
+
+    await expect(submitStudentResultChanges(
+      studentNumber,
+      fixture.appointmentId,
+      edit.id,
+      storage,
+    )).rejects.toMatchObject({ code: "RESULT_FILE_INTEGRITY_ERROR", status: 500 });
+  });
+
+  it("rejects submit changes when locked edit metadata disagrees with the file signature", async () => {
+    const studentNumber = "99-9455-55";
+    const fixture = await finalizedResultFixture(studentNumber, ["metadata-edit-object.pdf"]);
+    const edit = await beginStudentResultEdit(studentNumber, fixture.appointmentId, storage);
+    await pool.query(
+      "UPDATE student_result_files SET detected_mime_type='image/png' WHERE id=$1",
+      [edit.files[0].id],
+    );
+
+    await expect(submitStudentResultChanges(
+      studentNumber,
+      fixture.appointmentId,
+      edit.id,
+      storage,
+    )).rejects.toMatchObject({ code: "RESULT_FILE_INTEGRITY_ERROR", status: 500 });
+  });
+
+  it("rejects submit changes when locked edit rows exceed the file-count limit before storage reads", async () => {
+    const studentNumber = "99-9456-56";
+    const fixture = await finalizedResultFixture(studentNumber, ["count-limit-edit.pdf"]);
+    const edit = await beginStudentResultEdit(studentNumber, fixture.appointmentId, storage);
+    await pool.query(
+      `INSERT INTO student_result_files (
+         submission_id, storage_key, original_filename, detected_mime_type,
+         extension, byte_size, checksum_sha256
+       )
+       SELECT $1::uuid, $1::uuid::text || '/synthetic-count-' || value::text || '.pdf',
+              'synthetic-count.pdf', 'application/pdf', 'pdf', 1, $2
+         FROM GENERATE_SERIES(1, 10) value`,
+      [edit.id, "a".repeat(64)],
+    );
+    let readCalls = 0;
+    const trackingStorage: ResultStorage = {
+      write: storage.write.bind(storage),
+      read: async (storageKey) => {
+        readCalls += 1;
+        return storage.read(storageKey);
+      },
+      delete: storage.delete.bind(storage),
+    };
+
+    await expect(submitStudentResultChanges(
+      studentNumber,
+      fixture.appointmentId,
+      edit.id,
+      trackingStorage,
+    )).rejects.toMatchObject({ code: "RESULT_DRAFT_LIMIT_INVALID", status: 422 });
+    expect(readCalls).toBe(0);
+  });
+
+  it("rejects submit changes when locked edit rows exceed the total-byte limit before storage reads", async () => {
+    const studentNumber = "99-9457-57";
+    const fixture = await finalizedResultFixture(studentNumber, ["byte-limit-edit.pdf"]);
+    const edit = await beginStudentResultEdit(studentNumber, fixture.appointmentId, storage);
+    await pool.query(
+      "UPDATE student_result_files SET byte_size=$2 WHERE id=$1",
+      [edit.files[0].id, 50 * 1024 * 1024 + 1],
+    );
+    let readCalls = 0;
+    const trackingStorage: ResultStorage = {
+      write: storage.write.bind(storage),
+      read: async (storageKey) => {
+        readCalls += 1;
+        return storage.read(storageKey);
+      },
+      delete: storage.delete.bind(storage),
+    };
+
+    await expect(submitStudentResultChanges(
+      studentNumber,
+      fixture.appointmentId,
+      edit.id,
+      trackingStorage,
+    )).rejects.toMatchObject({ code: "RESULT_DRAFT_LIMIT_INVALID", status: 422 });
+    expect(readCalls).toBe(0);
+  });
+
+  it("rejects submit changes when the edit base is no longer the current official", async () => {
+    const studentNumber = "99-9458-58";
+    const fixture = await finalizedResultFixture(studentNumber, ["stale-base-edit.pdf"]);
+    const edit = await beginStudentResultEdit(studentNumber, fixture.appointmentId, storage);
+    const replacement = await transaction(async (client) => {
+      await client.query(
+        `UPDATE student_result_submissions
+            SET status='SUPERSEDED', superseded_at=NOW(), superseded_by_submission_id=$2
+          WHERE id=$1`,
+        [fixture.official.id, edit.id],
+      );
+      return client.query<{ id: string }>(
+        `INSERT INTO student_result_submissions (
+           appointment_id, student_number, result_type, status, finalized_at
+         ) VALUES ($1,$2,'LABORATORY','FINALIZED',NOW())
+         RETURNING id`,
+        [fixture.appointmentId, studentNumber],
+      );
+    });
+
+    await expect(submitStudentResultChanges(
+      studentNumber,
+      fixture.appointmentId,
+      edit.id,
+      storage,
+    )).rejects.toMatchObject({ code: "RESULT_EDIT_STALE", status: 409 });
+
+    const unchanged = await pool.query(
+      `SELECT id, status, based_on_submission_id::text AS "basedOnSubmissionId"
+         FROM student_result_submissions
+        WHERE appointment_id=$1
+        ORDER BY status, id`,
+      [fixture.appointmentId],
+    );
+    expect(unchanged.rows).toEqual(expect.arrayContaining([
+      { id: edit.id, status: "DRAFT", basedOnSubmissionId: fixture.official.id },
+      { id: replacement.rows[0].id, status: "FINALIZED", basedOnSubmissionId: null },
+    ]));
+  });
+
+  it("rejects submit changes after administrator invalidation retired the edit", async () => {
+    const studentNumber = "99-9459-59";
+    const fixture = await finalizedResultFixture(studentNumber, ["invalidated-base-edit.pdf"]);
+    const edit = await beginStudentResultEdit(studentNumber, fixture.appointmentId, storage);
+    await invalidateStudentResultSubmission(
+      fixture.official.id,
+      "Invalid document",
+      admin,
+      storage,
+    );
+
+    await expect(submitStudentResultChanges(
+      studentNumber,
+      fixture.appointmentId,
+      edit.id,
+      storage,
+    )).rejects.toMatchObject({ code: "RESULT_EDIT_STALE", status: 409 });
+    const state = await pool.query(
+      "SELECT status FROM student_result_submissions WHERE appointment_id=$1 ORDER BY status",
+      [fixture.appointmentId],
+    );
+    expect(state.rows).toEqual([{ status: "INVALIDATED" }]);
+  });
+
+  it("allows exactly one of two competing submit changes promotions", async () => {
+    const studentNumber = "99-9460-60";
+    const fixture = await finalizedResultFixture(
+      studentNumber,
+      ["competing-first.pdf", "competing-second.pdf"],
+    );
+    const edit = await beginStudentResultEdit(studentNumber, fixture.appointmentId, storage);
+
+    const outcomes = await Promise.allSettled([
+      submitStudentResultChanges(studentNumber, fixture.appointmentId, edit.id, storage),
+      submitStudentResultChanges(studentNumber, fixture.appointmentId, edit.id, storage),
+    ]);
+
+    expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+    expect(outcomes.filter((outcome) => (
+      outcome.status === "rejected"
+      && outcome.reason?.code === "RESULT_EDIT_STALE"
+      && outcome.reason?.status === 409
+    ))).toHaveLength(1);
+    const counts = await pool.query(
+      `SELECT COUNT(*) FILTER (WHERE status='FINALIZED')::int AS finalized,
+              COUNT(*) FILTER (WHERE status='SUPERSEDED')::int AS superseded
+         FROM student_result_submissions
+        WHERE appointment_id=$1`,
+      [fixture.appointmentId],
+    );
+    expect(counts.rows).toEqual([{ finalized: 1, superseded: 1 }]);
+    const audits = await pool.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count
+         FROM audit_logs
+        WHERE action='STUDENT_RESULT_SUBMISSION_REPLACED'
+          AND entity_id=$1`,
+      [edit.id],
+    );
+    expect(audits.rows).toEqual([{ count: 1 }]);
+  });
 });
 
 describe("student result drafts", () => {
@@ -744,6 +1706,23 @@ describe("student result drafts", () => {
       deleted: true,
       notification_type: "RESULT_INVALIDATED",
     }]);
+    const audit = await pool.query<{
+      actorUserId: string | null;
+      metadata: Record<string, unknown>;
+    }>(
+      `SELECT actor_user_id::text AS "actorUserId", metadata
+         FROM audit_logs
+        WHERE action='STUDENT_RESULT_SUBMISSION_INVALIDATED' AND entity_id=$1`,
+      [finalized.id],
+    );
+    expect(audit.rows).toEqual([{
+      actorUserId: admin.userId,
+      metadata: {
+        appointmentId,
+        fileCount: 1,
+      },
+    }]);
+    expect(JSON.stringify(audit.rows[0].metadata)).not.toContain("Wrong student document");
     const replacement = await getStudentResultSubmission("99-9411-11", appointmentId);
     expect(replacement).toMatchObject({ status: "DRAFT", fileCount: 0 });
     await expect(addStudentResultFile("99-9411-11", appointmentId, file("replacement.pdf"), storage))
@@ -974,6 +1953,7 @@ describe("appointment result correction protection", () => {
       ["99-9426-26", "Active"],
       ["99-9427-27", "Deleted"],
       ["99-9428-28", "PendingDelete"],
+      ["99-9429-29", "Retired"],
     ] as const;
     for (const [studentNumber, firstName] of fixtures) {
       await insertTestStudent({ studentNumber, firstName, lastName: "Protection", yearLevel: 3 });
@@ -1023,6 +2003,19 @@ describe("appointment result correction protection", () => {
         ],
       );
     }
+    const retired = await pool.query<{ id: string }>(
+      `INSERT INTO student_result_submissions (
+         appointment_id, student_number, result_type, discarded_at
+       ) VALUES ($1,'99-9429-29','LABORATORY',NOW()) RETURNING id`,
+      [ids.get("99-9429-29")],
+    );
+    await pool.query(
+      `INSERT INTO student_result_files (
+         submission_id, storage_key, original_filename, detected_mime_type,
+         extension, byte_size, checksum_sha256
+       ) VALUES ($1,'retired.pdf','retired.pdf','application/pdf','pdf',32,$2)`,
+      [retired.rows[0].id, "b".repeat(64)],
+    );
 
     const states = await transaction((client) =>
       loadAppointmentResultProtectionStates(client, [...ids.values()]),
@@ -1049,6 +2042,7 @@ describe("appointment result correction protection", () => {
     });
     expect(states.get(ids.get("99-9427-27")!)).toEqual({ type: "CLEAR" });
     expect(states.get(ids.get("99-9428-28")!)).toEqual({ type: "CLEAR" });
+    expect(states.get(ids.get("99-9429-29")!)).toEqual({ type: "CLEAR" });
   });
 
   it("returns clear when the completed appointment has no result row", async () => {
