@@ -28,7 +28,7 @@ The approved behavior is:
 
 The current implementation already provides useful foundations:
 
-- `student_result_submissions` supports `DRAFT`, `FINALIZED`, and `INVALIDATED` statuses.
+- `student_result_submissions` currently supports `DRAFT`, `FINALIZED`, and `INVALIDATED` statuses.
 - Database partial unique indexes allow one `DRAFT` and one `FINALIZED` submission for the same appointment simultaneously.
 - Result files are stored separately in `student_result_files` and belong to one submission.
 - Students may currently add and remove files only while a submission is `DRAFT`.
@@ -82,9 +82,9 @@ When the student clicks **Submit changes**:
 3. Verify that the official submission has not been invalidated or otherwise superseded.
 4. Revalidate all files in the edit draft, including file count, combined size, MIME/signature, metadata, and stored-file integrity.
 5. Require at least one file.
-6. Atomically promote the edited file set to the new official finalized version.
-7. Retire the previous finalized version in a way that preserves valid history and does not violate the one-finalized-submission partial unique index.
-8. Remove the edit draft after successful promotion.
+6. In one transaction, change the previous official submission from `FINALIZED` to `SUPERSEDED` and promote the edit draft from `DRAFT` to `FINALIZED`.
+7. Preserve the previous official version and its files as historical data; do not delete them during a successful edit submission.
+8. Keep the one-finalized-submission partial unique index valid throughout the transaction.
 9. Refresh the student and administrator views only after the transaction succeeds.
 
 There must never be a moment where an unfinished student edit becomes the official result.
@@ -120,17 +120,32 @@ based_on_submission_id UUID NULL
   REFERENCES student_result_submissions(id)
 ```
 
+Extend the status constraint to include `SUPERSEDED`:
+
+```text
+DRAFT
+FINALIZED
+INVALIDATED
+SUPERSEDED
+```
+
 Interpretation:
 
 - `DRAFT` with `based_on_submission_id IS NULL`: normal first submission or normal administrator-requested replacement draft.
 - `DRAFT` with `based_on_submission_id = <FINALIZED id>`: student edit draft derived from an official finalized submission.
-- `FINALIZED`: official submitted result.
+- `FINALIZED`: current official submitted result.
+- `SUPERSEDED`: an older, previously finalized version replaced by a later student-submitted edit.
+- `INVALIDATED`: administrator-invalidated submission under the existing invalidation workflow.
 
-The migration should also add an index on `based_on_submission_id` if query plans benefit from it.
+`SUPERSEDED` is distinct from `INVALIDATED`: a superseded submission was valid when submitted and was later replaced by the student; it was not rejected by an administrator.
 
-The service layer must ensure that `based_on_submission_id` references a finalized submission for the same appointment and student when an edit draft is created. Do not rely on client input to establish this relationship.
+For `SUPERSEDED`, retain `finalized_at` and add a nullable `superseded_at TIMESTAMPTZ` plus optional `superseded_by_submission_id UUID REFERENCES student_result_submissions(id)` so history has explicit provenance. `invalidated_at`, `invalidated_by`, and `invalidation_reason` remain null for superseded rows.
 
-No new public submission status is required solely for editing.
+The migration should add indexes on `based_on_submission_id` and `superseded_by_submission_id` if useful for the profile/history queries.
+
+The service layer must ensure that `based_on_submission_id` references the current finalized submission for the same appointment and student when an edit draft is created. Do not rely on client input to establish this relationship.
+
+The existing unique index for one `FINALIZED` submission per appointment remains appropriate because `SUPERSEDED` rows no longer match that predicate.
 
 ## 6. Edit-Draft Creation
 
@@ -146,7 +161,7 @@ The operation must:
 2. Lock the owned published appointment.
 3. Confirm the appointment still belongs to the student.
 4. Locate and lock the current official `FINALIZED` submission.
-5. Reject if an edit draft already exists, unless the service elects to return that existing edit draft idempotently.
+5. Reject if an edit draft already exists, unless the same valid edit draft can be returned idempotently.
 6. Create a `DRAFT` with `based_on_submission_id` pointing to the current finalized submission.
 7. Copy each finalized file into edit-draft storage and create corresponding `student_result_files` rows.
 8. Preserve original filenames and validated metadata.
@@ -165,11 +180,7 @@ The student file input becomes a multi-select input:
 <input type="file" multiple>
 ```
 
-Accepted formats remain:
-
-- PDF
-- JPG/JPEG
-- PNG
+Accepted formats remain PDF, JPG/JPEG, and PNG.
 
 ### 7.2 Browser pre-validation
 
@@ -180,12 +191,7 @@ Before the request is sent, validate the complete selected set against:
 - Maximum 10 total files including files already in the current editable draft.
 - Maximum 50 MB combined including files already in the current editable draft.
 
-The selected files should appear in a pre-upload list showing:
-
-- filename;
-- size;
-- valid/invalid state;
-- specific validation error where applicable.
+The selected files should appear in a pre-upload list showing filename, size, valid/invalid state, and a specific validation error where applicable.
 
 If any selected file is invalid:
 
@@ -222,11 +228,7 @@ The server must:
 5. Write all storage objects and database rows as one coordinated operation.
 6. On any failure, clean up all storage objects written for that request and leave the draft unchanged.
 
-The existing file limits remain:
-
-- 10 files maximum.
-- 20 MB maximum per file.
-- 50 MB maximum combined.
+The existing file limits remain 10 files maximum, 20 MB maximum per file, and 50 MB maximum combined.
 
 ### 7.5 Duplicate-submission protection
 
@@ -244,17 +246,7 @@ Upgrade `ResultDraftManager` rather than introducing a disconnected editor compo
 
 ### 8.1 Draft / first submission
 
-Show:
-
-- result type;
-- `fileCount / 10`;
-- combined size `/ 50 MB`;
-- current draft files;
-- remove controls;
-- multi-file picker;
-- selected-file pre-validation list;
-- **Upload files**;
-- **Final submit** when at least one file exists.
+Show result type, `fileCount / 10`, combined size `/ 50 MB`, current draft files, remove controls, the multi-file picker, selected-file pre-validation list, **Upload files**, and **Final submit** when at least one file exists.
 
 The final-submit confirmation should no longer claim the files can never be edited again. Recommended wording:
 
@@ -292,22 +284,13 @@ Show:
 
 ### 8.4 Error presentation
 
-Use clear student-facing messages for at least:
-
-- unsupported file type;
-- file exceeds 20 MB;
-- more than 10 total files;
-- combined files exceed 50 MB;
-- upload failed;
-- submission changed while editing;
-- administrator invalidated the result;
-- stored-file integrity failure.
+Use clear student-facing messages for unsupported file type, file exceeds 20 MB, more than 10 total files, combined files exceed 50 MB, upload failure, submission changed while editing, administrator invalidation, and stored-file integrity failure.
 
 For recoverable upload failures, selected files should remain visible where practical so the student can retry without rebuilding the selection.
 
 ## 9. Administrator Behavior
 
-The administrator's currently visible result remains the official finalized submission.
+The administrator's currently visible result remains the current `FINALIZED` submission.
 
 When an edit draft exists, show a subtle state such as:
 
@@ -316,11 +299,9 @@ Finalized
 Student editing in progress
 ```
 
-The admin must:
+The admin must continue downloading the official finalized files, must not see unfinished edit-draft files as finalized medical documents, and retains existing invalidation controls.
 
-- continue downloading the official finalized files;
-- not see unfinished edit-draft files as finalized medical documents;
-- retain existing invalidation controls.
+Superseded versions may remain in administrator history as historical submissions, clearly labeled `SUPERSEDED`; they must not be mistaken for the current official result.
 
 Do not expand result-document access to coordinators or clinic staff.
 
@@ -332,7 +313,7 @@ When invalidating the official finalized submission:
 
 1. Lock the current finalized submission.
 2. Detect any edit draft whose `based_on_submission_id` points to it.
-3. Mark that edit as stale or delete/retire it in the same protected workflow.
+3. Delete or expire that edit draft in the same protected workflow.
 4. Clean up temporary edit-draft storage safely.
 5. Complete the existing invalidation behavior and student notification.
 6. Prevent the stale edit draft from later becoming official.
@@ -347,35 +328,29 @@ Recommended student message:
 
 The implementation must fail closed under concurrent edits, submissions, or invalidations.
 
-Use database row locking around the relevant appointment and submission rows when:
-
-- creating an edit draft;
-- adding/removing draft files;
-- cancelling editing;
-- finalizing an initial submission;
-- submitting changes;
-- invalidating an official submission.
+Use database row locking around the relevant appointment and submission rows when creating an edit draft, adding/removing draft files, cancelling editing, finalizing an initial submission, submitting changes, or invalidating an official submission.
 
 `Submit changes` must verify that `based_on_submission_id` is still the current official finalized submission. If not, return a conflict and do not replace anything.
 
-The one-finalized-submission partial unique index must remain valid throughout promotion. Any status transition used to preserve history must occur within one transaction.
+For successful replacement, the same transaction must:
+
+1. lock the current official and edit draft;
+2. change the current official to `SUPERSEDED` with `superseded_at=NOW()`;
+3. change the edit draft to `FINALIZED`, set `finalized_at`, and clear edit-only provenance fields that should not remain active;
+4. set `superseded_by_submission_id` on the older version to the newly finalized submission id;
+5. commit only if the one-finalized constraint is satisfied.
 
 ## 12. File Storage Rules
 
 Edit drafts use actual temporary copies of the currently finalized files rather than delta references.
 
-Reasons:
-
-- simpler draft semantics;
-- existing file rows can remain submission-owned;
-- count/size validation stays straightforward;
-- removal behavior is consistent for copied and newly uploaded files;
-- fewer special download paths;
-- easier cleanup and testing.
+This keeps draft semantics simple, lets existing file rows remain submission-owned, makes count/size validation straightforward, keeps removal behavior consistent, avoids special download paths, and simplifies cleanup/testing.
 
 Temporary storage may briefly duplicate up to the current 50 MB submission limit. This is accepted as the preferable trade-off for implementation simplicity and correctness.
 
 Every copied or newly uploaded file must preserve or recompute the integrity metadata required by the existing validation layer.
+
+After a successful edit submission, files belonging to the `SUPERSEDED` historical version remain preserved unless a future retention policy explicitly changes that behavior.
 
 ## 13. API Surface
 
@@ -390,7 +365,7 @@ POST   /api/student/result-submissions/[appointmentId]/finalize
 POST   /api/student/result-submissions/[appointmentId]/submit-changes
 ```
 
-Existing download endpoints remain available for the student's official files.
+Existing download endpoints remain available for the student's current official files.
 
 The service layer, not the client, determines whether the target is a normal draft, edit draft, or current official submission.
 
@@ -398,12 +373,7 @@ The service layer, not the client, determines whether the target is a normal dra
 
 Preserve existing audit and activity patterns.
 
-Add audit events where useful for:
-
-- student edit started;
-- student edit cancelled;
-- edited submission finalized/replaced;
-- stale edit cancelled because of administrator invalidation.
+Add audit events where useful for student edit started, student edit cancelled, edited submission finalized/replaced, and stale edit cancelled because of administrator invalidation.
 
 Do not log file contents or sensitive medical data in audit metadata. Store identifiers, counts, byte totals, appointment id, and relevant submission ids only.
 
@@ -446,9 +416,9 @@ Cover at least:
 - official finalized submission remains accessible while edit draft exists;
 - submit changes requires one or more files;
 - submit changes validates stored-file integrity;
-- submit changes atomically promotes the edited version;
+- submit changes atomically supersedes the old version and finalizes the edited version;
 - stale `based_on_submission_id` returns conflict;
-- admin invalidation cancels or stales the related edit draft;
+- admin invalidation cancels the related edit draft;
 - expired edit cleanup leaves official finalized version untouched;
 - ownership checks deny another student's appointment/files;
 - coordinator and clinic-staff access boundaries are unchanged.
@@ -457,8 +427,10 @@ Cover at least:
 
 Cover:
 
-- migration adds valid self-reference;
+- migration adds valid self-reference and `SUPERSEDED` status support;
+- `SUPERSEDED` requires `finalized_at` and `superseded_at`, while invalidation fields remain null;
 - same appointment can still have one `DRAFT` and one `FINALIZED` simultaneously;
+- multiple `SUPERSEDED` historical versions can coexist for the same appointment;
 - invalid or cross-appointment edit provenance is rejected by service rules;
 - row-lock behavior prevents two successful competing promotions;
 - one-finalized partial unique constraint remains satisfied.
@@ -478,11 +450,12 @@ The feature is complete when:
 5. Editing keeps all current submitted files by default.
 6. The previous finalized submission remains official while edits are unfinished.
 7. Students can remove existing copied files, add new files, cancel editing, or submit changes.
-8. A successful **Submit changes** atomically replaces the official submitted version.
-9. Administrator views continue using the official finalized files and indicate editing in progress.
-10. Administrator invalidation takes precedence and prevents stale student edits from becoming official.
-11. Seven-day cleanup of unfinished edit drafts never deletes or alters the official finalized result.
-12. Existing file limits, ownership, authentication, privacy, integrity, audit, and role boundaries remain enforced.
+8. A successful **Submit changes** atomically marks the previous version `SUPERSEDED` and the edited version `FINALIZED`.
+9. Superseded historical files remain preserved and distinguishable from the current official result.
+10. Administrator views continue using the current finalized files and indicate editing in progress.
+11. Administrator invalidation takes precedence and prevents stale student edits from becoming official.
+12. Seven-day cleanup of unfinished edit drafts never deletes or alters the official finalized result.
+13. Existing file limits, ownership, authentication, privacy, integrity, audit, and role boundaries remain enforced.
 
 ## 17. Non-Goals
 
