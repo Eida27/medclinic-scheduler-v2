@@ -1,7 +1,10 @@
 // @vitest-environment node
-import { access, mkdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { access, mkdir, readFile, rm, rmdir, symlink, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { Pool } from "pg";
+import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   STUDENT_RESULT_EDITING_FIXTURE,
@@ -19,7 +22,16 @@ const STATE_DIRECTORY = resolve(".data/browser-student-result-editing");
 const STATE_FILE = resolve(STATE_DIRECTORY, "state.json");
 const STORAGE_ROOT = resolve(process.env.RESULT_UPLOAD_ROOT ?? ".data/private-result-uploads");
 const SENTINEL_AUDIT_ID = "be180000-0000-4000-8000-000000000901";
+const SUBSTRING_AUDIT_ID = "be180000-0000-4000-8000-000000000902";
+const TAMPERED_AUDIT_ID = "be180000-0000-4000-8000-000000000903";
+const STRUCTURED_AUDIT_ID = "be180000-0000-4000-8000-000000000904";
 const SENTINEL_STORAGE_KEY = "browser-student-result-editing-unrelated/sentinel.pdf";
+const TAMPERED_STORAGE_KEY = "be180000-0000-4000-8000-000000000101/tampered-unrelated.pdf";
+const REPARSE_TARGET = resolve(".data/browser-student-result-editing-reparse-target");
+
+async function createDirectoryLink(target: string, path: string) {
+  await symlink(target, path, process.platform === "win32" ? "junction" : "dir");
+}
 
 async function exists(path: string) {
   try {
@@ -150,17 +162,176 @@ describe.runIf(exclusive)("student result editing Browser acceptance fixture lif
 
   afterEach(async () => {
     await cleanup();
-    await pool.query("DELETE FROM audit_logs WHERE id=$1", [SENTINEL_AUDIT_ID]);
-    await rm(assertStudentResultEditingStorageTarget(STORAGE_ROOT, SENTINEL_STORAGE_KEY), { force: true });
+    await pool.query("DELETE FROM audit_logs WHERE id=ANY($1::uuid[])", [[
+      SENTINEL_AUDIT_ID,
+      SUBSTRING_AUDIT_ID,
+      TAMPERED_AUDIT_ID,
+      STRUCTURED_AUDIT_ID,
+    ]]);
+    await Promise.all([
+      SENTINEL_STORAGE_KEY,
+      TAMPERED_STORAGE_KEY,
+    ].map((key) => rm(assertStudentResultEditingStorageTarget(STORAGE_ROOT, key), { force: true })));
+    await rm(REPARSE_TARGET, { recursive: true, force: true });
   });
 
   afterAll(async () => {
     if (pool) {
       await cleanup();
-      await pool.query("DELETE FROM audit_logs WHERE id=$1", [SENTINEL_AUDIT_ID]);
-      await rm(assertStudentResultEditingStorageTarget(STORAGE_ROOT, SENTINEL_STORAGE_KEY), { force: true });
+      await pool.query("DELETE FROM audit_logs WHERE id=ANY($1::uuid[])", [[
+        SENTINEL_AUDIT_ID,
+        SUBSTRING_AUDIT_ID,
+        TAMPERED_AUDIT_ID,
+        STRUCTURED_AUDIT_ID,
+      ]]);
+      await Promise.all([
+        SENTINEL_STORAGE_KEY,
+        TAMPERED_STORAGE_KEY,
+      ].map((key) => rm(assertStudentResultEditingStorageTarget(STORAGE_ROOT, key), { force: true })));
+      await rm(REPARSE_TARGET, { recursive: true, force: true });
       await pool.end();
     }
+  });
+
+  it("rejects tampered manifest additions and preserves unrelated database and storage objects", async () => {
+    await prepareStudentResultEditingFixture(pool, identity);
+    const originalState = await readFile(STATE_FILE, "utf8");
+    const state = JSON.parse(originalState) as {
+      ownershipDigest: string;
+      manifest: { owned: { auditLogIds: string[]; storageKeys: string[] } };
+    };
+    const unrelatedPath = assertStudentResultEditingStorageTarget(STORAGE_ROOT, TAMPERED_STORAGE_KEY);
+    await mkdir(dirname(unrelatedPath), { recursive: true });
+    await writeFile(unrelatedPath, "unrelated storage object", "utf8");
+    await pool.query(
+      `INSERT INTO audit_logs (id,actor_user_id,action,entity_type,entity_id,metadata)
+       VALUES ($1,$2,'UNRELATED_TAMPER_TARGET','unrelated','unrelated','{}'::jsonb)`,
+      [TAMPERED_AUDIT_ID, STUDENT_RESULT_EDITING_FIXTURE.adminUserId],
+    );
+    state.manifest.owned.auditLogIds.push(TAMPERED_AUDIT_ID);
+    state.manifest.owned.storageKeys.push(TAMPERED_STORAGE_KEY);
+    state.ownershipDigest = createHash("sha256")
+      .update(JSON.stringify(state.manifest.owned))
+      .digest("hex");
+    await writeFile(STATE_FILE, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+
+    try {
+      await expect(cleanup()).rejects.toThrow(/ownership|integrity|tamper/i);
+      expect((await pool.query("SELECT COUNT(*)::int AS count FROM students WHERE student_number=$1", [
+        STUDENT_RESULT_EDITING_FIXTURE.student.studentNumber,
+      ])).rows[0].count).toBe(1);
+      expect((await pool.query("SELECT COUNT(*)::int AS count FROM audit_logs WHERE id=$1", [
+        TAMPERED_AUDIT_ID,
+      ])).rows[0].count).toBe(1);
+      expect(await readFile(unrelatedPath, "utf8")).toBe("unrelated storage object");
+    } finally {
+      if (await exists(STATE_FILE)) {
+        await writeFile(STATE_FILE, originalState, "utf8");
+        await cleanup();
+      }
+      await pool.query("DELETE FROM audit_logs WHERE id=$1", [TAMPERED_AUDIT_ID]);
+      await rm(unrelatedPath, { force: true });
+    }
+  });
+
+  it("preserves an unrelated audit whose metadata merely contains the fixture student number", async () => {
+    await pool.query(
+      `INSERT INTO audit_logs (id,actor_user_id,action,entity_type,entity_id,metadata)
+       VALUES ($1,$2,'UNRELATED_SUBSTRING_COLLISION','unrelated','unrelated',
+               jsonb_build_object('note',$3::text))`,
+      [
+        SUBSTRING_AUDIT_ID,
+        STUDENT_RESULT_EDITING_FIXTURE.adminUserId,
+        `prefix ${STUDENT_RESULT_EDITING_FIXTURE.student.studentNumber} suffix`,
+      ],
+    );
+    try {
+      await prepareStudentResultEditingFixture(pool, identity);
+      await pool.query(
+        `INSERT INTO audit_logs (id,actor_user_id,action,entity_type,entity_id,metadata)
+         VALUES ($1,NULL,'STUDENT_RESULT_EDIT_CANCELLED','student_result_submission',$2,
+                 jsonb_build_object('appointmentId',$3::text,'basedOnSubmissionId',$4::text))`,
+        [
+          STRUCTURED_AUDIT_ID,
+          "be180000-0000-4000-8000-000000000905",
+          STUDENT_RESULT_EDITING_FIXTURE.appointmentIds.physicalExam,
+          STUDENT_RESULT_EDITING_FIXTURE.submissionIds.physicalExamOfficial,
+        ],
+      );
+      await cleanup();
+      expect((await pool.query("SELECT action FROM audit_logs WHERE id=$1", [SUBSTRING_AUDIT_ID])).rows)
+        .toEqual([{ action: "UNRELATED_SUBSTRING_COLLISION" }]);
+      expect((await pool.query("SELECT COUNT(*)::int AS count FROM audit_logs WHERE id=$1", [
+        STRUCTURED_AUDIT_ID,
+      ])).rows[0].count).toBe(0);
+    } finally {
+      if (await exists(STATE_FILE)) await cleanup();
+      await pool.query("DELETE FROM audit_logs WHERE id=$1", [SUBSTRING_AUDIT_ID]);
+    }
+  });
+
+  it("refuses a junction or symbolic-link escape while preparing private storage", async () => {
+    const submissionDirectory = dirname(assertStudentResultEditingStorageTarget(
+      STORAGE_ROOT,
+      STUDENT_RESULT_EDITING_FIXTURE.initialStorageKeys.laboratory,
+    ));
+    await rm(submissionDirectory, { recursive: true, force: true });
+    await mkdir(dirname(submissionDirectory), { recursive: true });
+    await mkdir(REPARSE_TARGET, { recursive: true });
+    await createDirectoryLink(REPARSE_TARGET, submissionDirectory);
+    try {
+      await expect(prepareStudentResultEditingFixture(pool, identity))
+        .rejects.toThrow(/junction|symbolic|reparse|redirect/i);
+      expect(await exists(resolve(REPARSE_TARGET, "be180000-0000-4000-8000-000000000201.pdf")))
+        .toBe(false);
+    } finally {
+      if (await exists(STATE_FILE)) await cleanup();
+      await rmdir(submissionDirectory).catch(() => undefined);
+      await rm(REPARSE_TARGET, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a newly introduced junction or symbolic link before cleanup deletes database rows", async () => {
+    await prepareStudentResultEditingFixture(pool, identity);
+    const submissionDirectory = dirname(assertStudentResultEditingStorageTarget(
+      STORAGE_ROOT,
+      STUDENT_RESULT_EDITING_FIXTURE.initialStorageKeys.laboratory,
+    ));
+    await rm(submissionDirectory, { recursive: true, force: true });
+    await mkdir(REPARSE_TARGET, { recursive: true });
+    const outsideSentinel = resolve(REPARSE_TARGET, "outside-sentinel.txt");
+    await writeFile(outsideSentinel, "preserve me", "utf8");
+    await createDirectoryLink(REPARSE_TARGET, submissionDirectory);
+    try {
+      await expect(cleanup()).rejects.toThrow(/junction|symbolic|reparse|redirect/i);
+      expect((await pool.query("SELECT COUNT(*)::int AS count FROM students WHERE student_number=$1", [
+        STUDENT_RESULT_EDITING_FIXTURE.student.studentNumber,
+      ])).rows[0].count).toBe(1);
+      expect(await readFile(outsideSentinel, "utf8")).toBe("preserve me");
+    } finally {
+      await rmdir(submissionDirectory).catch(() => undefined);
+      await rm(REPARSE_TARGET, { recursive: true, force: true });
+      if (await exists(STATE_FILE)) await cleanup();
+    }
+  });
+
+  it("creates PDF, PNG, and JPEG chooser artifacts accepted by real parsers and decoders", async () => {
+    await prepareStudentResultEditingFixture(pool, identity);
+    const pdfBytes = await readFile(STUDENT_RESULT_EDITING_FIXTURE.chooserArtifacts.pdf);
+    const document = await getDocument({
+      data: new Uint8Array(pdfBytes),
+      disableFontFace: true,
+      useSystemFonts: false,
+    }).promise;
+    try {
+      expect(document.numPages).toBe(1);
+    } finally {
+      await document.destroy();
+    }
+    await expect(sharp(STUDENT_RESULT_EDITING_FIXTURE.chooserArtifacts.png).metadata())
+      .resolves.toMatchObject({ format: "png", width: 1, height: 1 });
+    await expect(sharp(STUDENT_RESULT_EDITING_FIXTURE.chooserArtifacts.jpeg).metadata())
+      .resolves.toMatchObject({ format: "jpeg", width: 1, height: 1 });
   });
 
   it("refuses and preserves an unrelated audit that collides with a reserved identifier", async () => {

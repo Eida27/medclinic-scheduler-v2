@@ -20,7 +20,7 @@ npm run acceptance:student-result-editing -- status
 npm run dev
 ```
 
-`prepare` is idempotent and resumable. A successful initial status reports one synthetic student, two published completed appointments (Laboratory and Physical Examination), one Laboratory draft, one finalized Physical Examination official submission, two initial result-file rows/private objects, four chooser artifacts, one fixture setup audit, and one state file. The chooser artifacts are under `.data/browser-student-result-editing/chooser-artifacts`, outside `public/`; status prints their absolute paths. The local state manifest at `.data/browser-student-result-editing/state.json` contains every reserved and subsequently discovered owned identifier needed for cleanup and acceptance.
+`prepare` is idempotent and resumable. A successful initial status reports one synthetic student, two published completed appointments (Laboratory and Physical Examination), one Laboratory draft, one finalized Physical Examination official submission, two initial result-file rows/private objects, four parser-valid chooser artifacts, one fixture setup audit, and one state file. The chooser artifacts are under `.data/browser-student-result-editing/chooser-artifacts`, outside `public/`; status prints their absolute paths. The local state manifest at `.data/browser-student-result-editing/state.json` contains every reserved and subsequently discovered owned identifier needed for cleanup and acceptance.
 
 Use only the in-app Browser for acceptance. Verify:
 
@@ -30,7 +30,7 @@ Use only the in-app Browser for acceptance. Verify:
 4. Return to the stale student tab and confirm the approved conflict message. In the administrator UI, verify superseded history/downloads and the administrator replacement reason.
 5. Check desktop and `390x844` layouts for horizontal overflow and check both tabs for zero console warnings or errors.
 
-`status` never repairs or deletes partial state. If preparation is interrupted, inspect status and rerun `prepare`. If cleanup is interrupted—including a private-storage deletion failure—inspect status and rerun `cleanup`; cleanup resumes from the persisted phase. Cleanup deletes only identifiers and exact file paths captured by the fixture manifest and refuses recursive removal when an unowned file appears in its state directory.
+`status` never repairs or deletes partial state. If preparation is interrupted, inspect status and rerun `prepare`. If cleanup is interrupted—including a private-storage deletion failure—inspect status and rerun `cleanup`; cleanup resumes from the persisted phase. Cleanup deletes only identifiers and exact file paths derived from the fixture's immutable database lineage. It rejects a modified ownership manifest, a changed canonical root, or any symbolic-link/junction/reparse component before database deletion, and refuses recursive removal when an unowned file appears in its state directory.
 
 Always clean the fixture before the authoritative serialized test suite:
 
