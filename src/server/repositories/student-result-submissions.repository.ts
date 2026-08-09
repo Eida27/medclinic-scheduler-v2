@@ -802,12 +802,8 @@ export async function promoteStudentResultEditDraft(
 
 export async function getAccessibleStudentResultFileRow(
   fileId: string,
-  studentNumber?: string,
-  submissionId?: string,
+  studentNumber: string,
 ) {
-  const values: unknown[] = [fileId];
-  const ownerClause = studentNumber ? `AND submission.student_number=$${values.push(studentNumber)}` : "";
-  const submissionClause = submissionId ? `AND submission.id=$${values.push(submissionId)}::uuid` : "";
   const result = await query<{
     id: string;
     submissionId: string;
@@ -824,12 +820,68 @@ export async function getAccessibleStudentResultFileRow(
        FROM student_result_files file
        JOIN student_result_submissions submission ON submission.id=file.submission_id
       WHERE file.id=$1 AND submission.status='FINALIZED'
+        AND submission.student_number=$2
         AND file.deleted_at IS NULL AND file.storage_delete_pending=FALSE
-        ${ownerClause} ${submissionClause}`,
+    `,
+    [fileId, studentNumber],
+  );
+  const row = result.rows[0];
+  return row ? { ...row, byteSize: Number(row.byteSize) } : null;
+}
+
+export async function getAccessibleAdminResultFileRow(
+  fileId: string,
+  submissionId?: string,
+) {
+  const values: unknown[] = [fileId];
+  const submissionClause = submissionId ? `AND submission.id=$${values.push(submissionId)}::uuid` : "";
+  const result = await query<{
+    id: string;
+    submissionId: string;
+    storageKey: string;
+    originalFilename: string;
+    detectedMimeType: string;
+    byteSize: string;
+    checksumSha256: string;
+  }>(
+    `SELECT file.id, file.submission_id AS "submissionId", file.storage_key AS "storageKey",
+            file.original_filename AS "originalFilename",
+            file.detected_mime_type AS "detectedMimeType", file.byte_size::text AS "byteSize",
+            file.checksum_sha256 AS "checksumSha256"
+       FROM student_result_files file
+       JOIN student_result_submissions submission ON submission.id=file.submission_id
+      WHERE file.id=$1
+        AND submission.status IN ('FINALIZED','INVALIDATED','SUPERSEDED')
+        AND file.deleted_at IS NULL AND file.storage_delete_pending=FALSE
+        ${submissionClause}`,
     values,
   );
   const row = result.rows[0];
   return row ? { ...row, byteSize: Number(row.byteSize) } : null;
+}
+
+export async function getAdminSubmissionFileRows(submissionId: string) {
+  const result = await query<{
+    id: string;
+    storageKey: string;
+    originalFilename: string;
+    detectedMimeType: string;
+    byteSize: string;
+    checksumSha256: string;
+  }>(
+    `SELECT file.id, file.storage_key AS "storageKey",
+            file.original_filename AS "originalFilename",
+            file.detected_mime_type AS "detectedMimeType", file.byte_size::text AS "byteSize",
+            file.checksum_sha256 AS "checksumSha256"
+       FROM student_result_files file
+       JOIN student_result_submissions submission ON submission.id=file.submission_id
+      WHERE submission.id=$1
+        AND submission.status IN ('FINALIZED','INVALIDATED','SUPERSEDED')
+        AND file.deleted_at IS NULL AND file.storage_delete_pending=FALSE
+      ORDER BY file.uploaded_at, file.id`,
+    [submissionId],
+  );
+  return result.rows.map((row) => ({ ...row, byteSize: Number(row.byteSize) }));
 }
 
 export async function getFinalizedSubmissionFileRows(submissionId: string) {
@@ -1013,10 +1065,13 @@ type AdminProfileDetailRow = {
   submissionAppointmentId: string | null;
   submissionAppointmentDate: string | null;
   submissionResultType: ScheduleType | null;
-  submissionStatus: "FINALIZED" | "INVALIDATED" | null;
+  submissionStatus: "FINALIZED" | "INVALIDATED" | "SUPERSEDED" | null;
   submissionFinalizedAt: Date | null;
   submissionInvalidatedAt: Date | null;
   submissionInvalidationReason: string | null;
+  submissionSupersededAt: Date | null;
+  submissionSupersededBySubmissionId: string | null;
+  submissionEditingInProgress: boolean;
   submissionLastActivityAt: Date | null;
   submissionCreatedAt: Date | null;
   fileId: string | null;
@@ -1030,6 +1085,7 @@ type AdminProfileDetailRow = {
 function activityTime(submission: AdminResultSubmission) {
   return Math.max(
     submission.invalidatedAt?.getTime() ?? Number.NEGATIVE_INFINITY,
+    submission.supersededAt?.getTime() ?? Number.NEGATIVE_INFINITY,
     submission.finalizedAt.getTime(),
     submission.lastActivityAt.getTime(),
   );
@@ -1057,6 +1113,18 @@ export async function getAdminStudentResultProfileRow(
             submission.finalized_at AS "submissionFinalizedAt",
             submission.invalidated_at AS "submissionInvalidatedAt",
             submission.invalidation_reason AS "submissionInvalidationReason",
+            submission.superseded_at AS "submissionSupersededAt",
+            submission.superseded_by_submission_id::text AS "submissionSupersededBySubmissionId",
+            EXISTS (
+              SELECT 1
+                FROM student_result_submissions edit
+               WHERE edit.appointment_id=submission.appointment_id
+                 AND edit.student_number=submission.student_number
+                 AND edit.result_type=submission.result_type
+                 AND edit.status='DRAFT'
+                 AND edit.discarded_at IS NULL
+                 AND edit.based_on_submission_id=submission.id
+            ) AS "submissionEditingInProgress",
             submission.last_activity_at AS "submissionLastActivityAt",
             submission.created_at AS "submissionCreatedAt",
             file.id AS "fileId", file.original_filename AS "fileOriginalFilename",
@@ -1074,13 +1142,14 @@ export async function getAdminStudentResultProfileRow(
         AND physical_appointment."scheduleType"='PHYSICAL_EXAM'
        LEFT JOIN student_result_submissions submission
          ON submission.student_number=student.student_number
-        AND submission.status IN ('FINALIZED','INVALIDATED')
+        AND submission.status IN ('FINALIZED','INVALIDATED','SUPERSEDED')
        LEFT JOIN appointments submission_appointment
          ON submission_appointment.id=submission.appointment_id
        LEFT JOIN student_result_files file ON file.submission_id=submission.id
       WHERE student.student_number=$1
       ORDER BY GREATEST(
                  COALESCE(submission.invalidated_at, '-infinity'::timestamptz),
+                 COALESCE(submission.superseded_at, '-infinity'::timestamptz),
                  COALESCE(submission.finalized_at, '-infinity'::timestamptz),
                  submission.last_activity_at
                ) DESC NULLS LAST,
@@ -1096,6 +1165,7 @@ export async function getAdminStudentResultProfileRow(
   const grouped = new Map<string, {
     submission: AdminResultSubmission;
     createdAt: Date;
+    editingInProgress: boolean;
   }>();
   for (const row of result.rows) {
     if (
@@ -1113,6 +1183,7 @@ export async function getAdminStudentResultProfileRow(
     if (!current) {
       current = {
         createdAt: row.submissionCreatedAt,
+        editingInProgress: row.submissionEditingInProgress,
         submission: {
           id: row.submissionId,
           appointmentId: row.submissionAppointmentId,
@@ -1122,6 +1193,8 @@ export async function getAdminStudentResultProfileRow(
           finalizedAt: row.submissionFinalizedAt,
           invalidatedAt: row.submissionInvalidatedAt,
           invalidationReason: row.submissionInvalidationReason,
+          supersededAt: row.submissionSupersededAt,
+          supersededBySubmissionId: row.submissionSupersededBySubmissionId,
           lastActivityAt: row.submissionLastActivityAt,
           fileCount: 0,
           totalBytes: 0,
@@ -1133,7 +1206,7 @@ export async function getAdminStudentResultProfileRow(
 
     if (row.fileId && row.fileByteSize !== null) {
       const byteSize = Number(row.fileByteSize);
-      const exposeFile = current.submission.status === "FINALIZED"
+      const exposeFile = current.submission.status !== "INVALIDATED"
         && row.fileDeletedAt === null
         && row.fileStorageDeletePending === false;
       if (current.submission.status === "INVALIDATED" || exposeFile) {
@@ -1155,13 +1228,13 @@ export async function getAdminStudentResultProfileRow(
     }
   }
 
-  const submissions = [...grouped.values()]
+  const submissionEntries = [...grouped.values()]
     .sort((left, right) => (
       activityTime(right.submission) - activityTime(left.submission)
       || right.createdAt.getTime() - left.createdAt.getTime()
       || right.submission.id.localeCompare(left.submission.id)
-    ))
-    .map(({ submission }) => submission);
+    ));
+  const submissions = submissionEntries.map(({ submission }) => submission);
   const laboratoryAppointment = first.laboratoryAppointmentId
     && first.laboratoryAppointmentDate
     && first.laboratoryAppointmentStatus
@@ -1182,23 +1255,37 @@ export async function getAdminStudentResultProfileRow(
     : null;
   const currentSubmission = (appointmentId: string | undefined) => (
     appointmentId
-      ? submissions
-        .filter((submission) => submission.appointmentId === appointmentId)
-        .sort((left, right) => activityTime(right) - activityTime(left))[0] ?? null
+      ? submissionEntries.find(({ submission }) => (
+        submission.appointmentId === appointmentId
+        && submission.status === "FINALIZED"
+      )) ?? null
       : null
   );
-  const laboratorySubmission = currentSubmission(laboratoryAppointment?.id);
-  const physicalExamSubmission = currentSubmission(physicalExamAppointment?.id);
-  const laboratoryState = currentSubmissionState(laboratorySubmission);
-  const physicalExamState = currentSubmissionState(physicalExamSubmission);
+  const currentInvalidatedSubmission = (appointmentId: string | undefined) => (
+    appointmentId
+      ? submissions.find((submission) => (
+        submission.appointmentId === appointmentId
+        && submission.status === "INVALIDATED"
+      )) ?? null
+      : null
+  );
+  const laboratoryCurrent = currentSubmission(laboratoryAppointment?.id);
+  const physicalExamCurrent = currentSubmission(physicalExamAppointment?.id);
+  const laboratorySubmission = laboratoryCurrent?.submission ?? null;
+  const physicalExamSubmission = physicalExamCurrent?.submission ?? null;
+  const laboratoryState = currentSubmissionState(
+    laboratorySubmission ?? currentInvalidatedSubmission(laboratoryAppointment?.id),
+  );
+  const physicalExamState = currentSubmissionState(
+    physicalExamSubmission ?? currentInvalidatedSubmission(physicalExamAppointment?.id),
+  );
   const currentIds = new Set(
     [laboratorySubmission?.id, physicalExamSubmission?.id].filter(
       (id): id is string => Boolean(id),
     ),
   );
   const history = submissions
-    .filter((submission) => !currentIds.has(submission.id))
-    .sort((left, right) => activityTime(right) - activityTime(left));
+    .filter((submission) => !currentIds.has(submission.id));
 
   return {
     studentNumber: first.studentNumber,
@@ -1214,12 +1301,14 @@ export async function getAdminStudentResultProfileRow(
       appointment: laboratoryAppointment,
       state: laboratoryState,
       submission: laboratorySubmission,
+      editingInProgress: laboratoryCurrent?.editingInProgress ?? false,
     },
     physicalExam: {
       resultType: "PHYSICAL_EXAM",
       appointment: physicalExamAppointment,
       state: physicalExamState,
       submission: physicalExamSubmission,
+      editingInProgress: physicalExamCurrent?.editingInProgress ?? false,
     },
     history,
   };

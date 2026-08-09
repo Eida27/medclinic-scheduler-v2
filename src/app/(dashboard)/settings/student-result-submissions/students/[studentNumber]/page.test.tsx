@@ -34,6 +34,8 @@ const laboratorySubmission = {
   finalizedAt: new Date("2026-08-18T16:00:00.000Z"),
   invalidatedAt: null,
   invalidationReason: null,
+  supersededAt: null,
+  supersededBySubmissionId: null,
   lastActivityAt: new Date("2026-08-18T16:00:00.000Z"),
   fileCount: 1,
   totalBytes: 2048,
@@ -61,12 +63,14 @@ const baseProfile = {
     },
     state: "FINALIZED" as const,
     submission: laboratorySubmission,
+    editingInProgress: false,
   },
   physicalExam: {
     resultType: "PHYSICAL_EXAM" as const,
     appointment: null,
     state: "NOT_SUBMITTED" as const,
     submission: null,
+    editingInProgress: false,
   },
   history: [],
 };
@@ -128,6 +132,30 @@ describe("AdminStudentResultProfilePage", () => {
     expect(within(section).getByLabelText("Laboratory invalidation reason")).toBeVisible();
   });
 
+  it("shows edit activity below the finalized state without exposing draft filenames", async () => {
+    getAdminStudentResultProfile.mockResolvedValue({
+      ...baseProfile,
+      laboratory: {
+        ...baseProfile.laboratory,
+        editingInProgress: true,
+      },
+    });
+
+    render(await AdminStudentResultProfilePage({
+      params: Promise.resolve({ studentNumber: "23%2F8200%2001" }),
+    }));
+
+    const section = screen.getByRole("region", { name: "Laboratory results" });
+    const finalized = within(section).getByText("Finalized");
+    const editing = within(section).getByRole("status", {
+      name: "Student editing in progress",
+    });
+    expect(finalized.compareDocumentPosition(editing) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBeTruthy();
+    expect(editing).toBeVisible();
+    expect(within(section).queryByText("active-edit-private.pdf")).not.toBeInTheDocument();
+  });
+
   it("keeps a maximum-length no-space filename in a bounded, wrapping download item", async () => {
     const filename = `${"a".repeat(251)}.pdf`;
     getAdminStudentResultProfile.mockResolvedValue({
@@ -167,7 +195,7 @@ describe("AdminStudentResultProfilePage", () => {
     expect(within(section).queryByLabelText("Physical Exam invalidation reason")).not.toBeInTheDocument();
   });
 
-  it("renders invalidated current metadata without exposing revoked file or ZIP links", async () => {
+  it("keeps invalidation awareness current while presenting rejected documents only in history", async () => {
     getAdminStudentResultProfile.mockResolvedValue({
       ...baseProfile,
       progress: "AWAITING_RESUBMISSION",
@@ -179,21 +207,25 @@ describe("AdminStudentResultProfilePage", () => {
           status: "COMPLETED",
         },
         state: "INVALIDATED",
-        submission: {
-          id: "exam-invalidated",
-          appointmentId: "exam-appointment",
-          appointmentDate: "2026-08-19",
-          resultType: "PHYSICAL_EXAM",
-          status: "INVALIDATED",
-          finalizedAt: new Date("2026-08-19T16:00:00.000Z"),
-          invalidatedAt: new Date("2026-08-20T16:00:00.000Z"),
-          invalidationReason: "Incorrect patient document",
-          lastActivityAt: new Date("2026-08-20T16:00:00.000Z"),
-          fileCount: 2,
-          totalBytes: 3072,
-          files: [],
-        },
+        submission: null,
+        editingInProgress: false,
       },
+      history: [{
+        id: "exam-invalidated",
+        appointmentId: "exam-appointment",
+        appointmentDate: "2026-08-19",
+        resultType: "PHYSICAL_EXAM",
+        status: "INVALIDATED",
+        finalizedAt: new Date("2026-08-19T16:00:00.000Z"),
+        invalidatedAt: new Date("2026-08-20T16:00:00.000Z"),
+        invalidationReason: "Incorrect patient document",
+        supersededAt: null,
+        supersededBySubmissionId: null,
+        lastActivityAt: new Date("2026-08-20T16:00:00.000Z"),
+        fileCount: 2,
+        totalBytes: 3072,
+        files: [],
+      }],
     });
 
     render(await AdminStudentResultProfilePage({
@@ -201,11 +233,14 @@ describe("AdminStudentResultProfilePage", () => {
     }));
 
     const section = screen.getByRole("region", { name: "Physical Exam results" });
-    expect(within(section).getByText("Invalidated: Aug 21, 2026, 12:00 AM")).toBeVisible();
-    expect(within(section).getByText("Reason: Incorrect patient document")).toBeVisible();
-    expect(within(section).getByText("2 files · 3 KB")).toBeVisible();
+    expect(within(section).getByText("Invalidated — awaiting resubmission")).toBeVisible();
+    expect(within(section).queryByText("Reason: Incorrect patient document")).not.toBeInTheDocument();
     expect(within(section).queryByRole("link", { name: /download/i })).not.toBeInTheDocument();
     expect(within(section).queryByLabelText("Physical Exam invalidation reason")).not.toBeInTheDocument();
+    const history = screen.getByRole("region", { name: "Submission history" });
+    expect(within(history).getByText("Invalidated: Aug 21, 2026, 12:00 AM")).toBeVisible();
+    expect(within(history).getByText("Reason: Incorrect patient document")).toBeVisible();
+    expect(within(history).getByText("2 files · 3 KB")).toBeVisible();
   });
 
   it("renders finalized and invalidated history with status-appropriate download access", async () => {
@@ -273,6 +308,50 @@ describe("AdminStudentResultProfilePage", () => {
     );
     expect(within(history).queryByLabelText("Laboratory invalidation reason")).not.toBeInTheDocument();
     expect(within(history).queryByRole("link", { name: /older-exam|Physical Exam ZIP/i })).not.toBeInTheDocument();
+  });
+
+  it("labels superseded history with provenance and retains administrator downloads", async () => {
+    getAdminStudentResultProfile.mockResolvedValue({
+      ...baseProfile,
+      history: [{
+        ...laboratorySubmission,
+        id: "superseded-lab",
+        appointmentId: "superseded-appointment",
+        appointmentDate: "2026-07-18",
+        status: "SUPERSEDED",
+        supersededAt: new Date("2026-07-20T16:00:00.000Z"),
+        supersededBySubmissionId: laboratorySubmission.id,
+        files: [{
+          id: "superseded-file",
+          originalFilename: "superseded-lab.pdf",
+          detectedMimeType: "application/pdf",
+          byteSize: 2048,
+        }],
+      }],
+    });
+
+    render(await AdminStudentResultProfilePage({
+      params: Promise.resolve({ studentNumber: "23%2F8200%2001" }),
+    }));
+
+    const history = screen.getByRole("region", { name: "Submission history" });
+    expect(within(history).getByText("Superseded")).toBeVisible();
+    expect(within(history).getByText("Superseded: Jul 21, 2026, 12:00 AM")).toBeVisible();
+    expect(within(history).getByText("Replacement submission ID: lab-submission")).toBeVisible();
+    expect(within(history).getByRole("link", {
+      name: "Download Laboratory history submission 1 file 1 for appointment 2026-07-18: superseded-lab.pdf",
+    })).toHaveAttribute(
+      "href",
+      "/api/admin/student-result-submissions/superseded-lab/files/superseded-file",
+    );
+    expect(within(history).getByRole("link", {
+      name: "Download Laboratory ZIP for appointment 2026-07-18, history submission 1",
+    })).toHaveAttribute(
+      "href",
+      "/api/admin/student-result-submissions/superseded-lab/zip",
+    );
+    expect(within(history).queryByLabelText("Laboratory invalidation reason"))
+      .not.toBeInTheDocument();
   });
 
   it("gives every current and historical download a unique accessible name despite duplicate filenames", async () => {

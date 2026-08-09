@@ -30,6 +30,7 @@ import {
   finalizeStudentResultSubmission as finalizeExpectedStudentResultSubmission,
   getAdminStudentResultProfile,
   getAdminStudentResultFile,
+  getAdminSubmissionResultFile,
   getAdminSubmissionStudentNumber,
   getStudentResultFile,
   getStudentResultSubmission,
@@ -1852,6 +1853,56 @@ describe("student result drafts", () => {
     const streamedZip = Buffer.concat(streamedChunks);
     expect(streamedZip.subarray(0, 2).toString("ascii")).toBe("PK");
     expect(streamedZip.toString("latin1")).toContain("01-shared-name.pdf");
+  });
+
+  it("keeps superseded official files downloadable only through administrator file and ZIP access", async () => {
+    const studentNumber = "99-9466-66";
+    const unrelatedStudentNumber = "99-9467-67";
+    const fixture = await finalizedResultFixture(studentNumber, ["superseded-history.pdf"]);
+    await insertTestStudent({
+      studentNumber: unrelatedStudentNumber,
+      firstName: "Unrelated",
+      lastName: "Student",
+      yearLevel: 3,
+    });
+    const originalFile = fixture.official.files[0];
+    const edit = await beginStudentResultEdit(studentNumber, fixture.appointmentId, storage);
+    await submitStudentResultChanges(studentNumber, fixture.appointmentId, edit.id, storage);
+
+    const lifecycle = await pool.query<{ status: string }>(
+      "SELECT status FROM student_result_submissions WHERE id=$1",
+      [fixture.official.id],
+    );
+    expect(lifecycle.rows).toEqual([{ status: "SUPERSEDED" }]);
+    await expect(getAdminSubmissionResultFile(
+      fixture.official.id,
+      originalFile.id,
+      admin,
+      storage,
+    )).resolves.toMatchObject({
+      filename: "superseded-history.pdf",
+      bytes: fixture.uploads[0].bytes,
+    });
+    await expect(getAdminSubmissionResultFile(
+      fixture.official.id,
+      originalFile.id,
+      coordinator,
+      storage,
+    )).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+    await expect(getAdminSubmissionResultFile(
+      fixture.official.id,
+      originalFile.id,
+      clinicStaff,
+      storage,
+    )).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+    await expect(getStudentResultFile(studentNumber, originalFile.id, storage))
+      .rejects.toMatchObject({ code: "RESULT_FILE_NOT_FOUND", status: 404 });
+    await expect(getStudentResultFile(unrelatedStudentNumber, originalFile.id, storage))
+      .rejects.toMatchObject({ code: "RESULT_FILE_NOT_FOUND", status: 404 });
+
+    const zip = await createAdminSubmissionZip(fixture.official.id, admin, storage);
+    expect(zip.subarray(0, 2).toString("ascii")).toBe("PK");
+    expect(zip.toString("latin1")).toContain("01-superseded-history.pdf");
   });
 
   it("invalidates metadata first, resets the result, notifies, and opens a replacement draft", async () => {

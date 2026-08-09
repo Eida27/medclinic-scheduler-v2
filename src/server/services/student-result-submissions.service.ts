@@ -14,10 +14,11 @@ import { transaction } from "@/server/db/pool";
 import {
   deleteRetiredStudentResultDraftIfClean,
   finalizeStudentResultDraft,
+  getAccessibleAdminResultFileRow,
   getAccessibleStudentResultFileRow,
+  getAdminSubmissionFileRows,
   getAdminStudentResultProfileRow,
   getAdminStudentResultSubmissionRow,
-  getFinalizedSubmissionFileRows,
   getStudentNumberForSubmission,
   getStudentResultSubmissionRow,
   invalidateFinalizedSubmissionMetadata,
@@ -569,7 +570,7 @@ export async function getAdminStudentResultFile(
   storage: ResultStorage = localResultStorage,
 ) {
   assertAdmin(actor);
-  const file = await readVerifiedResultFile(await getAccessibleStudentResultFileRow(fileId), storage);
+  const file = await readVerifiedResultFile(await getAccessibleAdminResultFileRow(fileId), storage);
   await writeAudit(actor.userId, "ADMIN_RESULT_FILE_DOWNLOADED", "student_result_file", fileId);
   return file;
 }
@@ -582,7 +583,7 @@ export async function getAdminSubmissionResultFile(
 ) {
   assertAdmin(actor);
   const file = await readVerifiedResultFile(
-    await getAccessibleStudentResultFileRow(fileId, undefined, submissionId),
+    await getAccessibleAdminResultFileRow(fileId, submissionId),
     storage,
   );
   await writeAudit(actor.userId, "ADMIN_RESULT_FILE_DOWNLOADED", "student_result_file", fileId, {
@@ -609,8 +610,8 @@ export async function createAdminSubmissionZip(
   storage: ResultStorage = localResultStorage,
 ) {
   assertAdmin(actor);
-  const files = await getFinalizedSubmissionFileRows(submissionId);
-  if (!files.length) throw new AppError("RESULT_SUBMISSION_NOT_FOUND", "Finalized result submission not found.", 404);
+  const files = await getAdminSubmissionFileRows(submissionId);
+  if (!files.length) throw new AppError("RESULT_SUBMISSION_NOT_FOUND", "Official result submission not found.", 404);
   const output = new PassThrough();
   const chunks: Buffer[] = [];
   output.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
@@ -646,9 +647,9 @@ export async function createAdminSubmissionZipStream(
   storage: ResultStorage = localResultStorage,
 ) {
   assertAdmin(actor);
-  const files = await getFinalizedSubmissionFileRows(submissionId);
+  const files = await getAdminSubmissionFileRows(submissionId);
   if (!files.length) {
-    throw new AppError("RESULT_SUBMISSION_NOT_FOUND", "Finalized result submission not found.", 404);
+    throw new AppError("RESULT_SUBMISSION_NOT_FOUND", "Official result submission not found.", 404);
   }
   const output = new PassThrough();
   const archive = new ZipArchive({ zlib: { level: 9 } });

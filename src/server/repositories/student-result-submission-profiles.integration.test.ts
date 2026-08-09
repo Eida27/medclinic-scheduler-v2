@@ -8,7 +8,10 @@ import {
   TEST_REFERENCE_IDS,
 } from "@/test/integration-fixtures";
 import {
+  getAccessibleAdminResultFileRow,
+  getAccessibleStudentResultFileRow,
   getAdminStudentResultProfileRow,
+  getAdminSubmissionFileRows,
   getStudentNumberForSubmission,
   listAdminStudentResultProfileRows,
 } from "./student-result-submissions.repository";
@@ -18,7 +21,7 @@ const batchNamePattern = "TEST profile aggregation%";
 
 type AppointmentStatus = "PENDING" | "COMPLETED" | "RESCHEDULED";
 type ResultType = "LABORATORY" | "PHYSICAL_EXAM";
-type SubmissionStatus = "DRAFT" | "FINALIZED" | "INVALIDATED";
+type SubmissionStatus = "DRAFT" | "FINALIZED" | "INVALIDATED" | "SUPERSEDED";
 
 let partialLaboratoryId: string;
 let invalidatedAfterCleanupId: string;
@@ -27,6 +30,13 @@ let oldFinalizedId: string;
 let invalidatedReplacementId: string;
 let replacementFinalizedId: string;
 let rescheduledReplacementId: string;
+let editingCurrentFinalizedId: string;
+let editingSupersededId: string;
+let editingInvalidatedId: string;
+let activeEditDraftId: string;
+let discardedEditDraftId: string;
+let editingSupersededFileId: string;
+let editingInvalidatedFileId: string;
 
 async function appointment(input: {
   studentNumber: string;
@@ -65,14 +75,23 @@ async function submission(input: {
   resultType: ResultType;
   status: SubmissionStatus;
   activityAt: string;
+  basedOnSubmissionId?: string;
+  discardedAt?: string;
+  supersededAt?: string;
+  supersededBySubmissionId?: string;
+  invalidationReason?: string;
 }) {
   const finalizedAt = input.status === "DRAFT" ? null : input.activityAt;
   const invalidatedAt = input.status === "INVALIDATED" ? input.activityAt : null;
+  const supersededAt = input.status === "SUPERSEDED"
+    ? input.supersededAt ?? input.activityAt
+    : null;
   const result = await pool.query<{ id: string }>(
     `INSERT INTO student_result_submissions (
        appointment_id, student_number, result_type, status, last_activity_at,
-       finalized_at, invalidated_at, invalidated_by, invalidation_reason, created_at
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$5)
+       finalized_at, invalidated_at, invalidated_by, invalidation_reason, created_at,
+       based_on_submission_id, discarded_at, superseded_at, superseded_by_submission_id
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$5,$10,$11,$12,$13)
      RETURNING id`,
     [
       input.appointmentId,
@@ -83,7 +102,13 @@ async function submission(input: {
       finalizedAt,
       invalidatedAt,
       input.status === "INVALIDATED" ? TEST_REFERENCE_IDS.adminUser : null,
-      input.status === "INVALIDATED" ? "Superseded result" : null,
+      input.status === "INVALIDATED"
+        ? input.invalidationReason ?? "Superseded result"
+        : null,
+      input.basedOnSubmissionId ?? null,
+      input.discardedAt ?? null,
+      supersededAt,
+      input.status === "SUPERSEDED" ? input.supersededBySubmissionId ?? null : null,
     ],
   );
   return result.rows[0].id;
@@ -97,12 +122,13 @@ async function file(input: {
   deletedAt?: string;
   storageDeletePending?: boolean;
 }) {
-  await pool.query(
+  const result = await pool.query<{ id: string }>(
     `INSERT INTO student_result_files (
        submission_id, storage_key, original_filename, detected_mime_type,
        extension, byte_size, checksum_sha256, storage_delete_pending,
        deleted_at, uploaded_at
-     ) VALUES ($1,$2,$3,'application/pdf','pdf',$4,$5,$6,$7,$8)`,
+     ) VALUES ($1,$2,$3,'application/pdf','pdf',$4,$5,$6,$7,$8)
+     RETURNING id`,
     [
       input.submissionId,
       `task-5/${input.submissionId}/${input.name}`,
@@ -114,6 +140,7 @@ async function file(input: {
       input.uploadedAt,
     ],
   );
+  return result.rows[0].id;
 }
 
 beforeAll(async () => {
@@ -128,6 +155,7 @@ beforeAll(async () => {
     ["TEST-PROFILE-0006", "Faye", "Draftonly"],
     ["TEST-PROFILE-0007", "Gio", "Rescheduled"],
     ["TEST-PROFILE-0008", "Hana", "Direct"],
+    ["TEST-PROFILE-0009", "Inez", "Editing"],
   ] as const;
   for (const [studentNumber, firstName, lastName] of students) {
     await insertTestStudent({ studentNumber, firstName, lastName, yearLevel: 4 });
@@ -322,6 +350,84 @@ beforeAll(async () => {
     status: "FINALIZED",
     activityAt: "2099-01-02T00:00:00Z",
   });
+
+  const editingAppointment = await appointment({
+    studentNumber: "TEST-PROFILE-0009",
+    resultType: "LABORATORY",
+    date: "2098-09-10",
+    createdAt: "2098-09-01T00:00:00Z",
+  });
+  editingCurrentFinalizedId = await submission({
+    appointmentId: editingAppointment,
+    studentNumber: "TEST-PROFILE-0009",
+    resultType: "LABORATORY",
+    status: "FINALIZED",
+    activityAt: "2099-01-04T00:00:00Z",
+  });
+  await file({
+    submissionId: editingCurrentFinalizedId,
+    name: "current-official.pdf",
+    byteSize: 110,
+    uploadedAt: "2099-01-04T00:00:01Z",
+  });
+  editingSupersededId = await submission({
+    appointmentId: editingAppointment,
+    studentNumber: "TEST-PROFILE-0009",
+    resultType: "LABORATORY",
+    status: "SUPERSEDED",
+    activityAt: "2099-01-01T00:00:00Z",
+    supersededAt: "2099-01-03T00:00:00Z",
+    supersededBySubmissionId: editingCurrentFinalizedId,
+  });
+  editingSupersededFileId = await file({
+    submissionId: editingSupersededId,
+    name: "superseded-official.pdf",
+    byteSize: 120,
+    uploadedAt: "2099-01-01T00:00:01Z",
+  });
+  editingInvalidatedId = await submission({
+    appointmentId: editingAppointment,
+    studentNumber: "TEST-PROFILE-0009",
+    resultType: "LABORATORY",
+    status: "INVALIDATED",
+    activityAt: "2099-01-02T00:00:00Z",
+    invalidationReason: "Document belongs to another student",
+  });
+  editingInvalidatedFileId = await file({
+    submissionId: editingInvalidatedId,
+    name: "invalidated-document.pdf",
+    byteSize: 130,
+    uploadedAt: "2099-01-02T00:00:01Z",
+  });
+  activeEditDraftId = await submission({
+    appointmentId: editingAppointment,
+    studentNumber: "TEST-PROFILE-0009",
+    resultType: "LABORATORY",
+    status: "DRAFT",
+    activityAt: "2099-01-05T00:00:00Z",
+    basedOnSubmissionId: editingCurrentFinalizedId,
+  });
+  await file({
+    submissionId: activeEditDraftId,
+    name: "active-edit-private.pdf",
+    byteSize: 140,
+    uploadedAt: "2099-01-05T00:00:01Z",
+  });
+  discardedEditDraftId = await submission({
+    appointmentId: editingAppointment,
+    studentNumber: "TEST-PROFILE-0009",
+    resultType: "LABORATORY",
+    status: "DRAFT",
+    activityAt: "2099-01-06T00:00:00Z",
+    basedOnSubmissionId: editingCurrentFinalizedId,
+    discardedAt: "2099-01-06T01:00:00Z",
+  });
+  await file({
+    submissionId: discardedEditDraftId,
+    name: "discarded-edit-private.pdf",
+    byteSize: 150,
+    uploadedAt: "2099-01-06T00:00:01Z",
+  });
 });
 
 afterAll(async () => {
@@ -403,18 +509,86 @@ describe("administrator student result profile repository", () => {
     });
   });
 
-  it("retains invalidated file aggregates after storage cleanup without exposing downloads", async () => {
+  it("keeps the finalized official current while projecting only official history and edit provenance", async () => {
+    const profile = await getAdminStudentResultProfileRow("TEST-PROFILE-0009");
+
+    expect(profile?.laboratory).toMatchObject({
+      state: "FINALIZED",
+      editingInProgress: true,
+      submission: {
+        id: editingCurrentFinalizedId,
+        status: "FINALIZED",
+        fileCount: 1,
+        totalBytes: 110,
+        files: [{ originalFilename: "current-official.pdf", byteSize: 110 }],
+      },
+    });
+    expect(profile?.history.map((item) => item.id)).toEqual([
+      editingSupersededId,
+      editingInvalidatedId,
+    ]);
+    expect(profile?.history[0]).toMatchObject({
+      status: "SUPERSEDED",
+      supersededAt: new Date("2099-01-03T00:00:00Z"),
+      supersededBySubmissionId: editingCurrentFinalizedId,
+      files: [{ originalFilename: "superseded-official.pdf", byteSize: 120 }],
+    });
+    expect(profile?.history[1]).toMatchObject({
+      status: "INVALIDATED",
+      invalidationReason: "Document belongs to another student",
+      files: [],
+    });
+    expect(profile?.history.map((item) => item.id)).not.toContain(activeEditDraftId);
+    expect(profile?.history.map((item) => item.id)).not.toContain(discardedEditDraftId);
+    expect(JSON.stringify(profile)).not.toContain("active-edit-private.pdf");
+    expect(JSON.stringify(profile)).not.toContain("discarded-edit-private.pdf");
+  });
+
+  it("keeps invalidation awareness current while moving rejected documents into history", async () => {
     const profile = await getAdminStudentResultProfileRow("TEST-PROFILE-0003");
 
-    expect(profile?.laboratory.submission).toMatchObject({
-      id: invalidatedAfterCleanupId,
+    expect(profile?.laboratory).toMatchObject({
+      state: "INVALIDATED",
+      submission: null,
+      editingInProgress: false,
+    });
+    expect(profile?.history.find((item) => item.id === invalidatedAfterCleanupId)).toMatchObject({
       status: "INVALIDATED",
+      invalidationReason: "Superseded result",
       fileCount: 2,
       totalBytes: 120,
       files: [],
     });
-    expect(profile?.laboratory.state).toBe("INVALIDATED");
     expect(profile?.latestActivityAt).toEqual(new Date("2099-01-06T00:00:00Z"));
+  });
+
+  it("splits administrator official-history access from the current student file query", async () => {
+    await expect(getAccessibleAdminResultFileRow(
+      editingSupersededFileId,
+      editingSupersededId,
+    )).resolves.toMatchObject({
+      id: editingSupersededFileId,
+      submissionId: editingSupersededId,
+      originalFilename: "superseded-official.pdf",
+    });
+    await expect(getAccessibleAdminResultFileRow(
+      editingInvalidatedFileId,
+      editingInvalidatedId,
+    )).resolves.toMatchObject({
+      id: editingInvalidatedFileId,
+      submissionId: editingInvalidatedId,
+      originalFilename: "invalidated-document.pdf",
+    });
+    await expect(getAdminSubmissionFileRows(editingSupersededId)).resolves.toMatchObject([
+      {
+        id: editingSupersededFileId,
+        originalFilename: "superseded-official.pdf",
+      },
+    ]);
+    await expect(getAccessibleStudentResultFileRow(
+      editingSupersededFileId,
+      "TEST-PROFILE-0009",
+    )).resolves.toBeNull();
   });
 
   it("returns owners and supports direct profiles for students absent from the grouped list", async () => {

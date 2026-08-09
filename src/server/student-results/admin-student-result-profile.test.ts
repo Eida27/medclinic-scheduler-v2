@@ -28,4 +28,8 @@ describe("administrator student result profile state", () => {
   it("maps an invalidated submission to INVALIDATED", () => {
     expect(currentSubmissionState({ status: "INVALIDATED" })).toBe("INVALIDATED");
   });
+
+  it("never treats a superseded official version as current", () => {
+    expect(currentSubmissionState({ status: "SUPERSEDED" })).toBe("NOT_SUBMITTED");
+  });
 });

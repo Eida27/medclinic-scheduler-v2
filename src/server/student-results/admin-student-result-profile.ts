@@ -25,10 +25,12 @@ export type AdminResultSubmission = {
   appointmentId: string;
   appointmentDate: string;
   resultType: ScheduleType;
-  status: "FINALIZED" | "INVALIDATED";
+  status: "FINALIZED" | "INVALIDATED" | "SUPERSEDED";
   finalizedAt: Date;
   invalidatedAt: Date | null;
   invalidationReason: string | null;
+  supersededAt: Date | null;
+  supersededBySubmissionId: string | null;
   lastActivityAt: Date;
   fileCount: number;
   totalBytes: number;
@@ -44,6 +46,7 @@ export type AdminCurrentResultSection = {
   } | null;
   state: CurrentSubmissionState;
   submission: AdminResultSubmission | null;
+  editingInProgress: boolean;
 };
 
 export type AdminStudentResultListItem = {
@@ -72,7 +75,9 @@ export type AdminStudentResultProfile = {
 export function currentSubmissionState(
   submission: Pick<AdminResultSubmission, "status"> | null,
 ): CurrentSubmissionState {
-  return submission?.status ?? "NOT_SUBMITTED";
+  if (submission?.status === "FINALIZED") return "FINALIZED";
+  if (submission?.status === "INVALIDATED") return "INVALIDATED";
+  return "NOT_SUBMITTED";
 }
 
 export function combinedSubmissionProgress(

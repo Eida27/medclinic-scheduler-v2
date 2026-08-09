@@ -28,25 +28,24 @@ export function StudentResultSection({ section }: { section: AdminCurrentResultS
             : "Unscheduled"}
         </p>
         {section.state !== "NOT_SUBMITTED" ? (
-          <div className="justify-self-start">
+          <div className="grid justify-self-start gap-2">
             <Badge tone={section.state === "FINALIZED" ? "success" : "danger"}>
               {currentSubmissionStateLabel(section.state)}
             </Badge>
+            {section.state === "FINALIZED" && section.editingInProgress ? (
+              <p
+                role="status"
+                aria-label="Student editing in progress"
+                className="text-sm font-semibold text-cpu-navy"
+              >
+                Student editing in progress
+              </p>
+            ) : null}
           </div>
         ) : null}
 
         {section.state === "NOT_SUBMITTED" ? (
           <p className="text-sm text-muted">Not submitted yet</p>
-        ) : null}
-
-        {section.state === "INVALIDATED" && submission ? (
-          <div className="grid gap-2 text-sm text-muted">
-            <p>Invalidated: {submission.invalidatedAt
-              ? formatResultDateTime(submission.invalidatedAt)
-              : "Date unavailable"}</p>
-            <p>Reason: {submission.invalidationReason ?? "No reason recorded"}</p>
-            <p>{submission.fileCount} {submission.fileCount === 1 ? "file" : "files"} · {formatResultBytes(submission.totalBytes)}</p>
-          </div>
         ) : null}
 
         {section.state === "FINALIZED" && submission ? (
