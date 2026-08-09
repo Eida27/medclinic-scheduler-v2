@@ -438,6 +438,81 @@ describe("student result edit creation", () => {
     );
   });
 
+  it("preserves committed edit files when the COMMIT response is lost", async () => {
+    const studentNumber = "99-9465-65";
+    const fixture = await finalizedResultFixture(
+      studentNumber,
+      ["commit-first.pdf", "commit-second.pdf"],
+    );
+    const originalConnectMethod = pool.connect;
+    const originalConnect = pool.connect.bind(pool);
+    const client = await originalConnect();
+    const ambiguousClient = new Proxy(client, {
+      get(target, property) {
+        if (property === "query") {
+          return async (...args: unknown[]) => {
+            const result = await Reflect.apply(target.query, target, args);
+            if (args[0] === "COMMIT") {
+              throw new Error("synthetic COMMIT response lost");
+            }
+            return result;
+          };
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as PoolClient;
+    let providedAmbiguousClient = false;
+    pool.connect = ((...args: unknown[]) => {
+      if (args.length) {
+        return Reflect.apply(originalConnectMethod, pool, args);
+      }
+      if (!providedAmbiguousClient) {
+        providedAmbiguousClient = true;
+        pool.connect = originalConnectMethod;
+        return Promise.resolve(ambiguousClient);
+      }
+      return originalConnect();
+    }) as typeof pool.connect;
+
+    try {
+      await expect(beginStudentResultEdit(
+        studentNumber,
+        fixture.appointmentId,
+        storage,
+      )).rejects.toThrow("synthetic COMMIT response lost");
+    } finally {
+      pool.connect = originalConnectMethod;
+    }
+
+    const committed = await pool.query<{
+      id: string;
+      storageKey: string;
+      deletedAt: Date | null;
+    }>(
+      `SELECT submission.id, file.storage_key AS "storageKey",
+              file.deleted_at AS "deletedAt"
+         FROM student_result_submissions submission
+         JOIN student_result_files file ON file.submission_id=submission.id
+        WHERE submission.appointment_id=$1
+          AND submission.status='DRAFT'
+          AND submission.discarded_at IS NULL
+        ORDER BY file.uploaded_at, file.id`,
+      [fixture.appointmentId],
+    );
+    expect(committed.rows).toHaveLength(2);
+    expect(committed.rows.every((row) => row.deletedAt === null)).toBe(true);
+    await expect(Promise.all(
+      committed.rows.map((row) => storage.read(row.storageKey)),
+    )).resolves.toHaveLength(2);
+    await expect(pool.query(
+      `SELECT storage_key
+         FROM student_result_storage_cleanup_intents
+        WHERE storage_key = ANY($1::text[])`,
+      [committed.rows.map((row) => row.storageKey)],
+    )).resolves.toMatchObject({ rowCount: 0 });
+  }, 15_000);
+
   it("rolls back the edit draft and every generated key after a partial copy write failure", async () => {
     const studentNumber = "99-9441-41";
     const fixture = await finalizedResultFixture(

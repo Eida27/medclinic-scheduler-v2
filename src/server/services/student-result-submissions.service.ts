@@ -36,11 +36,13 @@ import {
   retireStudentResultDraft,
 } from "@/server/repositories/student-result-submissions.repository";
 import {
+  claimStudentResultStorageCleanupIntentForEagerDeletion,
+  completeStudentResultStorageCleanupIntent,
   createStudentResultStorageCleanupIntents,
   deleteUnclaimedStudentResultStorageCleanupIntent,
   disarmStudentResultStorageCleanupIntents,
+  failStudentResultStorageCleanupIntent,
   lockStudentResultStorageCleanupIntentsForWrite,
-  recordStudentResultStorageCleanupIntentFailure,
   RESULT_STORAGE_CLEANUP_INTENT_DELAY_MS,
 } from "@/server/repositories/student-result-storage-cleanup-intents.repository";
 import { localResultStorage } from "@/server/storage/local-result-storage";
@@ -199,15 +201,20 @@ export async function beginStudentResultEdit(
           .catch(() => undefined);
         continue;
       }
+      const claim = await claimStudentResultStorageCleanupIntentForEagerDeletion(storageKey)
+        .catch(() => null);
+      if (!claim) continue;
       try {
         await storage.delete(storageKey);
-        await deleteUnclaimedStudentResultStorageCleanupIntent(storageKey);
+        await completeStudentResultStorageCleanupIntent(storageKey, claim.claimToken);
       } catch (cleanupError) {
-        await recordStudentResultStorageCleanupIntentFailure(
+        await failStudentResultStorageCleanupIntent(
           storageKey,
+          claim.claimToken,
           cleanupError instanceof Error
             ? cleanupError.message
             : "Unknown rollback deletion error",
+          new Date(),
         ).catch(() => undefined);
       }
     }

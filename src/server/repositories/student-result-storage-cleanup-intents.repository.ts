@@ -63,16 +63,38 @@ export async function deleteUnclaimedStudentResultStorageCleanupIntent(storageKe
   );
 }
 
-export async function recordStudentResultStorageCleanupIntentFailure(
+export async function claimStudentResultStorageCleanupIntentForEagerDeletion(
   storageKey: string,
-  error: string,
+  now = new Date(),
 ) {
-  await query(
-    `UPDATE student_result_storage_cleanup_intents
-        SET delete_error=$2, updated_at=NOW()
-      WHERE storage_key=$1 AND claim_token IS NULL`,
-    [storageKey, error.slice(0, 2000)],
-  );
+  const claimToken = randomUUID();
+  const claimExpiresAt = new Date(now.getTime() + RESULT_STORAGE_CLEANUP_CLAIM_LEASE_MS);
+  const claimed = await transaction((client) => client.query<{ storageKey: string }>(
+    `WITH claimable AS (
+       SELECT intent.storage_key
+         FROM student_result_storage_cleanup_intents intent
+        WHERE intent.storage_key=$1
+          AND intent.claim_token IS NULL
+          AND NOT EXISTS (
+            SELECT 1
+              FROM student_result_files file
+             WHERE file.storage_key=intent.storage_key
+               AND file.deleted_at IS NULL
+          )
+        FOR UPDATE OF intent
+     )
+     UPDATE student_result_storage_cleanup_intents intent
+        SET claim_token=$2,
+            claim_expires_at=$3,
+            attempt_count=intent.attempt_count + 1,
+            delete_error=NULL,
+            updated_at=$4
+       FROM claimable
+      WHERE intent.storage_key=claimable.storage_key
+     RETURNING intent.storage_key AS "storageKey"`,
+    [storageKey, claimToken, claimExpiresAt, now],
+  ));
+  return claimed.rows[0] ? { storageKey: claimed.rows[0].storageKey, claimToken } : null;
 }
 
 export async function claimDueStudentResultStorageCleanupIntents(now: Date) {
