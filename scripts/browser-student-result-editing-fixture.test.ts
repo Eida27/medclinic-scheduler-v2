@@ -25,6 +25,7 @@ const SENTINEL_AUDIT_ID = "be180000-0000-4000-8000-000000000901";
 const SUBSTRING_AUDIT_ID = "be180000-0000-4000-8000-000000000902";
 const TAMPERED_AUDIT_ID = "be180000-0000-4000-8000-000000000903";
 const STRUCTURED_AUDIT_ID = "be180000-0000-4000-8000-000000000904";
+const CRASH_WINDOW_AUDIT_ID = "be180000-0000-4000-8000-000000000907";
 const SENTINEL_STORAGE_KEY = "browser-student-result-editing-unrelated/sentinel.pdf";
 const TAMPERED_STORAGE_KEY = "be180000-0000-4000-8000-000000000101/tampered-unrelated.pdf";
 const POST_DATABASE_TAMPER_STORAGE_KEY = "be180000-0000-4000-8000-000000000906/unrelated-after-db.pdf";
@@ -168,6 +169,7 @@ describe.runIf(exclusive)("student result editing Browser acceptance fixture lif
       SUBSTRING_AUDIT_ID,
       TAMPERED_AUDIT_ID,
       STRUCTURED_AUDIT_ID,
+      CRASH_WINDOW_AUDIT_ID,
     ]]);
     await Promise.all([
       SENTINEL_STORAGE_KEY,
@@ -185,6 +187,7 @@ describe.runIf(exclusive)("student result editing Browser acceptance fixture lif
         SUBSTRING_AUDIT_ID,
         TAMPERED_AUDIT_ID,
         STRUCTURED_AUDIT_ID,
+        CRASH_WINDOW_AUDIT_ID,
       ]]);
       await Promise.all([
         SENTINEL_STORAGE_KEY,
@@ -519,6 +522,65 @@ describe.runIf(exclusive)("student result editing Browser acceptance fixture lif
       chooserArtifacts: 0,
       stateFiles: 0,
     }));
+  });
+
+  it("reports a STORAGE_DELETED crash window after database deletion removed dynamic ownership", async () => {
+    await prepareStudentResultEditingFixture(pool, identity);
+    const state = JSON.parse(await readFile(STATE_FILE, "utf8")) as {
+      phase: string;
+      ownershipDigest: string;
+      manifest: {
+        chooserArtifacts: Record<string, string>;
+        owned: { auditLogIds: string[] };
+      };
+    };
+    const artifacts = await Promise.all(Object.values(state.manifest.chooserArtifacts).map(
+      async (path) => ({ path, bytes: await readFile(path) }),
+    ));
+    await pool.query(
+      `INSERT INTO audit_logs (id,actor_user_id,action,entity_type,entity_id,metadata)
+       VALUES ($1,$2,'STUDENT_RESULT_SUBMISSION_INVALIDATED','student_result_submission',$3,
+               jsonb_build_object('appointmentId',$4::text))`,
+      [
+        CRASH_WINDOW_AUDIT_ID,
+        STUDENT_RESULT_EDITING_FIXTURE.adminUserId,
+        STUDENT_RESULT_EDITING_FIXTURE.submissionIds.physicalExamOfficial,
+        STUDENT_RESULT_EDITING_FIXTURE.appointmentIds.physicalExam,
+      ],
+    );
+    await cleanup();
+
+    state.phase = "STORAGE_DELETED";
+    state.manifest.owned.auditLogIds.push(CRASH_WINDOW_AUDIT_ID);
+    state.ownershipDigest = createHash("sha256")
+      .update(JSON.stringify(state.manifest.owned))
+      .digest("hex");
+    await mkdir(STATE_DIRECTORY, { recursive: true });
+    for (const artifact of artifacts) {
+      await mkdir(dirname(artifact.path), { recursive: true });
+      await writeFile(artifact.path, artifact.bytes);
+    }
+    await writeFile(STATE_FILE, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+
+    try {
+      const status = await getStudentResultEditingFixtureStatus(pool, identity);
+      expect(status).toMatchObject({
+        phase: "STORAGE_DELETED",
+        residue: {
+          students: 0,
+          appointments: 0,
+          submissions: 0,
+          files: 0,
+          auditLogs: 0,
+          storageObjects: 0,
+          chooserArtifacts: 4,
+          stateFiles: 1,
+        },
+      });
+    } finally {
+      if (await exists(STATE_FILE)) await cleanup();
+      await pool.query("DELETE FROM audit_logs WHERE id=$1", [CRASH_WINDOW_AUDIT_ID]);
+    }
   });
 
   it("discovers an orphan cleanup intent under a manifest-owned submission directory", async () => {

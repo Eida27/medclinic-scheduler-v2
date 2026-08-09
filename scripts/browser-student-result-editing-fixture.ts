@@ -1315,9 +1315,14 @@ export async function getStudentResultEditingFixtureStatus(
   try {
     await assertRequiredSchemaAndReferences(client);
     let manifest: OwnedManifest;
-    if (state.kind === "valid" && [
-      "DATABASE_DELETED", "ARTIFACTS_DELETED",
-    ].includes(state.value.phase)) {
+    const storageDeletedAfterCommittedDatabaseDelete = state.kind === "valid"
+      && state.value.phase === "STORAGE_DELETED"
+      && Object.values(await databaseResidue(client, state.value.manifest.owned))
+        .every((count) => count === 0);
+    if (state.kind === "valid" && (
+      ["DATABASE_DELETED", "ARTIFACTS_DELETED"].includes(state.value.phase)
+      || storageDeletedAfterCommittedDatabaseDelete
+    )) {
       manifest = state.value.manifest.owned;
     } else {
       const discovered = await discoverOwnedManifest(client);
