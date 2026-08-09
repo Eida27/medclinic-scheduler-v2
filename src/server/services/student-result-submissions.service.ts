@@ -31,11 +31,18 @@ import {
   lockOrCreateStudentResultDraft,
   lockOrCreateStudentResultEditDraft,
   markStudentResultFileForDeletion,
-  persistStudentResultCopyRollbackCleanup,
   promoteStudentResultEditDraft,
   recordResultFileDeletion,
   retireStudentResultDraft,
 } from "@/server/repositories/student-result-submissions.repository";
+import {
+  createStudentResultStorageCleanupIntents,
+  deleteUnclaimedStudentResultStorageCleanupIntent,
+  disarmStudentResultStorageCleanupIntents,
+  lockStudentResultStorageCleanupIntentsForWrite,
+  recordStudentResultStorageCleanupIntentFailure,
+  RESULT_STORAGE_CLEANUP_INTENT_DELAY_MS,
+} from "@/server/repositories/student-result-storage-cleanup-intents.repository";
 import { localResultStorage } from "@/server/storage/local-result-storage";
 import type { ResultStorage } from "@/server/storage/result-storage";
 import { createStudentNotification } from "@/server/services/student-notifications.service";
@@ -52,16 +59,6 @@ type CopiedResultFile = {
   byteSize: number;
   checksumSha256: string;
 };
-type RollbackEditDraft = {
-  id: string;
-  appointmentId: string;
-  studentNumber: string;
-  resultType: "LABORATORY" | "PHYSICAL_EXAM";
-  status: "DRAFT";
-  basedOnSubmissionId: string | null;
-  lastActivityAt: Date;
-};
-
 function draftError(type: "not_found" | "unavailable" | "finalized") {
   if (type === "not_found") {
     return new AppError("RESULT_APPOINTMENT_NOT_FOUND", "Result appointment not found.", 404);
@@ -112,18 +109,27 @@ export async function beginStudentResultEdit(
   appointmentId: string,
   storage: ResultStorage = localResultStorage,
 ) {
-  const generatedFiles: CopiedResultFile[] = [];
-  let rollbackDraft: RollbackEditDraft | null = null;
+  const candidateDraftId = randomUUID();
+  const armedStorageKeys = Array.from(
+    { length: RESULT_SUBMISSION_MAX_FILES },
+    () => `${candidateDraftId}/${randomUUID()}.copy`,
+  );
+  const attemptedStorageKeys = new Set<string>();
   try {
+    await createStudentResultStorageCleanupIntents(
+      armedStorageKeys,
+      new Date(Date.now() + RESULT_STORAGE_CLEANUP_INTENT_DELAY_MS),
+    );
     return await transaction(async (client) => {
       const outcome = await lockOrCreateStudentResultEditDraft(
         client,
         studentNumber,
         appointmentId,
+        candidateDraftId,
       );
       if (outcome.type !== "edit") throw beginEditError(outcome.type);
+      await lockStudentResultStorageCleanupIntentsForWrite(client, armedStorageKeys);
       if (outcome.created) {
-        rollbackDraft = outcome.draft;
         const copiedFiles: CopiedResultFile[] = [];
         for (const officialFile of outcome.officialFiles) {
           let bytes: Buffer;
@@ -144,7 +150,7 @@ export async function beginStudentResultEdit(
               500,
             );
           }
-          const storageKey = `${outcome.draft.id}/${randomUUID()}.${officialFile.extension}`;
+          const storageKey = armedStorageKeys[copiedFiles.length];
           const copiedFile = {
             submissionId: outcome.draft.id,
             storageKey,
@@ -154,7 +160,7 @@ export async function beginStudentResultEdit(
             byteSize: officialFile.byteSize,
             checksumSha256: officialFile.checksumSha256,
           };
-          generatedFiles.push(copiedFile);
+          attemptedStorageKeys.add(storageKey);
           await storage.write(storageKey, bytes);
           copiedFiles.push(copiedFile);
         }
@@ -183,34 +189,26 @@ export async function beginStudentResultEdit(
       if (!refreshed || refreshed.id !== outcome.draft.id) {
         throw new Error("Result edit draft disappeared during creation.");
       }
+      await disarmStudentResultStorageCleanupIntents(client, armedStorageKeys);
       return refreshed;
     });
   } catch (error) {
-    const cleanupResults = await Promise.allSettled(
-      generatedFiles.map((file) => storage.delete(file.storageKey)),
-    );
-    const failedCleanupFiles = cleanupResults.flatMap((result, index) => {
-      if (result.status === "fulfilled") return [];
-      return [{
-        ...generatedFiles[index],
-        deleteError: result.reason instanceof Error
-          ? result.reason.message
-          : "Unknown rollback deletion error",
-      }];
-    });
-    const cleanupDraft = rollbackDraft;
-    if (cleanupDraft && failedCleanupFiles.length) {
+    for (const storageKey of armedStorageKeys) {
+      if (!attemptedStorageKeys.has(storageKey)) {
+        await deleteUnclaimedStudentResultStorageCleanupIntent(storageKey)
+          .catch(() => undefined);
+        continue;
+      }
       try {
-        await transaction((client) => persistStudentResultCopyRollbackCleanup(
-          client,
-          cleanupDraft,
-          failedCleanupFiles,
-        ));
+        await storage.delete(storageKey);
+        await deleteUnclaimedStudentResultStorageCleanupIntent(storageKey);
       } catch (cleanupError) {
-        throw new AggregateError(
-          [error, cleanupError],
-          "Result edit copy failed and rollback cleanup could not be persisted.",
-        );
+        await recordStudentResultStorageCleanupIntentFailure(
+          storageKey,
+          cleanupError instanceof Error
+            ? cleanupError.message
+            : "Unknown rollback deletion error",
+        ).catch(() => undefined);
       }
     }
     throw error;

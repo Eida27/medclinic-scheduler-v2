@@ -1,7 +1,7 @@
 // @vitest-environment node
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { LocalResultStorage } from "./local-result-storage";
 
@@ -32,6 +32,20 @@ describe("local result storage", () => {
     const key = "00000000-0000-4000-8000-000000000010/file.png";
     await storage.write(key, Buffer.from([0x89, 0x50]));
     await storage.delete(key);
+    await expect(storage.read(key)).rejects.toThrow();
+  });
+
+  it("deletes the deterministic in-progress sibling left by an interrupted write", async () => {
+    const storage = new LocalResultStorage(root);
+    const key = "00000000-0000-4000-8000-000000000010/interrupted.copy";
+    const target = join(root, key);
+    const inProgress = `${target}.uploading`;
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(inProgress, Buffer.from("partial private bytes"));
+
+    await storage.delete(key);
+
+    await expect(readFile(inProgress)).rejects.toThrow();
     await expect(storage.read(key)).rejects.toThrow();
   });
 });

@@ -7,6 +7,11 @@ import {
   recordResultFileDeletion,
   retireStudentResultDraft,
 } from "@/server/repositories/student-result-submissions.repository";
+import {
+  claimDueStudentResultStorageCleanupIntents,
+  completeStudentResultStorageCleanupIntent,
+  failStudentResultStorageCleanupIntent,
+} from "@/server/repositories/student-result-storage-cleanup-intents.repository";
 import { localResultStorage } from "@/server/storage/local-result-storage";
 import type { ResultStorage } from "@/server/storage/result-storage";
 
@@ -38,6 +43,23 @@ export async function cleanupExpiredResultDrafts(
   now = new Date(),
   storage: ResultStorage = localResultStorage,
 ) {
+  let deletionFailureCount = 0;
+  const cleanupIntents = await claimDueStudentResultStorageCleanupIntents(now);
+  for (const intent of cleanupIntents) {
+    try {
+      await storage.delete(intent.storageKey);
+      await completeStudentResultStorageCleanupIntent(intent.storageKey, intent.claimToken);
+    } catch (error) {
+      deletionFailureCount += 1;
+      await failStudentResultStorageCleanupIntent(
+        intent.storageKey,
+        intent.claimToken,
+        error instanceof Error ? error.message : "Unknown file deletion error",
+        now,
+      );
+    }
+  }
+
   const candidates = await transaction((client) => lockExpiredDrafts(client, now));
   for (const candidate of candidates) {
     await transaction(async (client) => {
@@ -95,7 +117,6 @@ export async function cleanupExpiredResultDrafts(
     return { pendingDeletion: pendingDeletion.rows, retiredDrafts: retiredDrafts.rows };
   });
 
-  let deletionFailureCount = 0;
   for (const file of staged.pendingDeletion) {
     try {
       await storage.delete(file.storageKey);

@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -34,6 +35,7 @@ const admin = {
 };
 
 async function cleanup() {
+  await pool.query("DELETE FROM student_result_storage_cleanup_intents");
   await cleanupTestFixtures(studentPattern, "TEST-DRAFT-CLEANUP%", "TEST-DRAFT-CLEANUP%");
   if (storageRoot) {
     await rm(storageRoot, { recursive: true, force: true });
@@ -173,6 +175,108 @@ describe("result draft cleanup", () => {
     );
     expect(pending.rows).toEqual([{ storage_delete_pending: true, delete_error: "synthetic cleanup failure" }]);
     await expect(cleanupExpiredResultDrafts(now, storage)).resolves.toEqual({ expiredDraftCount: 1, deletionFailureCount: 0 });
+  });
+
+  it("recovers a due pre-write intent left by interruption and retries cleanup failure", async () => {
+    const storageKey = `${randomUUID()}/${randomUUID()}.copy`;
+    const bytes = Buffer.from("%PDF-1.7\ninterrupted edit copy");
+    const now = new Date("2027-09-08T00:00:00.000Z");
+    await storage.write(storageKey, bytes);
+    await pool.query(
+      `INSERT INTO student_result_storage_cleanup_intents (storage_key, not_before)
+       VALUES ($1,$2::timestamptz - INTERVAL '1 second')`,
+      [storageKey, now],
+    );
+    const failingStorage = {
+      write: storage.write.bind(storage),
+      read: storage.read.bind(storage),
+      delete: async () => { throw new Error("synthetic intent cleanup failure"); },
+    };
+
+    await expect(cleanupExpiredResultDrafts(now, failingStorage)).resolves.toEqual({
+      expiredDraftCount: 0,
+      deletionFailureCount: 1,
+    });
+    await expect(storage.read(storageKey)).resolves.toEqual(bytes);
+    const failed = await pool.query<{
+      attemptCount: number;
+      claimToken: string | null;
+      claimExpiresAt: Date | null;
+      deleteError: string | null;
+    }>(
+      `SELECT attempt_count AS "attemptCount", claim_token::text AS "claimToken",
+              claim_expires_at AS "claimExpiresAt", delete_error AS "deleteError"
+         FROM student_result_storage_cleanup_intents
+        WHERE storage_key=$1`,
+      [storageKey],
+    );
+    expect(failed.rows).toEqual([{
+      attemptCount: 1,
+      claimToken: null,
+      claimExpiresAt: null,
+      deleteError: "synthetic intent cleanup failure",
+    }]);
+
+    await expect(cleanupExpiredResultDrafts(now, storage)).resolves.toEqual({
+      expiredDraftCount: 0,
+      deletionFailureCount: 0,
+    });
+    await expect(storage.read(storageKey)).rejects.toThrow();
+    await expect(pool.query(
+      "SELECT storage_key FROM student_result_storage_cleanup_intents WHERE storage_key=$1",
+      [storageKey],
+    )).resolves.toMatchObject({ rowCount: 0 });
+  });
+
+  it("waits for an active cleanup lease and recovers it only after expiry", async () => {
+    const storageKey = `${randomUUID()}/${randomUUID()}.copy`;
+    const bytes = Buffer.from("%PDF-1.7\nleased edit copy");
+    const now = new Date("2027-09-08T00:00:00.000Z");
+    const claimExpiresAt = new Date(now.getTime() + 5 * 60 * 1000);
+    await storage.write(storageKey, bytes);
+    await pool.query(
+      `INSERT INTO student_result_storage_cleanup_intents (
+         storage_key, not_before, claim_token, claim_expires_at
+       ) VALUES ($1,$2,$3,$4)`,
+      [storageKey, new Date(now.getTime() - 1000), randomUUID(), claimExpiresAt],
+    );
+
+    await cleanupExpiredResultDrafts(now, storage);
+    await expect(storage.read(storageKey)).resolves.toEqual(bytes);
+    await expect(pool.query(
+      "SELECT storage_key FROM student_result_storage_cleanup_intents WHERE storage_key=$1",
+      [storageKey],
+    )).resolves.toMatchObject({ rowCount: 1 });
+
+    await cleanupExpiredResultDrafts(new Date(claimExpiresAt.getTime() + 1), storage);
+    await expect(storage.read(storageKey)).rejects.toThrow();
+    await expect(pool.query(
+      "SELECT storage_key FROM student_result_storage_cleanup_intents WHERE storage_key=$1",
+      [storageKey],
+    )).resolves.toMatchObject({ rowCount: 0 });
+  });
+
+  it("disarms an intent for a committed result file without deleting live bytes", async () => {
+    const fixture = await draft("99-9310-10", "live-file.pdf");
+    await pool.query(
+      `INSERT INTO student_result_storage_cleanup_intents (storage_key, not_before)
+       VALUES ($1,NOW() - INTERVAL '1 second')`,
+      [fixture.file.storageKey],
+    );
+
+    await cleanupExpiredResultDrafts(new Date(), storage);
+
+    await expect(storage.read(fixture.file.storageKey)).resolves.toEqual(
+      Buffer.from("%PDF-1.7\ncleanup"),
+    );
+    await expect(pool.query(
+      "SELECT storage_key FROM student_result_storage_cleanup_intents WHERE storage_key=$1",
+      [fixture.file.storageKey],
+    )).resolves.toMatchObject({ rowCount: 0 });
+    await expect(pool.query(
+      "SELECT id FROM student_result_files WHERE id=$1 AND deleted_at IS NULL",
+      [fixture.file.id],
+    )).resolves.toMatchObject({ rowCount: 1 });
   });
 
   it("retries physical deletion markers left by invalidation", async () => {

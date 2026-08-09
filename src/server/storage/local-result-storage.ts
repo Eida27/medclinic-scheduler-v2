@@ -1,5 +1,4 @@
 import "server-only";
-import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve, sep } from "node:path";
 import { serverEnv } from "@/lib/env";
@@ -25,7 +24,7 @@ export class LocalResultStorage implements ResultStorage {
     const target = this.pathFor(storageKey);
     const directory = dirname(target);
     await mkdir(directory, { recursive: true, mode: 0o700 });
-    const temporary = `${target}.${randomUUID()}.tmp`;
+    const temporary = `${target}.uploading`;
     try {
       await writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
       await rename(temporary, target);
@@ -40,7 +39,11 @@ export class LocalResultStorage implements ResultStorage {
   }
 
   async delete(storageKey: string) {
-    await rm(this.pathFor(storageKey), { force: true });
+    const target = this.pathFor(storageKey);
+    await Promise.all([
+      rm(target, { force: true }),
+      rm(`${target}.uploading`, { force: true }),
+    ]);
   }
 }
 

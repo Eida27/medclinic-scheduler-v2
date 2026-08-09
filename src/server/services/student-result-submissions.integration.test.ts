@@ -65,6 +65,7 @@ const coordinator: SessionUser = {
 };
 
 async function cleanup() {
+  await pool.query("DELETE FROM student_result_storage_cleanup_intents");
   await cleanupTestFixtures(studentPattern, "TEST-RESULT-DRAFT%", "TEST-RESULT-DRAFT%");
   if (storageRoot) {
     await rm(storageRoot, { recursive: true, force: true });
@@ -349,6 +350,94 @@ describe("student result edit creation", () => {
     expect(JSON.stringify(audits.rows[0].metadata)).not.toMatch(/filename|checksum|content/i);
   });
 
+  it("arms every copy key before the first write and disarms them atomically on success", async () => {
+    const studentNumber = "99-9464-64";
+    const fixture = await finalizedResultFixture(
+      studentNumber,
+      ["intent-first.pdf", "intent-second.pdf"],
+    );
+    const writeKeys: string[] = [];
+    const cleanupDeleteKeys: string[] = [];
+    let visibleBeforeFirstWrite: Array<{
+      storageKey: string;
+      notBefore: Date;
+      claimToken: string | null;
+    }> = [];
+    let inFlightCleanupResult: {
+      expiredDraftCount: number;
+      deletionFailureCount: number;
+    } | null = null;
+    const cleanupStorage: ResultStorage = {
+      read: storage.read.bind(storage),
+      write: storage.write.bind(storage),
+      delete: async (storageKey) => {
+        cleanupDeleteKeys.push(storageKey);
+        await storage.delete(storageKey);
+      },
+    };
+    const trackingStorage: ResultStorage = {
+      read: storage.read.bind(storage),
+      write: async (storageKey, bytes) => {
+        writeKeys.push(storageKey);
+        if (writeKeys.length === 1) {
+          const draftPrefix = storageKey.slice(0, storageKey.indexOf("/"));
+          const visible = await pool.query<{
+            storageKey: string;
+            notBefore: Date;
+            claimToken: string | null;
+          }>(
+            `SELECT storage_key AS "storageKey", not_before AS "notBefore",
+                    claim_token::text AS "claimToken"
+               FROM student_result_storage_cleanup_intents
+              WHERE storage_key LIKE $1
+              ORDER BY storage_key`,
+            [`${draftPrefix}/%`],
+          );
+          visibleBeforeFirstWrite = visible.rows;
+          inFlightCleanupResult = await cleanupExpiredResultDrafts(
+            new Date("2099-08-06T00:00:00.000Z"),
+            cleanupStorage,
+          );
+        }
+        await storage.write(storageKey, bytes);
+      },
+      delete: storage.delete.bind(storage),
+    };
+
+    const edit = await beginStudentResultEdit(
+      studentNumber,
+      fixture.appointmentId,
+      trackingStorage,
+    );
+
+    expect(writeKeys).toHaveLength(2);
+    expect(writeKeys.every((storageKey) => (
+      visibleBeforeFirstWrite.some((intent) => intent.storageKey === storageKey)
+    ))).toBe(true);
+    expect(visibleBeforeFirstWrite.length).toBeGreaterThanOrEqual(writeKeys.length);
+    expect(visibleBeforeFirstWrite.every((intent) => (
+      intent.notBefore.getTime() > Date.now() && intent.claimToken === null
+    ))).toBe(true);
+    expect(inFlightCleanupResult).toEqual({ expiredDraftCount: 0, deletionFailureCount: 0 });
+    expect(cleanupDeleteKeys).toEqual([]);
+    await expect(pool.query(
+      "SELECT storage_key FROM student_result_storage_cleanup_intents WHERE storage_key = ANY($1::text[])",
+      [visibleBeforeFirstWrite.map((intent) => intent.storageKey)],
+    )).resolves.toMatchObject({ rowCount: 0 });
+
+    const afterIntentBecomesDue = new Date(
+      Math.max(...visibleBeforeFirstWrite.map((intent) => intent.notBefore.getTime())) + 1,
+    );
+    await cleanupExpiredResultDrafts(afterIntentBecomesDue, cleanupStorage);
+    expect(cleanupDeleteKeys).toEqual([]);
+    const copiedBodies = await Promise.all(edit.files.map(async (copied) => (
+      (await storage.read(copied.storageKey)).toString("utf8")
+    )));
+    expect(copiedBodies.sort()).toEqual(
+      fixture.uploads.map((upload) => upload.bytes.toString("utf8")).sort(),
+    );
+  });
+
   it("rolls back the edit draft and every generated key after a partial copy write failure", async () => {
     const studentNumber = "99-9441-41";
     const fixture = await finalizedResultFixture(
@@ -377,7 +466,7 @@ describe("student result edit creation", () => {
     )).rejects.toThrow("synthetic edit copy failure");
 
     expect(writeKeys).toHaveLength(2);
-    expect(new Set(deleteKeys)).toEqual(new Set(writeKeys));
+    expect(deleteKeys).toEqual(expect.arrayContaining(writeKeys));
     for (const storageKey of writeKeys) {
       await expect(storage.read(storageKey)).rejects.toThrow();
     }
@@ -389,6 +478,10 @@ describe("student result edit creation", () => {
       [fixture.appointmentId],
     );
     expect(draftRows.rows).toEqual([]);
+    await expect(pool.query(
+      "SELECT storage_key FROM student_result_storage_cleanup_intents WHERE storage_key = ANY($1::text[])",
+      [deleteKeys],
+    )).resolves.toMatchObject({ rowCount: 0 });
     const preservedOfficialBodies = await Promise.all(
       fixture.official.files.map(async (officialFile) => (
         (await storage.read(officialFile.storageKey)).toString("utf8")
@@ -428,42 +521,56 @@ describe("student result edit creation", () => {
       failingStorage,
     )).rejects.toThrow("synthetic edit copy failure");
 
-    const cleanupMarker = await pool.query<{
-      id: string;
+    const cleanupIntent = await pool.query<{
       storageKey: string;
-      storageDeletePending: boolean;
+      notBefore: Date;
+      claimToken: string | null;
       deleteError: string | null;
     }>(
-      `SELECT submission.id, file.storage_key AS "storageKey",
-              file.storage_delete_pending AS "storageDeletePending",
-              file.delete_error AS "deleteError"
-         FROM student_result_submissions submission
-         JOIN student_result_files file ON file.submission_id=submission.id
-        WHERE submission.appointment_id=$1 AND submission.status='DRAFT'
-          AND submission.discarded_at IS NOT NULL`,
-      [fixture.appointmentId],
+      `SELECT storage_key AS "storageKey", not_before AS "notBefore",
+              claim_token::text AS "claimToken", delete_error AS "deleteError"
+         FROM student_result_storage_cleanup_intents
+        WHERE storage_key = ANY($1::text[])`,
+      [writeKeys],
     );
-    expect(cleanupMarker.rows).toEqual([{
-      id: expect.any(String),
+    expect(cleanupIntent.rows).toEqual([{
       storageKey: writeKeys[0],
-      storageDeletePending: true,
+      notBefore: expect.any(Date),
+      claimToken: null,
       deleteError: "synthetic rollback delete failure",
     }]);
-    await expect(storage.read(writeKeys[0])).resolves.toEqual(fixture.uploads[0].bytes);
+    const activeDrafts = await pool.query(
+      `SELECT id FROM student_result_submissions
+        WHERE appointment_id=$1 AND status='DRAFT'`,
+      [fixture.appointmentId],
+    );
+    expect(activeDrafts.rows).toEqual([]);
+    const strandedBody = await storage.read(writeKeys[0]);
+    expect(fixture.uploads.map((upload) => upload.bytes.toString("utf8"))).toContain(
+      strandedBody.toString("utf8"),
+    );
 
     failRollbackDelete = false;
-    await expect(cleanupExpiredResultDrafts(new Date(), failingStorage)).resolves.toEqual({
+    await expect(cleanupExpiredResultDrafts(
+      new Date(cleanupIntent.rows[0].notBefore.getTime() + 1),
+      failingStorage,
+    )).resolves.toEqual({
       expiredDraftCount: 0,
       deletionFailureCount: 0,
     });
     await expect(storage.read(writeKeys[0])).rejects.toThrow();
     const afterRetry = await pool.query(
-      "SELECT id FROM student_result_submissions WHERE id=$1",
-      [cleanupMarker.rows[0].id],
+      "SELECT storage_key FROM student_result_storage_cleanup_intents WHERE storage_key=$1",
+      [writeKeys[0]],
     );
     expect(afterRetry.rows).toEqual([]);
-    await expect(storage.read(fixture.official.files[0].storageKey)).resolves.toEqual(
-      fixture.uploads[0].bytes,
+    const preservedOfficialBodies = await Promise.all(
+      fixture.official.files.map(async (officialFile) => (
+        (await storage.read(officialFile.storageKey)).toString("utf8")
+      )),
+    );
+    expect(preservedOfficialBodies.sort()).toEqual(
+      fixture.uploads.map((upload) => upload.bytes.toString("utf8")).sort(),
     );
   });
 
@@ -498,7 +605,7 @@ describe("student result edit creation", () => {
     )).rejects.toMatchObject({ code: "RESULT_FILE_INTEGRITY_ERROR", status: 500 });
 
     expect(writeKeys).toHaveLength(1);
-    expect(deleteKeys).toEqual(writeKeys);
+    expect(deleteKeys).toEqual(expect.arrayContaining(writeKeys));
     await expect(storage.read(writeKeys[0])).rejects.toThrow();
     const drafts = await pool.query(
       `SELECT id FROM student_result_submissions

@@ -350,6 +350,7 @@ export async function lockOrCreateStudentResultEditDraft(
   client: PoolClient,
   studentNumber: string,
   appointmentId: string,
+  candidateDraftId: string,
 ) {
   const appointment = await lockOwnedResultAppointment(
     client,
@@ -389,13 +390,13 @@ export async function lockOrCreateStudentResultEditDraft(
 
   const inserted = await client.query<DraftRow>(
     `INSERT INTO student_result_submissions (
-       appointment_id, student_number, result_type, based_on_submission_id
-     ) VALUES ($1,$2,$3,$4)
+       id, appointment_id, student_number, result_type, based_on_submission_id
+     ) VALUES ($1,$2,$3,$4,$5)
      RETURNING id, appointment_id AS "appointmentId", student_number AS "studentNumber",
                result_type AS "resultType", status,
                based_on_submission_id::text AS "basedOnSubmissionId",
                last_activity_at AS "lastActivityAt"`,
-    [appointmentId, studentNumber, appointment.scheduleType, currentOfficial.id],
+    [candidateDraftId, appointmentId, studentNumber, appointment.scheduleType, currentOfficial.id],
   );
   return {
     type: "edit" as const,
@@ -506,61 +507,6 @@ export async function retireStudentResultDraft(
     [submissionId],
   );
   return true;
-}
-
-export async function persistStudentResultCopyRollbackCleanup(
-  client: PoolClient,
-  draft: DraftRow,
-  files: Array<{
-    storageKey: string;
-    originalFilename: string;
-    detectedMimeType: string;
-    extension: string;
-    byteSize: number;
-    checksumSha256: string;
-    deleteError: string;
-  }>,
-) {
-  if (!files.length) return;
-  await client.query(
-    `INSERT INTO student_result_submissions (
-       id, appointment_id, student_number, result_type,
-       based_on_submission_id, discarded_at
-     ) VALUES ($1,$2,$3,$4,$5,NOW())`,
-    [
-      draft.id,
-      draft.appointmentId,
-      draft.studentNumber,
-      draft.resultType,
-      draft.basedOnSubmissionId,
-    ],
-  );
-  await client.query(
-    `INSERT INTO student_result_files (
-       submission_id, storage_key, original_filename, detected_mime_type,
-       extension, byte_size, checksum_sha256, storage_delete_pending, delete_error
-     )
-     SELECT cleanup.submission_id, cleanup.storage_key, cleanup.original_filename,
-            cleanup.detected_mime_type, cleanup.extension, cleanup.byte_size,
-            cleanup.checksum_sha256, TRUE, cleanup.delete_error
-       FROM UNNEST(
-         $1::uuid[], $2::text[], $3::text[], $4::text[],
-         $5::text[], $6::bigint[], $7::text[], $8::text[]
-       ) AS cleanup(
-         submission_id, storage_key, original_filename, detected_mime_type,
-         extension, byte_size, checksum_sha256, delete_error
-       )`,
-    [
-      files.map(() => draft.id),
-      files.map((file) => file.storageKey),
-      files.map((file) => file.originalFilename),
-      files.map((file) => file.detectedMimeType),
-      files.map((file) => file.extension),
-      files.map((file) => file.byteSize),
-      files.map((file) => file.checksumSha256),
-      files.map((file) => file.deleteError),
-    ],
-  );
 }
 
 export async function deleteRetiredStudentResultDraftIfClean(submissionId: string) {
