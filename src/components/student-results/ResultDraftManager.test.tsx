@@ -210,6 +210,45 @@ describe("ResultDraftManager", () => {
     await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
   });
 
+  it("keeps a successful mutation locked until authoritative props change", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(apiResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    const official = draft({
+      status: "FINALIZED",
+      fileCount: 1,
+      totalBytes: 32,
+      files: [{ id: "official-file-1", originalFilename: "submitted.pdf", byteSize: 32 }],
+    });
+    const { rerender } = render(<ResultDraftManager draft={official} />);
+    const editButton = screen.getByRole("button", { name: "Edit submission" });
+
+    await user.click(editButton);
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await user.click(editButton);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    rerender(<ResultDraftManager draft={draft({
+      id: "30000000-0000-4000-8000-000000000003",
+      basedOnSubmissionId: official.id,
+      fileCount: 1,
+      totalBytes: 32,
+      files: [{ id: "copied-file-1", originalFilename: "submitted.pdf", byteSize: 32 }],
+    })} />);
+    await user.click(screen.getByRole("button", { name: "Remove submitted.pdf" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/student/result-submissions/appointment-1/files/copied-file-1",
+      expect.objectContaining({
+        method: "DELETE",
+        body: JSON.stringify({ submissionId: "30000000-0000-4000-8000-000000000003" }),
+      }),
+    );
+  });
+
   it("shows retained edit files and removes one with its expected edit id", async () => {
     const fetchMock = vi.fn().mockResolvedValue(apiResponse());
     vi.stubGlobal("fetch", fetchMock);
@@ -335,10 +374,12 @@ describe("ResultDraftManager", () => {
     ));
   });
 
-  it("shows the approved administrator-invalidation conflict and the replacement reason", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(apiResponse(false, {
-      error: { code: "RESULT_EDIT_STALE", message: "This result draft changed. Refresh and try again." },
-    }));
+  it("refreshes and locks a stale edit until replacement props arrive", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(apiResponse(false, {
+        error: { code: "RESULT_EDIT_STALE", message: "This result draft changed. Refresh and try again." },
+      }))
+      .mockResolvedValueOnce(apiResponse());
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
     const { rerender } = render(<ResultDraftManager draft={draft({
@@ -352,11 +393,26 @@ describe("ResultDraftManager", () => {
     }));
 
     expect(await screen.findByText(approvedStaleMessage)).toBeVisible();
-    expect(refresh).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Submit these changes?" })).not.toBeInTheDocument();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Submit changes" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel editing" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove retained.pdf" })).toBeDisabled();
+    expect(screen.getByLabelText(/choose result files/i)).toBeDisabled();
 
     rerender(<ResultDraftManager draft={draft({
+      id: "40000000-0000-4000-8000-000000000004",
       administratorReplacementReason: "The uploaded page belongs to another student.",
     })} />);
     expect(screen.getByText("The uploaded page belongs to another student.")).toBeVisible();
+    expect(screen.getByText(approvedStaleMessage)).toBeVisible();
+    const input = screen.getByLabelText(/choose result files/i);
+    expect(input).toBeEnabled();
+    await user.upload(input, pdfFile("replacement.pdf"));
+    await user.click(screen.getByRole("button", { name: "Upload files" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect((fetchMock.mock.calls[1][1]?.body as FormData).get("submissionId"))
+      .toBe("40000000-0000-4000-8000-000000000004");
   });
 });

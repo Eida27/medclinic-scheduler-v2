@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import {
+  useEffect,
   useRef,
   useState,
   type ChangeEvent,
@@ -28,69 +29,120 @@ export type StudentResultDraftView = {
 };
 
 type Confirmation = "finalize" | "cancel-edit" | "submit-changes" | null;
+type MutationState = {
+  action: string;
+  requestRevision: string;
+  awaitingAuthoritativeProps: boolean;
+  uploadCount: number;
+};
 
 const formatBytes = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 const staleEditMessage = "Your submission was changed by an administrator while you were editing it. Your unfinished edit can no longer be submitted. Review the reason and upload the requested replacement.";
 
-function errorMessage(payload: unknown, fallback: string) {
+function responseError(payload: unknown) {
   if (
     typeof payload === "object"
     && payload !== null
     && "error" in payload
     && typeof payload.error === "object"
     && payload.error !== null
-    && "message" in payload.error
-    && typeof payload.error.message === "string"
   ) {
-    if (
-      "code" in payload.error
-      && payload.error.code === "RESULT_EDIT_STALE"
-    ) return staleEditMessage;
-    return payload.error.message;
+    return {
+      code: "code" in payload.error && typeof payload.error.code === "string"
+        ? payload.error.code
+        : null,
+      message: "message" in payload.error && typeof payload.error.message === "string"
+        ? payload.error.message
+        : null,
+    };
   }
-  return fallback;
+  return null;
+}
+
+function draftRevision(draft: StudentResultDraftView) {
+  return JSON.stringify([
+    draft.id,
+    draft.status,
+    draft.basedOnSubmissionId,
+    draft.fileCount,
+    draft.totalBytes,
+    draft.administratorReplacementReason,
+    draft.files.map((file) => [file.id, file.originalFilename, file.byteSize]),
+  ]);
 }
 
 export function ResultDraftManager({ draft }: { draft: StudentResultDraftView }) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const inFlightRef = useRef(false);
-  const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const [mutationState, setMutationState] = useState<MutationState | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [error, setError] = useState<string>();
   const [confirmation, setConfirmation] = useState<Confirmation>(null);
 
   const editing = draft.status === "DRAFT" && draft.basedOnSubmissionId !== null;
+  const revision = draftRevision(draft);
+  const authoritativeRevisionArrived = mutationState?.awaitingAuthoritativeProps === true
+    && mutationState.requestRevision !== revision;
+  const pendingAction = mutationState !== null && !authoritativeRevisionArrived
+    ? mutationState.action
+    : null;
   const pending = pendingAction !== null;
   const selection = validateResultFileSelection(selectedFiles, {
     currentFileCount: draft.fileCount,
     currentTotalBytes: draft.totalBytes,
   });
 
+  useEffect(() => {
+    if (authoritativeRevisionArrived) inFlightRef.current = false;
+  }, [authoritativeRevisionArrived]);
+
   async function mutate(
     action: string,
     request: () => Promise<Response>,
     fallback: string,
     onSuccess?: () => void,
+    uploadCount = 0,
   ) {
     if (inFlightRef.current) return;
+    const requestRevision = revision;
+    let keepLockedForRefresh = false;
     inFlightRef.current = true;
-    setPendingAction(action);
+    const activeMutation = {
+      action,
+      requestRevision,
+      awaitingAuthoritativeProps: false,
+      uploadCount,
+    };
+    setMutationState(activeMutation);
     setError(undefined);
     try {
       const response = await request();
       const payload = await response.json().catch(() => undefined);
       if (!response.ok) {
-        setError(errorMessage(payload, fallback));
+        const apiError = responseError(payload);
+        if (apiError?.code === "RESULT_EDIT_STALE") {
+          keepLockedForRefresh = true;
+          setError(staleEditMessage);
+          setConfirmation(null);
+          setMutationState({ ...activeMutation, awaitingAuthoritativeProps: true });
+          router.refresh();
+          return;
+        }
+        setError(apiError?.message ?? fallback);
         return;
       }
       onSuccess?.();
+      keepLockedForRefresh = true;
+      setMutationState({ ...activeMutation, awaitingAuthoritativeProps: true });
       router.refresh();
     } catch {
       setError(fallback);
     } finally {
-      inFlightRef.current = false;
-      setPendingAction(null);
+      if (!keepLockedForRefresh) {
+        inFlightRef.current = false;
+        setMutationState(null);
+      }
     }
   }
 
@@ -120,6 +172,7 @@ export function ResultDraftManager({ draft }: { draft: StudentResultDraftView })
         ? "Unable to upload this file."
         : "Unable to upload these files.",
       clearSelection,
+      selectedFiles.length,
     );
   }
 
@@ -244,7 +297,7 @@ export function ResultDraftManager({ draft }: { draft: StudentResultDraftView })
             <Button type="submit" disabled={pending || !selection.canUpload}>
               <span aria-live="polite">
                 {pendingAction === "upload"
-                  ? `Uploading ${selectedFiles.length} ${selectedFiles.length === 1 ? "file" : "files"}...`
+                  ? `Uploading ${mutationState?.uploadCount ?? 0} ${mutationState?.uploadCount === 1 ? "file" : "files"}...`
                   : "Upload files"}
               </span>
             </Button>
