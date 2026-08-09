@@ -13,6 +13,7 @@ import {
   type AppointmentMutationContext, type AppointmentStatus,
 } from "@/server/repositories/appointments.repository";
 import { getScheduleBatch } from "@/server/repositories/coordinator-schedules.repository";
+import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import { ensureBatchStudentAcademicSnapshotsWithClient } from "@/server/repositories/student-academic-snapshots.repository";
 import {
   deletePendingResultPlaceholder,
@@ -432,6 +433,7 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
     const appointmentDate = input.appointmentDate;
     try {
       const replacementId = await transaction(async (client) => {
+        await lockEffectiveAppointmentScopes(client, [current]);
         const appointment = await getAppointmentMutationContext(id, client);
         if (!appointment) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
         assertAppointmentMutationAuthorized(actor, appointment);

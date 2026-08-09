@@ -62,6 +62,37 @@ type CopiedResultFile = {
   byteSize: number;
   checksumSha256: string;
 };
+
+async function cleanupArmedResultStorageKeys(
+  armedStorageKeys: string[],
+  attemptedStorageKeys: Set<string>,
+  storage: ResultStorage,
+) {
+  for (const storageKey of armedStorageKeys) {
+    if (!attemptedStorageKeys.has(storageKey)) {
+      await deleteUnclaimedStudentResultStorageCleanupIntent(storageKey)
+        .catch(() => undefined);
+      continue;
+    }
+    const claim = await claimStudentResultStorageCleanupIntentForEagerDeletion(storageKey)
+      .catch(() => null);
+    if (!claim) continue;
+    try {
+      await storage.delete(storageKey);
+      await completeStudentResultStorageCleanupIntent(storageKey, claim.claimToken);
+    } catch (cleanupError) {
+      await failStudentResultStorageCleanupIntent(
+        storageKey,
+        claim.claimToken,
+        cleanupError instanceof Error
+          ? cleanupError.message
+          : "Unknown rollback deletion error",
+        new Date(),
+      ).catch(() => undefined);
+    }
+  }
+}
+
 function draftError(type: "not_found" | "unavailable" | "finalized") {
   if (type === "not_found") {
     return new AppError("RESULT_APPOINTMENT_NOT_FOUND", "Result appointment not found.", 404);
@@ -100,11 +131,15 @@ function beginEditError(type: "not_found" | "unavailable" | "no_official" | "con
 export async function getStudentResultSubmission(studentNumber: string, appointmentId: string) {
   const existing = await getStudentResultSubmissionRow(studentNumber, appointmentId);
   if (existing) return existing;
-  const outcome = await transaction((client) => (
-    lockOrCreateStudentResultDraft(client, studentNumber, appointmentId)
-  ));
-  if (outcome.type !== "draft") throw draftError(outcome.type);
-  return (await getStudentResultSubmissionRow(studentNumber, appointmentId))!;
+  return transaction(async (client) => {
+    const outcome = await lockOrCreateStudentResultDraft(client, studentNumber, appointmentId);
+    if (outcome.type !== "draft") throw draftError(outcome.type);
+    const refreshed = await getStudentResultSubmissionRow(studentNumber, appointmentId, client);
+    if (!refreshed || refreshed.id !== outcome.draft.id) {
+      throw new Error("Result draft disappeared while it was being loaded.");
+    }
+    return refreshed;
+  });
 }
 
 export async function beginStudentResultEdit(
@@ -196,29 +231,7 @@ export async function beginStudentResultEdit(
       return refreshed;
     });
   } catch (error) {
-    for (const storageKey of armedStorageKeys) {
-      if (!attemptedStorageKeys.has(storageKey)) {
-        await deleteUnclaimedStudentResultStorageCleanupIntent(storageKey)
-          .catch(() => undefined);
-        continue;
-      }
-      const claim = await claimStudentResultStorageCleanupIntentForEagerDeletion(storageKey)
-        .catch(() => null);
-      if (!claim) continue;
-      try {
-        await storage.delete(storageKey);
-        await completeStudentResultStorageCleanupIntent(storageKey, claim.claimToken);
-      } catch (cleanupError) {
-        await failStudentResultStorageCleanupIntent(
-          storageKey,
-          claim.claimToken,
-          cleanupError instanceof Error
-            ? cleanupError.message
-            : "Unknown rollback deletion error",
-          new Date(),
-        ).catch(() => undefined);
-      }
-    }
+    await cleanupArmedResultStorageKeys(armedStorageKeys, attemptedStorageKeys, storage);
     throw error;
   }
 }
@@ -301,8 +314,23 @@ export async function addStudentResultFiles(
   if (!uploads.length) {
     throw new AppError("RESULT_FILES_REQUIRED", "Select at least one result file to upload.", 400);
   }
-  const generatedStorageKeys: string[] = [];
+  const pendingFiles = uploads.map((upload) => {
+    const validated = validateResultFile(upload);
+    return {
+      submissionId,
+      storageKey: `${submissionId}/${randomUUID()}.${validated.extension}`,
+      originalFilename: upload.filename,
+      bytes: upload.bytes,
+      ...validated,
+    };
+  });
+  const armedStorageKeys = pendingFiles.map((file) => file.storageKey);
+  const attemptedStorageKeys = new Set<string>();
   try {
+    await createStudentResultStorageCleanupIntents(
+      armedStorageKeys,
+      new Date(Date.now() + RESULT_STORAGE_CLEANUP_INTENT_DELAY_MS),
+    );
     return await transaction(async (client) => {
       const outcome = await lockExpectedStudentResultDraft(
         client,
@@ -312,30 +340,20 @@ export async function addStudentResultFiles(
       );
       if (outcome.type !== "draft") throw expectedDraftError(outcome.type);
       const existingFiles = await listDraftFilesForUpdate(client, outcome.draft.id);
-      const validatedUploads = uploads.map((upload) => ({
-        upload,
-        validated: validateResultFile(upload),
-      }));
-      if (existingFiles.length + validatedUploads.length > RESULT_SUBMISSION_MAX_FILES) {
+      if (existingFiles.length + pendingFiles.length > RESULT_SUBMISSION_MAX_FILES) {
         throw new AppError("RESULT_FILE_COUNT_LIMIT", "A result submission may contain at most 10 files.", 422);
       }
       const currentBytes = existingFiles.reduce((sum, file) => sum + file.byteSize, 0);
-      const uploadedBytes = validatedUploads.reduce(
-        (sum, input) => sum + input.validated.byteSize,
+      const uploadedBytes = pendingFiles.reduce(
+        (sum, input) => sum + input.byteSize,
         0,
       );
       if (currentBytes + uploadedBytes > RESULT_SUBMISSION_MAX_BYTES) {
         throw new AppError("RESULT_TOTAL_SIZE_LIMIT", "A result submission may contain at most 50 MB.", 422);
       }
-      const pendingFiles = validatedUploads.map(({ upload, validated }) => ({
-        submissionId: outcome.draft.id,
-        storageKey: `${outcome.draft.id}/${randomUUID()}.${validated.extension}`,
-        originalFilename: upload.filename,
-        bytes: upload.bytes,
-        ...validated,
-      }));
-      generatedStorageKeys.push(...pendingFiles.map((file) => file.storageKey));
+      await lockStudentResultStorageCleanupIntentsForWrite(client, armedStorageKeys);
       for (const pending of pendingFiles) {
+        attemptedStorageKeys.add(pending.storageKey);
         await storage.write(pending.storageKey, pending.bytes);
       }
       await insertStudentResultFiles(client, pendingFiles);
@@ -343,10 +361,11 @@ export async function addStudentResultFiles(
       if (!refreshed || refreshed.id !== submissionId) {
         throw new Error("Result draft disappeared during batch upload.");
       }
+      await disarmStudentResultStorageCleanupIntents(client, armedStorageKeys);
       return refreshed;
     });
   } catch (error) {
-    await Promise.allSettled(generatedStorageKeys.map((storageKey) => storage.delete(storageKey)));
+    await cleanupArmedResultStorageKeys(armedStorageKeys, attemptedStorageKeys, storage);
     throw error;
   }
 }
@@ -390,7 +409,7 @@ export async function finalizeStudentResultSubmission(
   submissionId: string,
   storage: ResultStorage = localResultStorage,
 ) {
-  await transaction(async (client) => {
+  return transaction(async (client) => {
     const outcome = await lockExpectedStudentResultDraft(
       client,
       studentNumber,
@@ -431,8 +450,12 @@ export async function finalizeStudentResultSubmission(
       }
     }
     await finalizeStudentResultDraft(client, draft, files.length, totalBytes);
+    const refreshed = await getStudentResultSubmissionRow(studentNumber, appointmentId, client);
+    if (!refreshed || refreshed.id !== submissionId || refreshed.status !== "FINALIZED") {
+      throw new Error("Finalized result submission disappeared before commit.");
+    }
+    return refreshed;
   });
-  return (await getStudentResultSubmissionRow(studentNumber, appointmentId))!;
 }
 
 export async function submitStudentResultChanges(

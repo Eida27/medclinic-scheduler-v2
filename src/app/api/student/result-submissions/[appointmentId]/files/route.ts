@@ -2,6 +2,7 @@ import { AppError } from "@/lib/errors";
 import { dataResponse, errorResponse } from "@/lib/api-response";
 import { requireStudent } from "@/server/auth/current-student";
 import { addStudentResultFiles } from "@/server/services/student-result-submissions.service";
+import { toStudentResultDraftView } from "@/server/student-results/student-result-draft-view";
 import { z } from "zod";
 
 type Context = { params: Promise<{ appointmentId: string }> };
@@ -40,7 +41,7 @@ export async function POST(request: Request, context: Context) {
       submissionId,
       uploads,
     );
-    return dataResponse(submission);
+    return dataResponse(toStudentResultDraftView(submission));
   } catch (error) {
     return errorResponse(error);
   }

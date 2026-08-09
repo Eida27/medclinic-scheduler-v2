@@ -25,8 +25,8 @@ const rawSubmission = {
   studentNumber: "23/8200 01",
   resultType: "PHYSICAL_EXAM",
   status: "DRAFT",
-  basedOnSubmissionId: null,
-  administratorReplacementReason: "Upload the complete signed page.",
+  basedOnSubmissionId: "20000000-0000-4000-8000-000000000002",
+  administratorReplacementReason: null,
   lastActivityAt: new Date("2026-08-06T08:00:00.000Z"),
   files: [{
     id: "file-1",
@@ -41,6 +41,22 @@ const rawSubmission = {
   }],
   fileCount: 1,
   totalBytes: 256,
+  officialSubmission: {
+    id: "20000000-0000-4000-8000-000000000002",
+    files: [{
+      id: "official-file-1",
+      submissionId: "20000000-0000-4000-8000-000000000002",
+      storageKey: "private/official-storage-key.pdf",
+      originalFilename: "current-official.pdf",
+      detectedMimeType: "application/pdf",
+      extension: "pdf",
+      byteSize: 512,
+      checksumSha256: "private-official-checksum",
+      uploadedAt: new Date("2026-08-06T07:00:00.000Z"),
+    }],
+    fileCount: 1,
+    totalBytes: 512,
+  },
 };
 
 describe("StudentResultDraftPage", () => {
@@ -63,13 +79,20 @@ describe("StudentResultDraftPage", () => {
       appointmentId: "appointment-1",
       resultType: "PHYSICAL_EXAM",
       status: "DRAFT",
-      basedOnSubmissionId: null,
-      administratorReplacementReason: "Upload the complete signed page.",
+      basedOnSubmissionId: "20000000-0000-4000-8000-000000000002",
+      administratorReplacementReason: null,
       files: [{ id: "file-1", originalFilename: "replacement.pdf", byteSize: 256 }],
       fileCount: 1,
       totalBytes: 256,
+      officialSubmission: {
+        id: "20000000-0000-4000-8000-000000000002",
+        files: [{ id: "official-file-1", originalFilename: "current-official.pdf", byteSize: 512 }],
+        fileCount: 1,
+        totalBytes: 512,
+      },
     });
     expect(JSON.stringify(manager.props.draft)).not.toContain("private/storage-key.pdf");
     expect(JSON.stringify(manager.props.draft)).not.toContain("private-checksum");
+    expect(JSON.stringify(manager.props.draft)).not.toContain("private-official-checksum");
   });
 });

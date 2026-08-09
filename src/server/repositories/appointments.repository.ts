@@ -359,7 +359,6 @@ export async function rescheduleAppointmentWithClient(
   notes: string | null,
   actorUserId: string,
 ) {
-  await lockEffectiveAppointmentScopes(client, [appointment]);
   const changed = await client.query(
     `UPDATE appointments
         SET status='RESCHEDULED', is_published=FALSE, updated_by=$3

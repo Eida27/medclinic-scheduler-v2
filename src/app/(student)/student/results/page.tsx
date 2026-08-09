@@ -2,12 +2,17 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Card } from "@/components/ui/Card";
 import { requireStudent } from "@/server/auth/current-student";
-import { getStudentPortalSchedule } from "@/server/repositories/student-portal.repository";
+import {
+  getCurrentEffectiveAppointmentsForStudent,
+  type CurrentEffectiveAppointment,
+} from "@/server/repositories/current-effective-appointments.repository";
 
 export default async function StudentResultsPage() {
   const student = await requireStudent().catch(() => redirect("/student/login"));
-  const portal = await getStudentPortalSchedule(student.studentNumber);
-  const completed = portal?.appointments.filter((appointment) => appointment.status === "COMPLETED") ?? [];
+  const current = await getCurrentEffectiveAppointmentsForStudent(student.studentNumber);
+  const completed = [current.laboratory, current.physicalExam].filter(
+    (appointment): appointment is CurrentEffectiveAppointment => appointment?.status === "COMPLETED",
+  );
   return (
     <section>
       <h1 className="text-3xl font-bold">Results</h1>

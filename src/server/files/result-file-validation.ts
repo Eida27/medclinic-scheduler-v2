@@ -4,6 +4,7 @@ import { extname } from "node:path";
 import { AppError } from "@/lib/errors";
 import {
   RESULT_FILE_MAX_BYTES,
+  getAllowedResultFileMimeType,
   isAllowedResultFileName,
 } from "@/shared/student-result-file-rules";
 
@@ -12,13 +13,6 @@ export {
   RESULT_SUBMISSION_MAX_BYTES,
   RESULT_SUBMISSION_MAX_FILES,
 } from "@/shared/student-result-file-rules";
-
-const allowedByExtension = {
-  pdf: "application/pdf",
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-} as const;
 
 function detectedMimeType(bytes: Buffer) {
   if (bytes.subarray(0, 5).toString("ascii") === "%PDF-") return "application/pdf";
@@ -46,7 +40,7 @@ export function validateResultFile(input: {
   if (!isAllowedResultFileName(input.filename)) {
     throw new AppError("RESULT_FILE_TYPE_NOT_ALLOWED", "Upload a PDF, JPG, JPEG, or PNG file.", 422);
   }
-  const expectedMime = allowedByExtension[extension as keyof typeof allowedByExtension];
+  const expectedMime = getAllowedResultFileMimeType(input.filename);
   const detected = detectedMimeType(input.bytes);
   if (!detected || detected !== expectedMime || input.declaredMimeType.toLowerCase() !== expectedMime) {
     throw new AppError(

@@ -13,8 +13,10 @@ import {
   lockCurrentFinalizedSubmissionForInvalidation,
   lockExpectedStudentResultDraft,
   lockFinalizedSubmissionForInvalidation,
+  lockOrCreateStudentResultDraft,
 } from "@/server/repositories/student-result-submissions.repository";
 import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
+import { getCurrentEffectiveAppointmentsForStudent } from "@/server/repositories/current-effective-appointments.repository";
 import { publishBatch } from "@/server/repositories/appointments.repository";
 import { LocalResultStorage } from "@/server/storage/local-result-storage";
 import type { ResultStorage } from "@/server/storage/result-storage";
@@ -79,12 +81,13 @@ async function appointment(
   studentNumber: string,
   status: "PENDING" | "COMPLETED" = "COMPLETED",
   scheduleType: "LABORATORY" | "PHYSICAL_EXAM" = "LABORATORY",
+  appointmentDate = "2027-08-02",
 ) {
   const result = await pool.query<{ id: string }>(
     `INSERT INTO appointments (
        clinic_id, student_number, schedule_type, appointment_date,
        status, is_published, created_by
-     ) VALUES ($1,$2,$3,'2027-08-02',$4,TRUE,$5)
+     ) VALUES ($1,$2,$3,$4,$5,TRUE,$6)
      RETURNING id`,
     [
       scheduleType === "LABORATORY"
@@ -92,6 +95,7 @@ async function appointment(
         : TEST_REFERENCE_IDS.physicalExamClinic,
       studentNumber,
       scheduleType,
+      appointmentDate,
       status,
       TEST_REFERENCE_IDS.adminUser,
     ],
@@ -258,6 +262,51 @@ async function waitForAdvisoryLockWaiter(
   throw new Error("Timed out waiting for the appointment-scope advisory lock.");
 }
 
+async function runWithAfterNextTransactionCommit<T>(
+  work: () => Promise<T>,
+  afterCommit: () => Promise<void>,
+) {
+  const originalConnectMethod = pool.connect;
+  const originalConnect = pool.connect.bind(pool);
+  const client = await originalConnect();
+  let commitObserved = false;
+  const commitHookClient = new Proxy(client, {
+    get(target, property) {
+      if (property === "query") {
+        return async (...args: unknown[]) => {
+          const result = await Reflect.apply(target.query, target, args);
+          if (!commitObserved && args[0] === "COMMIT") {
+            commitObserved = true;
+            await afterCommit();
+          }
+          return result;
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as PoolClient;
+  let providedCommitHookClient = false;
+  pool.connect = ((...args: unknown[]) => {
+    if (args.length) return Reflect.apply(originalConnectMethod, pool, args);
+    if (!providedCommitHookClient) {
+      providedCommitHookClient = true;
+      pool.connect = originalConnectMethod;
+      return Promise.resolve(commitHookClient);
+    }
+    return originalConnect();
+  }) as typeof pool.connect;
+
+  try {
+    const result = await work();
+    if (!commitObserved) throw new Error("Expected the service transaction to commit.");
+    return result;
+  } finally {
+    pool.connect = originalConnectMethod;
+    if (!providedCommitHookClient) client.release();
+  }
+}
+
 async function generatedDraftAppointment(studentNumber: string, suffix: string) {
   const batch = await pool.query<{ id: string }>(
     `INSERT INTO schedule_batches (clinic_id, batch_name, status, created_by)
@@ -305,6 +354,14 @@ describe("student result edit creation", () => {
       basedOnSubmissionId: fixture.official.id,
       fileCount: 2,
       administratorReplacementReason: null,
+      officialSubmission: {
+        id: fixture.official.id,
+        fileCount: 2,
+        files: fixture.official.files.map((officialFile) => ({
+          id: officialFile.id,
+          originalFilename: officialFile.originalFilename,
+        })),
+      },
     });
     expect(first.files.map((copied) => copied.originalFilename).sort()).toEqual([
       "official-first.pdf",
@@ -398,10 +455,14 @@ describe("student result edit creation", () => {
             [`${draftPrefix}/%`],
           );
           visibleBeforeFirstWrite = visible.rows;
-          inFlightCleanupResult = await cleanupExpiredResultDrafts(
-            new Date("2099-08-06T00:00:00.000Z"),
-            cleanupStorage,
-          );
+          if (visibleBeforeFirstWrite.length) {
+            inFlightCleanupResult = await cleanupExpiredResultDrafts(
+              new Date(Math.max(
+                ...visibleBeforeFirstWrite.map((intent) => intent.notBefore.getTime()),
+              ) + 1),
+              cleanupStorage,
+            );
+          }
         }
         await storage.write(storageKey, bytes);
       },
@@ -794,6 +855,39 @@ describe("student result edit creation", () => {
     )).rejects.toMatchObject({ code: "RESULT_EDIT_STALE", status: 409 });
     expect(storageCalls).toBe(0);
     await expect(getStudentResultSubmission(studentNumber, appointmentId)).resolves.toEqual(normalDraft);
+  });
+
+  it("normalizes an invalidation racing with a stale Edit click to RESULT_EDIT_STALE", async () => {
+    const studentNumber = "99-9487-87";
+    const fixture = await finalizedResultFixture(studentNumber, ["invalidated-before-edit.pdf"]);
+    await invalidateStudentResultSubmission(
+      fixture.official.id,
+      "Replacement required",
+      admin,
+      storage,
+    );
+    let storageCalls = 0;
+    const trackingStorage: ResultStorage = {
+      read: async () => {
+        storageCalls += 1;
+        throw new Error("unexpected read");
+      },
+      write: async () => { storageCalls += 1; },
+      delete: async () => { storageCalls += 1; },
+    };
+
+    await expect(beginStudentResultEdit(
+      studentNumber,
+      fixture.appointmentId,
+      trackingStorage,
+    )).rejects.toMatchObject({ code: "RESULT_EDIT_STALE", status: 409 });
+    expect(storageCalls).toBe(0);
+    await expect(pool.query(
+      `SELECT status FROM student_result_submissions
+        WHERE appointment_id=$1
+        ORDER BY created_at, id`,
+      [fixture.appointmentId],
+    )).resolves.toMatchObject({ rows: [{ status: "INVALIDATED" }] });
   });
 
   it("serializes simultaneous edit creation into one copied draft", async () => {
@@ -1400,6 +1494,492 @@ describe("student result edit promotion", () => {
 });
 
 describe("student result drafts", () => {
+  it("returns a newly created draft when a replacement publishes immediately after COMMIT", async () => {
+    const studentNumber = "99-9488-88";
+    await insertTestStudent({ studentNumber, firstName: "Create", lastName: "Race", yearLevel: 3 });
+    const appointmentId = await appointment(
+      studentNumber,
+      "COMPLETED",
+      "LABORATORY",
+      "2027-08-02",
+    );
+    let replacementAppointmentId = "";
+
+    const created = await runWithAfterNextTransactionCommit(
+      () => getStudentResultSubmission(studentNumber, appointmentId),
+      async () => {
+        replacementAppointmentId = await appointment(
+          studentNumber,
+          "PENDING",
+          "LABORATORY",
+          "2027-08-03",
+        );
+      },
+    );
+
+    expect(created).toMatchObject({ appointmentId, status: "DRAFT" });
+    await expect(getCurrentEffectiveAppointmentsForStudent(studentNumber)).resolves.toMatchObject({
+      laboratory: { id: replacementAppointmentId, status: "PENDING" },
+    });
+  });
+
+  it("returns the committed finalization when a replacement publishes immediately after COMMIT", async () => {
+    const studentNumber = "99-9489-89";
+    await insertTestStudent({ studentNumber, firstName: "Finalize", lastName: "Race", yearLevel: 3 });
+    const appointmentId = await appointment(
+      studentNumber,
+      "COMPLETED",
+      "LABORATORY",
+      "2027-08-02",
+    );
+    const draft = await getStudentResultSubmission(studentNumber, appointmentId);
+    const populated = await addStudentResultFiles(
+      studentNumber,
+      appointmentId,
+      draft.id,
+      [file("finalize-race.pdf")],
+      storage,
+    );
+    let replacementAppointmentId = "";
+
+    const finalized = await runWithAfterNextTransactionCommit(
+      () => finalizeExpectedStudentResultSubmission(
+        studentNumber,
+        appointmentId,
+        populated.id,
+        storage,
+      ),
+      async () => {
+        replacementAppointmentId = await appointment(
+          studentNumber,
+          "PENDING",
+          "LABORATORY",
+          "2027-08-03",
+        );
+      },
+    );
+
+    expect(finalized).toMatchObject({ id: populated.id, appointmentId, status: "FINALIZED" });
+    await expect(getCurrentEffectiveAppointmentsForStudent(studentNumber)).resolves.toMatchObject({
+      laboratory: { id: replacementAppointmentId, status: "PENDING" },
+    });
+  });
+
+  it("keeps result scope-to-appointment ordering compatible with a concurrent reschedule", async () => {
+    const studentNumber = "99-9490-90";
+    await insertTestStudent({ studentNumber, firstName: "Lock", lastName: "Order", yearLevel: 3 });
+    const appointmentId = await appointment(
+      studentNumber,
+      "PENDING",
+      "LABORATORY",
+      "2027-08-02",
+    );
+    const resultClient = await pool.connect();
+    const observer = await pool.connect();
+    let resultTransactionOpen = false;
+    let rescheduleTask: Promise<Awaited<ReturnType<typeof updateAppointment>>> | null = null;
+
+    try {
+      await resultClient.query("BEGIN");
+      resultTransactionOpen = true;
+      await resultClient.query("SET LOCAL deadlock_timeout='100ms'");
+      await lockEffectiveAppointmentScopes(resultClient, [{
+        studentNumber,
+        scheduleType: "LABORATORY",
+      }]);
+
+      let rescheduleSettled = false;
+      rescheduleTask = updateAppointment(appointmentId, {
+        appointmentDate: "2027-08-03",
+      }, admin).finally(() => { rescheduleSettled = true; });
+      await waitForAdvisoryLockWaiter(observer, () => rescheduleSettled);
+
+      await expect(lockOrCreateStudentResultDraft(
+        resultClient,
+        studentNumber,
+        appointmentId,
+      )).resolves.toMatchObject({ type: "unavailable" });
+      await resultClient.query("COMMIT");
+      resultTransactionOpen = false;
+
+      await expect(rescheduleTask).resolves.toMatchObject({
+        appointmentDate: "2027-08-03",
+        status: "PENDING",
+        rescheduledFrom: appointmentId,
+      });
+    } finally {
+      if (resultTransactionOpen) await resultClient.query("ROLLBACK").catch(() => undefined);
+      resultClient.release();
+      observer.release();
+      await rescheduleTask?.catch(() => undefined);
+    }
+  });
+
+  it("lists and loads only the current effective Laboratory and Physical Examination appointments", async () => {
+    const studentNumber = "99-9473-73";
+    await insertTestStudent({ studentNumber, firstName: "Current", lastName: "Results", yearLevel: 3 });
+    const olderLaboratoryId = await appointment(
+      studentNumber,
+      "COMPLETED",
+      "LABORATORY",
+      "2027-08-02",
+    );
+    const olderPhysicalId = await appointment(
+      studentNumber,
+      "COMPLETED",
+      "PHYSICAL_EXAM",
+      "2027-08-02",
+    );
+    const newerLaboratoryId = await appointment(
+      studentNumber,
+      "COMPLETED",
+      "LABORATORY",
+      "2027-08-03",
+    );
+    const newerPhysicalId = await appointment(
+      studentNumber,
+      "COMPLETED",
+      "PHYSICAL_EXAM",
+      "2027-08-03",
+    );
+
+    await expect(getCurrentEffectiveAppointmentsForStudent(studentNumber)).resolves.toMatchObject({
+      laboratory: { id: newerLaboratoryId, status: "COMPLETED" },
+      physicalExam: { id: newerPhysicalId, status: "COMPLETED" },
+    });
+    await expect(getStudentResultSubmission(studentNumber, olderLaboratoryId))
+      .rejects.toMatchObject({ code: "RESULT_APPOINTMENT_NOT_FOUND", status: 404 });
+    await expect(getStudentResultSubmission(studentNumber, olderPhysicalId))
+      .rejects.toMatchObject({ code: "RESULT_APPOINTMENT_NOT_FOUND", status: 404 });
+    await expect(getStudentResultSubmission(studentNumber, newerLaboratoryId)).resolves.toMatchObject({
+      appointmentId: newerLaboratoryId,
+      resultType: "LABORATORY",
+      status: "DRAFT",
+    });
+    await expect(getStudentResultSubmission(studentNumber, newerPhysicalId)).resolves.toMatchObject({
+      appointmentId: newerPhysicalId,
+      resultType: "PHYSICAL_EXAM",
+      status: "DRAFT",
+    });
+  });
+
+  it.each([
+    { label: "upload", studentNumber: "99-9474-74", edit: false },
+    { label: "remove", studentNumber: "99-9475-75", edit: false },
+    { label: "finalize", studentNumber: "99-9476-76", edit: false },
+    { label: "cancel", studentNumber: "99-9477-77", edit: true },
+    { label: "submit changes", studentNumber: "99-9478-78", edit: true },
+  ])("rejects $label against an older appointment without mutating its draft", async ({
+    label,
+    studentNumber,
+    edit,
+  }) => {
+    await insertTestStudent({ studentNumber, firstName: "Stale", lastName: "Mutation", yearLevel: 3 });
+    const olderAppointmentId = await appointment(
+      studentNumber,
+      "COMPLETED",
+      "LABORATORY",
+      "2027-08-02",
+    );
+    const initialDraft = await getStudentResultSubmission(studentNumber, olderAppointmentId);
+    const populated = await addStudentResultFiles(
+      studentNumber,
+      olderAppointmentId,
+      initialDraft.id,
+      [file("preserved-old.pdf")],
+      storage,
+    );
+    if (edit) {
+      await finalizeExpectedStudentResultSubmission(
+        studentNumber,
+        olderAppointmentId,
+        populated.id,
+        storage,
+      );
+    }
+    const target = edit
+      ? await beginStudentResultEdit(studentNumber, olderAppointmentId, storage)
+      : populated;
+    const targetFile = target.files[0];
+    await appointment(studentNumber, "COMPLETED", "LABORATORY", "2027-08-03");
+
+    const mutation = label === "upload"
+      ? addStudentResultFiles(
+        studentNumber,
+        olderAppointmentId,
+        target.id,
+        [file("must-not-upload.pdf")],
+        storage,
+      )
+      : label === "remove"
+        ? removeExpectedStudentResultFile(
+          studentNumber,
+          olderAppointmentId,
+          target.id,
+          targetFile.id,
+          storage,
+        )
+        : label === "finalize"
+          ? finalizeExpectedStudentResultSubmission(
+            studentNumber,
+            olderAppointmentId,
+            target.id,
+            storage,
+          )
+          : label === "cancel"
+            ? cancelStudentResultEdit(
+              studentNumber,
+              olderAppointmentId,
+              target.id,
+              storage,
+            )
+            : submitStudentResultChanges(
+              studentNumber,
+              olderAppointmentId,
+              target.id,
+              storage,
+            );
+
+    await expect(mutation).rejects.toMatchObject({ code: "RESULT_EDIT_STALE", status: 409 });
+    const unchanged = await pool.query<{
+      status: string;
+      discardedAt: Date | null;
+      fileCount: number;
+      pendingCount: number;
+    }>(
+      `SELECT submission.status, submission.discarded_at AS "discardedAt",
+              COUNT(file.id) FILTER (WHERE file.deleted_at IS NULL)::int AS "fileCount",
+              COUNT(file.id) FILTER (WHERE file.storage_delete_pending=TRUE)::int AS "pendingCount"
+         FROM student_result_submissions submission
+         LEFT JOIN student_result_files file ON file.submission_id=submission.id
+        WHERE submission.id=$1
+        GROUP BY submission.id`,
+      [target.id],
+    );
+    expect(unchanged.rows).toEqual([{
+      status: "DRAFT",
+      discardedAt: null,
+      fileCount: 1,
+      pendingCount: 0,
+    }]);
+    await expect(storage.read(targetFile.storageKey)).resolves.toBeInstanceOf(Buffer);
+  });
+
+  it("rejects beginning an edit on an older finalized appointment without copying files", async () => {
+    const studentNumber = "99-9479-79";
+    const fixture = await finalizedResultFixture(
+      studentNumber,
+      ["older-physical-official.pdf"],
+      "PHYSICAL_EXAM",
+    );
+    await appointment(studentNumber, "COMPLETED", "PHYSICAL_EXAM", "2027-08-03");
+
+    await expect(beginStudentResultEdit(studentNumber, fixture.appointmentId, storage))
+      .rejects.toMatchObject({ code: "RESULT_EDIT_STALE", status: 409 });
+    const drafts = await pool.query(
+      `SELECT id FROM student_result_submissions
+        WHERE appointment_id=$1 AND status='DRAFT' AND discarded_at IS NULL`,
+      [fixture.appointmentId],
+    );
+    expect(drafts.rows).toEqual([]);
+    await expect(storage.read(fixture.official.files[0].storageKey)).resolves.toEqual(
+      fixture.uploads[0].bytes,
+    );
+  });
+
+  it("arms every batch upload key before the first storage write", async () => {
+    const studentNumber = "99-9470-70";
+    await insertTestStudent({ studentNumber, firstName: "Intent", lastName: "Upload", yearLevel: 3 });
+    const appointmentId = await appointment(studentNumber);
+    const draft = await getStudentResultSubmission(studentNumber, appointmentId);
+    const writeKeys: string[] = [];
+    let visibleBeforeFirstWrite: Array<{
+      storageKey: string;
+      notBefore: Date;
+      claimToken: string | null;
+    }> = [];
+    const trackingStorage: ResultStorage = {
+      read: storage.read.bind(storage),
+      write: async (storageKey, bytes) => {
+        writeKeys.push(storageKey);
+        if (writeKeys.length === 1) {
+          const visible = await pool.query<{
+            storageKey: string;
+            notBefore: Date;
+            claimToken: string | null;
+          }>(
+            `SELECT storage_key AS "storageKey", not_before AS "notBefore",
+                    claim_token::text AS "claimToken"
+               FROM student_result_storage_cleanup_intents
+              WHERE storage_key LIKE $1
+              ORDER BY storage_key`,
+            [`${draft.id}/%`],
+          );
+          visibleBeforeFirstWrite = visible.rows;
+        }
+        await storage.write(storageKey, bytes);
+      },
+      delete: storage.delete.bind(storage),
+    };
+
+    const uploaded = await addStudentResultFiles(
+      studentNumber,
+      appointmentId,
+      draft.id,
+      [file("intent-first.pdf"), file("intent-second.pdf")],
+      trackingStorage,
+    );
+
+    expect(writeKeys).toHaveLength(2);
+    expect(visibleBeforeFirstWrite).toHaveLength(2);
+    expect(writeKeys.every((storageKey) => (
+      visibleBeforeFirstWrite.some((intent) => intent.storageKey === storageKey)
+    ))).toBe(true);
+    expect(visibleBeforeFirstWrite.every((intent) => (
+      intent.notBefore.getTime() > Date.now() && intent.claimToken === null
+    ))).toBe(true);
+    await expect(pool.query(
+      "SELECT storage_key FROM student_result_storage_cleanup_intents WHERE storage_key = ANY($1::text[])",
+      [writeKeys],
+    )).resolves.toMatchObject({ rowCount: 0 });
+    expect(uploaded.files.map((uploadedFile) => uploadedFile.originalFilename).sort()).toEqual([
+      "intent-first.pdf",
+      "intent-second.pdf",
+    ]);
+  });
+
+  it("preserves committed batch upload files when the COMMIT response is lost", async () => {
+    const studentNumber = "99-9471-71";
+    await insertTestStudent({ studentNumber, firstName: "Commit", lastName: "Upload", yearLevel: 3 });
+    const appointmentId = await appointment(studentNumber);
+    const draft = await getStudentResultSubmission(studentNumber, appointmentId);
+    const originalConnectMethod = pool.connect;
+    const originalConnect = pool.connect.bind(pool);
+    const client = await originalConnect();
+    const ambiguousClient = new Proxy(client, {
+      get(target, property) {
+        if (property === "query") {
+          return async (...args: unknown[]) => {
+            const result = await Reflect.apply(target.query, target, args);
+            if (args[0] === "COMMIT") throw new Error("synthetic upload COMMIT response lost");
+            return result;
+          };
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as PoolClient;
+    let providedAmbiguousClient = false;
+    pool.connect = ((...args: unknown[]) => {
+      if (args.length) return Reflect.apply(originalConnectMethod, pool, args);
+      if (!providedAmbiguousClient) {
+        providedAmbiguousClient = true;
+        pool.connect = originalConnectMethod;
+        return Promise.resolve(ambiguousClient);
+      }
+      return originalConnect();
+    }) as typeof pool.connect;
+
+    try {
+      await expect(addStudentResultFiles(
+        studentNumber,
+        appointmentId,
+        draft.id,
+        [file("commit-upload-first.pdf"), file("commit-upload-second.pdf")],
+        storage,
+      )).rejects.toThrow("synthetic upload COMMIT response lost");
+    } finally {
+      pool.connect = originalConnectMethod;
+    }
+
+    const committed = await pool.query<{ storageKey: string }>(
+      `SELECT file.storage_key AS "storageKey"
+         FROM student_result_files file
+        WHERE file.submission_id=$1 AND file.deleted_at IS NULL
+        ORDER BY file.uploaded_at, file.id`,
+      [draft.id],
+    );
+    expect(committed.rows).toHaveLength(2);
+    await expect(Promise.all(
+      committed.rows.map((row) => storage.read(row.storageKey)),
+    )).resolves.toHaveLength(2);
+    await expect(pool.query(
+      "SELECT storage_key FROM student_result_storage_cleanup_intents WHERE storage_key = ANY($1::text[])",
+      [committed.rows.map((row) => row.storageKey)],
+    )).resolves.toMatchObject({ rowCount: 0 });
+  }, 15_000);
+
+  it("keeps a failed batch rollback delete worker-retryable", async () => {
+    const studentNumber = "99-9472-72";
+    await insertTestStudent({ studentNumber, firstName: "Retry", lastName: "Upload", yearLevel: 3 });
+    const appointmentId = await appointment(studentNumber);
+    const draft = await getStudentResultSubmission(studentNumber, appointmentId);
+    const objects = new Map<string, Buffer>();
+    const writeKeys: string[] = [];
+    let failRollbackDelete = true;
+    const failingStorage: ResultStorage = {
+      write: async (storageKey, bytes) => {
+        writeKeys.push(storageKey);
+        if (writeKeys.length === 2) throw new Error("synthetic upload write failure");
+        objects.set(storageKey, bytes);
+      },
+      read: async (storageKey) => {
+        const bytes = objects.get(storageKey);
+        if (!bytes) throw new Error("missing synthetic object");
+        return bytes;
+      },
+      delete: async (storageKey) => {
+        if (failRollbackDelete && storageKey === writeKeys[0]) {
+          throw new Error("synthetic upload rollback delete failure");
+        }
+        objects.delete(storageKey);
+      },
+    };
+
+    await expect(addStudentResultFiles(
+      studentNumber,
+      appointmentId,
+      draft.id,
+      [file("retry-upload-first.pdf"), file("retry-upload-second.pdf")],
+      failingStorage,
+    )).rejects.toThrow("synthetic upload write failure");
+
+    const intent = await pool.query<{
+      storageKey: string;
+      notBefore: Date;
+      claimToken: string | null;
+      deleteError: string | null;
+    }>(
+      `SELECT storage_key AS "storageKey", not_before AS "notBefore",
+              claim_token::text AS "claimToken", delete_error AS "deleteError"
+         FROM student_result_storage_cleanup_intents
+        WHERE storage_key = ANY($1::text[])`,
+      [writeKeys],
+    );
+    expect(intent.rows).toEqual([{
+      storageKey: writeKeys[0],
+      notBefore: expect.any(Date),
+      claimToken: null,
+      deleteError: "synthetic upload rollback delete failure",
+    }]);
+    expect(objects.has(writeKeys[0])).toBe(true);
+    await expect(getStudentResultSubmission(studentNumber, appointmentId)).resolves.toMatchObject({
+      id: draft.id,
+      files: [],
+    });
+
+    failRollbackDelete = false;
+    await expect(cleanupExpiredResultDrafts(
+      new Date(intent.rows[0].notBefore.getTime() + 1),
+      failingStorage,
+    )).resolves.toEqual({ expiredDraftCount: 0, deletionFailureCount: 0 });
+    expect(objects.has(writeKeys[0])).toBe(false);
+    await expect(pool.query(
+      "SELECT storage_key FROM student_result_storage_cleanup_intents WHERE storage_key=$1",
+      [writeKeys[0]],
+    )).resolves.toMatchObject({ rowCount: 0 });
+  });
+
   it("rejects a mixed-invalid batch without file rows or storage residue", async () => {
     const studentNumber = "99-9430-30";
     await insertTestStudent({ studentNumber, firstName: "Mixed", lastName: "Batch", yearLevel: 3 });
@@ -1520,11 +2100,14 @@ describe("student result drafts", () => {
       trackingStorage,
     )).rejects.toThrow("synthetic batch write failure");
 
-    const generatedBatchKeys = deleteKeys.slice(-3);
-    expect(generatedBatchKeys).toHaveLength(3);
-    expect(new Set(generatedBatchKeys).size).toBe(3);
+    const generatedBatchKeys = deleteKeys.filter((storageKey) => storageKey !== existingKey);
+    expect(generatedBatchKeys.sort()).toEqual(writeKeys.slice(-2).sort());
     expect(generatedBatchKeys).not.toContain(existingKey);
     expect([...objects.keys()]).toEqual([existingKey]);
+    await expect(pool.query(
+      "SELECT storage_key FROM student_result_storage_cleanup_intents WHERE storage_key = ANY($1::text[])",
+      [writeKeys.slice(-2)],
+    )).resolves.toMatchObject({ rowCount: 0 });
     await expect(getStudentResultSubmission(studentNumber, appointmentId)).resolves.toMatchObject({
       id: draft.id,
       fileCount: 1,
@@ -1696,7 +2279,7 @@ describe("student result drafts", () => {
       await insertTestStudent({ studentNumber, firstName: "Access", lastName: "Student", yearLevel: 3 });
     }
     const pendingId = await appointment("99-9402-02", "PENDING");
-    const completedId = await appointment("99-9402-02", "COMPLETED");
+    const completedId = await appointment("99-9402-02", "COMPLETED", "PHYSICAL_EXAM");
     await expect(addStudentResultFile("99-9402-02", pendingId, file(), storage))
       .rejects.toMatchObject({ code: "RESULT_UPLOAD_NOT_AVAILABLE", status: 409 });
     await expect(addStudentResultFile("99-9403-03", completedId, file(), storage))

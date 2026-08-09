@@ -450,4 +450,3 @@ git status --short
 ```
 
 Expected: full serialized suite passes, lint exits 0, production build exits 0, diff check is empty, and only intentional committed feature changes exist.
-

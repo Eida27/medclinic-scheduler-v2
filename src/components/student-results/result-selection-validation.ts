@@ -2,6 +2,7 @@ import {
   RESULT_FILE_MAX_BYTES,
   RESULT_SUBMISSION_MAX_BYTES,
   RESULT_SUBMISSION_MAX_FILES,
+  hasMatchingResultFileMimeType,
   isAllowedResultFileName,
 } from "@/shared/student-result-file-rules";
 
@@ -27,6 +28,8 @@ export function validateResultFileSelection(
     const errors: string[] = [];
     if (!isAllowedResultFileName(file.name)) {
       errors.push("Upload a PDF, JPG, JPEG, or PNG file.");
+    } else if (!hasMatchingResultFileMimeType(file.name, file.type)) {
+      errors.push("The file extension and type do not match.");
     }
     if (file.size > RESULT_FILE_MAX_BYTES) {
       errors.push("Each result file must be 20 MB or smaller.");

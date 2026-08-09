@@ -40,6 +40,22 @@ const rawSubmission = {
   }],
   fileCount: 1,
   totalBytes: 128,
+  officialSubmission: {
+    id: "20000000-0000-4000-8000-000000000002",
+    files: [{
+      id: "official-file-1",
+      submissionId: "20000000-0000-4000-8000-000000000002",
+      storageKey: "private/current-official.pdf",
+      originalFilename: "current-official.pdf",
+      detectedMimeType: "application/pdf",
+      extension: "pdf",
+      byteSize: 512,
+      checksumSha256: "private-official-checksum",
+      uploadedAt: new Date("2026-08-06T07:00:00.000Z"),
+    }],
+    fileCount: 1,
+    totalBytes: 512,
+  },
 };
 
 describe("GET /api/student/result-submissions/[appointmentId]", () => {
@@ -68,6 +84,12 @@ describe("GET /api/student/result-submissions/[appointmentId]", () => {
         files: [{ id: "file-1", originalFilename: "retained.pdf", byteSize: 128 }],
         fileCount: 1,
         totalBytes: 128,
+        officialSubmission: {
+          id: "20000000-0000-4000-8000-000000000002",
+          files: [{ id: "official-file-1", originalFilename: "current-official.pdf", byteSize: 512 }],
+          fileCount: 1,
+          totalBytes: 512,
+        },
       },
     });
   });

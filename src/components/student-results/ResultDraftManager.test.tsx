@@ -36,6 +36,7 @@ const draft = (
   totalBytes: 0,
   administratorReplacementReason: null,
   files: [] as Array<{ id: string; originalFilename: string; byteSize: number }>,
+  officialSubmission: null,
   ...overrides,
 });
 
@@ -100,6 +101,22 @@ describe("ResultDraftManager", () => {
     expect(within(selectedRow).getByText("Upload a PDF, JPG, JPEG, or PNG file.")).toBeVisible();
     expect(screen.getByRole("button", { name: "Upload files" })).toBeDisabled();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not show a PDF with a mismatched browser MIME type as ready", () => {
+    render(<ResultDraftManager draft={draft()} />);
+    const input = screen.getByLabelText(/choose result files/i);
+
+    fireEvent.change(input, {
+      target: {
+        files: [new File(["plain text"], "mislabeled.pdf", { type: "text/plain" })],
+      },
+    });
+
+    const selectedRow = screen.getByText("mislabeled.pdf").closest("li")!;
+    expect(within(selectedRow).getByText("The file extension and type do not match.")).toBeVisible();
+    expect(within(selectedRow).queryByText("Ready to upload")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Upload files" })).toBeDisabled();
   });
 
   it("blocks a valid selection when its resulting file count exceeds ten", async () => {
@@ -257,16 +274,31 @@ describe("ResultDraftManager", () => {
       basedOnSubmissionId: "20000000-0000-4000-8000-000000000002",
       fileCount: 1,
       totalBytes: 32,
-      files: [{ id: "copied-file-1", originalFilename: "retained.pdf", byteSize: 32 }],
+      files: [{ id: "copied-file-1", originalFilename: "retained-copy.pdf", byteSize: 32 }],
+      officialSubmission: {
+        id: "20000000-0000-4000-8000-000000000002",
+        fileCount: 1,
+        totalBytes: 32,
+        files: [{ id: "official-file-1", originalFilename: "current-official.pdf", byteSize: 32 }],
+      },
     })} />);
 
     expect(screen.getByText("Editing submission")).toBeVisible();
     expect(screen.getByText(
       "Your currently submitted result remains official until you submit these changes.",
     )).toBeVisible();
-    expect(screen.getByText("retained.pdf")).toBeVisible();
+    const officialFiles = screen.getByRole("list", { name: "Current submitted files" });
+    expect(screen.getByText("Current submitted result")).toBeVisible();
+    expect(screen.getByText("1 file · 0.00 MB")).toBeVisible();
+    expect(within(officialFiles).getByText("current-official.pdf")).toBeVisible();
+    expect(within(officialFiles).getByRole("link", {
+      name: "Download current-official.pdf",
+    })).toHaveAttribute("href", "/api/student/result-files/official-file-1");
+    const draftFiles = screen.getByRole("list", { name: "Draft files" });
+    expect(within(draftFiles).getByText("retained-copy.pdf")).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Download retained-copy.pdf" })).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Remove retained.pdf" }));
+    await user.click(screen.getByRole("button", { name: "Remove retained-copy.pdf" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       "/api/student/result-submissions/appointment-1/files/copied-file-1",

@@ -58,6 +58,12 @@ export type StudentResultSubmission = {
   files: StudentResultFileMetadata[];
   fileCount: number;
   totalBytes: number;
+  officialSubmission: {
+    id: string;
+    files: StudentResultFileMetadata[];
+    fileCount: number;
+    totalBytes: number;
+  } | null;
 };
 
 type DraftRow = {
@@ -82,6 +88,7 @@ type LockedResultAppointment = {
   id: string;
   status: string;
   scheduleType: "LABORATORY" | "PHYSICAL_EXAM";
+  isCurrentEffective: boolean;
 };
 
 type AppointmentResultProtectionRow = {
@@ -269,6 +276,7 @@ export async function lockOrCreateStudentResultDraft(
     appointmentId,
   );
   if (!appointment) return { type: "not_found" as const };
+  if (!appointment.isCurrentEffective) return { type: "not_found" as const };
   if (appointment.status !== "COMPLETED") return { type: "unavailable" as const };
   const finalized = await client.query<{ id: string }>(
     `SELECT id FROM student_result_submissions
@@ -318,14 +326,23 @@ async function lockOwnedResultAppointment(
     studentNumber,
     scheduleType: scope.rows[0].scheduleType,
   }]);
-  const appointment = await client.query<LockedResultAppointment>(
+  const appointment = await client.query<Omit<LockedResultAppointment, "isCurrentEffective">>(
     `SELECT id, status, schedule_type AS "scheduleType"
        FROM appointments
       WHERE id=$1 AND student_number=$2 AND is_published=TRUE
       FOR UPDATE`,
     [appointmentId, studentNumber],
   );
-  return appointment.rows[0] ?? null;
+  const locked = appointment.rows[0];
+  if (!locked) return null;
+  const currentEffective = await client.query<{ id: string }>(
+    `WITH ${CURRENT_EFFECTIVE_APPOINTMENTS_CTE}
+     SELECT id
+       FROM current_effective_appointments
+      WHERE id=$1 AND "studentNumber"=$2 AND "scheduleType"=$3`,
+    [locked.id, studentNumber, locked.scheduleType],
+  );
+  return { ...locked, isCurrentEffective: currentEffective.rowCount === 1 };
 }
 
 async function lockActiveStudentResultDraft(
@@ -359,6 +376,7 @@ export async function lockOrCreateStudentResultEditDraft(
     appointmentId,
   );
   if (!appointment) return { type: "not_found" as const };
+  if (!appointment.isCurrentEffective) return { type: "conflict" as const };
   if (appointment.status !== "COMPLETED") return { type: "unavailable" as const };
 
   const official = await client.query<FinalizedRow>(
@@ -387,7 +405,20 @@ export async function lockOrCreateStudentResultEditDraft(
     }
     return { type: "conflict" as const };
   }
-  if (!currentOfficial) return { type: "no_official" as const };
+  if (!currentOfficial) {
+    const invalidated = await client.query<{ exists: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1
+           FROM student_result_submissions
+          WHERE appointment_id=$1 AND student_number=$2
+            AND result_type=$3 AND status='INVALIDATED'
+       ) AS "exists"`,
+      [appointmentId, studentNumber, appointment.scheduleType],
+    );
+    return invalidated.rows[0]?.exists
+      ? { type: "conflict" as const }
+      : { type: "no_official" as const };
+  }
 
   const inserted = await client.query<DraftRow>(
     `INSERT INTO student_result_submissions (
@@ -420,6 +451,7 @@ export async function lockExpectedStudentResultDraft(
     appointmentId,
   );
   if (!appointment) return { type: "not_found" as const };
+  if (!appointment.isCurrentEffective) return { type: "stale" as const };
   if (appointment.status !== "COMPLETED") return { type: "unavailable" as const };
 
   const finalized = await client.query<{ id: string }>(
@@ -619,7 +651,8 @@ export async function getStudentResultSubmissionRow(
   client?: PoolClient,
 ) {
   const submissionSql =
-    `SELECT submission.id, submission.appointment_id AS "appointmentId",
+    `WITH ${CURRENT_EFFECTIVE_APPOINTMENTS_CTE}
+     SELECT submission.id, submission.appointment_id AS "appointmentId",
             submission.student_number AS "studentNumber", submission.result_type AS "resultType",
             submission.status,
             submission.based_on_submission_id::text AS "basedOnSubmissionId",
@@ -640,6 +673,10 @@ export async function getStudentResultSubmissionRow(
             END AS "administratorReplacementReason",
             submission.last_activity_at AS "lastActivityAt"
        FROM student_result_submissions submission
+       JOIN current_effective_appointments current_appointment
+         ON current_appointment.id=submission.appointment_id
+        AND current_appointment."studentNumber"=submission.student_number
+        AND current_appointment."scheduleType"=submission.result_type
       WHERE submission.appointment_id=$1 AND submission.student_number=$2
         AND submission.discarded_at IS NULL
         AND submission.status IN ('DRAFT','FINALIZED')
@@ -678,15 +715,50 @@ export async function getStudentResultSubmissionRow(
     checksumSha256: string;
     uploadedAt: Date;
   };
-  const files = client
-    ? await client.query<FileRow>(filesSql, [submission.rows[0].id])
-    : await query<FileRow>(filesSql, [submission.rows[0].id]);
-  const mappedFiles = files.rows.map((file) => ({ ...file, byteSize: Number(file.byteSize) }));
+  const loadFiles = async (submissionId: string) => {
+    const files = client
+      ? await client.query<FileRow>(filesSql, [submissionId])
+      : await query<FileRow>(filesSql, [submissionId]);
+    return files.rows.map((file) => ({ ...file, byteSize: Number(file.byteSize) }));
+  };
+  const selectedSubmission = submission.rows[0];
+  const mappedFiles = await loadFiles(selectedSubmission.id);
+  let officialSubmission: StudentResultSubmission["officialSubmission"] = null;
+  if (selectedSubmission.status === "DRAFT" && selectedSubmission.basedOnSubmissionId !== null) {
+    const officialSql =
+      `SELECT id
+         FROM student_result_submissions
+        WHERE id=$1 AND appointment_id=$2 AND student_number=$3 AND result_type=$4
+          AND status='FINALIZED' AND discarded_at IS NULL`;
+    const official = client
+      ? await client.query<{ id: string }>(officialSql, [
+        selectedSubmission.basedOnSubmissionId,
+        selectedSubmission.appointmentId,
+        selectedSubmission.studentNumber,
+        selectedSubmission.resultType,
+      ])
+      : await query<{ id: string }>(officialSql, [
+        selectedSubmission.basedOnSubmissionId,
+        selectedSubmission.appointmentId,
+        selectedSubmission.studentNumber,
+        selectedSubmission.resultType,
+      ]);
+    if (official.rows[0]) {
+      const officialFiles = await loadFiles(official.rows[0].id);
+      officialSubmission = {
+        id: official.rows[0].id,
+        files: officialFiles,
+        fileCount: officialFiles.length,
+        totalBytes: officialFiles.reduce((sum, file) => sum + file.byteSize, 0),
+      };
+    }
+  }
   return {
-    ...submission.rows[0],
+    ...selectedSubmission,
     files: mappedFiles,
     fileCount: mappedFiles.length,
     totalBytes: mappedFiles.reduce((sum, file) => sum + file.byteSize, 0),
+    officialSubmission,
   } satisfies StudentResultSubmission;
 }
 

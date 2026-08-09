@@ -4,6 +4,7 @@ import { dataResponse, errorResponse } from "@/lib/api-response";
 import { AppError } from "@/lib/errors";
 import { requireStudent } from "@/server/auth/current-student";
 import { submitStudentResultChanges } from "@/server/services/student-result-submissions.service";
+import { toStudentResultDraftView } from "@/server/student-results/student-result-draft-view";
 
 type Context = { params: Promise<{ appointmentId: string }> };
 
@@ -55,7 +56,7 @@ export async function POST(request: Request, context: Context) {
     revalidatePath(
       `/settings/student-result-submissions/students/${encodeURIComponent(student.studentNumber)}`,
     );
-    return dataResponse(submission);
+    return dataResponse(toStudentResultDraftView(submission));
   } catch (error) {
     return editErrorResponse(error);
   }

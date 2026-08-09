@@ -26,10 +26,23 @@ const submission = {
   studentNumber: student.studentNumber,
   resultType: "LABORATORY",
   status: "DRAFT",
+  basedOnSubmissionId: null,
+  administratorReplacementReason: null,
   lastActivityAt: new Date("2026-08-06T08:00:00.000Z"),
-  files: [],
-  fileCount: 0,
-  totalBytes: 0,
+  files: [{
+    id: "uploaded-file-1",
+    submissionId: draftId,
+    storageKey: "private/upload-storage-key.pdf",
+    originalFilename: "first.pdf",
+    detectedMimeType: "application/pdf",
+    extension: "pdf",
+    byteSize: 14,
+    checksumSha256: "private-upload-checksum",
+    uploadedAt: new Date("2026-08-06T08:00:00.000Z"),
+  }],
+  fileCount: 1,
+  totalBytes: 14,
+  officialSubmission: null,
 };
 const context = { params: Promise.resolve({ appointmentId: "appointment-1" }) };
 
@@ -79,9 +92,24 @@ describe("POST /api/student/result-submissions/[appointmentId]/files", () => {
         },
       ],
     );
-    await expect(response.json()).resolves.toMatchObject({
-      data: { id: draftId, status: "DRAFT" },
+    const body = await response.json();
+    expect(body).toEqual({
+      data: {
+        id: draftId,
+        appointmentId: "appointment-1",
+        resultType: "LABORATORY",
+        status: "DRAFT",
+        basedOnSubmissionId: null,
+        administratorReplacementReason: null,
+        files: [{ id: "uploaded-file-1", originalFilename: "first.pdf", byteSize: 14 }],
+        fileCount: 1,
+        totalBytes: 14,
+        officialSubmission: null,
+      },
     });
+    expect(JSON.stringify(body)).not.toMatch(
+      /private-upload-(storage-key|checksum)/,
+    );
   });
 
   it("returns 400 when no valid File entries are present", async () => {

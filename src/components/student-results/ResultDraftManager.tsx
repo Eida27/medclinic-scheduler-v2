@@ -26,6 +26,12 @@ export type StudentResultDraftView = {
   totalBytes: number;
   administratorReplacementReason: string | null;
   files: Array<{ id: string; originalFilename: string; byteSize: number }>;
+  officialSubmission: {
+    id: string;
+    files: Array<{ id: string; originalFilename: string; byteSize: number }>;
+    fileCount: number;
+    totalBytes: number;
+  } | null;
 };
 
 type Confirmation = "finalize" | "cancel-edit" | "submit-changes" | null;
@@ -68,6 +74,18 @@ function draftRevision(draft: StudentResultDraftView) {
     draft.totalBytes,
     draft.administratorReplacementReason,
     draft.files.map((file) => [file.id, file.originalFilename, file.byteSize]),
+    draft.officialSubmission === null
+      ? null
+      : [
+        draft.officialSubmission.id,
+        draft.officialSubmission.fileCount,
+        draft.officialSubmission.totalBytes,
+        draft.officialSubmission.files.map((file) => [
+          file.id,
+          file.originalFilename,
+          file.byteSize,
+        ]),
+      ],
   ]);
 }
 
@@ -280,6 +298,37 @@ export function ResultDraftManager({ draft }: { draft: StudentResultDraftView })
         </Alert>
       ) : null}
       {error ? <Alert tone="danger">{error}</Alert> : null}
+
+      {editing && draft.officialSubmission !== null ? (
+        <Card className="grid gap-3 p-5">
+          <div>
+            <p className="font-bold">Current submitted result</p>
+            <p className="mt-1 text-sm text-muted">
+              {draft.officialSubmission.fileCount} {draft.officialSubmission.fileCount === 1 ? "file" : "files"}
+              {" · "}{formatBytes(draft.officialSubmission.totalBytes)}
+            </p>
+          </div>
+          <ul aria-label="Current submitted files" className="grid gap-3">
+            {draft.officialSubmission.files.map((file) => (
+              <li key={file.id} className="rounded-xl border border-line bg-canvas p-4">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="break-all font-semibold">{file.originalFilename}</p>
+                    <p className="text-xs text-muted">{formatBytes(file.byteSize)}</p>
+                  </div>
+                  <a
+                    href={`/api/student/result-files/${file.id}`}
+                    aria-label={`Download ${file.originalFilename}`}
+                    className="inline-flex h-11 items-center rounded-xl border border-line px-4 text-sm font-semibold"
+                  >
+                    Download
+                  </a>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      ) : null}
 
       {draft.status === "DRAFT" ? (
         <form onSubmit={upload} className="grid gap-3">

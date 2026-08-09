@@ -7,6 +7,7 @@ import {
   beginStudentResultEdit,
   cancelStudentResultEdit,
 } from "@/server/services/student-result-submissions.service";
+import { toStudentResultDraftView } from "@/server/student-results/student-result-draft-view";
 
 type Context = { params: Promise<{ appointmentId: string }> };
 
@@ -60,7 +61,7 @@ export async function POST(_request: Request, context: Context) {
       (await context.params).appointmentId,
     );
     revalidateResultViews(student.studentNumber);
-    return dataResponse(edit);
+    return dataResponse(toStudentResultDraftView(edit));
   } catch (error) {
     return editErrorResponse(error);
   }

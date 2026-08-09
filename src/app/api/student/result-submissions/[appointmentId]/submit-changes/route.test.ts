@@ -31,10 +31,22 @@ const promoted = {
   resultType: "LABORATORY",
   status: "FINALIZED",
   basedOnSubmissionId: null,
+  administratorReplacementReason: null,
   lastActivityAt: new Date("2026-08-06T08:00:00.000Z"),
-  files: [],
-  fileCount: 0,
-  totalBytes: 0,
+  files: [{
+    id: "promoted-file-1",
+    submissionId: draftId,
+    storageKey: "private/promoted-storage-key.pdf",
+    originalFilename: "promoted.pdf",
+    detectedMimeType: "application/pdf",
+    extension: "pdf",
+    byteSize: 512,
+    checksumSha256: "private-promoted-checksum",
+    uploadedAt: new Date("2026-08-06T08:00:00.000Z"),
+  }],
+  fileCount: 1,
+  totalBytes: 512,
+  officialSubmission: null,
 };
 const approvedStaleMessage = "Your submission was changed by an administrator while you were editing it. Your unfinished edit can no longer be submitted. Review the reason and upload the requested replacement.";
 
@@ -72,9 +84,24 @@ describe("POST /api/student/result-submissions/[appointmentId]/submit-changes", 
       2,
       "/settings/student-result-submissions/students/23%2F8200%2001",
     );
-    await expect(response.json()).resolves.toEqual({
-      data: { ...promoted, lastActivityAt: "2026-08-06T08:00:00.000Z" },
+    const body = await response.json();
+    expect(body).toEqual({
+      data: {
+        id: draftId,
+        appointmentId,
+        resultType: "LABORATORY",
+        status: "FINALIZED",
+        basedOnSubmissionId: null,
+        administratorReplacementReason: null,
+        files: [{ id: "promoted-file-1", originalFilename: "promoted.pdf", byteSize: 512 }],
+        fileCount: 1,
+        totalBytes: 512,
+        officialSubmission: null,
+      },
     });
+    expect(JSON.stringify(body)).not.toMatch(
+      /private-promoted-(storage-key|checksum)/,
+    );
   });
 
   it.each([

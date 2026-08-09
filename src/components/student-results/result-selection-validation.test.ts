@@ -5,9 +5,18 @@ import {
 } from "@/shared/student-result-file-rules";
 import { validateResultFileSelection } from "./result-selection-validation";
 
-const file = (name: string, byteSize = 8) => new File(
+const mimeTypeFor = (name: string) => {
+  const extension = name.split(".").pop()?.toLowerCase();
+  if (extension === "pdf") return "application/pdf";
+  if (extension === "png") return "image/png";
+  if (extension === "jpg" || extension === "jpeg") return "image/jpeg";
+  return "application/octet-stream";
+};
+
+const file = (name: string, byteSize = 8, type = mimeTypeFor(name)) => new File(
   [new Uint8Array(byteSize)],
   name,
+  { type },
 );
 
 describe("validateResultFileSelection", () => {
@@ -43,6 +52,20 @@ describe("validateResultFileSelection", () => {
       filename: "notes.txt",
       valid: false,
       error: "Upload a PDF, JPG, JPEG, or PNG file.",
+    });
+    expect(result.canUpload).toBe(false);
+  });
+
+  it("marks a supported extension with a mismatched browser MIME type invalid", () => {
+    const result = validateResultFileSelection([file("mislabeled.pdf", 8, "text/plain")], {
+      currentFileCount: 0,
+      currentTotalBytes: 0,
+    });
+
+    expect(result.rows[0]).toMatchObject({
+      filename: "mislabeled.pdf",
+      valid: false,
+      error: "The file extension and type do not match.",
     });
     expect(result.canUpload).toBe(false);
   });

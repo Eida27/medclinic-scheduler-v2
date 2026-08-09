@@ -19,5 +19,17 @@ export function toStudentResultDraftView(
     })),
     fileCount: submission.fileCount,
     totalBytes: submission.totalBytes,
+    officialSubmission: submission.officialSubmission === null
+      ? null
+      : {
+        id: submission.officialSubmission.id,
+        files: submission.officialSubmission.files.map((file) => ({
+          id: file.id,
+          originalFilename: file.originalFilename,
+          byteSize: file.byteSize,
+        })),
+        fileCount: submission.officialSubmission.fileCount,
+        totalBytes: submission.officialSubmission.totalBytes,
+      },
   };
 }

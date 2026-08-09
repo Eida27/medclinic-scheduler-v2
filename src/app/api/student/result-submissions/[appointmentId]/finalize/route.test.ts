@@ -40,9 +40,28 @@ describe("POST /api/student/result-submissions/[appointmentId]/finalize", () => 
     vi.clearAllMocks();
     requireStudent.mockResolvedValue(student);
     finalizeStudentResultSubmission.mockResolvedValue({
-      id: "submission-1",
+      id: draftId,
+      appointmentId: "appointment-1",
       studentNumber: student.studentNumber,
+      resultType: "LABORATORY",
       status: "FINALIZED",
+      basedOnSubmissionId: null,
+      administratorReplacementReason: null,
+      lastActivityAt: new Date("2026-08-06T08:00:00.000Z"),
+      files: [{
+        id: "finalized-file-1",
+        submissionId: draftId,
+        storageKey: "private/finalized-storage-key.pdf",
+        originalFilename: "finalized.pdf",
+        detectedMimeType: "application/pdf",
+        extension: "pdf",
+        byteSize: 256,
+        checksumSha256: "private-finalized-checksum",
+        uploadedAt: new Date("2026-08-06T08:00:00.000Z"),
+      }],
+      fileCount: 1,
+      totalBytes: 256,
+      officialSubmission: null,
     });
   });
 
@@ -62,13 +81,24 @@ describe("POST /api/student/result-submissions/[appointmentId]/finalize", () => 
       2,
       "/settings/student-result-submissions/students/23%2F8200%2001",
     );
-    await expect(response.json()).resolves.toEqual({
+    const body = await response.json();
+    expect(body).toEqual({
       data: {
-        id: "submission-1",
-        studentNumber: student.studentNumber,
+        id: draftId,
+        appointmentId: "appointment-1",
+        resultType: "LABORATORY",
         status: "FINALIZED",
+        basedOnSubmissionId: null,
+        administratorReplacementReason: null,
+        files: [{ id: "finalized-file-1", originalFilename: "finalized.pdf", byteSize: 256 }],
+        fileCount: 1,
+        totalBytes: 256,
+        officialSubmission: null,
       },
     });
+    expect(JSON.stringify(body)).not.toMatch(
+      /private-finalized-(storage-key|checksum)/,
+    );
   });
 
   it.each([

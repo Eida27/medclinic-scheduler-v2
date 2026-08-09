@@ -38,10 +38,37 @@ const edit = {
   resultType: "LABORATORY",
   status: "DRAFT",
   basedOnSubmissionId: "20000000-0000-4000-8000-000000000002",
+  administratorReplacementReason: null,
   lastActivityAt: new Date("2026-08-06T08:00:00.000Z"),
-  files: [],
-  fileCount: 0,
-  totalBytes: 0,
+  files: [{
+    id: "draft-file-1",
+    submissionId: draftId,
+    storageKey: "private/edit-copy-storage-key.pdf",
+    originalFilename: "retained-copy.pdf",
+    detectedMimeType: "application/pdf",
+    extension: "pdf",
+    byteSize: 128,
+    checksumSha256: "private-edit-copy-checksum",
+    uploadedAt: new Date("2026-08-06T08:00:00.000Z"),
+  }],
+  fileCount: 1,
+  totalBytes: 128,
+  officialSubmission: {
+    id: "20000000-0000-4000-8000-000000000002",
+    files: [{
+      id: "official-file-1",
+      submissionId: "20000000-0000-4000-8000-000000000002",
+      storageKey: "private/official-storage-key.pdf",
+      originalFilename: "current-official.pdf",
+      detectedMimeType: "application/pdf",
+      extension: "pdf",
+      byteSize: 256,
+      checksumSha256: "private-official-checksum",
+      uploadedAt: new Date("2026-08-06T07:00:00.000Z"),
+    }],
+    fileCount: 1,
+    totalBytes: 256,
+  },
 };
 const approvedStaleMessage = "Your submission was changed by an administrator while you were editing it. Your unfinished edit can no longer be submitted. Review the reason and upload the requested replacement.";
 
@@ -72,12 +99,32 @@ describe("/api/student/result-submissions/[appointmentId]/edit", () => {
     expect(beginStudentResultEdit).toHaveBeenCalledTimes(2);
     expect(beginStudentResultEdit).toHaveBeenNthCalledWith(1, student.studentNumber, appointmentId);
     expect(beginStudentResultEdit).toHaveBeenNthCalledWith(2, student.studentNumber, appointmentId);
-    await expect(first.json()).resolves.toEqual({
-      data: { ...edit, lastActivityAt: "2026-08-06T08:00:00.000Z" },
-    });
-    await expect(repeated.json()).resolves.toEqual({
-      data: { ...edit, lastActivityAt: "2026-08-06T08:00:00.000Z" },
-    });
+    const expected = {
+      data: {
+        id: draftId,
+        appointmentId,
+        resultType: "LABORATORY",
+        status: "DRAFT",
+        basedOnSubmissionId: "20000000-0000-4000-8000-000000000002",
+        administratorReplacementReason: null,
+        files: [{ id: "draft-file-1", originalFilename: "retained-copy.pdf", byteSize: 128 }],
+        fileCount: 1,
+        totalBytes: 128,
+        officialSubmission: {
+          id: "20000000-0000-4000-8000-000000000002",
+          files: [{ id: "official-file-1", originalFilename: "current-official.pdf", byteSize: 256 }],
+          fileCount: 1,
+          totalBytes: 256,
+        },
+      },
+    };
+    const firstBody = await first.json();
+    const repeatedBody = await repeated.json();
+    expect(firstBody).toEqual(expected);
+    expect(repeatedBody).toEqual(expected);
+    expect(JSON.stringify([firstBody, repeatedBody])).not.toMatch(
+      /private-(edit-copy|official)-(storage-key|checksum)/,
+    );
     expect(JSON.stringify(beginStudentResultEdit.mock.calls)).not.toContain(attackerBase);
     expect(revalidatePath).toHaveBeenCalledTimes(4);
   });
