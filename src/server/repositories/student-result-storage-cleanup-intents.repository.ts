@@ -65,12 +65,13 @@ export async function deleteUnclaimedStudentResultStorageCleanupIntent(storageKe
 
 export async function claimStudentResultStorageCleanupIntentForEagerDeletion(
   storageKey: string,
-  now = new Date(),
 ) {
   const claimToken = randomUUID();
-  const claimExpiresAt = new Date(now.getTime() + RESULT_STORAGE_CLEANUP_CLAIM_LEASE_MS);
   const claimed = await transaction((client) => client.query<{ storageKey: string }>(
-    `WITH claimable AS (
+    `WITH cleanup_clock AS MATERIALIZED (
+       SELECT clock_timestamp() AS now
+     ),
+     claimable AS (
        SELECT intent.storage_key
          FROM student_result_storage_cleanup_intents intent
         WHERE intent.storage_key=$1
@@ -85,19 +86,20 @@ export async function claimStudentResultStorageCleanupIntentForEagerDeletion(
      )
      UPDATE student_result_storage_cleanup_intents intent
         SET claim_token=$2,
-            claim_expires_at=$3,
+            claim_expires_at=cleanup_clock.now
+              + ($3::double precision * INTERVAL '1 millisecond'),
             attempt_count=intent.attempt_count + 1,
             delete_error=NULL,
-            updated_at=$4
-       FROM claimable
+            updated_at=cleanup_clock.now
+       FROM claimable, cleanup_clock
       WHERE intent.storage_key=claimable.storage_key
      RETURNING intent.storage_key AS "storageKey"`,
-    [storageKey, claimToken, claimExpiresAt, now],
+    [storageKey, claimToken, RESULT_STORAGE_CLEANUP_CLAIM_LEASE_MS],
   ));
   return claimed.rows[0] ? { storageKey: claimed.rows[0].storageKey, claimToken } : null;
 }
 
-export async function claimDueStudentResultStorageCleanupIntents(now: Date) {
+export async function claimDueStudentResultStorageCleanupIntents() {
   return transaction(async (client) => {
     await client.query(
       `WITH committed AS (
@@ -113,27 +115,33 @@ export async function claimDueStudentResultStorageCleanupIntents(now: Date) {
     );
 
     const claimToken = randomUUID();
-    const claimExpiresAt = new Date(now.getTime() + RESULT_STORAGE_CLEANUP_CLAIM_LEASE_MS);
     const claimed = await client.query<{ storageKey: string }>(
-      `WITH due AS (
-         SELECT storage_key
-           FROM student_result_storage_cleanup_intents
-          WHERE not_before <= $1
-            AND (claim_expires_at IS NULL OR claim_expires_at <= $1)
-          ORDER BY not_before, storage_key
-          LIMIT $2
-          FOR UPDATE SKIP LOCKED
+      `WITH cleanup_clock AS MATERIALIZED (
+         SELECT clock_timestamp() AS now
+       ),
+       due AS (
+         SELECT intent.storage_key
+           FROM student_result_storage_cleanup_intents intent, cleanup_clock
+          WHERE intent.not_before <= cleanup_clock.now
+            AND (
+              intent.claim_expires_at IS NULL
+              OR intent.claim_expires_at <= cleanup_clock.now
+            )
+          ORDER BY intent.not_before, intent.storage_key
+          LIMIT $1
+          FOR UPDATE OF intent SKIP LOCKED
        )
        UPDATE student_result_storage_cleanup_intents intent
-          SET claim_token=$3,
-              claim_expires_at=$4,
+          SET claim_token=$2,
+              claim_expires_at=cleanup_clock.now
+                + ($3::double precision * INTERVAL '1 millisecond'),
               attempt_count=intent.attempt_count + 1,
               delete_error=NULL,
-              updated_at=$1
-         FROM due
+              updated_at=cleanup_clock.now
+         FROM due, cleanup_clock
         WHERE intent.storage_key=due.storage_key
        RETURNING intent.storage_key AS "storageKey"`,
-      [now, RESULT_STORAGE_CLEANUP_CLAIM_LIMIT, claimToken, claimExpiresAt],
+      [RESULT_STORAGE_CLEANUP_CLAIM_LIMIT, claimToken, RESULT_STORAGE_CLEANUP_CLAIM_LEASE_MS],
     );
     return claimed.rows.map((intent) => ({ ...intent, claimToken }));
   });
@@ -154,15 +162,14 @@ export async function failStudentResultStorageCleanupIntent(
   storageKey: string,
   claimToken: string,
   error: string,
-  now: Date,
 ) {
   await query(
     `UPDATE student_result_storage_cleanup_intents
         SET claim_token=NULL,
             claim_expires_at=NULL,
             delete_error=$3,
-            updated_at=$4
+            updated_at=clock_timestamp()
       WHERE storage_key=$1 AND claim_token=$2`,
-    [storageKey, claimToken, error.slice(0, 2000), now],
+    [storageKey, claimToken, error.slice(0, 2000)],
   );
 }

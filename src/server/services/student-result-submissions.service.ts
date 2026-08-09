@@ -86,7 +86,6 @@ async function cleanupArmedResultStorageKeys(
         cleanupError instanceof Error
           ? cleanupError.message
           : "Unknown rollback deletion error",
-        new Date(),
       ).catch(() => undefined);
     }
   }

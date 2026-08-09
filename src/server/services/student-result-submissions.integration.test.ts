@@ -456,12 +456,7 @@ describe("student result edit creation", () => {
           );
           visibleBeforeFirstWrite = visible.rows;
           if (visibleBeforeFirstWrite.length) {
-            inFlightCleanupResult = await cleanupExpiredResultDrafts(
-              new Date(Math.max(
-                ...visibleBeforeFirstWrite.map((intent) => intent.notBefore.getTime()),
-              ) + 1),
-              cleanupStorage,
-            );
+            inFlightCleanupResult = await cleanupExpiredResultDrafts(undefined, cleanupStorage);
           }
         }
         await storage.write(storageKey, bytes);
@@ -490,10 +485,7 @@ describe("student result edit creation", () => {
       [visibleBeforeFirstWrite.map((intent) => intent.storageKey)],
     )).resolves.toMatchObject({ rowCount: 0 });
 
-    const afterIntentBecomesDue = new Date(
-      Math.max(...visibleBeforeFirstWrite.map((intent) => intent.notBefore.getTime())) + 1,
-    );
-    await cleanupExpiredResultDrafts(afterIntentBecomesDue, cleanupStorage);
+    await cleanupExpiredResultDrafts(undefined, cleanupStorage);
     expect(cleanupDeleteKeys).toEqual([]);
     const copiedBodies = await Promise.all(edit.files.map(async (copied) => (
       (await storage.read(copied.storageKey)).toString("utf8")
@@ -691,10 +683,13 @@ describe("student result edit creation", () => {
     );
 
     failRollbackDelete = false;
-    await expect(cleanupExpiredResultDrafts(
-      new Date(cleanupIntent.rows[0].notBefore.getTime() + 1),
-      failingStorage,
-    )).resolves.toEqual({
+    await pool.query(
+      `UPDATE student_result_storage_cleanup_intents
+          SET not_before=clock_timestamp() - INTERVAL '1 second'
+        WHERE storage_key=$1`,
+      [writeKeys[0]],
+    );
+    await expect(cleanupExpiredResultDrafts(undefined, failingStorage)).resolves.toEqual({
       expiredDraftCount: 0,
       deletionFailureCount: 0,
     });
@@ -1857,7 +1852,6 @@ describe("student result drafts", () => {
       "SELECT clock_timestamp() AS now",
     );
     const databaseNow = databaseClock.rows[0].now;
-    const cleanupAt = new Date(databaseNow.getTime() + 60_000);
     const originalConnectMethod = pool.connect;
     const originalConnect = pool.connect.bind(pool);
     const client = await originalConnect();
@@ -1883,7 +1877,7 @@ describe("student result drafts", () => {
                 [`${draft.id}/%`],
               );
               observation.intentNotBefore = visible.rows[0]?.notBefore ?? null;
-              observation.cleanupResult = await cleanupExpiredResultDrafts(cleanupAt, storage);
+              observation.cleanupResult = await cleanupExpiredResultDrafts(undefined, storage);
             }
             return result;
           };
@@ -2045,10 +2039,16 @@ describe("student result drafts", () => {
     });
 
     failRollbackDelete = false;
-    await expect(cleanupExpiredResultDrafts(
-      new Date(intent.rows[0].notBefore.getTime() + 1),
-      failingStorage,
-    )).resolves.toEqual({ expiredDraftCount: 0, deletionFailureCount: 0 });
+    await pool.query(
+      `UPDATE student_result_storage_cleanup_intents
+          SET not_before=clock_timestamp() - INTERVAL '1 second'
+        WHERE storage_key=$1`,
+      [writeKeys[0]],
+    );
+    await expect(cleanupExpiredResultDrafts(undefined, failingStorage)).resolves.toEqual({
+      expiredDraftCount: 0,
+      deletionFailureCount: 0,
+    });
     expect(objects.has(writeKeys[0])).toBe(false);
     await expect(pool.query(
       "SELECT storage_key FROM student_result_storage_cleanup_intents WHERE storage_key=$1",

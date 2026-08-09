@@ -44,7 +44,7 @@ export async function cleanupExpiredResultDrafts(
   storage: ResultStorage = localResultStorage,
 ) {
   let deletionFailureCount = 0;
-  const cleanupIntents = await claimDueStudentResultStorageCleanupIntents(now);
+  const cleanupIntents = await claimDueStudentResultStorageCleanupIntents();
   for (const intent of cleanupIntents) {
     try {
       await storage.delete(intent.storageKey);
@@ -55,7 +55,6 @@ export async function cleanupExpiredResultDrafts(
         intent.storageKey,
         intent.claimToken,
         error instanceof Error ? error.message : "Unknown file deletion error",
-        now,
       );
     }
   }

@@ -7,6 +7,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { pool } from "@/server/db/pool";
 import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import {
+  claimStudentResultStorageCleanupIntentForEagerDeletion,
+  createStudentResultStorageCleanupIntents,
+} from "@/server/repositories/student-result-storage-cleanup-intents.repository";
+import {
   addStudentResultFiles,
   beginStudentResultEdit,
   finalizeStudentResultSubmission,
@@ -180,12 +184,11 @@ describe("result draft cleanup", () => {
   it("recovers a due pre-write intent left by interruption and retries cleanup failure", async () => {
     const storageKey = `${randomUUID()}/${randomUUID()}.copy`;
     const bytes = Buffer.from("%PDF-1.7\ninterrupted edit copy");
-    const now = new Date("2027-09-08T00:00:00.000Z");
     await storage.write(storageKey, bytes);
     await pool.query(
       `INSERT INTO student_result_storage_cleanup_intents (storage_key, not_before)
-       VALUES ($1,$2::timestamptz - INTERVAL '1 second')`,
-      [storageKey, now],
+       VALUES ($1,clock_timestamp() - INTERVAL '1 second')`,
+      [storageKey],
     );
     const failingStorage = {
       write: storage.write.bind(storage),
@@ -193,7 +196,7 @@ describe("result draft cleanup", () => {
       delete: async () => { throw new Error("synthetic intent cleanup failure"); },
     };
 
-    await expect(cleanupExpiredResultDrafts(now, failingStorage)).resolves.toEqual({
+    await expect(cleanupExpiredResultDrafts(undefined, failingStorage)).resolves.toEqual({
       expiredDraftCount: 0,
       deletionFailureCount: 1,
     });
@@ -217,7 +220,7 @@ describe("result draft cleanup", () => {
       deleteError: "synthetic intent cleanup failure",
     }]);
 
-    await expect(cleanupExpiredResultDrafts(now, storage)).resolves.toEqual({
+    await expect(cleanupExpiredResultDrafts(undefined, storage)).resolves.toEqual({
       expiredDraftCount: 0,
       deletionFailureCount: 0,
     });
@@ -228,27 +231,160 @@ describe("result draft cleanup", () => {
     )).resolves.toMatchObject({ rowCount: 0 });
   });
 
+  it("uses database time before an ahead-skewed worker claims an active cleanup intent", async () => {
+    const storageKey = `${randomUUID()}/${randomUUID()}.copy`;
+    const bytes = Buffer.from("%PDF-1.7\nahead-skewed cleanup worker");
+    const deleteAttempts: string[] = [];
+    await storage.write(storageKey, bytes);
+    await createStudentResultStorageCleanupIntents([storageKey]);
+    const databaseClock = await pool.query<{ now: Date }>("SELECT clock_timestamp() AS now");
+    const failingStorage = {
+      write: storage.write.bind(storage),
+      read: storage.read.bind(storage),
+      delete: async (key: string) => {
+        deleteAttempts.push(key);
+        throw new Error("synthetic ahead-skew cleanup failure");
+      },
+    };
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(databaseClock.rows[0].now.getTime() + 24 * 60 * 60 * 1000));
+
+    try {
+      await expect(cleanupExpiredResultDrafts(undefined, failingStorage)).resolves.toEqual({
+        expiredDraftCount: 0,
+        deletionFailureCount: 0,
+      });
+      expect(deleteAttempts).toEqual([]);
+      await expect(pool.query(
+        `SELECT attempt_count AS "attemptCount", claim_token::text AS "claimToken",
+                claim_expires_at AS "claimExpiresAt", delete_error AS "deleteError"
+           FROM student_result_storage_cleanup_intents
+          WHERE storage_key=$1`,
+        [storageKey],
+      )).resolves.toMatchObject({
+        rows: [{
+          attemptCount: 0,
+          claimToken: null,
+          claimExpiresAt: null,
+          deleteError: null,
+        }],
+      });
+
+      await pool.query(
+        `UPDATE student_result_storage_cleanup_intents
+            SET not_before=clock_timestamp() - INTERVAL '1 second'
+          WHERE storage_key=$1`,
+        [storageKey],
+      );
+      const beforeFailure = await pool.query<{ now: Date }>("SELECT clock_timestamp() AS now");
+      await expect(cleanupExpiredResultDrafts(undefined, failingStorage)).resolves.toEqual({
+        expiredDraftCount: 0,
+        deletionFailureCount: 1,
+      });
+      const afterFailure = await pool.query<{ now: Date }>("SELECT clock_timestamp() AS now");
+      const failed = await pool.query<{
+        attemptCount: number;
+        claimToken: string | null;
+        claimExpiresAt: Date | null;
+        deleteError: string | null;
+        updatedAt: Date;
+      }>(
+        `SELECT attempt_count AS "attemptCount", claim_token::text AS "claimToken",
+                claim_expires_at AS "claimExpiresAt", delete_error AS "deleteError",
+                updated_at AS "updatedAt"
+           FROM student_result_storage_cleanup_intents
+          WHERE storage_key=$1`,
+        [storageKey],
+      );
+      expect(deleteAttempts).toEqual([storageKey]);
+      expect(failed.rows).toEqual([expect.objectContaining({
+        attemptCount: 1,
+        claimToken: null,
+        claimExpiresAt: null,
+        deleteError: "synthetic ahead-skew cleanup failure",
+      })]);
+      expect(failed.rows[0].updatedAt.getTime()).toBeGreaterThanOrEqual(beforeFailure.rows[0].now.getTime());
+      expect(failed.rows[0].updatedAt.getTime()).toBeLessThanOrEqual(afterFailure.rows[0].now.getTime());
+
+      await expect(cleanupExpiredResultDrafts(undefined, storage)).resolves.toEqual({
+        expiredDraftCount: 0,
+        deletionFailureCount: 0,
+      });
+      await expect(storage.read(storageKey)).rejects.toThrow();
+      await expect(pool.query(
+        "SELECT storage_key FROM student_result_storage_cleanup_intents WHERE storage_key=$1",
+        [storageKey],
+      )).resolves.toMatchObject({ rowCount: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses database time for an eager cleanup lease when application time is ahead", async () => {
+    const storageKey = `${randomUUID()}/${randomUUID()}.copy`;
+    await createStudentResultStorageCleanupIntents([storageKey]);
+    const beforeClaim = await pool.query<{ now: Date }>("SELECT clock_timestamp() AS now");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(beforeClaim.rows[0].now.getTime() + 24 * 60 * 60 * 1000));
+
+    try {
+      await expect(
+        claimStudentResultStorageCleanupIntentForEagerDeletion(storageKey),
+      ).resolves.toMatchObject({ storageKey, claimToken: expect.any(String) });
+      const afterClaim = await pool.query<{ now: Date }>("SELECT clock_timestamp() AS now");
+      const claimed = await pool.query<{ claimExpiresAt: Date; updatedAt: Date }>(
+        `SELECT claim_expires_at AS "claimExpiresAt", updated_at AS "updatedAt"
+           FROM student_result_storage_cleanup_intents
+          WHERE storage_key=$1`,
+        [storageKey],
+      );
+      expect(claimed.rows[0].updatedAt.getTime()).toBeGreaterThanOrEqual(
+        beforeClaim.rows[0].now.getTime(),
+      );
+      expect(claimed.rows[0].updatedAt.getTime()).toBeLessThanOrEqual(
+        afterClaim.rows[0].now.getTime(),
+      );
+      expect(claimed.rows[0].claimExpiresAt.getTime()).toBeGreaterThanOrEqual(
+        beforeClaim.rows[0].now.getTime() + 5 * 60 * 1000,
+      );
+      expect(claimed.rows[0].claimExpiresAt.getTime()).toBeLessThanOrEqual(
+        afterClaim.rows[0].now.getTime() + 5 * 60 * 1000,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("waits for an active cleanup lease and recovers it only after expiry", async () => {
     const storageKey = `${randomUUID()}/${randomUUID()}.copy`;
     const bytes = Buffer.from("%PDF-1.7\nleased edit copy");
-    const now = new Date("2027-09-08T00:00:00.000Z");
-    const claimExpiresAt = new Date(now.getTime() + 5 * 60 * 1000);
     await storage.write(storageKey, bytes);
     await pool.query(
       `INSERT INTO student_result_storage_cleanup_intents (
          storage_key, not_before, claim_token, claim_expires_at
-       ) VALUES ($1,$2,$3,$4)`,
-      [storageKey, new Date(now.getTime() - 1000), randomUUID(), claimExpiresAt],
+       ) VALUES (
+         $1,
+         clock_timestamp() - INTERVAL '1 second',
+         $2,
+         clock_timestamp() + INTERVAL '5 minutes'
+       )`,
+      [storageKey, randomUUID()],
     );
 
-    await cleanupExpiredResultDrafts(now, storage);
+    await cleanupExpiredResultDrafts(undefined, storage);
     await expect(storage.read(storageKey)).resolves.toEqual(bytes);
     await expect(pool.query(
       "SELECT storage_key FROM student_result_storage_cleanup_intents WHERE storage_key=$1",
       [storageKey],
     )).resolves.toMatchObject({ rowCount: 1 });
 
-    await cleanupExpiredResultDrafts(new Date(claimExpiresAt.getTime() + 1), storage);
+    await pool.query(
+      `UPDATE student_result_storage_cleanup_intents
+          SET claim_expires_at=clock_timestamp() - INTERVAL '1 second'
+        WHERE storage_key=$1`,
+      [storageKey],
+    );
+    await cleanupExpiredResultDrafts(undefined, storage);
     await expect(storage.read(storageKey)).rejects.toThrow();
     await expect(pool.query(
       "SELECT storage_key FROM student_result_storage_cleanup_intents WHERE storage_key=$1",
