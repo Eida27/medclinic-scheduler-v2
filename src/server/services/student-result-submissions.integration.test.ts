@@ -3,7 +3,7 @@ import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PoolClient } from "pg";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { pool, transaction } from "@/server/db/pool";
 import {
   deletePendingResultPlaceholder,
@@ -1846,6 +1846,82 @@ describe("student result drafts", () => {
       "intent-first.pdf",
       "intent-second.pdf",
     ]);
+  });
+
+  it("keeps pre-write cleanup intents future-dated by the database clock", async () => {
+    const studentNumber = "99-9491-91";
+    await insertTestStudent({ studentNumber, firstName: "Clock", lastName: "Intent", yearLevel: 3 });
+    const appointmentId = await appointment(studentNumber);
+    const draft = await getStudentResultSubmission(studentNumber, appointmentId);
+    const databaseClock = await pool.query<{ now: Date }>(
+      "SELECT clock_timestamp() AS now",
+    );
+    const databaseNow = databaseClock.rows[0].now;
+    const cleanupAt = new Date(databaseNow.getTime() + 60_000);
+    const originalConnectMethod = pool.connect;
+    const originalConnect = pool.connect.bind(pool);
+    const client = await originalConnect();
+    const observation: {
+      intentNotBefore: Date | null;
+      cleanupResult: Awaited<ReturnType<typeof cleanupExpiredResultDrafts>> | null;
+    } = {
+      intentNotBefore: null,
+      cleanupResult: null,
+    };
+    const beginHookClient = new Proxy(client, {
+      get(target, property) {
+        if (property === "query") {
+          return async (...args: unknown[]) => {
+            const result = await Reflect.apply(target.query, target, args);
+            if (args[0] === "BEGIN") {
+              const visible = await pool.query<{ notBefore: Date }>(
+                `SELECT not_before AS "notBefore"
+                   FROM student_result_storage_cleanup_intents
+                  WHERE storage_key LIKE $1
+                  ORDER BY storage_key
+                  LIMIT 1`,
+                [`${draft.id}/%`],
+              );
+              observation.intentNotBefore = visible.rows[0]?.notBefore ?? null;
+              observation.cleanupResult = await cleanupExpiredResultDrafts(cleanupAt, storage);
+            }
+            return result;
+          };
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as PoolClient;
+    let providedBeginHookClient = false;
+    pool.connect = ((...args: unknown[]) => {
+      if (args.length) return Reflect.apply(originalConnectMethod, pool, args);
+      if (!providedBeginHookClient) {
+        providedBeginHookClient = true;
+        pool.connect = originalConnectMethod;
+        return Promise.resolve(beginHookClient);
+      }
+      return originalConnect();
+    }) as typeof pool.connect;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(databaseNow.getTime() - 24 * 60 * 60 * 1000));
+
+    try {
+      await expect(addStudentResultFiles(
+        studentNumber,
+        appointmentId,
+        draft.id,
+        [file("database-clock.pdf")],
+        storage,
+      )).resolves.toMatchObject({ id: draft.id, fileCount: 1 });
+      expect(observation.intentNotBefore?.getTime()).toBeGreaterThan(
+        databaseNow.getTime() + 14 * 60 * 1000,
+      );
+      expect(observation.cleanupResult).toEqual({ expiredDraftCount: 0, deletionFailureCount: 0 });
+    } finally {
+      pool.connect = originalConnectMethod;
+      if (!providedBeginHookClient) client.release();
+      vi.useRealTimers();
+    }
   });
 
   it("preserves committed batch upload files when the COMMIT response is lost", async () => {

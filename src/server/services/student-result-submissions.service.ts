@@ -44,7 +44,6 @@ import {
   disarmStudentResultStorageCleanupIntents,
   failStudentResultStorageCleanupIntent,
   lockStudentResultStorageCleanupIntentsForWrite,
-  RESULT_STORAGE_CLEANUP_INTENT_DELAY_MS,
 } from "@/server/repositories/student-result-storage-cleanup-intents.repository";
 import { localResultStorage } from "@/server/storage/local-result-storage";
 import type { ResultStorage } from "@/server/storage/result-storage";
@@ -154,10 +153,7 @@ export async function beginStudentResultEdit(
   );
   const attemptedStorageKeys = new Set<string>();
   try {
-    await createStudentResultStorageCleanupIntents(
-      armedStorageKeys,
-      new Date(Date.now() + RESULT_STORAGE_CLEANUP_INTENT_DELAY_MS),
-    );
+    await createStudentResultStorageCleanupIntents(armedStorageKeys);
     return await transaction(async (client) => {
       const outcome = await lockOrCreateStudentResultEditDraft(
         client,
@@ -327,10 +323,7 @@ export async function addStudentResultFiles(
   const armedStorageKeys = pendingFiles.map((file) => file.storageKey);
   const attemptedStorageKeys = new Set<string>();
   try {
-    await createStudentResultStorageCleanupIntents(
-      armedStorageKeys,
-      new Date(Date.now() + RESULT_STORAGE_CLEANUP_INTENT_DELAY_MS),
-    );
+    await createStudentResultStorageCleanupIntents(armedStorageKeys);
     return await transaction(async (client) => {
       const outcome = await lockExpectedStudentResultDraft(
         client,

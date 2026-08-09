@@ -9,14 +9,14 @@ const RESULT_STORAGE_CLEANUP_CLAIM_LIMIT = 100;
 
 export async function createStudentResultStorageCleanupIntents(
   storageKeys: string[],
-  notBefore: Date,
 ) {
   if (!storageKeys.length) return;
   await query(
     `INSERT INTO student_result_storage_cleanup_intents (storage_key, not_before)
-     SELECT storage_key, $2::timestamptz
+     SELECT storage_key,
+            clock_timestamp() + ($2::double precision * INTERVAL '1 millisecond')
        FROM UNNEST($1::text[]) AS storage_key`,
-    [storageKeys, notBefore],
+    [storageKeys, RESULT_STORAGE_CLEANUP_INTENT_DELAY_MS],
   );
 }
 
