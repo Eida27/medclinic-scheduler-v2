@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { PoolClient } from "pg";
 import { afterAll, describe, expect, it } from "vitest";
 import { pool } from "./pool";
 
@@ -9,7 +10,7 @@ afterAll(async () => {
   await pool.end();
 });
 
-async function applyMigration(client: Awaited<ReturnType<typeof pool.connect>>) {
+async function applyMigration(client: PoolClient) {
   const migrationSql = await readFile(
     join(process.cwd(), "database", "migrations", "017_student_result_multi_upload_editing.sql"),
     "utf8",
@@ -17,7 +18,7 @@ async function applyMigration(client: Awaited<ReturnType<typeof pool.connect>>) 
   await client.query(migrationSql);
 }
 
-async function createPreMigrationSubmissionSchema(client: Awaited<ReturnType<typeof pool.connect>>) {
+async function createPreMigrationSubmissionSchema(client: PoolClient) {
   await client.query(`
     CREATE TABLE student_result_submissions (
       id UUID PRIMARY KEY,
@@ -55,7 +56,7 @@ async function createPreMigrationSubmissionSchema(client: Awaited<ReturnType<typ
   `);
 }
 
-async function withMigrationSchema(test: (client: Awaited<ReturnType<typeof pool.connect>>, schemaName: string) => Promise<void>) {
+async function withMigrationSchema(test: (client: PoolClient, schemaName: string) => Promise<void>) {
   const schemaName = `student_result_multi_upload_${randomUUID().replaceAll("-", "_")}`;
   const quotedSchema = `"${schemaName}"`;
   const client = await pool.connect();

@@ -4,8 +4,6 @@ import { extname } from "node:path";
 import { AppError } from "@/lib/errors";
 import {
   RESULT_FILE_MAX_BYTES,
-  RESULT_SUBMISSION_MAX_BYTES,
-  RESULT_SUBMISSION_MAX_FILES,
   isAllowedResultFileName,
 } from "@/shared/student-result-file-rules";
 
