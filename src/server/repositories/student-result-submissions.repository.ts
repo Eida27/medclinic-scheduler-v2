@@ -53,6 +53,7 @@ export type StudentResultSubmission = {
   resultType: "LABORATORY" | "PHYSICAL_EXAM";
   status: "DRAFT" | "FINALIZED";
   basedOnSubmissionId: string | null;
+  administratorReplacementReason: string | null;
   lastActivityAt: Date;
   files: StudentResultFileMetadata[];
   fileCount: number;
@@ -622,6 +623,21 @@ export async function getStudentResultSubmissionRow(
             submission.student_number AS "studentNumber", submission.result_type AS "resultType",
             submission.status,
             submission.based_on_submission_id::text AS "basedOnSubmissionId",
+            CASE
+              WHEN submission.status='DRAFT' AND submission.based_on_submission_id IS NULL
+              THEN (
+                SELECT invalidated.invalidation_reason
+                  FROM student_result_submissions invalidated
+                 WHERE invalidated.appointment_id=submission.appointment_id
+                   AND invalidated.student_number=submission.student_number
+                   AND invalidated.result_type=submission.result_type
+                   AND invalidated.status='INVALIDATED'
+                 ORDER BY invalidated.invalidated_at DESC NULLS LAST,
+                          invalidated.created_at DESC, invalidated.id DESC
+                 LIMIT 1
+              )
+              ELSE NULL
+            END AS "administratorReplacementReason",
             submission.last_activity_at AS "lastActivityAt"
        FROM student_result_submissions submission
       WHERE submission.appointment_id=$1 AND submission.student_number=$2
@@ -636,6 +652,7 @@ export async function getStudentResultSubmissionRow(
     resultType: "LABORATORY" | "PHYSICAL_EXAM";
     status: "DRAFT" | "FINALIZED";
     basedOnSubmissionId: string | null;
+    administratorReplacementReason: string | null;
     lastActivityAt: Date;
   };
   const submission = client

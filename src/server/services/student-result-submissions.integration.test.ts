@@ -303,6 +303,7 @@ describe("student result edit creation", () => {
       status: "DRAFT",
       basedOnSubmissionId: fixture.official.id,
       fileCount: 2,
+      administratorReplacementReason: null,
     });
     expect(first.files.map((copied) => copied.originalFilename).sort()).toEqual([
       "official-first.pdf",
@@ -316,6 +317,8 @@ describe("student result edit creation", () => {
       fixture.official.files[0].id,
       storage,
     )).resolves.toMatchObject({ filename: fixture.official.files[0].originalFilename });
+    await expect(getStudentResultFile(studentNumber, first.files[0].id, storage))
+      .rejects.toMatchObject({ code: "RESULT_FILE_NOT_FOUND", status: 404 });
     const rows = await pool.query<{ draftCount: number; finalizedCount: number }>(
       `SELECT COUNT(*) FILTER (
                 WHERE status='DRAFT' AND discarded_at IS NULL
@@ -976,6 +979,7 @@ describe("student result edit retirement", () => {
       status: "DRAFT",
       basedOnSubmissionId: null,
       fileCount: 0,
+      administratorReplacementReason: "Document belongs to another student",
     });
     await expect(cancelStudentResultEdit(
       studentNumber,
