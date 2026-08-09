@@ -1855,6 +1855,47 @@ describe("student result drafts", () => {
     expect(streamedZip.toString("latin1")).toContain("01-shared-name.pdf");
   });
 
+  it("keeps an older finalized appointment file private from its student owner after a newer appointment becomes current", async () => {
+    const studentNumber = "99-9468-68";
+    await insertTestStudent({
+      studentNumber,
+      firstName: "Historical",
+      lastName: "Finalized",
+      yearLevel: 3,
+    });
+    const oldAppointmentId = await appointment(studentNumber);
+    const oldFile = await addStudentResultFile(
+      studentNumber,
+      oldAppointmentId,
+      file("historical-finalized.pdf"),
+      storage,
+    );
+    const oldSubmission = await finalizeStudentResultSubmission(
+      studentNumber,
+      oldAppointmentId,
+      storage,
+    );
+    await pool.query(
+      `INSERT INTO appointments (
+         clinic_id, student_number, schedule_type, appointment_date,
+         status, is_published, created_by
+       ) VALUES ($1,$2,'LABORATORY','2027-08-03','PENDING',TRUE,$3)`,
+      [TEST_REFERENCE_IDS.laboratoryClinic, studentNumber, TEST_REFERENCE_IDS.adminUser],
+    );
+
+    await expect(getStudentResultFile(studentNumber, oldFile.id, storage))
+      .rejects.toMatchObject({ code: "RESULT_FILE_NOT_FOUND", status: 404 });
+    await expect(getAdminSubmissionResultFile(
+      oldSubmission.id,
+      oldFile.id,
+      admin,
+      storage,
+    )).resolves.toMatchObject({
+      filename: "historical-finalized.pdf",
+      bytes: file().bytes,
+    });
+  });
+
   it("keeps superseded official files downloadable only through administrator file and ZIP access", async () => {
     const studentNumber = "99-9466-66";
     const unrelatedStudentNumber = "99-9467-67";

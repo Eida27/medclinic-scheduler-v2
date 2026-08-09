@@ -813,12 +813,17 @@ export async function getAccessibleStudentResultFileRow(
     byteSize: string;
     checksumSha256: string;
   }>(
-    `SELECT file.id, file.submission_id AS "submissionId", file.storage_key AS "storageKey",
+    `WITH ${CURRENT_EFFECTIVE_APPOINTMENTS_CTE}
+     SELECT file.id, file.submission_id AS "submissionId", file.storage_key AS "storageKey",
             file.original_filename AS "originalFilename",
             file.detected_mime_type AS "detectedMimeType", file.byte_size::text AS "byteSize",
             file.checksum_sha256 AS "checksumSha256"
        FROM student_result_files file
        JOIN student_result_submissions submission ON submission.id=file.submission_id
+       JOIN current_effective_appointments current_appointment
+         ON current_appointment.id=submission.appointment_id
+        AND current_appointment."studentNumber"=submission.student_number
+        AND current_appointment."scheduleType"=submission.result_type
       WHERE file.id=$1 AND submission.status='FINALIZED'
         AND submission.student_number=$2
         AND file.deleted_at IS NULL AND file.storage_delete_pending=FALSE
