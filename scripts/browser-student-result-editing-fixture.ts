@@ -15,7 +15,7 @@ import { dirname, isAbsolute, parse, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool, type PoolClient } from "pg";
 
-const FIXTURE_VERSION = 2;
+const FIXTURE_VERSION = 3;
 const FIXTURE_MARKER = "BROWSER-STUDENT-RESULT-EDITING-V1";
 const FIXTURE_DIRECTORY = resolve(".data/browser-student-result-editing");
 const ARTIFACT_DIRECTORY = resolve(FIXTURE_DIRECTORY, "chooser-artifacts");
@@ -1316,7 +1316,7 @@ export async function getStudentResultEditingFixtureStatus(
     await assertRequiredSchemaAndReferences(client);
     let manifest: OwnedManifest;
     if (state.kind === "valid" && [
-      "DATABASE_DELETED", "STORAGE_DELETED", "ARTIFACTS_DELETED",
+      "DATABASE_DELETED", "ARTIFACTS_DELETED",
     ].includes(state.value.phase)) {
       manifest = state.value.manifest.owned;
     } else {
@@ -1477,13 +1477,6 @@ export async function cleanupStudentResultEditingFixture(
   await assertCanonicalRootIdentity(state.fixtureRoot, FIXTURE_DIRECTORY);
   const client = await pool.connect();
   try {
-    if (state.phase === "MANIFESTED") {
-      const remaining = await databaseResidue(client, state.manifest.owned);
-      if (Object.values(remaining).every((count) => count === 0)) {
-        state = { ...state, phase: "DATABASE_DELETED" };
-        await writeState(state);
-      }
-    }
     if (![
       "MANIFESTED", "DATABASE_DELETED", "STORAGE_DELETED", "ARTIFACTS_DELETED",
     ].includes(state.phase)) {
@@ -1510,12 +1503,6 @@ export async function cleanupStudentResultEditingFixture(
       };
       await assertOwnedFilesystemTargetsSafe(state);
       await writeState(state);
-      await deleteOwnedDatabaseRows(client, state.manifest.owned);
-      state = { ...state, phase: "DATABASE_DELETED" };
-      await writeState(state);
-    }
-    if (state.phase === "DATABASE_DELETED") {
-      await assertOwnedFilesystemTargetsSafe(state);
       await removeOwnedStorage(
         state.manifest.owned,
         state.storageRoot,
@@ -1525,6 +1512,25 @@ export async function cleanupStudentResultEditingFixture(
       await writeState(state);
     }
     if (state.phase === "STORAGE_DELETED") {
+      const remaining = await databaseResidue(client, state.manifest.owned);
+      if (Object.values(remaining).every((count) => count === 0)) {
+        state = { ...state, phase: "DATABASE_DELETED" };
+        await writeState(state);
+      } else {
+        const rediscovered = await discoverOwnedManifest(client);
+        assertStructurallyValidOwnedManifest(rediscovered);
+        assertPersistedOwnershipDerivedFromDatabase(state.manifest.owned, rediscovered);
+        state = {
+          ...state,
+          manifest: { ...state.manifest, owned: rediscovered },
+        };
+        await writeState(state);
+        await deleteOwnedDatabaseRows(client, state.manifest.owned);
+        state = { ...state, phase: "DATABASE_DELETED" };
+        await writeState(state);
+      }
+    }
+    if (state.phase === "DATABASE_DELETED") {
       await removeChooserArtifacts(state.fixtureRoot);
       state = { ...state, phase: "ARTIFACTS_DELETED" };
       await writeState(state);

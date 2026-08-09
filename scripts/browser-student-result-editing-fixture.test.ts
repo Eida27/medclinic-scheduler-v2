@@ -27,6 +27,7 @@ const TAMPERED_AUDIT_ID = "be180000-0000-4000-8000-000000000903";
 const STRUCTURED_AUDIT_ID = "be180000-0000-4000-8000-000000000904";
 const SENTINEL_STORAGE_KEY = "browser-student-result-editing-unrelated/sentinel.pdf";
 const TAMPERED_STORAGE_KEY = "be180000-0000-4000-8000-000000000101/tampered-unrelated.pdf";
+const POST_DATABASE_TAMPER_STORAGE_KEY = "be180000-0000-4000-8000-000000000906/unrelated-after-db.pdf";
 const REPARSE_TARGET = resolve(".data/browser-student-result-editing-reparse-target");
 
 async function createDirectoryLink(target: string, path: string) {
@@ -171,6 +172,7 @@ describe.runIf(exclusive)("student result editing Browser acceptance fixture lif
     await Promise.all([
       SENTINEL_STORAGE_KEY,
       TAMPERED_STORAGE_KEY,
+      POST_DATABASE_TAMPER_STORAGE_KEY,
     ].map((key) => rm(assertStudentResultEditingStorageTarget(STORAGE_ROOT, key), { force: true })));
     await rm(REPARSE_TARGET, { recursive: true, force: true });
   });
@@ -187,6 +189,7 @@ describe.runIf(exclusive)("student result editing Browser acceptance fixture lif
       await Promise.all([
         SENTINEL_STORAGE_KEY,
         TAMPERED_STORAGE_KEY,
+        POST_DATABASE_TAMPER_STORAGE_KEY,
       ].map((key) => rm(assertStudentResultEditingStorageTarget(STORAGE_ROOT, key), { force: true })));
       await rm(REPARSE_TARGET, { recursive: true, force: true });
       await pool.end();
@@ -230,6 +233,43 @@ describe.runIf(exclusive)("student result editing Browser acceptance fixture lif
         await cleanup();
       }
       await pool.query("DELETE FROM audit_logs WHERE id=$1", [TAMPERED_AUDIT_ID]);
+      await rm(unrelatedPath, { force: true });
+    }
+  });
+
+  it("preserves unrelated storage from a forged DATABASE_DELETED state with a recomputed digest", async () => {
+    await prepareStudentResultEditingFixture(pool, identity);
+    const originalState = await readFile(STATE_FILE, "utf8");
+    const state = JSON.parse(originalState) as {
+      phase: string;
+      ownershipDigest: string;
+      manifest: { owned: { submissionIds: string[]; storageKeys: string[] } };
+    };
+    const unrelatedPath = assertStudentResultEditingStorageTarget(
+      STORAGE_ROOT,
+      POST_DATABASE_TAMPER_STORAGE_KEY,
+    );
+    await mkdir(dirname(unrelatedPath), { recursive: true });
+    await writeFile(unrelatedPath, "preserve forged post-database target", "utf8");
+    state.phase = "DATABASE_DELETED";
+    state.manifest.owned.submissionIds.push("be180000-0000-4000-8000-000000000906");
+    state.manifest.owned.storageKeys.push(POST_DATABASE_TAMPER_STORAGE_KEY);
+    state.ownershipDigest = createHash("sha256")
+      .update(JSON.stringify(state.manifest.owned))
+      .digest("hex");
+    await writeFile(STATE_FILE, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+
+    try {
+      await expect(cleanup()).rejects.toThrow(/residue|ownership|database/i);
+      expect(await readFile(unrelatedPath, "utf8")).toBe("preserve forged post-database target");
+      expect((await pool.query("SELECT COUNT(*)::int AS count FROM students WHERE student_number=$1", [
+        STUDENT_RESULT_EDITING_FIXTURE.student.studentNumber,
+      ])).rows[0].count).toBe(1);
+    } finally {
+      if (await exists(STATE_FILE)) {
+        await writeFile(STATE_FILE, originalState, "utf8");
+        await cleanup();
+      }
       await rm(unrelatedPath, { force: true });
     }
   });
@@ -458,12 +498,12 @@ describe.runIf(exclusive)("student result editing Browser acceptance fixture lif
 
     const partial = await getStudentResultEditingFixtureStatus(pool, identity);
     expect(partial).toMatchObject({
-      phase: "DATABASE_DELETED",
+      phase: "MANIFESTED",
       residue: {
-        students: 0,
-        appointments: 0,
-        submissions: 0,
-        files: 0,
+        students: 1,
+        appointments: 2,
+        submissions: 2,
+        files: 2,
         storageObjects: expect.any(Number),
         stateFiles: 1,
       },
