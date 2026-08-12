@@ -20,6 +20,10 @@ export async function markOverdueAppointmentsNoShow(now: Date, timeZone: string)
           WHERE appointment.is_published=TRUE
             AND appointment.status='PENDING'
             AND appointment.schedule_type IN ('LABORATORY','PHYSICAL_EXAM')
+            AND NOT (
+              appointment.ovpsa_batch_id IS NOT NULL
+              AND appointment.schedule_type='LABORATORY'
+            )
             AND ((appointment.appointment_date + 1)::timestamp AT TIME ZONE $2)
                 <= $1::timestamptz
           FOR UPDATE SKIP LOCKED

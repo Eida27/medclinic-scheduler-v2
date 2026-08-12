@@ -21,7 +21,10 @@
     "acceptance:unified-clinic-calendar": "tsx --env-file=.env.local scripts/browser-unified-clinic-calendar-fixture.ts",
     "acceptance:reports:setup": "tsx --env-file=.env.local scripts/browser-reports-acceptance-fixture.ts setup",
     "acceptance:reports:status": "tsx --env-file=.env.local scripts/browser-reports-acceptance-fixture.ts status",
-    "acceptance:reports:cleanup": "tsx --env-file=.env.local scripts/browser-reports-acceptance-fixture.ts cleanup"
+    "acceptance:reports:cleanup": "tsx --env-file=.env.local scripts/browser-reports-acceptance-fixture.ts cleanup",
+    "acceptance:first-year-ovpsa:setup": "tsx --env-file=.env.local scripts/browser-first-year-ovpsa-fixture.ts setup",
+    "acceptance:first-year-ovpsa:status": "tsx --env-file=.env.local scripts/browser-first-year-ovpsa-fixture.ts status",
+    "acceptance:first-year-ovpsa:cleanup": "tsx --env-file=.env.local scripts/browser-first-year-ovpsa-fixture.ts cleanup"
   },
   "dependencies": {
     "archiver": "^8.0.0",

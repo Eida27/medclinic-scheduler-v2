@@ -2,7 +2,9 @@ import { notFound, redirect } from "next/navigation";
 import { AppointmentActions } from "@/components/appointments/AppointmentActions";
 import { AppointmentProtectionPanel } from "@/components/appointments/AppointmentProtectionPanel";
 import { CompletedStatusCorrection } from "@/components/appointments/CompletedStatusCorrection";
+import { ExternalLaboratoryVerificationPanel } from "@/components/appointments/ExternalLaboratoryVerificationPanel";
 import { operationalStatusLabel, statusTone } from "@/components/appointments/status-labels";
+import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -77,8 +79,19 @@ export async function AppointmentDetail({
             <p className="text-xs font-bold uppercase tracking-wide text-muted">Visibility</p>
             <p className="mt-1 font-bold text-ink">Published</p>
           </div>
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wide text-muted">Location</p>
+            <p className="mt-1 font-bold text-ink">{String(appointment.locationName)}</p>
+          </div>
         </div>
       </Card>
+      {appointment.isOvpsaFirstYear && appointment.scheduleType === "PHYSICAL_EXAM"
+        && appointment.linkedOvpsaLaboratoryAppointmentId ? (
+          <ExternalLaboratoryVerificationPanel
+            laboratoryAppointmentId={appointment.linkedOvpsaLaboratoryAppointmentId}
+            verified={Boolean(appointment.linkedOvpsaLaboratoryVerified)}
+          />
+        ) : null}
       <AppointmentProtectionPanel
         appointmentId={String(appointment.id)}
         status={String(appointment.status)}
@@ -92,14 +105,18 @@ export async function AppointmentDetail({
       <Card>
         <CardTitle>Update appointment</CardTitle>
         <div className="mt-4">
-          <AppointmentActions
-            id={String(appointment.id)}
-            status={String(appointment.status)}
-            canCorrectNoShow={canCorrectNoShow}
-            isManuallyLocked={Boolean(appointment.isManuallyLocked)}
-            basePath={source === "LABORATORY" ? "/laboratory" : "/physical-exam"}
-          />
-          {appointment.status === "COMPLETED" ? (
+          {appointment.isOvpsaFirstYear && appointment.scheduleType === "LABORATORY" ? (
+            <Alert tone={appointment.status === "COMPLETED" ? "success" : "info"}>
+              {String(appointment.displayStatus)}. This Mission Hospital appointment is updated only through the linked Physical Examination verification panel.
+            </Alert>
+          ) : <AppointmentActions
+              id={String(appointment.id)}
+              status={String(appointment.status)}
+              canCorrectNoShow={canCorrectNoShow}
+              isManuallyLocked={Boolean(appointment.isManuallyLocked)}
+              basePath={source === "LABORATORY" ? "/laboratory" : "/physical-exam"}
+            />}
+          {appointment.status === "COMPLETED" && !(appointment.isOvpsaFirstYear && appointment.scheduleType === "LABORATORY") ? (
             <div className="mt-5">
               <CompletedStatusCorrection
                 appointmentId={String(appointment.id)}

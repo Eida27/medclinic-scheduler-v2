@@ -21,6 +21,8 @@ import {
   getAppointmentResultCorrectionState,
 } from "@/server/repositories/student-result-submissions.repository";
 import type { SessionUser } from "@/types/roles";
+import { assertOvpsaAppointmentCompletionAllowed } from "@/server/ovpsa/external-laboratory-verification.service";
+import { isSchedulingDateBlocked } from "@/server/repositories/scheduling-blocked-dates.repository";
 
 const transitions: Record<AppointmentStatus, AppointmentStatus[]> = {
   DRAFT: ["PENDING", "CANCELLED"],
@@ -221,6 +223,14 @@ export async function completeAppointmentWithClient(
   const appointment = await getAppointmentMutationContext(id, client);
   if (!appointment) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
   assertAppointmentMutationAuthorized(actor, appointment);
+  if (appointment.ovpsaBatchId && appointment.scheduleType === "LABORATORY") {
+    throw new AppError(
+      "OVPSA_EXTERNAL_LABORATORY_VERIFICATION_REQUIRED",
+      "First Year Mission Hospital Laboratory appointments can only be changed through external-result verification or the batch lifecycle.",
+      422,
+    );
+  }
+  await assertOvpsaAppointmentCompletionAllowed(client, appointment);
   if (appointment.status === "COMPLETED") return appointment;
   if (appointment.status === "NO_SHOW") {
     if (!isAutomaticNoShowLog(appointment.latestLog)) {
@@ -255,6 +265,13 @@ async function correctCompletedAppointmentWithClient(
   const appointment = await getAppointmentMutationContext(id, client);
   if (!appointment) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
   assertAppointmentMutationAuthorized(actor, appointment);
+  if (appointment.ovpsaBatchId && appointment.scheduleType === "LABORATORY") {
+    throw new AppError(
+      "OVPSA_EXTERNAL_LABORATORY_VERIFICATION_REQUIRED",
+      "First Year Mission Hospital Laboratory appointments cannot be corrected through generic appointment controls.",
+      422,
+    );
+  }
   if (appointment.status !== "COMPLETED") {
     throw new AppError(
       "APPOINTMENT_STATUS_CONFLICT",
@@ -320,6 +337,13 @@ async function applyQuickStatusWithClient(
   const appointment = await getAppointmentMutationContext(id, client);
   if (!appointment) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
   assertAppointmentMutationAuthorized(actor, appointment);
+  if (appointment.ovpsaBatchId && appointment.scheduleType === "LABORATORY") {
+    throw new AppError(
+      "OVPSA_EXTERNAL_LABORATORY_VERIFICATION_REQUIRED",
+      "First Year Mission Hospital Laboratory appointments can only be changed through external-result verification or the batch lifecycle.",
+      422,
+    );
+  }
   if (appointment.status !== input.expectedStatus) {
     throw new AppError(
       "APPOINTMENT_STATUS_CONFLICT",
@@ -329,6 +353,7 @@ async function applyQuickStatusWithClient(
   }
 
   if (input.quickStatusAction === "MARK_COMPLETED") {
+    await assertOvpsaAppointmentCompletionAllowed(client, appointment);
     if (appointment.status !== "PENDING" && appointment.status !== "NO_SHOW") {
       throw new AppError(
         "APPOINTMENT_QUICK_STATUS_NOT_ALLOWED",
@@ -441,6 +466,23 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
         if (!["PENDING", "NO_SHOW"].includes(appointment.status)) {
           throw new AppError("INVALID_RESCHEDULE", "Only pending or no-show appointments can be rescheduled.", 422);
         }
+        if (appointment.ovpsaBatchId) {
+          throw new AppError(
+            "OVPSA_APPOINTMENT_REQUIRES_BATCH_RESCHEDULE",
+            "First Year OVPSA appointments must be moved through the batch reschedule workflow.",
+            409,
+          );
+        }
+        if (await isSchedulingDateBlocked(client, {
+          scheduleType: appointment.scheduleType as "LABORATORY" | "PHYSICAL_EXAM",
+          date: appointmentDate,
+        })) {
+          throw new AppError(
+            "OVPSA_SERVICE_RESERVATION_CONFLICT",
+            `${appointmentDate} is closed or reserved for First Year OVPSA scheduling.`,
+            409,
+          );
+        }
         const replacementAppointmentId = await rescheduleAppointmentWithClient(
           client,
           appointment,
@@ -524,6 +566,13 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
       const appointment = await getAppointmentMutationContext(id, client);
       if (!appointment) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
       assertAppointmentMutationAuthorized(actor, appointment);
+      if (appointment.ovpsaBatchId && appointment.scheduleType === "LABORATORY") {
+        throw new AppError(
+          "OVPSA_EXTERNAL_LABORATORY_VERIFICATION_REQUIRED",
+          "First Year Mission Hospital Laboratory appointments can only be changed through external-result verification or the batch lifecycle.",
+          422,
+        );
+      }
       assertManualNoShowNotRequested(requestedStatus);
       assertStatusTransition(appointment.status, requestedStatus);
       await changeAppointmentStatusWithClient(

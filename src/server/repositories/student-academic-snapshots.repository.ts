@@ -7,7 +7,8 @@ import { studentDisplayNameSql } from "@/server/students/student-display-name";
 export type StudentAcademicSnapshotSource =
   | "VERIFIED_HISTORICAL"
   | "RECOVERED_HISTORICAL"
-  | "MIGRATED_INCOMPLETE";
+  | "MIGRATED_INCOMPLETE"
+  | "OVPSA_PUBLICATION";
 
 export type StudentAcademicSnapshotCandidate = {
   studentNumber: string;

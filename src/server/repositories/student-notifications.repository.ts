@@ -11,6 +11,55 @@ export type StudentNotificationInput = {
   eventKey?: string;
 };
 
+export async function insertStudentNotifications(
+  client: PoolClient,
+  inputs: StudentNotificationInput[],
+) {
+  if (!inputs.length) return [];
+  const result = await client.query<{ id: string }>(
+    `WITH source AS MATERIALIZED (
+       SELECT row.student_number,row.notification_type,row.title,row.message,
+              row.metadata,row.event_key
+         FROM jsonb_to_recordset($1::jsonb) AS row(
+           student_number text,notification_type text,title text,message text,
+           metadata jsonb,event_key text
+         )
+     ),
+     inserted AS (
+       INSERT INTO student_portal_notifications (
+         student_number,notification_type,title,message,metadata,event_key
+       )
+       SELECT student_number,notification_type,title,message,metadata,event_key
+         FROM source
+       ON CONFLICT (event_key) WHERE event_key IS NOT NULL DO NOTHING
+       RETURNING id,student_number,title,message,event_key
+     ),
+     enqueued AS (
+       INSERT INTO email_outbox (
+         student_number,to_email,subject,text_body,html_body,event_key
+       )
+       SELECT inserted.student_number,student.email,inserted.title,
+              inserted.message || E'\\n\\nOpen the student portal to review the details.',
+              NULL,inserted.event_key
+         FROM inserted
+         JOIN students student ON student.student_number=inserted.student_number
+        WHERE student.email_verified_at IS NOT NULL AND student.email IS NOT NULL
+       ON CONFLICT (event_key) WHERE event_key IS NOT NULL DO NOTHING
+       RETURNING student_number
+     )
+     SELECT id::text FROM inserted`,
+    [JSON.stringify(inputs.map((input) => ({
+      student_number: input.studentNumber,
+      notification_type: input.notificationType,
+      title: input.title,
+      message: input.message,
+      metadata: input.metadata ?? {},
+      event_key: input.eventKey ?? null,
+    })))],
+  );
+  return result.rows.map((row) => row.id);
+}
+
 export async function insertStudentNotification(
   client: PoolClient,
   input: StudentNotificationInput,

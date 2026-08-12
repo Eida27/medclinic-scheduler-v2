@@ -9,6 +9,7 @@ import {
   type DisplacementCandidate,
 } from "@/server/repositories/priority-displacement.repository";
 import { createStudentNotification } from "@/server/services/student-notifications.service";
+import { loadSchedulingBlockedDates } from "@/server/repositories/scheduling-blocked-dates.repository";
 
 export function priorityDisplacementScopes(candidates: DisplacementCandidate[]) {
   return candidates.flatMap((candidate) => (
@@ -158,6 +159,10 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
        JOIN clinics clinic ON clinic.id=appointment.clinic_id
       WHERE appointment.appointment_date BETWEEN $1 AND $2
         AND appointment.status IN ('DRAFT','PENDING','COMPLETED','NO_SHOW')
+        AND NOT (
+          appointment.schedule_type='LABORATORY'
+          AND appointment.ovpsa_batch_id IS NOT NULL
+        )
       GROUP BY clinic.code, appointment.appointment_date`,
     [input.replacementWindowStart, input.searchEndDate],
   );
@@ -166,15 +171,12 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
   );
   const laboratoryLoad = loadFor("KABALAKA_CLINIC");
   const physicalExamLoad = loadFor("CPU_CLINIC");
-  const blocked = await client.query<{ date: string }>(
-    `SELECT blocked_date::text AS date
-       FROM clinic_unavailable_dates
-      WHERE blocked_date BETWEEN $1::date AND $2::date
-        AND reopened_at IS NULL`,
-    [input.replacementWindowStart, input.searchEndDate],
-  );
-  const blockedLaboratoryDates = blocked.rows.map((row) => row.date);
-  const blockedPhysicalExamDates = blocked.rows.map((row) => row.date);
+  const blocked = await loadSchedulingBlockedDates(client, {
+    startDate: input.replacementWindowStart,
+    endDate: input.searchEndDate,
+  });
+  const blockedLaboratoryDates = blocked.laboratoryDates;
+  const blockedPhysicalExamDates = blocked.physicalExamDates;
   const generated = generatePairedSchedule({
     requests: pairCandidates.map((candidate) => ({
       requestId: `displacement:${candidate.schedulePairId}`,

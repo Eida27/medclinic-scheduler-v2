@@ -209,6 +209,7 @@ function nextCapacityDate(input: {
   afterDate: string;
   scheduleType: keyof ReplacementCapacity;
   blockedDates: Set<string>;
+  blockedDatesByService?: Partial<Record<keyof ReplacementCapacity, Set<string>>>;
   usedCapacity: UsedReplacementCapacity;
   capacity: ReplacementCapacity;
 }) {
@@ -218,7 +219,12 @@ function nextCapacityDate(input: {
     candidate <= horizon;
     candidate = addCalendarDays(candidate, 1)
   ) {
-    if (!isClinicSchedulingWeekday(candidate) || input.blockedDates.has(candidate)) continue;
+    const blockedForService = input.blockedDatesByService?.[input.scheduleType];
+    if (
+      !isClinicSchedulingWeekday(candidate)
+      || input.blockedDates.has(candidate)
+      || blockedForService?.has(candidate)
+    ) continue;
     if ((input.usedCapacity[input.scheduleType].get(candidate) ?? 0) >= input.capacity[input.scheduleType]) {
       continue;
     }
@@ -234,6 +240,7 @@ export function allocateReplacementDates(input: {
   strategy: "MOVE_COMPLETE_PAIR" | "MOVE_PHYSICAL_ONLY";
   afterDate: string;
   blockedDates: Set<string>;
+  blockedDatesByService?: Partial<Record<keyof ReplacementCapacity, Set<string>>>;
   usedCapacity: UsedReplacementCapacity;
   capacity: ReplacementCapacity;
 }) {

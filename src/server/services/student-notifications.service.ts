@@ -3,10 +3,18 @@ import type { PoolClient } from "pg";
 import {
   enqueueStudentEmail,
   insertStudentNotification,
+  insertStudentNotifications,
   listStudentNotificationRows,
   markStudentNotificationReadRow,
   type StudentNotificationInput,
 } from "@/server/repositories/student-notifications.repository";
+
+export function createStudentNotifications(
+  client: PoolClient,
+  inputs: StudentNotificationInput[],
+) {
+  return insertStudentNotifications(client, inputs);
+}
 
 export async function createStudentNotification(
   client: PoolClient,

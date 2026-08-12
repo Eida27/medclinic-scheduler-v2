@@ -20,6 +20,7 @@ import {
 } from "@/server/services/priority-displacement.service";
 import { studentDisplayNameSql } from "@/server/students/student-display-name";
 import { ensureStudentAcademicSnapshotsWithClient } from "./student-academic-snapshots.repository";
+import { loadSchedulingBlockedDates } from "./scheduling-blocked-dates.repository";
 
 export type ScheduleImportStatus =
   | "DRAFT"
@@ -416,6 +417,10 @@ export async function createScheduleImport(
          JOIN clinics clinic ON clinic.id=appointment.clinic_id
         WHERE appointment.appointment_date BETWEEN $1 AND $2
           AND appointment.status IN ('DRAFT','PENDING','COMPLETED','NO_SHOW')
+          AND NOT (
+            appointment.schedule_type='LABORATORY'
+            AND appointment.ovpsa_batch_id IS NOT NULL
+          )
         GROUP BY clinic.code, appointment.appointment_date`,
       [windowStart, searchEndDate],
     );
@@ -426,13 +431,10 @@ export async function createScheduleImport(
     );
     const laboratoryLoad = loadFor("KABALAKA_CLINIC");
     const physicalExamLoad = loadFor("CPU_CLINIC");
-    const blockedDates = await client.query<{ date: string }>(
-      `SELECT blocked_date::text AS date
-         FROM clinic_unavailable_dates
-        WHERE blocked_date BETWEEN $1::date AND $2::date
-          AND reopened_at IS NULL`,
-      [windowStart, searchEndDate],
-    );
+    const blockedDates = await loadSchedulingBlockedDates(client, {
+      startDate: windowStart,
+      endDate: searchEndDate,
+    });
     const preferredWindowEnd = input.studentCategory === "REGULAR"
       ? `${input.academicYearStart + 1}-03-31`
       : new Date(Date.UTC(
@@ -457,8 +459,8 @@ export async function createScheduleImport(
       },
       existingLaboratoryLoad: laboratoryLoad,
       existingPhysicalExamLoad: physicalExamLoad,
-      blockedLaboratoryDates: blockedDates.rows.map((row) => row.date),
-      blockedPhysicalExamDates: blockedDates.rows.map((row) => row.date),
+      blockedLaboratoryDates: blockedDates.laboratoryDates,
+      blockedPhysicalExamDates: blockedDates.physicalExamDates,
       searchEndDate,
     });
     let assignments = generatePairedSchedule(allocationInput());

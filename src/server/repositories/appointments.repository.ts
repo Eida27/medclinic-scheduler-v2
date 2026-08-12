@@ -21,6 +21,11 @@ type AppointmentDetail = {
   lockedByName: string | null; lockedAt: Date | null; updatedAt: Date;
   completedFromStatus: CompletionSourceStatus | null;
   laboratoryStatus?: "PENDING" | "COMPLETED" | "NO_SHOW" | null;
+  locationName: string;
+  isOvpsaFirstYear: boolean;
+  displayStatus: string;
+  linkedOvpsaLaboratoryAppointmentId?: string | null;
+  linkedOvpsaLaboratoryVerified?: boolean | null;
 };
 type StatusLog = { id: string; oldStatus: string | null; newStatus: string; notes: string | null; createdAt: Date; changedById: string | null; changedByName: string | null };
 
@@ -44,6 +49,9 @@ export type AppointmentMutationContext = {
   updatedAt: Date;
   latestLog: AutomaticNoShowLog | null;
   completedFromStatus: CompletionSourceStatus | null;
+  ovpsaBatchId?: string | null;
+  ovpsaRevisionId?: string | null;
+  ovpsaServiceReservationId?: string | null;
 };
 
 type AppointmentMutationContextWithDate = AppointmentMutationContext & {
@@ -142,6 +150,12 @@ export async function listAppointments(filters: {
             a.appointment_date::text AS "appointmentDate",
             a.status, a.is_published AS "isPublished", c.name AS "collegeName", p.name AS "programName",
             a.is_manually_locked AS "isManuallyLocked",
+            CASE WHEN a.ovpsa_batch_id IS NOT NULL AND a.schedule_type='LABORATORY'
+                 THEN 'Iloilo Mission Hospital' ELSE cl.name END AS "locationName",
+            (a.ovpsa_batch_id IS NOT NULL) AS "isOvpsaFirstYear",
+            CASE WHEN a.ovpsa_batch_id IS NOT NULL AND a.schedule_type='LABORATORY'
+                       AND a.status='PENDING' AND ovpsa_verification.id IS NULL
+                 THEN 'Awaiting External Laboratory Result' ELSE a.status END AS "displayStatus",
             CASE
               WHEN a.status='COMPLETED' AND completion.old_status IN ('PENDING','NO_SHOW')
                 THEN completion.old_status
@@ -157,6 +171,8 @@ export async function listAppointments(filters: {
         ORDER BY created_at DESC, id DESC
         LIMIT 1
      ) completion ON TRUE
+     LEFT JOIN ovpsa_external_laboratory_verifications ovpsa_verification
+       ON ovpsa_verification.appointment_id=a.id
      ${laboratoryStatusJoin}
      WHERE ${where} ORDER BY ${orderBy}
      LIMIT $${values.length - 1} OFFSET $${values.length}`,
@@ -173,6 +189,14 @@ export async function getPublishedAppointment(id: string) {
             a.clinic_id AS "clinicId", cl.code AS "clinicCode", cl.name AS "clinicName",
             a.status, a.is_published AS "isPublished",
             a.notes, a.rescheduled_from AS "rescheduledFrom", c.name AS "collegeName", p.name AS "programName",
+            CASE WHEN a.ovpsa_batch_id IS NOT NULL AND a.schedule_type='LABORATORY'
+                 THEN 'Iloilo Mission Hospital' ELSE cl.name END AS "locationName",
+            (a.ovpsa_batch_id IS NOT NULL) AS "isOvpsaFirstYear",
+            CASE WHEN a.ovpsa_batch_id IS NOT NULL AND a.schedule_type='LABORATORY'
+                       AND a.status='PENDING' AND ovpsa_verification.id IS NULL
+                 THEN 'Awaiting External Laboratory Result' ELSE a.status END AS "displayStatus",
+            linked_laboratory.id::text AS "linkedOvpsaLaboratoryAppointmentId",
+            linked_laboratory.is_verified AS "linkedOvpsaLaboratoryVerified",
             a.is_manually_locked AS "isManuallyLocked", a.lock_reason AS "lockReason",
             a.locked_by::text AS "lockedById", locked_user.full_name AS "lockedByName",
             a.locked_at AS "lockedAt", a.updated_at AS "updatedAt"
@@ -180,6 +204,25 @@ export async function getPublishedAppointment(id: string) {
      JOIN clinics cl ON cl.id=a.clinic_id
      JOIN colleges c ON c.id=s.college_id JOIN programs p ON p.id=s.program_id
      LEFT JOIN users locked_user ON locked_user.id=a.locked_by
+     LEFT JOIN ovpsa_external_laboratory_verifications ovpsa_verification
+       ON ovpsa_verification.appointment_id=a.id
+     LEFT JOIN LATERAL (
+       SELECT laboratory.id,
+              EXISTS (
+                SELECT 1 FROM ovpsa_external_laboratory_verifications verification
+                 WHERE verification.appointment_id=laboratory.id
+              ) AS is_verified
+         FROM appointments laboratory
+        WHERE a.schedule_type='PHYSICAL_EXAM'
+          AND a.ovpsa_batch_id IS NOT NULL
+          AND laboratory.ovpsa_batch_id=a.ovpsa_batch_id
+          AND laboratory.student_number=a.student_number
+          AND laboratory.schedule_type='LABORATORY'
+          AND laboratory.is_published=TRUE
+          AND laboratory.status IN ('PENDING','COMPLETED','AWAITING_RESCHEDULE')
+        ORDER BY laboratory.created_at DESC,laboratory.id DESC
+        LIMIT 1
+     ) linked_laboratory ON TRUE
      WHERE a.id=$1 AND a.is_published=TRUE
        AND a.status NOT IN ('RESCHEDULED','CANCELLED')`, [id]);
   if (!result.rows[0]) return null;
@@ -215,6 +258,9 @@ export async function getAppointmentMutationContext(id: string, client: PoolClie
     lockedById: string | null;
     lockedAt: Date | null;
     updatedAt: Date;
+    ovpsaBatchId: string | null;
+    ovpsaRevisionId: string | null;
+    ovpsaServiceReservationId: string | null;
   }>(
     `SELECT appointment.id, appointment.batch_id AS "batchId",
             appointment.student_number AS "studentNumber",
@@ -224,6 +270,9 @@ export async function getAppointmentMutationContext(id: string, client: PoolClie
             appointment.is_published AS "isPublished",
             appointment.schedule_pair_id::text AS "schedulePairId",
             appointment.schedule_cycle_start AS "scheduleCycleStart",
+            appointment.ovpsa_batch_id::text AS "ovpsaBatchId",
+            appointment.ovpsa_revision_id::text AS "ovpsaRevisionId",
+            appointment.ovpsa_service_reservation_id::text AS "ovpsaServiceReservationId",
             appointment.is_manually_locked AS "isManuallyLocked",
             appointment.lock_reason AS "lockReason",
             appointment.locked_by::text AS "lockedById",
@@ -284,6 +333,9 @@ export async function getAppointmentMutationContext(id: string, client: PoolClie
       changedById: row.latestChangedById,
     } : null,
     completedFromStatus: row.completedFromStatus,
+    ovpsaBatchId: row.ovpsaBatchId,
+    ovpsaRevisionId: row.ovpsaRevisionId,
+    ovpsaServiceReservationId: row.ovpsaServiceReservationId,
   } satisfies AppointmentMutationContextWithDate;
 }
 

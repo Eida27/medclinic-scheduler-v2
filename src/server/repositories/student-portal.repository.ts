@@ -31,6 +31,9 @@ export async function getStudentPortalSchedule(studentNumber: string) {
     appointmentDate: string | null;
     status: string;
     rescheduledFrom: string | null;
+    locationName: string;
+    isOvpsaFirstYear: boolean;
+    displayStatus: string;
   }>(
     `SELECT appointment.id,
             appointment.student_number AS "studentNumber",
@@ -38,8 +41,19 @@ export async function getStudentPortalSchedule(studentNumber: string) {
             CASE WHEN appointment.status='AWAITING_RESCHEDULE'
                  THEN NULL ELSE appointment.appointment_date::text END AS "appointmentDate",
             appointment.status,
-            appointment.rescheduled_from AS "rescheduledFrom"
+            appointment.rescheduled_from AS "rescheduledFrom",
+            CASE WHEN appointment.ovpsa_batch_id IS NOT NULL
+                       AND appointment.schedule_type='LABORATORY'
+                 THEN 'Iloilo Mission Hospital' ELSE clinic.name END AS "locationName",
+            (appointment.ovpsa_batch_id IS NOT NULL) AS "isOvpsaFirstYear",
+            CASE WHEN appointment.ovpsa_batch_id IS NOT NULL
+                       AND appointment.schedule_type='LABORATORY'
+                       AND appointment.status='PENDING' AND verification.id IS NULL
+                 THEN 'Awaiting External Laboratory Result' ELSE appointment.status END AS "displayStatus"
        FROM appointments appointment
+       JOIN clinics clinic ON clinic.id=appointment.clinic_id
+       LEFT JOIN ovpsa_external_laboratory_verifications verification
+         ON verification.appointment_id=appointment.id
       WHERE appointment.student_number=$1 AND appointment.is_published=TRUE
         AND appointment.status NOT IN ('RESCHEDULED','CANCELLED')
       ORDER BY appointment.appointment_date, appointment.schedule_type, appointment.created_at`,

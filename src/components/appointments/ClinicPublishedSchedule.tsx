@@ -18,6 +18,9 @@ type ClinicAppointment = {
   isManuallyLocked: boolean;
   completedFromStatus: "PENDING" | "NO_SHOW" | null;
   laboratoryStatus?: "PENDING" | "COMPLETED" | "NO_SHOW" | null;
+  locationName?: string;
+  isOvpsaFirstYear?: boolean;
+  displayStatus?: string;
 };
 
 type ClinicPublishedScheduleProps = {
@@ -141,7 +144,7 @@ export function ClinicPublishedSchedule({
                         {appointment.studentNumber}
                       </Link>
                     </td>
-                    <td className="px-5 py-4">{appointment.scheduleType.replaceAll("_", " ")}</td>
+                    <td className="px-5 py-4">{appointment.scheduleType.replaceAll("_", " ")}<br/><span className="text-xs text-muted">{appointment.locationName}</span></td>
                     <td className="px-5 py-4">{appointment.appointmentDate}</td>
                     {showLaboratoryStatus ? (
                       <td className="px-5 py-4">
@@ -152,11 +155,15 @@ export function ClinicPublishedSchedule({
                     ) : null}
                     <td className="px-5 py-4">
                       <div className="flex flex-wrap items-center gap-2">
-                        <AppointmentQuickStatusButton
-                          appointmentId={appointment.id}
-                          status={appointment.status}
-                          completedFromStatus={appointment.completedFromStatus}
-                        />
+                        {appointment.isOvpsaFirstYear && appointment.scheduleType === "LABORATORY" ? (
+                          <span className="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-950">
+                            {appointment.displayStatus ?? operationalStatusLabel(appointment.status)}
+                          </span>
+                        ) : <AppointmentQuickStatusButton
+                            appointmentId={appointment.id}
+                            status={appointment.status}
+                            completedFromStatus={appointment.completedFromStatus}
+                          />}
                         {appointment.isManuallyLocked ? (
                           <span
                             aria-label="Appointment manually locked"

@@ -28,6 +28,7 @@ import { studentDisplayNameSql } from "@/server/students/student-display-name";
 import { loadAppointmentResultProtectionStates } from "@/server/repositories/student-result-submissions.repository";
 import {
   allocateReplacementDates,
+  addCalendarDays,
   classifyClinicCycle,
   ClinicCalendarPlanningError,
   groupContiguousClosureChanges,
@@ -38,6 +39,11 @@ import {
   type ReplacementCapacity,
   type UsedReplacementCapacity,
 } from "./clinic-calendar-planner";
+import { invalidateOvpsaReservationsForClosuresWithClient } from "@/server/ovpsa/ovpsa-first-year-lifecycle";
+import {
+  isSchedulingDateBlocked,
+  loadSchedulingBlockedDates,
+} from "@/server/repositories/scheduling-blocked-dates.repository";
 
 const categorySchema = z.enum([
   "HOLIDAY",
@@ -250,6 +256,7 @@ async function loadAffectedCycles(client: PoolClient, dates: string[], lock: boo
        SELECT DISTINCT student_number,schedule_cycle_start
          FROM appointments
         WHERE appointment_date=ANY($1::date[])
+          AND ovpsa_batch_id IS NULL
           AND is_published=TRUE
           AND status NOT IN ('RESCHEDULED','CANCELLED')
      )
@@ -261,6 +268,7 @@ async function loadAffectedCycles(client: PoolClient, dates: string[], lock: boo
        FROM appointments appointment
        JOIN impacted USING(student_number,schedule_cycle_start)
       WHERE appointment.is_published=TRUE
+        AND appointment.ovpsa_batch_id IS NULL
         AND appointment.status NOT IN ('RESCHEDULED','CANCELLED')
       ORDER BY appointment.student_number,appointment.schedule_cycle_start,
                appointment.schedule_pair_id,appointment.schedule_type,appointment.id
@@ -326,6 +334,7 @@ async function loadCapacity(client: PoolClient) {
     `SELECT schedule_type,appointment_date::text,COUNT(*)::int AS used
        FROM appointments
       WHERE is_published=TRUE AND status IN ('DRAFT','PENDING')
+        AND NOT (schedule_type='LABORATORY' AND ovpsa_batch_id IS NOT NULL)
       GROUP BY schedule_type,appointment_date`,
   );
   const usedCapacity: UsedReplacementCapacity = {
@@ -912,6 +921,15 @@ export async function saveClinicCalendarChanges(
         });
       }
 
+      await invalidateOvpsaReservationsForClosuresWithClient(
+        client,
+        persistedGroups.map((group) => ({
+          closureGroupId: group.closureGroupId,
+          dates: group.dateIds,
+        })),
+        actor.userId,
+      );
+
       const reopenChanges = request.changes.filter((change) => change.action === "REOPEN");
       const lockedReopenings = await lockActiveUnavailableDates(
         client,
@@ -932,6 +950,10 @@ export async function saveClinicCalendarChanges(
 
       const cycles = await loadAffectedCycles(client, blockChanges.map((change) => change.date), true);
       const blockedDates = await listUnifiedBlockedDateSet(client);
+      const serviceBlockedDates = await loadSchedulingBlockedDates(client, {
+        startDate: manilaToday(),
+        endDate: addCalendarDays(manilaToday(), 366 * 5),
+      });
       const { capacity, usedCapacity } = await loadCapacity(client);
       const clinicRows = await client.query<{ id: string; code: keyof ReplacementCapacity }>(
         `SELECT id::text,CASE code
@@ -979,6 +1001,10 @@ export async function saveClinicCalendarChanges(
                 strategy: classification.strategy,
                 afterDate: group.endDate,
                 blockedDates,
+                blockedDatesByService: {
+                  LABORATORY: new Set(serviceBlockedDates.laboratoryDates),
+                  PHYSICAL_EXAM: new Set(serviceBlockedDates.physicalExamDates),
+                },
                 usedCapacity,
                 capacity,
               });
@@ -1306,16 +1332,18 @@ async function assertManualDateAvailable(
   if (date < manilaToday() || !isClinicSchedulingWeekday(date)) {
     throw validationError("Manual replacement dates must be current or future weekdays.");
   }
-  const blocked = await client.query(
-    "SELECT 1 FROM clinic_unavailable_dates WHERE blocked_date=$1 AND reopened_at IS NULL",
-    [date],
-  );
-  if (blocked.rowCount) throw new AppError("CLINIC_CALENDAR_CONFLICT", `${date} is blocked.`, 409);
+  if (await isSchedulingDateBlocked(client, { scheduleType, date })) {
+    throw new AppError("CLINIC_CALENDAR_CONFLICT", `${date} is blocked or reserved.`, 409);
+  }
   const capacity = await client.query<{ max_daily_capacity: number; used: number }>(
     `SELECT setting.max_daily_capacity,
             (SELECT COUNT(*)::int FROM appointments appointment
               WHERE appointment.schedule_type=$1 AND appointment.appointment_date=$2
-                AND appointment.is_published=TRUE AND appointment.status IN ('DRAFT','PENDING')) AS used
+                AND appointment.is_published=TRUE AND appointment.status IN ('DRAFT','PENDING')
+                AND NOT (
+                  appointment.schedule_type='LABORATORY'
+                  AND appointment.ovpsa_batch_id IS NOT NULL
+                )) AS used
        FROM clinic_capacity_settings setting
        JOIN clinics clinic ON clinic.id=setting.clinic_id
       WHERE setting.schedule_type=$1

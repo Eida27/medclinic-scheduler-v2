@@ -65,7 +65,8 @@ const appointmentId = "11111111-1111-4111-8111-111111111111";
 const replacementId = "22222222-2222-4222-8222-222222222222";
 const laboratoryClinicId = "60000000-0000-4000-8000-000000000001";
 const physicalExamClinicId = "60000000-0000-4000-8000-000000000002";
-const client = { query: vi.fn() } as unknown as PoolClient;
+const query = vi.fn();
+const client = { query } as unknown as PoolClient;
 
 const admin = {
   userId: "00000000-0000-4000-8000-000000000001",
@@ -249,6 +250,7 @@ describe("appointment mutation authorization and automatic no-show correction", 
     rescheduleAppointmentWithClient.mockResolvedValue(replacementId);
     setAppointmentManualLockWithClient.mockResolvedValue(true);
     writeAudit.mockResolvedValue(undefined);
+    query.mockResolvedValue({ rows: [] });
     transaction.mockImplementation(async (callback: (transactionClient: PoolClient) => Promise<unknown>) => (
       callback(client)
     ));
@@ -555,6 +557,28 @@ describe("appointment mutation authorization and automatic no-show correction", 
     }, admin)).rejects.toMatchObject({ status: 422 });
     expect(getAppointmentResultCorrectionState).not.toHaveBeenCalled();
     expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
+  });
+
+  it("rejects an ordinary reschedule onto an active First Year OVPSA service reservation", async () => {
+    query.mockImplementation(async (sql: string) => ({
+      rows: sql.includes("ovpsa_first_year_service_reservations")
+        ? [{ schedule_type: "LABORATORY", date: "2026-08-19" }]
+        : [],
+    }));
+
+    await expect(updateAppointment(appointmentId, {
+      appointmentDate: "2026-08-19",
+      notes: "Student requested a replacement",
+    }, admin)).rejects.toMatchObject({
+      code: "OVPSA_SERVICE_RESERVATION_CONFLICT",
+      status: 409,
+    });
+
+    expect(rescheduleAppointmentWithClient).not.toHaveBeenCalled();
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("ovpsa_first_year_service_reservations"),
+      ["2026-08-19", "2026-08-19", null],
+    );
   });
 
   it.each([

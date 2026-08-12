@@ -1,9 +1,10 @@
 // @vitest-environment node
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { pool, transaction } from "@/server/db/pool";
 import { cleanupTestFixtures, insertTestStudent } from "@/test/integration-fixtures";
 import {
   createStudentNotification,
+  createStudentNotifications,
   listStudentNotifications,
   markStudentNotificationRead,
 } from "./student-notifications.service";
@@ -23,6 +24,56 @@ afterAll(async () => {
 });
 
 describe("student notifications and optional email", () => {
+  it("batch-inserts portal notifications and verified-email outbox rows in one statement", async () => {
+    for (const studentNumber of ["99-9505-05", "99-9506-06"]) {
+      await insertTestStudent({
+        studentNumber,
+        firstName: "Batch",
+        lastName: "Notify",
+        yearLevel: 3,
+        dateOfBirth: "2003-05-06",
+      });
+    }
+    await pool.query(
+      `UPDATE students SET email='batch@example.test', email_verified_at=NOW()
+        WHERE student_number='99-9505-05'`,
+    );
+
+    await transaction(async (client) => {
+      const querySpy = vi.spyOn(client, "query");
+      await createStudentNotifications(client, [
+        {
+          studentNumber: "99-9505-05",
+          notificationType: "SCHEDULE_PUBLISHED",
+          title: "Schedule published",
+          message: "Your First Year schedule is ready.",
+        },
+        {
+          studentNumber: "99-9506-06",
+          notificationType: "SCHEDULE_PUBLISHED",
+          title: "Schedule published",
+          message: "Your First Year schedule is ready.",
+        },
+      ]);
+      expect(querySpy).toHaveBeenCalledTimes(1);
+      querySpy.mockRestore();
+    });
+
+    await expect(pool.query(
+      "SELECT student_number FROM student_portal_notifications ORDER BY student_number",
+    )).resolves.toMatchObject({
+      rows: [
+        { student_number: "99-9505-05" },
+        { student_number: "99-9506-06" },
+      ],
+    });
+    await expect(pool.query(
+      "SELECT student_number,to_email FROM email_outbox ORDER BY student_number",
+    )).resolves.toMatchObject({
+      rows: [{ student_number: "99-9505-05", to_email: "batch@example.test" }],
+    });
+  });
+
   it("always creates a portal notification and queues email only for a verified address", async () => {
     for (const studentNumber of ["99-9501-01", "99-9502-02"]) {
       await insertTestStudent({
