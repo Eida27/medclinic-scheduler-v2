@@ -10,7 +10,6 @@ export default async function LoginPage() {
   return (
     <main className="relative grid min-h-screen place-items-center overflow-hidden bg-canvas p-4">
       <div aria-hidden="true" className="absolute inset-x-0 top-0 h-52 bg-cpu-navy" />
-      <div aria-hidden="true" className="absolute left-[8%] top-24 size-28 rounded-full border-[18px] border-cpu-gold/30" />
       <Card className="relative w-full max-w-md rounded-3xl p-7 sm:p-9">
         <div className="mb-7">
           <BrandMark priority />
