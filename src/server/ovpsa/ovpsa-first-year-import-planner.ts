@@ -80,7 +80,14 @@ export function planFirstYearScheduleImport(
   const estimatedPhysicalExamDateCount = input.physicalExamMaximumCapacity > 0
     ? Math.ceil(orderedMembers.length / input.physicalExamMaximumCapacity)
     : 0;
-  const base = {
+  const base: Pick<
+    FirstYearImportPlan,
+    | "memberCount"
+    | "laboratory"
+    | "firstPhysicalExamCandidate"
+    | "physicalExamMaximumCapacity"
+    | "estimatedPhysicalExamDateCount"
+  > = {
     memberCount: orderedMembers.length,
     laboratory: {
       date: input.laboratoryDate,

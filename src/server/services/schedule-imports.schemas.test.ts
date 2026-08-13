@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { importNameFromFileName, importStudentScheduleCsv } from "./schedule-imports.service";
 
-const admin = { userId: "admin-user", role: "ADMIN" as const };
+const admin = {
+  userId: "admin-user",
+  fullName: "System Admin",
+  email: "admin@example.test",
+  role: "ADMIN" as const,
+};
 
 describe("importNameFromFileName", () => {
   it("derives a normalized name from the CSV filename", () => {

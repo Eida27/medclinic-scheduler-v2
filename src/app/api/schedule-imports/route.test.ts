@@ -58,6 +58,7 @@ describe("/api/schedule-imports", () => {
     const form = new FormData();
     form.set("file", new File([contents], "students.csv", { type: "text/csv" }));
     form.set("studentCategory", "OJT");
+    form.set("importMode", "STANDARD");
     form.set("academicYearStart", "2026");
     form.set("preferredMonth", "9");
 
@@ -79,11 +80,38 @@ describe("/api/schedule-imports", () => {
       fileName: "students.csv",
       fileSize: Buffer.byteLength(contents),
       contents: Array.from(new TextEncoder().encode(contents)),
+      importMode: "STANDARD",
       studentCategory: "OJT",
       academicYearStart: "2026",
       preferredMonth: "9",
+      firstYearLaboratoryDate: null,
     });
     expect(actor).toEqual(admin);
+  });
+
+  it("forwards First Year mode and Laboratory date for authoritative publication", async () => {
+    const contents = [
+      "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth",
+      "26-0001-01,Santos,Maria,Rosa,,College of Computer Studies,BSIT,1,2007-05-06",
+    ].join("\n");
+    const form = new FormData();
+    form.set("file", new File([contents], "first-year.csv", { type: "text/csv" }));
+    form.set("importMode", "FIRST_YEAR_OVPSA");
+    form.set("studentCategory", "REGULAR");
+    form.set("academicYearStart", "2026");
+    form.set("firstYearLaboratoryDate", "2026-09-14");
+
+    const response = await POST(new Request("http://localhost/api/schedule-imports", {
+      method: "POST",
+      body: form,
+    }));
+    expect(response.status).toBe(201);
+    expect(acceptAndScheduleImport).toHaveBeenCalledWith(expect.objectContaining({
+      importMode: "FIRST_YEAR_OVPSA",
+      studentCategory: "REGULAR",
+      preferredMonth: null,
+      firstYearLaboratoryDate: "2026-09-14",
+    }), admin);
   });
 
   it("rejects a missing file without calling the service", async () => {

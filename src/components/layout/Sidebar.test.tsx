@@ -77,6 +77,7 @@ describe("Sidebar", () => {
       "/settings/academic-years",
     );
     expect(screen.getByRole("link", { name: "Capacity" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: "First Year OVPSA" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Manual resolution" })).toHaveAttribute(
       "href",
       "/settings/clinic-unavailable-dates/manual-resolution",

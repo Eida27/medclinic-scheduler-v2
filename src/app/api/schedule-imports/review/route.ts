@@ -1,19 +1,7 @@
 import { dataResponse, errorResponse } from "@/lib/api-response";
 import { AppError } from "@/lib/errors";
 import { requireUser } from "@/server/auth/current-user";
-import {
-  acceptAndScheduleImport,
-  listScheduleImports,
-} from "@/server/services/schedule-imports.service";
-
-export async function GET() {
-  try {
-    const user = await requireUser(["ADMIN", "COORDINATOR"]);
-    return dataResponse(await listScheduleImports(user));
-  } catch (error) {
-    return errorResponse(error);
-  }
-}
+import { reviewFirstYearScheduleImport } from "@/server/services/schedule-imports.service";
 
 export async function POST(request: Request) {
   try {
@@ -28,18 +16,16 @@ export async function POST(request: Request) {
         { file: ["Choose a CSV file to import."] },
       );
     }
-
-    const result = await acceptAndScheduleImport({
+    return dataResponse(await reviewFirstYearScheduleImport({
       fileName: file.name,
       fileSize: file.size,
       contents: new Uint8Array(await file.arrayBuffer()),
-      importMode: form.get("importMode") || "STANDARD",
+      importMode: form.get("importMode"),
       studentCategory: form.get("studentCategory"),
       academicYearStart: form.get("academicYearStart"),
       preferredMonth: form.get("preferredMonth"),
       firstYearLaboratoryDate: form.get("firstYearLaboratoryDate"),
-    }, user);
-    return dataResponse(result, { status: 201 });
+    }, user));
   } catch (error) {
     return errorResponse(error);
   }

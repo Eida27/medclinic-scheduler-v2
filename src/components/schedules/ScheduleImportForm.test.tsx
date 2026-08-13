@@ -61,6 +61,74 @@ describe("ScheduleImportForm", () => {
     expect(screen.queryByLabelText("Preferred month")).not.toBeInTheDocument();
   });
 
+  it("reviews First Year imports before confirmation and shows the authoritative allocation warning", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            sourceFilename: "students.csv",
+            memberCount: 280,
+            academicYearStart: 2026,
+            laboratory: { date: "2026-09-22", locationName: "Iloilo Mission Hospital" },
+            firstPhysicalExamCandidate: "2026-09-29",
+            physicalExamMaximumCapacity: 150,
+            allocations: [
+              { date: "2026-09-29", studentCount: 150, capacity: 150 },
+              { date: "2026-09-30", studentCount: 130, capacity: 150 },
+            ],
+            skippedDates: [{ date: "2026-09-28", reasons: ["PROTECTED_APPOINTMENT_CONFLICT"] }],
+            displacementTotal: 4,
+            blockers: [],
+            canPublish: true,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ data: { importId: "first-year-import-id" } }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<ScheduleImportForm />);
+
+    await user.selectOptions(screen.getByLabelText("Student category"), "FIRST_YEAR");
+    expect(screen.queryByLabelText("Preferred month")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Laboratory date")).toBeRequired();
+    expect(screen.getByText("Iloilo Mission Hospital")).toBeVisible();
+    await user.upload(screen.getByLabelText("CSV file"), csvFile());
+    await user.selectOptions(screen.getByLabelText("Academic year"), "2026");
+    fireEvent.change(screen.getByLabelText("Laboratory date"), {
+      target: { value: "2026-09-22" },
+    });
+    fireEvent.submit(screen.getByRole("button", { name: "Review import" }).closest("form")!);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const reviewBody = fetchMock.mock.calls[0][1].body as FormData;
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/schedule-imports/review");
+    expect(reviewBody.get("importMode")).toBe("FIRST_YEAR_OVPSA");
+    expect(reviewBody.get("studentCategory")).toBe("REGULAR");
+    expect(reviewBody.get("firstYearLaboratoryDate")).toBe("2026-09-22");
+
+    const dialog = await screen.findByRole("dialog", { name: "Confirm First Year schedule?" });
+    expect(dialog).toHaveTextContent("280 Year-1 students");
+    expect(dialog).toHaveTextContent("students.csv");
+    expect(dialog).toHaveTextContent("AY 2026–2027");
+    expect(dialog).toHaveTextContent("2026-09-22 at Iloilo Mission Hospital");
+    expect(dialog).toHaveTextContent("first Physical Examination candidate is 2026-09-29");
+    expect(dialog).toHaveTextContent("capacity is 150 per day across 2 selected dates");
+    expect(dialog).toHaveTextContent("2026-09-29: 150 of 150");
+    expect(dialog).toHaveTextContent("2026-09-30: 130 of 150");
+    expect(dialog).toHaveTextContent("2026-09-28");
+    expect(dialog).toHaveTextContent("4 lower-priority appointments");
+    expect(dialog).toHaveTextContent("First Year-exclusive");
+
+    await user.click(within(dialog).getByRole("button", { name: "Agree and schedule" }));
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/students/schedule-imports/first-year-import-id"));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/schedule-imports");
+  });
+
   it("posts file, category, academic year, and conditional preferred month once confirmed", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -83,11 +151,13 @@ describe("ScheduleImportForm", () => {
     const body = fetchMock.mock.calls[0][1].body as FormData;
     expect(body.get("file")).toBeInstanceOf(File);
     expect(body.get("studentCategory")).toBe("TOUR");
+    expect(body.get("importMode")).toBe("STANDARD");
     expect(body.get("academicYearStart")).toBe("2026");
     expect(body.get("preferredMonth")).toBe("10");
     expect([...body.keys()].sort()).toEqual([
       "academicYearStart",
       "file",
+      "importMode",
       "preferredMonth",
       "studentCategory",
     ]);

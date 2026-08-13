@@ -153,4 +153,57 @@ describe("ScheduleImportDetailPage", () => {
     expect(screen.getByRole("region", { name: "Physical examination schedule review" })).toBeVisible();
     expect(screen.getAllByText("Draft — not published")).toHaveLength(2);
   });
+
+  it("renders the dedicated published First Year allocation and lineage summary", async () => {
+    requireUser.mockResolvedValue(admin);
+    getScheduleImport.mockResolvedValue({
+      importId: "import-1",
+      importName: "First Year 2026-2027",
+      sourceFilename: "first-year.csv",
+      totalRows: 280,
+      createdStudentCount: 280,
+      matchedStudentCount: 0,
+      createdByName: "System Admin",
+      laboratoryItemCount: 280,
+      physicalExaminationItemCount: 280,
+      status: "PUBLISHED",
+      importMode: "FIRST_YEAR_OVPSA",
+      studentCategory: "REGULAR",
+      academicYearStart: 2026,
+      acceptedAt: "2026-08-13T06:30:00.000Z",
+      skippedStudentCount: 0,
+      generatedRange: { startDate: "2026-09-22", endDate: "2026-09-30" },
+      overflow: { pairCountBeyondPreferredWindow: 0, unscheduledStudentCount: 0 },
+      displacementTotal: 4,
+      firstYearSummary: {
+        laboratory: { date: "2026-09-22", locationName: "Iloilo Mission Hospital" },
+        firstPhysicalExamCandidate: "2026-09-29",
+        physicalExamMaximumCapacity: 150,
+        allocations: [
+          { date: "2026-09-29", studentCount: 150, capacity: 150 },
+          { date: "2026-09-30", studentCount: 130, capacity: 150 },
+        ],
+        skippedDates: [{ date: "2026-09-28", reasons: ["PROTECTED_APPOINTMENT_CONFLICT"] }],
+        displacementTotal: 4,
+        appointmentCount: 560,
+        batchId: "ovpsa-batch",
+        revisionId: "ovpsa-revision",
+      },
+      childBatches: [],
+    });
+
+    render(await ScheduleImportDetailPage({
+      params: Promise.resolve({ importId: "import-1" }),
+    }));
+
+    expect(screen.getByText("First Year", { selector: "dd" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "First Year publication" })).toBeVisible();
+    expect(screen.getByText("2026-09-22 at Iloilo Mission Hospital")).toBeVisible();
+    expect(screen.getByText("150 / 150 students")).toBeVisible();
+    expect(screen.getByText("130 / 150 students")).toBeVisible();
+    expect(screen.getByText(/2026-09-28.*Protected appointment conflict/)).toBeVisible();
+    expect(screen.getByText("560 appointments")).toBeVisible();
+    expect(screen.getByText(/ovpsa-batch \/ ovpsa-revision/)).toBeVisible();
+    expect(screen.getAllByText("PUBLISHED").length).toBeGreaterThan(0);
+  });
 });

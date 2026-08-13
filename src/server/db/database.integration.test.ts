@@ -296,6 +296,8 @@ describe("database constraints", () => {
       { column_name: "academic_year_start", data_type: "integer", character_maximum_length: null, is_nullable: "YES", column_default: null },
       { column_name: "preferred_month", data_type: "integer", character_maximum_length: null, is_nullable: "YES", column_default: null },
       { column_name: "accepted_at", data_type: "timestamp with time zone", character_maximum_length: null, is_nullable: "NO", column_default: "clock_timestamp()" },
+      { column_name: "import_mode", data_type: "character varying", character_maximum_length: 30, is_nullable: "NO", column_default: "'STANDARD'::character varying" },
+      { column_name: "first_year_laboratory_date", data_type: "date", character_maximum_length: null, is_nullable: "YES", column_default: null },
     ]);
 
     const created = await pool.query<{

@@ -43,19 +43,26 @@ describe("first-year OVPSA priority scheduling migration", () => {
       const fixture = await client.query<{
         actor_id: string;
         college_id: string;
-        student_number: string;
+        program_id: string;
       }>(
         `SELECT user_row.id::text AS actor_id,
-                student.college_id::text,
-                student.student_number
+                program.college_id::text,
+                program.id::text AS program_id
            FROM users user_row
            CROSS JOIN LATERAL (
-             SELECT student_number,college_id FROM students ORDER BY student_number LIMIT 1
-           ) student
+             SELECT id,college_id FROM programs ORDER BY id LIMIT 1
+           ) program
           ORDER BY user_row.id
           LIMIT 1`,
       );
-      const { actor_id: actorId, college_id: collegeId, student_number: studentNumber } = fixture.rows[0];
+      const { actor_id: actorId, college_id: collegeId, program_id: programId } = fixture.rows[0];
+      const studentNumber = "FY-MIG-2097";
+      await client.query(
+        `INSERT INTO students (
+           student_number,first_name,last_name,college_id,program_id,year_level
+         ) VALUES ($1,'Migration','Fixture',$2,$3,1)`,
+        [studentNumber, collegeId, programId],
+      );
       await client.query(
         `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
          VALUES (2097,'2098-07-31',$1,$1)

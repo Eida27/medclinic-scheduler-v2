@@ -48,7 +48,7 @@ export default async function ScheduleImportDetailPage({
             <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
               <div><dt className="font-semibold text-muted">Source file</dt><dd className="mt-1 break-all font-medium text-ink">{detail.sourceFilename}</dd></div>
               <div><dt className="font-semibold text-muted">Accepted</dt><dd className="mt-1 text-ink"><time dateTime={detail.acceptedAt}>{acceptedAtLabel(detail.acceptedAt)}</time></dd></div>
-              <div><dt className="font-semibold text-muted">Category</dt><dd className="mt-1 text-ink">{detail.studentCategory ?? "Legacy"}</dd></div>
+              <div><dt className="font-semibold text-muted">Category</dt><dd className="mt-1 text-ink">{detail.importMode === "FIRST_YEAR_OVPSA" ? "First Year" : detail.studentCategory ?? "Legacy"}</dd></div>
               <div><dt className="font-semibold text-muted">Academic year</dt><dd className="mt-1 text-ink">{academicYear}</dd></div>
               <div><dt className="font-semibold text-muted">Generated range</dt><dd className="mt-1 text-ink">{detail.generatedRange ? `${detail.generatedRange.startDate} – ${detail.generatedRange.endDate}` : "No new pair generated"}</dd></div>
               <div><dt className="font-semibold text-muted">Imported by</dt><dd className="mt-1 text-ink">{detail.createdByName}</dd></div>
@@ -75,6 +75,62 @@ export default async function ScheduleImportDetailPage({
           </dl>
         </div>
       </Card>
+      {detail.firstYearSummary ? (
+        <Card>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <CardTitle>First Year publication</CardTitle>
+              <p className="mt-1 text-sm text-muted">
+                {detail.firstYearSummary.laboratory.date} at {detail.firstYearSummary.laboratory.locationName}
+              </p>
+            </div>
+            <Badge tone="success">{detail.status}</Badge>
+          </div>
+          <dl className="mt-5 grid gap-3 text-sm sm:grid-cols-3">
+            <div className="rounded-xl border border-line p-4">
+              <dt className="font-semibold text-muted">First PE candidate</dt>
+              <dd className="mt-1 font-bold text-ink">{detail.firstYearSummary.firstPhysicalExamCandidate}</dd>
+            </div>
+            <div className="rounded-xl border border-line p-4">
+              <dt className="font-semibold text-muted">Active PE capacity</dt>
+              <dd className="mt-1 font-bold text-ink">{detail.firstYearSummary.physicalExamMaximumCapacity} per day</dd>
+            </div>
+            <div className="rounded-xl border border-line p-4">
+              <dt className="font-semibold text-muted">Publication</dt>
+              <dd className="mt-1 font-bold text-ink">{detail.firstYearSummary.appointmentCount} appointments</dd>
+            </div>
+          </dl>
+          <div className="mt-5 grid gap-4 lg:grid-cols-2">
+            <div>
+              <h3 className="text-sm font-bold text-ink">Physical Examination allocations</h3>
+              <ul className="mt-2 grid gap-2">
+                {detail.firstYearSummary.allocations.map((allocation) => (
+                  <li key={allocation.date} className="flex items-center justify-between gap-3 rounded-xl bg-cpu-navy-soft/55 px-4 py-3 text-sm">
+                    <time dateTime={allocation.date} className="font-bold text-ink">{allocation.date}</time>
+                    <span className="text-muted">{allocation.studentCount} / {allocation.capacity} students</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-ink">Skipped dates and displacement</h3>
+              {detail.firstYearSummary.skippedDates.length ? (
+                <ul className="mt-2 grid gap-2">
+                  {detail.firstYearSummary.skippedDates.map((skipped) => (
+                    <li key={skipped.date} className="rounded-xl bg-cpu-navy-soft/55 px-4 py-3 text-sm text-muted">
+                      {`${skipped.date} — ${skipped.reasons.map((reason) => reason.toLowerCase().replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase())).join(", ")}`}
+                    </li>
+                  ))}
+                </ul>
+              ) : <p className="mt-2 text-sm text-muted">No candidate dates were skipped.</p>}
+              <p className="mt-3 text-sm text-muted">{detail.firstYearSummary.displacementTotal} lower-priority appointments displaced and replaced.</p>
+            </div>
+          </div>
+          <p className="mt-5 break-all text-xs text-muted">
+            {`OVPSA lineage: ${detail.firstYearSummary.batchId} / ${detail.firstYearSummary.revisionId}`}
+          </p>
+        </Card>
+      ) : null}
       {detail.status === "DRAFT" || detail.status === "VALIDATED" || detail.status === "GENERATED" ? (
         <Card>
           <CardTitle>Historical import actions</CardTitle>

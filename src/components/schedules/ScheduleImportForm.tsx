@@ -7,14 +7,28 @@ import { Button } from "@/components/ui/Button";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Field } from "@/components/ui/Field";
+import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 
 type StudentCategory = "REGULAR" | "OJT" | "TOUR" | "SPECIALIZED";
+type VisibleCategory = StudentCategory | "FIRST_YEAR";
 type ImportError = { message: string; fields?: Record<string, string[]> };
+type FirstYearReview = {
+  memberCount: number;
+  laboratory: { date: string; locationName: string };
+  firstPhysicalExamCandidate: string;
+  physicalExamMaximumCapacity: number;
+  allocations: Array<{ date: string; studentCount: number; capacity: number }>;
+  skippedDates: Array<{ date: string; reasons: string[] }>;
+  displacementTotal: number;
+  blockers: Array<{ code: string; message: string }>;
+  canPublish: boolean;
+};
 
 const REQUIRED_HEADERS = "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth";
-const categoryLabels: Record<StudentCategory, string> = {
+const categoryLabels: Record<VisibleCategory, string> = {
   REGULAR: "Regular",
+  FIRST_YEAR: "First Year",
   OJT: "OJT",
   TOUR: "Tour",
   SPECIALIZED: "Specialized",
@@ -39,18 +53,50 @@ export function ScheduleImportForm() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const currentYear = currentManilaYear();
   const academicYears = Array.from({ length: 7 }, (_, index) => currentYear - 1 + index);
-  const [studentCategory, setStudentCategory] = useState<StudentCategory>("REGULAR");
+  const [visibleCategory, setVisibleCategory] = useState<VisibleCategory>("REGULAR");
   const [academicYearStart, setAcademicYearStart] = useState(String(currentYear));
   const [selectedFileName, setSelectedFileName] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<ImportError>();
+  const [firstYearReview, setFirstYearReview] = useState<FirstYearReview>();
 
-  function review(event: FormEvent<HTMLFormElement>) {
+  async function review(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending) return;
     setError(undefined);
-    setConfirmOpen(true);
+    if (visibleCategory !== "FIRST_YEAR") {
+      setConfirmOpen(true);
+      return;
+    }
+    if (!formRef.current) return;
+    setPending(true);
+    setFirstYearReview(undefined);
+    try {
+      const response = await fetch("/api/schedule-imports/review", {
+        method: "POST",
+        body: new FormData(formRef.current),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        setError(payload.error ?? { message: "Unable to review the First Year import." });
+        return;
+      }
+      const plan = payload.data as FirstYearReview;
+      if (!plan.canPublish) {
+        setError({
+          message: plan.blockers.map((blocker) => blocker.message).join(" ")
+            || "The complete First Year import cannot be scheduled.",
+        });
+        return;
+      }
+      setFirstYearReview(plan);
+      setConfirmOpen(true);
+    } catch {
+      setError({ message: "Unable to review the First Year import." });
+    } finally {
+      setPending(false);
+    }
   }
 
   async function submit() {
@@ -78,9 +124,23 @@ export function ScheduleImportForm() {
     }
   }
 
+  const firstYearDescription = firstYearReview
+    ? `${selectedFileName}: ${firstYearReview.memberCount} Year-1 students for AY ${academicYearStart}–${Number(academicYearStart) + 1} will receive Laboratory on ${firstYearReview.laboratory.date} at ${firstYearReview.laboratory.locationName}. The first Physical Examination candidate is ${firstYearReview.firstPhysicalExamCandidate}; active CPU Clinic capacity is ${firstYearReview.physicalExamMaximumCapacity} per day across ${firstYearReview.allocations.length} selected dates: ${firstYearReview.allocations.map((allocation) => `${allocation.date}: ${allocation.studentCount} of ${allocation.capacity}`).join("; ")}. ${firstYearReview.skippedDates.length ? `Skipped dates: ${firstYearReview.skippedDates.map((date) => date.date).join(", ")}. ` : ""}Selected service dates become First Year-exclusive. ${firstYearReview.displacementTotal} lower-priority appointments will be displaced and replaced atomically.`
+    : "";
+
   return (
     <>
       <form ref={formRef} onSubmit={review}>
+        <input
+          type="hidden"
+          name="importMode"
+          value={visibleCategory === "FIRST_YEAR" ? "FIRST_YEAR_OVPSA" : "STANDARD"}
+        />
+        <input
+          type="hidden"
+          name="studentCategory"
+          value={visibleCategory === "FIRST_YEAR" ? "REGULAR" : visibleCategory}
+        />
         <Card className="grid gap-5">
           <div>
             <CardTitle>Academic-year student CSV</CardTitle>
@@ -146,10 +206,12 @@ export function ScheduleImportForm() {
             </div>
             <Field label="Student category">
               <Select
-                name="studentCategory"
-                value={studentCategory}
+                value={visibleCategory}
                 disabled={pending}
-                onChange={(event) => setStudentCategory(event.target.value as StudentCategory)}
+                onChange={(event) => {
+                  setVisibleCategory(event.target.value as VisibleCategory);
+                  setFirstYearReview(undefined);
+                }}
               >
                 {Object.entries(categoryLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </Select>
@@ -165,9 +227,22 @@ export function ScheduleImportForm() {
                 {academicYears.map((year) => <option key={year} value={year}>{year}–{year + 1}</option>)}
               </Select>
             </Field>
-            {studentCategory === "REGULAR" ? null : (
+            {visibleCategory === "FIRST_YEAR" ? (
+              <Field label="Laboratory date">
+                <div className="grid gap-1.5">
+                  <Input
+                    aria-label="Laboratory date"
+                    name="firstYearLaboratoryDate"
+                    type="date"
+                    required
+                    disabled={pending}
+                  />
+                  <span className="text-xs font-medium text-muted">Iloilo Mission Hospital</span>
+                </div>
+              </Field>
+            ) : visibleCategory === "REGULAR" ? null : (
               <Field label="Preferred month">
-                <Select name="preferredMonth" required defaultValue="" disabled={pending} key={studentCategory}>
+                <Select name="preferredMonth" required defaultValue="" disabled={pending} key={visibleCategory}>
                   <option value="" disabled>Select preferred month</option>
                   {Array.from({ length: 12 }, (_, index) => (
                     <option key={index + 1} value={index + 1}>
@@ -184,9 +259,11 @@ export function ScheduleImportForm() {
       </form>
       <ConfirmDialog
         open={confirmOpen}
-        title="Import and publish this CSV?"
-        description={`${selectedFileName} will be scheduled as ${categoryLabels[studentCategory]} for ${academicYearStart}–${Number(academicYearStart) + 1}. Both date-only clinic schedules will publish atomically.`}
-        confirmLabel="Agree and import"
+        title={visibleCategory === "FIRST_YEAR" ? "Confirm First Year schedule?" : "Import and publish this CSV?"}
+        description={visibleCategory === "FIRST_YEAR"
+          ? firstYearDescription
+          : `${selectedFileName} will be scheduled as ${categoryLabels[visibleCategory]} for ${academicYearStart}–${Number(academicYearStart) + 1}. Both date-only clinic schedules will publish atomically.`}
+        confirmLabel={visibleCategory === "FIRST_YEAR" ? "Agree and schedule" : "Agree and import"}
         pending={pending}
         pendingLabel="Importing and publishing…"
         onCancel={() => setConfirmOpen(false)}

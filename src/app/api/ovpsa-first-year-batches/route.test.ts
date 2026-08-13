@@ -58,39 +58,39 @@ beforeEach(() => {
 });
 
 describe("First Year OVPSA JSON routes", () => {
-  it("requires an administrator for list and create", async () => {
+  it("preserves historical list but retires manual creation", async () => {
     mocks.list.mockResolvedValue({ items: [] });
     expect((await GET()).status).toBe(200);
     expect(mocks.requireUser).toHaveBeenCalledWith(["ADMIN"]);
 
-    mocks.create.mockResolvedValue({ batchId, optimisticToken: token });
-    const response = await POST(jsonRequest("http://localhost/api/ovpsa-first-year-batches", {
-      scheduleCycleStart: 2026,
-      collegeId: "44444444-4444-4444-8444-444444444444",
-      laboratoryDate: "2026-09-12",
-      physicalExamDateOverride: null,
-      physicalExamExceptionReason: null,
-    }));
-    expect(response.status).toBe(201);
-    expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ laboratoryDate: "2026-09-12" }), actor.userId);
+    const response = await POST();
+    expect(response.status).toBe(410);
+    expect(await response.json()).toMatchObject({
+      error: {
+        code: "FIRST_YEAR_IMPORT_WORKFLOW_RETIRED",
+        message: expect.stringContaining("Schedule Import"),
+      },
+    });
+    expect(mocks.create).not.toHaveBeenCalled();
   });
 
-  it("wires detail, update, validation, publication, reschedule, and cancellation tokens", async () => {
+  it("preserves detail and emergency lifecycle but retires update, validation, and publication", async () => {
     mocks.get.mockResolvedValue({ batchId });
     expect((await getBatch(new Request("http://localhost"), batchContext)).status).toBe(200);
 
-    mocks.update.mockResolvedValue({ batchId, optimisticToken: token });
-    await PATCH(jsonRequest("http://localhost", {
-      optimisticToken: token,
-      laboratoryDate: "2026-09-12",
-      physicalExamDateOverride: null,
-      physicalExamExceptionReason: null,
-    }, "PATCH"), batchContext);
-    expect(mocks.update).toHaveBeenCalledWith(batchId, expect.objectContaining({ optimisticToken: token }), actor.userId);
+    const updateResponse = await PATCH();
+    expect(updateResponse.status).toBe(410);
+    expect(mocks.update).not.toHaveBeenCalled();
+
+    for (const handler of [validateBatch, publishBatch] as const) {
+      const response = await handler();
+      expect(response.status).toBe(410);
+      expect(await response.json()).toMatchObject({ error: { code: "FIRST_YEAR_IMPORT_WORKFLOW_RETIRED" } });
+    }
+    expect(mocks.validate).not.toHaveBeenCalled();
+    expect(mocks.publish).not.toHaveBeenCalled();
 
     for (const [handler, service, body] of [
-      [validateBatch, mocks.validate, { optimisticToken: token }],
-      [publishBatch, mocks.publish, { optimisticToken: token }],
       [rescheduleBatch, mocks.reschedule, {
         optimisticToken: token,
         laboratoryDate: "2026-10-03",
@@ -113,9 +113,9 @@ describe("First Year OVPSA JSON routes", () => {
     expect(denied.status).toBe(403);
     expect(await denied.json()).toMatchObject({ error: { code: "FORBIDDEN" } });
 
-    const invalid = await POST(jsonRequest("http://localhost", { scheduleCycleStart: "bad" }));
-    expect(invalid.status).toBe(422);
-    expect(await invalid.json()).toMatchObject({ error: { code: "VALIDATION_ERROR" } });
+    const retired = await POST();
+    expect(retired.status).toBe(410);
+    expect(await retired.json()).toMatchObject({ error: { code: "FIRST_YEAR_IMPORT_WORKFLOW_RETIRED" } });
   });
 
   it("authorizes the external Laboratory verification route for admin or clinic staff", async () => {

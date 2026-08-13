@@ -43,7 +43,9 @@ async function readArtifactWorkbook(templatePath: string) {
   }));
 
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(await zip.generateAsync({ type: "nodebuffer" }));
+  await workbook.xlsx.load(
+    await zip.generateAsync({ type: "nodebuffer" }) as unknown as Parameters<typeof workbook.xlsx.load>[0],
+  );
   return workbook;
 }
 

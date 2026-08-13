@@ -1,19 +1,15 @@
-import { z } from "zod";
 import { requireUser } from "@/server/auth/current-user";
-import { dataResponse, errorResponse } from "@/lib/api-response";
-import { validateOvpsaFirstYearBatch } from "@/server/ovpsa/ovpsa-first-year.service";
+import { errorResponse } from "@/lib/api-response";
+import { AppError } from "@/lib/errors";
 
-type Context = { params: Promise<{ batchId: string }> };
-const schema = z.object({ optimisticToken: z.string().uuid() }).strict();
-
-export async function POST(request: Request, context: Context) {
+export async function POST() {
   try {
-    const actor = await requireUser(["ADMIN"]);
-    return dataResponse(await validateOvpsaFirstYearBatch(
-      (await context.params).batchId,
-      schema.parse(await request.json()),
-      actor.userId,
-    ));
+    await requireUser(["ADMIN"]);
+    throw new AppError(
+      "FIRST_YEAR_IMPORT_WORKFLOW_RETIRED",
+      "Validate First Year schedules through Schedule Import.",
+      410,
+    );
   } catch (error) {
     return errorResponse(error);
   }

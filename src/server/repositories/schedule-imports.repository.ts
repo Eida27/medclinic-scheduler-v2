@@ -67,6 +67,18 @@ export type ScheduleImportResult = {
   overflow: { pairCountBeyondPreferredWindow: number; unscheduledStudentCount: number };
   displacementTotal: number;
   batchIds: string[];
+  importMode?: "STANDARD" | "FIRST_YEAR_OVPSA";
+  firstYearSummary?: {
+    laboratory: { date: string; locationName: string };
+    firstPhysicalExamCandidate: string;
+    physicalExamMaximumCapacity: number;
+    allocations: Array<{ date: string; studentCount: number; capacity: number }>;
+    skippedDates: Array<{ date: string; reasons: string[] }>;
+    displacementTotal: number;
+    appointmentCount: number;
+    batchId: string;
+    revisionId: string;
+  };
 };
 
 export type ScheduleImportListItem = {
@@ -85,6 +97,8 @@ export type ScheduleImportListItem = {
   createdAt: string;
   updatedAt: string;
   studentCategory: CreateScheduleImportInput["studentCategory"] | null;
+  importMode?: "STANDARD" | "FIRST_YEAR_OVPSA";
+  firstYearLaboratoryDate?: string | null;
   academicYearStart: number | null;
   preferredMonth: number | null;
   acceptedAt: string;
@@ -92,6 +106,17 @@ export type ScheduleImportListItem = {
   generatedRange: { startDate: string; endDate: string } | null;
   overflow: { pairCountBeyondPreferredWindow: number; unscheduledStudentCount: number };
   displacementTotal: number;
+  firstYearSummary?: {
+    laboratory: { date: string; locationName: string };
+    firstPhysicalExamCandidate: string;
+    physicalExamMaximumCapacity: number;
+    allocations: Array<{ date: string; studentCount: number; capacity: number }>;
+    skippedDates: Array<{ date: string; reasons: string[] }>;
+    displacementTotal: number;
+    appointmentCount: number;
+    batchId: string;
+    revisionId: string;
+  };
 };
 
 type StoredImportChildBatch = NonNullable<Awaited<ReturnType<typeof getScheduleBatch>>>;
@@ -785,6 +810,8 @@ type ScheduleImportSummaryRow = {
   created_at: Date;
   updated_at: Date;
   student_category: CreateScheduleImportInput["studentCategory"] | null;
+  import_mode: "STANDARD" | "FIRST_YEAR_OVPSA";
+  first_year_laboratory_date: string | null;
   academic_year_start: number | null;
   preferred_month: number | null;
   accepted_at: Date;
@@ -804,6 +831,8 @@ async function loadScheduleImportGroups(importId?: string) {
             import_group.submitted_by_name,
             import_group.description,
             import_group.student_category,
+            import_group.import_mode,
+            import_group.first_year_laboratory_date::text,
             import_group.academic_year_start,
             import_group.preferred_month,
             import_group.accepted_at,
@@ -837,7 +866,22 @@ async function loadScheduleImportGroups(importId?: string) {
        ORDER BY import_group.created_at DESC`,
     values,
   );
-  return result.rows.map((row): ScheduleImportListItem => ({
+  return result.rows.map((row): ScheduleImportListItem => {
+    const firstYearPlan = row.published_metadata?.firstYearSummary as Record<string, unknown> | undefined;
+    const firstYearSummary = row.import_mode === "FIRST_YEAR_OVPSA" && firstYearPlan
+      ? {
+          laboratory: firstYearPlan.laboratory as { date: string; locationName: string },
+          firstPhysicalExamCandidate: String(firstYearPlan.firstPhysicalExamCandidate),
+          physicalExamMaximumCapacity: Number(firstYearPlan.physicalExamMaximumCapacity),
+          allocations: (firstYearPlan.allocations ?? []) as Array<{ date: string; studentCount: number; capacity: number }>,
+          skippedDates: (firstYearPlan.skippedDates ?? []) as Array<{ date: string; reasons: string[] }>,
+          displacementTotal: Number(row.published_metadata?.displacementTotal ?? 0),
+          appointmentCount: Number(row.published_metadata?.publishedAppointmentCount ?? 0),
+          batchId: String(row.published_metadata?.batchId ?? ""),
+          revisionId: String(row.published_metadata?.revisionId ?? ""),
+        }
+      : undefined;
+    return ({
     importId: row.import_id,
     importName: row.import_name,
     sourceFilename: row.source_filename,
@@ -853,6 +897,8 @@ async function loadScheduleImportGroups(importId?: string) {
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
     studentCategory: row.student_category,
+    importMode: row.import_mode,
+    firstYearLaboratoryDate: row.first_year_laboratory_date,
     academicYearStart: row.academic_year_start,
     preferredMonth: row.preferred_month,
     acceptedAt: row.accepted_at.toISOString(),
@@ -863,7 +909,9 @@ async function loadScheduleImportGroups(importId?: string) {
       unscheduledStudentCount: 0,
     },
     displacementTotal: Number(row.published_metadata?.displacementTotal ?? 0),
-  }));
+    firstYearSummary,
+  });
+  });
 }
 
 export async function listScheduleImportGroups(): Promise<ScheduleImportListItem[]> {

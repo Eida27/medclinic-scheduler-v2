@@ -49,7 +49,9 @@ export function ScheduleImportHistoryTable({ imports }: { imports: ScheduleImpor
                   <p className="font-mono text-xs text-muted">{item.sourceFilename}</p>
                 </td>
                 <td className="px-5 py-4">
-                  <p className="font-bold text-ink">{item.studentCategory ?? "Legacy"}</p>
+                  <p className="font-bold text-ink">
+                    {item.importMode === "FIRST_YEAR_OVPSA" ? "First Year" : item.studentCategory ?? "Legacy"}
+                  </p>
                   <p className="text-xs text-muted">
                     {item.academicYearStart ? `${item.academicYearStart}–${item.academicYearStart + 1}` : "No academic year"}
                   </p>

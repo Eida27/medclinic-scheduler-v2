@@ -46,12 +46,19 @@ export type OvpsaDisplacementCandidate = {
   preferredMonth: number | null;
   schedulingWindowStart: string;
   schedulingWindowEnd: string;
+  conflictingServiceType: "LABORATORY" | "PHYSICAL_EXAM";
+  conflictingServiceDate: string;
   laboratory: AppointmentLineage;
   physicalExam: AppointmentLineage;
 };
 
 type PlannedReplacement = OvpsaProposedReplacement & {
   candidate: OvpsaDisplacementCandidate;
+};
+
+export type OvpsaServiceDates = {
+  laboratoryDates: string[];
+  physicalExamDates: string[];
 };
 
 function addDays(date: string, days: number) {
@@ -76,6 +83,7 @@ async function loadDateConflictAppointments(
     batch: StoredOvpsaBatch;
     memberStudentNumbers: string[];
     forUpdate: boolean;
+    serviceDates: OvpsaServiceDates;
   },
 ) {
   const result = await client.query<{
@@ -112,9 +120,9 @@ async function loadDateConflictAppointments(
        LEFT JOIN coordinator_schedule_items item ON item.id=appointment.schedule_item_id
       WHERE appointment.schedule_cycle_start=$1
         AND (
-          (appointment.schedule_type='LABORATORY' AND appointment.appointment_date=$2::date)
+          (appointment.schedule_type='LABORATORY' AND appointment.appointment_date=ANY($2::date[]))
           OR
-          (appointment.schedule_type='PHYSICAL_EXAM' AND appointment.appointment_date=$3::date)
+          (appointment.schedule_type='PHYSICAL_EXAM' AND appointment.appointment_date=ANY($3::date[]))
         )
         AND NOT (appointment.student_number=ANY($4::varchar[]))
         AND appointment.ovpsa_batch_id IS NULL
@@ -131,8 +139,8 @@ async function loadDateConflictAppointments(
       ${input.forUpdate ? "FOR UPDATE OF appointment" : ""}`,
     [
       input.batch.scheduleCycleStart,
-      input.batch.laboratoryDate,
-      input.batch.physicalExamDate,
+      input.serviceDates.laboratoryDates,
+      input.serviceDates.physicalExamDates,
       input.memberStudentNumbers,
     ],
   );
@@ -249,6 +257,24 @@ export async function planOvpsaLowerPriorityDisplacements(
     forUpdate: boolean;
   },
 ) {
+  return planOvpsaLowerPriorityDisplacementsForServiceDates(client, {
+    ...input,
+    serviceDates: {
+      laboratoryDates: [input.batch.laboratoryDate],
+      physicalExamDates: [input.batch.physicalExamDate],
+    },
+  });
+}
+
+export async function planOvpsaLowerPriorityDisplacementsForServiceDates(
+  client: PoolClient,
+  input: {
+    batch: StoredOvpsaBatch;
+    memberStudentNumbers: string[];
+    forUpdate: boolean;
+    serviceDates: OvpsaServiceDates;
+  },
+) {
   const direct = await loadDateConflictAppointments(client, input);
   const pairIds = [
     ...new Set(
@@ -274,17 +300,22 @@ export async function planOvpsaLowerPriorityDisplacements(
     ]);
   }
   const protectedConflicts: OvpsaProtectedConflict[] = [];
+  const protectedServiceDateKeys = new Set<string>();
   const candidates: OvpsaDisplacementCandidate[] = [];
   const plannedPairIds = new Set<string>();
 
   for (const conflict of direct) {
+    const recordProtected = (protectedAppointment: OvpsaProtectedConflict) => {
+      protectedConflicts.push(protectedAppointment);
+      protectedServiceDateKeys.add(`${conflict.scheduleType}:${conflict.appointmentDate}`);
+    };
     const state = protection.get(conflict.id);
     if (
       conflict.status !== "PENDING" ||
       conflict.isManuallyLocked ||
       state?.type === "PROTECTED"
     ) {
-      protectedConflicts.push(
+      recordProtected(
         protectedConflict(
           conflict,
           conflict.isManuallyLocked
@@ -305,7 +336,7 @@ export async function planOvpsaLowerPriorityDisplacements(
       conflict.sourceRowOrder === null ||
       !conflict.batchId
     ) {
-      protectedConflicts.push(
+      recordProtected(
         protectedConflict(
           conflict,
           "UNKNOWN_SCHEDULING_LINEAGE",
@@ -315,7 +346,7 @@ export async function planOvpsaLowerPriorityDisplacements(
       continue;
     }
     if (!conflict.schedulePairId) {
-      protectedConflicts.push(
+      recordProtected(
         protectedConflict(
           conflict,
           "PAIR_MISSING_OR_INCONSISTENT",
@@ -333,7 +364,7 @@ export async function planOvpsaLowerPriorityDisplacements(
       (appointment) => appointment.scheduleType === "PHYSICAL_EXAM",
     );
     if (laboratory.length !== 1 || physicalExam.length !== 1) {
-      protectedConflicts.push(
+      recordProtected(
         protectedConflict(
           conflict,
           "PAIR_MISSING_OR_INCONSISTENT",
@@ -356,7 +387,7 @@ export async function planOvpsaLowerPriorityDisplacements(
     });
     if (protectedRelated) {
       const relatedState = protection.get(protectedRelated.id);
-      protectedConflicts.push(
+      recordProtected(
         protectedConflict(
           protectedRelated,
           protectedRelated.isManuallyLocked
@@ -373,7 +404,7 @@ export async function planOvpsaLowerPriorityDisplacements(
     }
     const window = windowFor(conflict, input.batch);
     if (!window) {
-      protectedConflicts.push(
+      recordProtected(
         protectedConflict(
           conflict,
           "UNKNOWN_SCHEDULING_LINEAGE",
@@ -393,6 +424,8 @@ export async function planOvpsaLowerPriorityDisplacements(
       preferredMonth: conflict.preferredMonth,
       schedulingWindowStart: window.start,
       schedulingWindowEnd: window.end,
+      conflictingServiceType: conflict.scheduleType,
+      conflictingServiceDate: conflict.appointmentDate,
       laboratory: {
         ...laboratory[0],
         ...(conflict.scheduleType === "LABORATORY" ? conflict : {}),
@@ -480,10 +513,10 @@ export async function planOvpsaLowerPriorityDisplacements(
       excludeOvpsaBatchId: input.batch.batchId,
     });
     const blockedLaboratoryDates = [
-      ...new Set([...blocked.laboratoryDates, input.batch.laboratoryDate]),
+      ...new Set([...blocked.laboratoryDates, ...input.serviceDates.laboratoryDates]),
     ];
     const blockedPhysicalExamDates = [
-      ...new Set([...blocked.physicalExamDates, input.batch.physicalExamDate]),
+      ...new Set([...blocked.physicalExamDates, ...input.serviceDates.physicalExamDates]),
     ];
     const pairCandidates = candidates.filter(
       (candidate) => candidate.displacementType === "PAIR",
@@ -598,10 +631,32 @@ export async function planOvpsaLowerPriorityDisplacements(
     oldPhysicalExamDate: candidate.physicalExam.appointmentDate,
     displacementType: candidate.displacementType,
   }));
+  const replacementPairIds = new Set(
+    replacements.map((replacement) => replacement.candidate.schedulePairId),
+  );
+  const replacementBlockedServiceDateKeys = new Set(
+    candidates
+      .filter((candidate) => !replacementPairIds.has(candidate.schedulePairId))
+      .map((candidate) => `${candidate.conflictingServiceType}:${candidate.conflictingServiceDate}`),
+  );
   return {
     candidates,
     plannedReplacements: replacements,
     protectedConflicts,
+    protectedServiceDates: [...protectedServiceDateKeys].map((key) => {
+      const separator = key.indexOf(":");
+      return {
+        scheduleType: key.slice(0, separator) as "LABORATORY" | "PHYSICAL_EXAM",
+        date: key.slice(separator + 1),
+      };
+    }),
+    replacementBlockedServiceDates: [...replacementBlockedServiceDateKeys].map((key) => {
+      const separator = key.indexOf(":");
+      return {
+        scheduleType: key.slice(0, separator) as "LABORATORY" | "PHYSICAL_EXAM",
+        date: key.slice(separator + 1),
+      };
+    }),
     blockers,
     displacements,
     proposedReplacements: replacements.map((replacement) => ({
@@ -620,7 +675,8 @@ export async function applyOvpsaLowerPriorityDisplacements(
     actorUserId: string;
     plannedReplacements: PlannedReplacement[];
     laboratoryReservationId: string;
-    physicalExamReservationId: string;
+    physicalExamReservationId?: string;
+    physicalExamReservationIdsByDate?: Record<string, string>;
   },
 ) {
   if (!input.plannedReplacements.length) return { displacedCount: 0 };
@@ -744,7 +800,8 @@ export async function applyOvpsaLowerPriorityDisplacements(
     reservation_id:
       candidate.displacementType === "PAIR"
         ? input.laboratoryReservationId
-        : input.physicalExamReservationId,
+        : input.physicalExamReservationIdsByDate?.[candidate.physicalExam.appointmentDate]
+          ?? input.physicalExamReservationId,
   }));
   await client.query(
     `INSERT INTO appointment_reschedule_events (

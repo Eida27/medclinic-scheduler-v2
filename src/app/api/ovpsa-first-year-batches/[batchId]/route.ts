@@ -1,19 +1,9 @@
-import { z } from "zod";
-
 import { requireUser } from "@/server/auth/current-user";
 import { dataResponse, errorResponse } from "@/lib/api-response";
-import {
-  getOvpsaFirstYearBatch,
-  updateOvpsaFirstYearDraft,
-} from "@/server/ovpsa/ovpsa-first-year.service";
+import { AppError } from "@/lib/errors";
+import { getOvpsaFirstYearBatch } from "@/server/ovpsa/ovpsa-first-year.service";
 
 type Context = { params: Promise<{ batchId: string }> };
-const updateSchema = z.object({
-  optimisticToken: z.string().uuid(),
-  laboratoryDate: z.iso.date(),
-  physicalExamDateOverride: z.iso.date().nullable().default(null),
-  physicalExamExceptionReason: z.string().trim().min(3).max(1000).nullable().default(null),
-}).strict();
 
 export async function GET(_: Request, context: Context) {
   try {
@@ -24,14 +14,14 @@ export async function GET(_: Request, context: Context) {
   }
 }
 
-export async function PATCH(request: Request, context: Context) {
+export async function PATCH() {
   try {
-    const actor = await requireUser(["ADMIN"]);
-    return dataResponse(await updateOvpsaFirstYearDraft(
-      (await context.params).batchId,
-      updateSchema.parse(await request.json()),
-      actor.userId,
-    ));
+    await requireUser(["ADMIN"]);
+    throw new AppError(
+      "FIRST_YEAR_IMPORT_WORKFLOW_RETIRED",
+      "Update First Year schedules through Schedule Import.",
+      410,
+    );
   } catch (error) {
     return errorResponse(error);
   }

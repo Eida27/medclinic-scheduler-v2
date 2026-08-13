@@ -26,15 +26,56 @@ import {
   parseStudentImportCsv,
   STUDENT_IMPORT_MAXIMUM_BYTES,
 } from "./student-import-csv";
+import {
+  publishFirstYearScheduleImport,
+  reviewFirstYearScheduleImportPlan,
+  type FirstYearScheduleImportReview,
+} from "./first-year-schedule-import.service";
 
 const importMetadataSchema = z.object({
+  importMode: z.enum(["STANDARD", "FIRST_YEAR_OVPSA"]).default("STANDARD"),
   studentCategory: z.enum(["REGULAR", "OJT", "TOUR", "SPECIALIZED"]),
   academicYearStart: z.coerce.number().int().min(2020).max(2100),
   preferredMonth: z.preprocess(
     (value) => value === "" || value === null || value === undefined ? null : value,
     z.union([z.coerce.number().int().min(1).max(12), z.null()]),
   ),
+  firstYearLaboratoryDate: z.preprocess(
+    (value) => value === "" || value === null || value === undefined ? null : value,
+    z.union([z.iso.date(), z.null()]),
+  ).default(null),
 }).superRefine((value, context) => {
+  if (value.importMode === "FIRST_YEAR_OVPSA") {
+    if (value.studentCategory !== "REGULAR") {
+      context.addIssue({
+        code: "custom",
+        path: ["studentCategory"],
+        message: "First Year imports use the Regular compatibility category.",
+      });
+    }
+    if (value.preferredMonth !== null) {
+      context.addIssue({
+        code: "custom",
+        path: ["preferredMonth"],
+        message: "First Year imports do not use a preferred month.",
+      });
+    }
+    if (value.firstYearLaboratoryDate === null) {
+      context.addIssue({
+        code: "custom",
+        path: ["firstYearLaboratoryDate"],
+        message: "Choose the First Year Laboratory date.",
+      });
+    }
+    return;
+  }
+  if (value.firstYearLaboratoryDate !== null) {
+    context.addIssue({
+      code: "custom",
+      path: ["firstYearLaboratoryDate"],
+      message: "Standard imports do not use a First Year Laboratory date.",
+    });
+  }
   if (value.studentCategory === "REGULAR" && value.preferredMonth !== null) {
     context.addIssue({
       code: "custom",
@@ -121,6 +162,49 @@ function validatedFile(raw: unknown) {
     );
   }
   return { fileName, contents };
+}
+
+function validatedFirstYearRows(contents: CsvContents) {
+  const rows = parseStudentImportCsv(contents);
+  const fields: Record<string, string[]> = {};
+  for (const row of rows) {
+    if (row.yearLevel !== 1) {
+      fields[`rows.${row.rowNumber}.Year`] = [
+        "First Year imports require Year 1 for every row.",
+      ];
+    }
+  }
+  if (Object.keys(fields).length > 0) {
+    throw new AppError(
+      "CSV_IMPORT_INVALID",
+      "Please correct the CSV import errors.",
+      422,
+      fields,
+    );
+  }
+  return rows;
+}
+
+export async function reviewFirstYearScheduleImport(
+  raw: unknown,
+  actor: SessionUser,
+): Promise<FirstYearScheduleImportReview> {
+  assertImportOperator(actor);
+  const file = validatedFile(raw);
+  const metadata = importMetadataSchema.parse(raw);
+  if (metadata.importMode !== "FIRST_YEAR_OVPSA" || !metadata.firstYearLaboratoryDate) {
+    throw new AppError(
+      "FIRST_YEAR_IMPORT_REQUIRED",
+      "First Year review requires the First Year import mode and Laboratory date.",
+      422,
+    );
+  }
+  return reviewFirstYearScheduleImportPlan({
+    sourceFilename: file.fileName,
+    academicYearStart: metadata.academicYearStart,
+    laboratoryDate: metadata.firstYearLaboratoryDate,
+    rows: validatedFirstYearRows(file.contents),
+  });
 }
 
 export async function importStudentScheduleCsv(
@@ -408,7 +492,33 @@ export async function acceptAndScheduleImport(
   raw: unknown,
   actor: SessionUser,
 ): Promise<ScheduleImportResult> {
-  return importStudentScheduleCsv(raw, actor);
+  assertImportOperator(actor);
+  const file = validatedFile(raw);
+  const metadata = importMetadataSchema.parse(raw);
+  if (metadata.importMode === "FIRST_YEAR_OVPSA") {
+    return publishFirstYearScheduleImport({
+      sourceFilename: file.fileName,
+      academicYearStart: metadata.academicYearStart,
+      laboratoryDate: metadata.firstYearLaboratoryDate!,
+      rows: validatedFirstYearRows(file.contents),
+    }, actor.userId);
+  }
+  const result = await createScheduleImport({
+    studentCategory: metadata.studentCategory,
+    academicYearStart: metadata.academicYearStart,
+    preferredMonth: metadata.preferredMonth,
+    sourceFilename: file.fileName,
+    rows: parseStudentImportCsv(file.contents),
+  }, actor.userId);
+  if ("fields" in result) {
+    throw new AppError(
+      "CSV_IMPORT_INVALID",
+      "Please correct the CSV import errors.",
+      422,
+      result.fields,
+    );
+  }
+  return result;
 }
 
 export const importAndPublishStudentScheduleCsv = acceptAndScheduleImport;

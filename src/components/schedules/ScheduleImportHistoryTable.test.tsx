@@ -48,4 +48,16 @@ describe("ScheduleImportHistoryTable", () => {
 
     expect(screen.getByText("No schedule CSV files have been imported yet.")).toBeVisible();
   });
+
+  it("uses First Year as the authoritative imported category", () => {
+    render(<ScheduleImportHistoryTable imports={[{
+      ...scheduleImport,
+      importMode: "FIRST_YEAR_OVPSA",
+      studentCategory: "REGULAR",
+    }]} />);
+
+    const row = screen.getByRole("row", { name: /First Semester Schedules/ });
+    expect(within(row).getByText("First Year")).toBeVisible();
+    expect(within(row).queryByText("REGULAR")).not.toBeInTheDocument();
+  });
 });
