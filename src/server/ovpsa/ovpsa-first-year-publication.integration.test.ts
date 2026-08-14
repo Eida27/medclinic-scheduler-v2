@@ -8,10 +8,13 @@ import {
   cancelOvpsaFirstYearBatch,
   createOvpsaFirstYearBatch,
   publishOvpsaFirstYearBatch,
-  rescheduleOvpsaFirstYearBatch,
   validateOvpsaFirstYearBatch,
 } from "./ovpsa-first-year.service";
-import { saveClinicCalendarChanges } from "@/server/services/clinic-calendar.service";
+import {
+  confirmOvpsaClinicClosureBatchRecovery,
+  previewOvpsaClinicClosureBatchRecovery,
+  saveClinicCalendarChanges,
+} from "@/server/services/clinic-calendar.service";
 import { markOverdueAppointmentsNoShow } from "@/server/repositories/appointment-no-show.repository";
 import type { SessionUser } from "@/types/roles";
 
@@ -56,6 +59,10 @@ async function cleanup() {
       WHERE ovpsa_batch_id IN (SELECT id FROM ovpsa_first_year_batches WHERE schedule_cycle_start=$1)
          OR student_number LIKE $2`,
     [cycleStart, `${studentPrefix}%`],
+  );
+  await pool.query(
+    "DELETE FROM clinic_closure_manual_cases WHERE student_number LIKE $1",
+    [`${studentPrefix}%`],
   );
   await pool.query(
     "DELETE FROM appointment_status_logs WHERE appointment_id IN (SELECT id FROM appointments WHERE student_number LIKE $1)",
@@ -634,11 +641,87 @@ describe("First Year OVPSA publication", () => {
     expect(restoration.rows).toEqual([{ decision: "RESTORED", audits: 1 }]);
   });
 
+  it("automatically recovers an OVPSA PE-only closure without claiming an exclusive date", async () => {
+    const member = `${studentPrefix}0299`;
+    await insertStudent(member, 1);
+    const created = await createOvpsaFirstYearBatch({
+      scheduleCycleStart: cycleStart,
+      collegeId: TEST_REFERENCE_IDS.college,
+      laboratoryDate: "2096-11-05",
+      physicalExamDateOverride: null,
+      physicalExamExceptionReason: null,
+    }, TEST_REFERENCE_IDS.adminUser);
+    const validated = await validateOvpsaFirstYearBatch(
+      created.batchId,
+      { optimisticToken: created.optimisticToken },
+      TEST_REFERENCE_IDS.adminUser,
+    );
+    await publishOvpsaFirstYearBatch(
+      created.batchId,
+      { optimisticToken: validated.optimisticToken },
+      TEST_REFERENCE_IDS.adminUser,
+    );
+
+    const result = await saveClinicCalendarChanges({
+      requestId: randomUUID(),
+      emergencyAcknowledged: false,
+      recoveryMode: "AUTO_ELIGIBLE",
+      changes: [{
+        action: "BLOCK",
+        date: "2096-11-12",
+        category: "CLOSURE",
+        reason: "OVP-T1 closure PE only",
+      }],
+    }, adminActor);
+    expect(result).toMatchObject({
+      autoRecoveredStudentCount: 1,
+      movedAppointmentCount: 1,
+      manualCaseCount: 0,
+    });
+    const state = await pool.query<{
+      batch_status: string;
+      current_revision_id: string;
+      original_revision_id: string;
+      pending_laboratory: number;
+      pending_physical: number;
+      recovery_reservations: number;
+      exclusive_physical_active: number;
+    }>(
+      `SELECT batch.status AS batch_status,batch.current_revision_id::text,
+              $2::text AS original_revision_id,
+              (SELECT COUNT(*)::int FROM appointments
+                WHERE ovpsa_batch_id=batch.id AND schedule_type='LABORATORY'
+                  AND status='PENDING' AND is_published=TRUE) AS pending_laboratory,
+              (SELECT COUNT(*)::int FROM appointments
+                WHERE ovpsa_batch_id=batch.id AND schedule_type='PHYSICAL_EXAM'
+                  AND status='PENDING' AND is_published=TRUE) AS pending_physical,
+              (SELECT COUNT(*)::int FROM ovpsa_first_year_service_reservations
+                WHERE batch_id=batch.id AND reservation_kind='CLOSURE_RECOVERY'
+                  AND status='ACTIVE') AS recovery_reservations,
+              (SELECT COUNT(*)::int FROM ovpsa_first_year_service_reservations
+                WHERE batch_id=batch.id AND schedule_type='PHYSICAL_EXAM'
+                  AND reservation_kind='EXCLUSIVE' AND status='ACTIVE') AS exclusive_physical_active
+         FROM ovpsa_first_year_batches batch WHERE id=$1`,
+      [created.batchId, created.revisionId],
+    );
+    expect(state.rows).toEqual([{
+      batch_status: "PUBLISHED",
+      current_revision_id: created.revisionId,
+      original_revision_id: created.revisionId,
+      pending_laboratory: 1,
+      pending_physical: 1,
+      recovery_reservations: 1,
+      exclusive_physical_active: 0,
+    }]);
+  });
+
   it("marks a closed OVPSA date for reschedule, publishes a replacement revision, and cancels safely", async () => {
     const preservedMember = `${studentPrefix}0300`;
     const affectedMember = `${studentPrefix}0301`;
+    const safePhysicalMember = `${studentPrefix}0302`;
     await insertStudent(preservedMember, 1);
     await insertStudent(affectedMember, 1);
+    await insertStudent(safePhysicalMember, 1);
     const created = await createOvpsaFirstYearBatch({
       scheduleCycleStart: cycleStart,
       collegeId: TEST_REFERENCE_IDS.college,
@@ -662,10 +745,18 @@ describe("First Year OVPSA publication", () => {
         WHERE ovpsa_batch_id=$1 AND student_number=$3`,
       [created.batchId, TEST_REFERENCE_IDS.adminUser, preservedMember],
     );
+    await pool.query(
+      `UPDATE appointments
+          SET appointment_date='2096-11-27',updated_by=$2
+        WHERE ovpsa_batch_id=$1 AND student_number=$3
+          AND schedule_type='PHYSICAL_EXAM'`,
+      [created.batchId, TEST_REFERENCE_IDS.adminUser, safePhysicalMember],
+    );
 
     await saveClinicCalendarChanges({
       requestId: randomUUID(),
       emergencyAcknowledged: false,
+      recoveryMode: "AUTO_ELIGIBLE",
       changes: [{
         action: "BLOCK",
         date: "2096-11-05",
@@ -701,23 +792,64 @@ describe("First Year OVPSA publication", () => {
     expect(invalidated.rows).toEqual([expect.objectContaining({
       batch_status: "RESCHEDULE_REQUIRED",
       reservation_status: "INVALIDATED",
-      awaiting_laboratory: 1,
-      pending_physical: 1,
+      awaiting_laboratory: 2,
+      pending_physical: 2,
       completed_preserved: 2,
     })]);
 
-    const rescheduled = await rescheduleOvpsaFirstYearBatch(
+    const manualCases = await pool.query<{ id: string; optimistic_token: string }>(
+      `SELECT id::text,optimistic_token::text FROM clinic_closure_manual_cases
+        WHERE policy_metadata->>'ovpsaBatchId'=$1 AND status='OPEN' ORDER BY id`,
+      [created.batchId],
+    );
+    expect(manualCases.rows).toHaveLength(2);
+    const preview = await previewOvpsaClinicClosureBatchRecovery(
       created.batchId,
       {
         optimisticToken: invalidated.rows[0].optimistic_token,
-        laboratoryDate: "2096-11-19",
-        physicalExamDateOverride: null,
-        physicalExamExceptionReason: null,
+        replacementLaboratoryDate: "2096-11-19",
+      },
+      adminActor,
+    );
+    expect(preview).toMatchObject({
+      linkedCaseCount: 2,
+      preservedPhysicalExamCount: 1,
+      movedPhysicalExamCount: 1,
+    });
+    await expect(confirmOvpsaClinicClosureBatchRecovery(
+      created.batchId,
+      {
+        optimisticToken: invalidated.rows[0].optimistic_token,
+        replacementLaboratoryDate: "2096-11-19",
+        caseTokens: manualCases.rows.map((item, index) => ({
+          caseId: item.id,
+          expectedOptimisticToken: index === 0 ? randomUUID() : item.optimistic_token,
+        })),
+        reason: "This stale confirmation must remain atomic.",
+      },
+      adminActor,
+    )).rejects.toMatchObject({ code: "OVPSA_BATCH_RECOVERY_CASES_STALE", status: 409 });
+    await expect(pool.query(
+      `SELECT
+         (SELECT COUNT(*)::int FROM ovpsa_first_year_batch_revisions WHERE batch_id=$1) AS revisions,
+         (SELECT COUNT(*)::int FROM clinic_closure_manual_cases
+           WHERE policy_metadata->>'ovpsaBatchId'=$1::text AND status='OPEN') AS open_cases`,
+      [created.batchId],
+    )).resolves.toMatchObject({ rows: [{ revisions: 1, open_cases: 2 }] });
+    const rescheduled = await confirmOvpsaClinicClosureBatchRecovery(
+      created.batchId,
+      {
+        optimisticToken: invalidated.rows[0].optimistic_token,
+        replacementLaboratoryDate: "2096-11-19",
+        caseTokens: manualCases.rows.map((item) => ({
+          caseId: item.id,
+          expectedOptimisticToken: item.optimistic_token,
+        })),
         reason: "OVPSA approved replacement after closure.",
       },
-      TEST_REFERENCE_IDS.adminUser,
+      adminActor,
     );
-    expect(rescheduled).toMatchObject({ status: "PUBLISHED", revisionNumber: 2 });
+    expect(rescheduled).toMatchObject({ revisionNumber: 2 });
     const replacement = await pool.query<{
       revision_count: number;
       active_reservations: number;
@@ -741,9 +873,9 @@ describe("First Year OVPSA publication", () => {
     );
     expect(replacement.rows).toEqual([{
       revision_count: 2,
-      active_reservations: 2,
+      active_reservations: 3,
       old_released: 2,
-      new_pending: 2,
+      new_pending: 4,
       completed_preserved: 2,
     }]);
 
@@ -773,7 +905,7 @@ describe("First Year OVPSA publication", () => {
     );
     expect(cancelled.rows).toEqual([{
       status: "CANCELLED",
-      unfinished: 2,
+      unfinished: 4,
       active_memberships: 0,
       active_reservations: 0,
     }]);

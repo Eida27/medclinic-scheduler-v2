@@ -127,6 +127,7 @@ describe("unified calendar scheduling and student flow", () => {
     await saveClinicCalendarChanges({
       requestId: requestIds[0],
       emergencyAcknowledged: false,
+      recoveryMode: "AUTO_ELIGIBLE",
       changes: [{ action: "BLOCK", date: "2050-08-01", category: "CLOSURE", reason: "TEST-UNIFIED-E2E pre-import" }],
     }, admin);
     await acceptAndScheduleImport({
@@ -153,6 +154,7 @@ describe("unified calendar scheduling and student flow", () => {
     const moved = await saveClinicCalendarChanges({
       requestId: requestIds[1],
       emergencyAcknowledged: false,
+      recoveryMode: "AUTO_ELIGIBLE",
       changes: [
         { action: "BLOCK", date: "2050-08-02", category: "CLOSURE", reason: "TEST-UNIFIED-E2E current pair" },
         { action: "BLOCK", date: "2050-08-03", category: "CLOSURE", reason: "TEST-UNIFIED-E2E current pair" },
@@ -176,22 +178,23 @@ describe("unified calendar scheduling and student flow", () => {
 
     const first = moved.activeUnavailableDates.find((date) => date.blockedDate === "2050-08-02")!;
     const second = moved.activeUnavailableDates.find((date) => date.blockedDate === "2050-08-03")!;
-    const partial = await saveClinicCalendarChanges({
+    await saveClinicCalendarChanges({
       requestId: requestIds[2],
       emergencyAcknowledged: false,
+      recoveryMode: "AUTO_ELIGIBLE",
       changes: [{ action: "REOPEN", date: first.blockedDate, unavailableDateId: first.id, expectedUpdatedAt: first.updatedAt }],
     }, admin);
-    expect(partial.restoredAppointmentCount).toBe(0);
-    const restored = await saveClinicCalendarChanges({
+    const reopened = await saveClinicCalendarChanges({
       requestId: requestIds[3],
       emergencyAcknowledged: false,
+      recoveryMode: "AUTO_ELIGIBLE",
       changes: [{ action: "REOPEN", date: second.blockedDate, unavailableDateId: second.id, expectedUpdatedAt: second.updatedAt }],
     }, admin);
-    expect(restored).toMatchObject({ restoredStudentCount: 1, restoredAppointmentCount: 2 });
+    expect(reopened).toMatchObject({ reopenedDateCount: 1, movedAppointmentCount: 0 });
     await expect(publicStudentSchedule(studentNumber)).resolves.toMatchObject({
       appointments: [
-        expect.objectContaining({ appointmentDate: "2050-08-02", status: "PENDING" }),
-        expect.objectContaining({ appointmentDate: "2050-08-03", status: "PENDING" }),
+        expect.objectContaining({ appointmentDate: "2050-08-04", status: "PENDING" }),
+        expect.objectContaining({ appointmentDate: "2050-08-05", status: "PENDING" }),
       ],
     });
   });

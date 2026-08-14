@@ -5,6 +5,8 @@ export type ClinicCalendarCategory =
   | "MAINTENANCE"
   | "STAFF_UNAVAILABILITY";
 
+export type ClinicClosureRecoveryMode = "AUTO_ELIGIBLE" | "MANUAL_ALL";
+
 export type ClinicCalendarBlockChange = {
   action: "BLOCK";
   date: string;
@@ -25,6 +27,7 @@ export type ClinicCalendarOperationRequest = {
   requestId: string;
   changes: ClinicCalendarChange[];
   emergencyAcknowledged: boolean;
+  recoveryMode: ClinicClosureRecoveryMode;
 };
 
 export type ClinicCalendarIssue = {
@@ -51,6 +54,8 @@ export type ClinicUnavailableDateDto = {
   groupEndDate: string;
   category: ClinicCalendarCategory;
   reason: string;
+  recoveryMode?: ClinicClosureRecoveryMode;
+  policyEffectiveDate?: string;
   createdByName: string;
   createdAt: string;
   updatedAt: string;
@@ -69,12 +74,19 @@ export type ClinicCalendarPreviewResult = {
   closureGroups: ClinicCalendarClosureGroupPreview[];
   datesBeingReopened: string[];
   affectedStudentCount: number;
-  completePairMoveCount: number;
-  physicalOnlyMoveCount: number;
-  preservedCompletionCount: number;
-  expectedManualCaseCount: number;
-  expectedRestorationCount: number;
-  retainedReplacementCount: number;
+  automaticRecoveryEligibleCount: number;
+  manualResolutionRequiredCount: number;
+  completePairMoveEstimate: number;
+  laboratoryOnlyMoveEstimate: number;
+  physicalOnlyMoveEstimate: number;
+  preservedAppointmentCount: number;
+  expectedCapacityFallbackCount: number;
+  manualReasonGroups: ClinicCalendarReasonCount[];
+};
+
+export type ClinicCalendarReasonCount = {
+  reasonCode: ClinicManualCaseReason;
+  count: number;
 };
 
 export type ClinicCalendarOperationResult = {
@@ -83,15 +95,21 @@ export type ClinicCalendarOperationResult = {
   activeUnavailableDates: ClinicUnavailableDateDto[];
   blockedDateCount: number;
   reopenedDateCount: number;
+  autoRecoveredStudentCount: number;
   movedStudentCount: number;
   movedAppointmentCount: number;
-  preservedCompletionCount: number;
+  preservedAppointmentCount: number;
   manualCaseCount: number;
-  restoredStudentCount: number;
-  restoredAppointmentCount: number;
+  capacityFallbackCount: number;
+  manualReasonGroups: ClinicCalendarReasonCount[];
+  notificationWarningCount: number;
 };
 
 export type ClinicManualCaseReason =
+  | "EMERGENCY_CLOSURE"
+  | "NOTICE_PERIOD_PROTECTED"
+  | "OVPSA_LABORATORY_PROTECTED"
+  | "ADMIN_CHOSE_MANUAL_RECOVERY"
   | "PHYSICAL_COMPLETED_BEFORE_LABORATORY"
   | "APPOINTMENT_MANUALLY_LOCKED"
   | "DRAFT_RESULT_FILES_EXIST"
@@ -107,6 +125,8 @@ export type ClinicManualCaseResolutionRequest =
       expectedOptimisticToken: string;
       laboratoryDate?: string;
       physicalExamDate?: string;
+      preserveLaboratory?: boolean;
+      preservePhysicalExam?: boolean;
       reason: string;
     }
   | {
@@ -114,3 +134,32 @@ export type ClinicManualCaseResolutionRequest =
       expectedOptimisticToken: string;
       reason: string;
     };
+
+export type OvpsaClosureBatchCaseToken = {
+  caseId: string;
+  expectedOptimisticToken: string;
+};
+
+export type OvpsaClosureBatchRecoveryAllocation = {
+  studentNumber: string;
+  currentPhysicalExamDate: string;
+  proposedPhysicalExamDate: string;
+  physicalExamAction: "PRESERVE" | "MOVE";
+};
+
+export type OvpsaClosureBatchRecoveryPreview = {
+  batchId: string;
+  optimisticToken: string;
+  replacementLaboratoryDate: string;
+  linkedCaseCount: number;
+  preservedPhysicalExamCount: number;
+  movedPhysicalExamCount: number;
+  allocations: OvpsaClosureBatchRecoveryAllocation[];
+};
+
+export type OvpsaClosureBatchRecoveryConfirmation =
+  OvpsaClosureBatchRecoveryPreview & {
+    revisionId: string;
+    revisionNumber: number;
+    notificationWarningCount: number;
+  };

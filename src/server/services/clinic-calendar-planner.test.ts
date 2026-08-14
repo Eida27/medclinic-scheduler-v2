@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  addCalendarDays,
   allocateReplacementDates,
   classifyClinicCycle,
   groupContiguousClosureChanges,
@@ -69,6 +70,25 @@ describe("unified clinic closure planning", () => {
     expect(classifyClinicCycle(appointments as ClinicCycleAppointment[]).strategy).toBe(expected);
   });
 
+  it("moves only the affected service when the related appointment remains safe", () => {
+    const laboratory = appointment("LABORATORY", "PENDING");
+    const physicalExam = appointment("PHYSICAL_EXAM", "PENDING", {
+      appointmentDate: "2027-09-20",
+    });
+
+    expect(classifyClinicCycle([laboratory, physicalExam], {
+      affectedAppointmentIds: new Set([physicalExam.id]),
+    }).strategy).toBe("MOVE_PHYSICAL_ONLY");
+    expect(classifyClinicCycle([laboratory, physicalExam], {
+      affectedAppointmentIds: new Set([laboratory.id]),
+      proposedLaboratoryDate: "2027-09-01",
+    }).strategy).toBe("MOVE_LABORATORY_ONLY");
+    expect(classifyClinicCycle([laboratory, physicalExam], {
+      affectedAppointmentIds: new Set([laboratory.id]),
+      proposedLaboratoryDate: "2027-09-20",
+    }).strategy).toBe("MOVE_COMPLETE_PAIR");
+  });
+
   it("reports a specific reason for draft files, protected results, and inconsistent pairs", () => {
     expect(classifyClinicCycle([
       appointment("LABORATORY", "PENDING", {
@@ -133,6 +153,19 @@ describe("unified clinic closure planning", () => {
     })).toEqual({ laboratoryDate: "2027-08-18", physicalExamDate: "2027-08-20" });
   });
 
+  it("allocates a Laboratory-only recovery without consuming Physical capacity", () => {
+    expect(allocateReplacementDates({
+      strategy: "MOVE_LABORATORY_ONLY",
+      afterDate: "2027-08-13",
+      blockedDates: new Set(),
+      usedCapacity: {
+        LABORATORY: new Map(),
+        PHYSICAL_EXAM: new Map(),
+      },
+      capacity: { LABORATORY: 1, PHYSICAL_EXAM: 1 },
+    })).toEqual({ laboratoryDate: "2027-08-16" });
+  });
+
   it("allocates deterministically as callers process students in student-number order", () => {
     const usedCapacity = {
       LABORATORY: new Map<string, number>(),
@@ -154,5 +187,25 @@ describe("unified clinic closure planning", () => {
       capacity: { LABORATORY: 1, PHYSICAL_EXAM: 1 },
     });
     expect([first.physicalExamDate, second.physicalExamDate]).toEqual(["2027-08-16", "2027-08-17"]);
+  });
+
+  it("reports a manual capacity fallback when no free weekday exists in the recovery horizon", () => {
+    const blockedDates = new Set<string>();
+    const afterDate = "2027-08-13";
+    const horizon = addCalendarDays(afterDate, 366 * 5);
+    for (
+      let date = addCalendarDays(afterDate, 1);
+      date <= horizon;
+      date = addCalendarDays(date, 1)
+    ) {
+      blockedDates.add(date);
+    }
+    expect(() => allocateReplacementDates({
+      strategy: "MOVE_PHYSICAL_ONLY",
+      afterDate,
+      blockedDates,
+      usedCapacity: { LABORATORY: new Map(), PHYSICAL_EXAM: new Map() },
+      capacity: { LABORATORY: 1, PHYSICAL_EXAM: 1 },
+    })).toThrow(expect.objectContaining({ reasonCode: "NO_REPLACEMENT_CAPACITY" }));
   });
 });

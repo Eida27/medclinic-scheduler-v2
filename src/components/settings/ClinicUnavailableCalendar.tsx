@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Card, CardTitle } from "@/components/ui/Card";
@@ -14,6 +14,7 @@ import type {
   ClinicCalendarIssue,
   ClinicCalendarOperationResult,
   ClinicCalendarPreviewResult,
+  ClinicClosureRecoveryMode,
 } from "@/types/clinic-calendar";
 import { buildAnnualCalendar, expandUnavailableRanges } from "./clinic-calendar";
 import {
@@ -82,10 +83,12 @@ export function ClinicUnavailableCalendar({
   const [preview, setPreview] = useState<ClinicCalendarPreviewResult>();
   const [requestId, setRequestId] = useState<string>();
   const [emergencyAcknowledged, setEmergencyAcknowledged] = useState(false);
+  const [recoveryMode, setRecoveryMode] = useState<ClinicClosureRecoveryMode>("AUTO_ELIGIBLE");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiError>();
   const [success, setSuccess] = useState<ClinicCalendarOperationResult>();
   const submitting = useRef(false);
+  const impactDialog = useRef<HTMLDivElement>(null);
   const annual = useMemo(() => buildAnnualCalendar(selectedYear), [selectedYear]);
   const persistedByDate = useMemo(() => expandUnavailableRanges(records), [records]);
   const changes = useMemo(() => sortedChanges(draft), [draft]);
@@ -96,10 +99,17 @@ export function ClinicUnavailableCalendar({
     && change.date === today
     && change.category === "EMERGENCY_CLOSURE");
 
+  useEffect(() => {
+    if (!preview) return;
+    const frame = requestAnimationFrame(() => impactDialog.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [preview]);
+
   function invalidatePreview() {
     setPreview(undefined);
     setRequestId(undefined);
     setEmergencyAcknowledged(false);
+    setRecoveryMode("AUTO_ELIGIBLE");
     setSuccess(undefined);
   }
 
@@ -150,6 +160,11 @@ export function ClinicUnavailableCalendar({
       if (!response.ok || !payload.data) throw payload.error ?? { message: "Unable to preview calendar impact." };
       setRequestId(nextRequestId);
       setPreview(payload.data);
+      setRecoveryMode(
+        payload.data.automaticRecoveryEligibleCount > 0
+          ? "AUTO_ELIGIBLE"
+          : "MANUAL_ALL",
+      );
     } catch (caught) {
       setError(caught as ApiError);
     } finally {
@@ -167,7 +182,7 @@ export function ClinicUnavailableCalendar({
       const response = await fetch("/api/clinic-unavailable-dates", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ requestId, changes, emergencyAcknowledged }),
+        body: JSON.stringify({ requestId, changes, emergencyAcknowledged, recoveryMode }),
       });
       const payload = await response.json() as { data?: ClinicCalendarOperationResult; error?: ApiError };
       if (!response.ok || !payload.data) {
@@ -185,6 +200,7 @@ export function ClinicUnavailableCalendar({
       setPreview(undefined);
       setRequestId(undefined);
       setEmergencyAcknowledged(false);
+      setRecoveryMode("AUTO_ELIGIBLE");
     } catch (caught) {
       setError(caught as ApiError);
       setPreview(undefined);
@@ -213,7 +229,7 @@ export function ClinicUnavailableCalendar({
       ) : null}
       {success ? (
         <Alert tone="success">
-          Saved {success.blockedDateCount} blocked and {success.reopenedDateCount} reopened dates. {success.manualCaseCount} manual cases created.
+          Saved {success.blockedDateCount} blocked and {success.reopenedDateCount} reopened dates. {success.autoRecoveredStudentCount} students recovered automatically; {success.manualCaseCount} manual cases created; {success.capacityFallbackCount} capacity fallbacks; {success.notificationWarningCount} notification warnings.
         </Alert>
       ) : null}
       {error ? <Alert tone="danger">{error.message}</Alert> : null}
@@ -350,18 +366,66 @@ export function ClinicUnavailableCalendar({
       ) : null}
 
       {preview ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-labelledby="impact-title">
+        <div
+          ref={impactDialog}
+          tabIndex={-1}
+          className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4 outline-none"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="impact-title"
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && !busy) setPreview(undefined);
+          }}
+        >
           <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-5 shadow-xl">
             <h2 id="impact-title" className="text-xl font-bold text-ink">Confirm clinic calendar impact</h2>
             <p className="mt-1 text-sm text-muted">The save will recalculate these counts under the scheduling lock.</p>
             <dl className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
               <div><dt className="text-muted">Affected students</dt><dd className="text-lg font-bold">{preview.affectedStudentCount}</dd></div>
-              <div><dt className="text-muted">Complete pairs</dt><dd className="text-lg font-bold">{preview.completePairMoveCount}</dd></div>
-              <div><dt className="text-muted">Physical only</dt><dd className="text-lg font-bold">{preview.physicalOnlyMoveCount}</dd></div>
-              <div><dt className="text-muted">Completed preserved</dt><dd className="text-lg font-bold">{preview.preservedCompletionCount}</dd></div>
-              <div><dt className="text-muted">Expected manual cases</dt><dd className="text-lg font-bold">{preview.expectedManualCaseCount}</dd></div>
-              <div><dt className="text-muted">Expected restorations</dt><dd className="text-lg font-bold">{preview.expectedRestorationCount}</dd></div>
+              <div><dt className="text-muted">Automatic eligible</dt><dd className="text-lg font-bold">{preview.automaticRecoveryEligibleCount}</dd></div>
+              <div><dt className="text-muted">Manual Resolution</dt><dd className="text-lg font-bold">{preview.manualResolutionRequiredCount}</dd></div>
+              <div><dt className="text-muted">Complete pairs</dt><dd className="text-lg font-bold">{preview.completePairMoveEstimate}</dd></div>
+              <div><dt className="text-muted">Laboratory only</dt><dd className="text-lg font-bold">{preview.laboratoryOnlyMoveEstimate}</dd></div>
+              <div><dt className="text-muted">Physical only</dt><dd className="text-lg font-bold">{preview.physicalOnlyMoveEstimate}</dd></div>
+              <div><dt className="text-muted">Appointments preserved</dt><dd className="text-lg font-bold">{preview.preservedAppointmentCount}</dd></div>
+              <div><dt className="text-muted">Capacity fallbacks</dt><dd className="text-lg font-bold">{preview.expectedCapacityFallbackCount}</dd></div>
             </dl>
+            {preview.manualReasonGroups.length ? (
+              <div className="mt-4 rounded-xl border border-line bg-canvas/60 p-3 text-sm">
+                <p className="font-bold text-ink">Manual reasons</p>
+                <ul className="mt-2 grid gap-1 text-muted">
+                  {preview.manualReasonGroups.map((item) => (
+                    <li key={item.reasonCode}>
+                      {item.reasonCode.toLowerCase().replaceAll("_", " ")}: {item.count}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            <fieldset className="mt-4 grid gap-2 rounded-xl border border-line p-3">
+              <legend className="px-1 text-sm font-bold text-ink">Recovery mode</legend>
+              <label className="flex items-start gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="clinic-closure-recovery-mode"
+                  value="AUTO_ELIGIBLE"
+                  checked={recoveryMode === "AUTO_ELIGIBLE"}
+                  disabled={preview.automaticRecoveryEligibleCount === 0}
+                  onChange={() => setRecoveryMode("AUTO_ELIGIBLE")}
+                />
+                <span>Automatically reschedule eligible appointments</span>
+              </label>
+              <label className="flex items-start gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="clinic-closure-recovery-mode"
+                  value="MANUAL_ALL"
+                  checked={recoveryMode === "MANUAL_ALL"}
+                  onChange={() => setRecoveryMode("MANUAL_ALL")}
+                />
+                <span>Send eligible appointments to Manual Resolution</span>
+              </label>
+            </fieldset>
             {sameDayEmergency ? (
               <label className="mt-4 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-900">
                 <input

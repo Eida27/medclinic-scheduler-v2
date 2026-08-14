@@ -16,11 +16,21 @@ export type ClinicCycleAppointment = {
   resultProtectionState: AppointmentResultProtectionState;
   schedulePairId: string | null;
   scheduleCycleStart: number;
+  createdAt?: string;
+  sourceOrder?: number | null;
+  ovpsaBatchId?: string | null;
+  ovpsaRevisionId?: string | null;
+  ovpsaServiceReservationId?: string | null;
 };
 
 export type ClinicCycleClassification =
   | {
       strategy: "MOVE_COMPLETE_PAIR";
+      laboratory: ClinicCycleAppointment;
+      physicalExam: ClinicCycleAppointment;
+    }
+  | {
+      strategy: "MOVE_LABORATORY_ONLY";
       laboratory: ClinicCycleAppointment;
       physicalExam: ClinicCycleAppointment;
     }
@@ -124,6 +134,10 @@ function manual(
 
 export function classifyClinicCycle(
   appointments: ClinicCycleAppointment[],
+  options: {
+    affectedAppointmentIds?: ReadonlySet<string>;
+    proposedLaboratoryDate?: string | null;
+  } = {},
 ): ClinicCycleClassification {
   const laboratoryRows = appointments.filter((item) => item.scheduleType === "LABORATORY");
   const physicalRows = appointments.filter((item) => item.scheduleType === "PHYSICAL_EXAM");
@@ -180,13 +194,30 @@ export function classifyClinicCycle(
   const labCompleted = laboratory.status === "COMPLETED";
   const physicalCompleted = physicalExam.status === "COMPLETED";
   const unfinished = new Set(["DRAFT", "PENDING"]);
+  const affectedAppointmentIds = options.affectedAppointmentIds
+    ?? new Set([laboratory.id, physicalExam.id]);
+  const laboratoryAffected = affectedAppointmentIds.has(laboratory.id);
+  const physicalExamAffected = affectedAppointmentIds.has(physicalExam.id);
   if (labCompleted && physicalCompleted) {
     return { strategy: "PRESERVE_COMPLETION", laboratory, physicalExam };
   }
   if (labCompleted && unfinished.has(physicalExam.status)) {
-    return { strategy: "MOVE_PHYSICAL_ONLY", laboratory, physicalExam };
+    return physicalExamAffected
+      ? { strategy: "MOVE_PHYSICAL_ONLY", laboratory, physicalExam }
+      : { strategy: "PRESERVE_COMPLETION", laboratory, physicalExam };
   }
   if (unfinished.has(laboratory.status) && unfinished.has(physicalExam.status)) {
+    if (!laboratoryAffected && physicalExamAffected) {
+      return { strategy: "MOVE_PHYSICAL_ONLY", laboratory, physicalExam };
+    }
+    if (
+      laboratoryAffected
+      && !physicalExamAffected
+      && options.proposedLaboratoryDate
+      && options.proposedLaboratoryDate < physicalExam.appointmentDate
+    ) {
+      return { strategy: "MOVE_LABORATORY_ONLY", laboratory, physicalExam };
+    }
     return { strategy: "MOVE_COMPLETE_PAIR", laboratory, physicalExam };
   }
   if (unfinished.has(laboratory.status) && physicalCompleted) {
@@ -237,7 +268,7 @@ function nextCapacityDate(input: {
 }
 
 export function allocateReplacementDates(input: {
-  strategy: "MOVE_COMPLETE_PAIR" | "MOVE_PHYSICAL_ONLY";
+  strategy: "MOVE_COMPLETE_PAIR" | "MOVE_LABORATORY_ONLY" | "MOVE_PHYSICAL_ONLY";
   afterDate: string;
   blockedDates: Set<string>;
   blockedDatesByService?: Partial<Record<keyof ReplacementCapacity, Set<string>>>;
@@ -253,6 +284,9 @@ export function allocateReplacementDates(input: {
     };
   }
   const laboratoryDate = nextCapacityDate({ ...input, scheduleType: "LABORATORY" });
+  if (input.strategy === "MOVE_LABORATORY_ONLY") {
+    return { laboratoryDate };
+  }
   const physicalExamDate = nextCapacityDate({
     ...input,
     afterDate: laboratoryDate,

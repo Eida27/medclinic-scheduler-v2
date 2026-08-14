@@ -2,6 +2,7 @@ import type { PoolClient, QueryResultRow } from "pg";
 import { query } from "@/server/db/pool";
 import type {
   ClinicCalendarClosureGroupPreview,
+  ClinicClosureRecoveryMode,
   ClinicUnavailableDateDto,
 } from "@/types/clinic-calendar";
 
@@ -19,6 +20,8 @@ type UnavailableDateRow = {
   group_end_date: string;
   category: ClinicUnavailableDateDto["category"];
   reason: string;
+  recovery_mode: ClinicClosureRecoveryMode;
+  policy_effective_date: string;
   created_by_name: string;
   created_at: Date;
   updated_at: string;
@@ -43,6 +46,8 @@ const activeDateSelect = `
          closure.end_date::text AS group_end_date,
          closure.category,
          closure.reason,
+         closure.recovery_mode,
+         closure.policy_effective_date::text,
          creator.full_name AS created_by_name,
          unavailable.created_at,
          to_char(
@@ -63,6 +68,8 @@ function toDto(row: UnavailableDateRow): ClinicUnavailableDateDto {
     groupEndDate: row.group_end_date,
     category: row.category,
     reason: row.reason,
+    recoveryMode: row.recovery_mode,
+    policyEffectiveDate: row.policy_effective_date,
     createdByName: row.created_by_name,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at,
@@ -118,6 +125,8 @@ export async function lockActiveUnavailableDates(
     group_end_date: string;
     category: ClinicUnavailableDateDto["category"];
     reason: string;
+    recovery_mode: ClinicClosureRecoveryMode;
+    policy_effective_date: string;
     updated_at: string;
   }>(
     `SELECT unavailable.id::text,unavailable.closure_group_id::text,
@@ -125,6 +134,7 @@ export async function lockActiveUnavailableDates(
             closure.start_date::text AS group_start_date,
             closure.end_date::text AS group_end_date,
             closure.category,closure.reason,
+            closure.recovery_mode,closure.policy_effective_date::text,
             to_char(
               unavailable.updated_at AT TIME ZONE 'UTC',
               'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
@@ -145,6 +155,8 @@ export async function lockActiveUnavailableDates(
     groupEndDate: row.group_end_date,
     category: row.category,
     reason: row.reason,
+    recoveryMode: row.recovery_mode,
+    policyEffectiveDate: row.policy_effective_date,
     updatedAt: row.updated_at,
   }));
 }
@@ -154,12 +166,29 @@ export async function createClosureGroupWithDates(
   group: ClinicCalendarClosureGroupPreview,
   actorUserId: string,
   batchId: string,
+  recoveryMode: ClinicClosureRecoveryMode = "AUTO_ELIGIBLE",
+  policyEffectiveDate = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Manila",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date()),
 ) {
   const insertedGroup = await client.query<{ id: string }>(
     `INSERT INTO clinic_closure_groups (
-       start_date,end_date,category,reason,created_by,creation_batch_id
-     ) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id::text`,
-    [group.startDate, group.endDate, group.category, group.reason, actorUserId, batchId],
+       start_date,end_date,category,reason,created_by,creation_batch_id,
+       recovery_mode,policy_effective_date
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id::text`,
+    [
+      group.startDate,
+      group.endDate,
+      group.category,
+      group.reason,
+      actorUserId,
+      batchId,
+      recoveryMode,
+      policyEffectiveDate,
+    ],
   );
   const closureGroupId = insertedGroup.rows[0].id;
   const dates = await client.query<{ id: string; blocked_date: string }>(

@@ -19,11 +19,14 @@ import type {
   ClinicCalendarOperationRequest,
   ClinicCalendarOperationResult,
   ClinicCalendarPreviewResult,
+  ClinicClosureRecoveryMode,
   ClinicManualCaseReason,
   ClinicManualCaseResolutionRequest,
+  OvpsaClosureBatchRecoveryConfirmation,
+  OvpsaClosureBatchRecoveryPreview,
 } from "@/types/clinic-calendar";
 import type { SessionUser } from "@/types/roles";
-import { createStudentNotification } from "@/server/services/student-notifications.service";
+import { createStudentNotificationIsolated } from "@/server/services/student-notifications.service";
 import { studentDisplayNameSql } from "@/server/students/student-display-name";
 import { loadAppointmentResultProtectionStates } from "@/server/repositories/student-result-submissions.repository";
 import {
@@ -39,11 +42,15 @@ import {
   type ReplacementCapacity,
   type UsedReplacementCapacity,
 } from "./clinic-calendar-planner";
-import { invalidateOvpsaReservationsForClosuresWithClient } from "@/server/ovpsa/ovpsa-first-year-lifecycle";
 import {
   isSchedulingDateBlocked,
   loadSchedulingBlockedDates,
 } from "@/server/repositories/scheduling-blocked-dates.repository";
+import {
+  compareClosureRecoveryQueueEntries,
+  evaluateClosureRecoveryPolicy,
+  type ClinicClosureRecoveryPolicyDecision,
+} from "./clinic-closure-recovery-policy";
 
 const categorySchema = z.enum([
   "HOLIDAY",
@@ -64,10 +71,16 @@ const reopenSchema = z.object({
   unavailableDateId: z.string().uuid(),
   expectedUpdatedAt: z.string().trim().min(1).max(64),
 }).strict();
-const requestSchema = z.object({
+const recoveryModeSchema = z.enum(["AUTO_ELIGIBLE", "MANUAL_ALL"]);
+const requestShape = {
   requestId: z.string().uuid(),
   changes: z.array(z.discriminatedUnion("action", [blockSchema, reopenSchema])).min(1).max(366),
   emergencyAcknowledged: z.boolean(),
+};
+const previewRequestSchema = z.object(requestShape).strict();
+const requestSchema = z.object({
+  ...requestShape,
+  recoveryMode: recoveryModeSchema,
 }).strict();
 const resolutionSchema = z.discriminatedUnion("action", [
   z.object({
@@ -75,6 +88,8 @@ const resolutionSchema = z.discriminatedUnion("action", [
     expectedOptimisticToken: z.string().uuid(),
     laboratoryDate: z.iso.date().optional(),
     physicalExamDate: z.iso.date().optional(),
+    preserveLaboratory: z.boolean().optional(),
+    preservePhysicalExam: z.boolean().optional(),
     reason: z.string().trim().min(3).max(500),
   }),
   z.object({
@@ -83,12 +98,27 @@ const resolutionSchema = z.discriminatedUnion("action", [
     reason: z.string().trim().min(3).max(500),
   }),
 ]);
+const ovpsaBatchPreviewSchema = z.object({
+  optimisticToken: z.string().uuid(),
+  replacementLaboratoryDate: z.iso.date(),
+}).strict();
+const ovpsaBatchConfirmSchema = ovpsaBatchPreviewSchema.extend({
+  caseTokens: z.array(z.object({
+    caseId: z.string().uuid(),
+    expectedOptimisticToken: z.string().uuid(),
+  }).strict()).min(1),
+  reason: z.string().trim().min(3).max(500),
+}).strict();
 
 type CalendarCycle = {
   key: string;
   studentNumber: string;
   scheduleCycleStart: number;
   appointments: ClinicCycleAppointment[];
+};
+
+type ParsedCalendarRequest = Omit<ClinicCalendarOperationRequest, "recoveryMode"> & {
+  recoveryMode?: ClinicClosureRecoveryMode;
 };
 
 type PersistedGroup = ReturnType<typeof groupContiguousClosureChanges>[number] & {
@@ -179,11 +209,16 @@ function manilaToday() {
 
 function parseRequest(
   raw: unknown,
-  options: { requireEmergencyAcknowledgement?: boolean } = {},
-): ClinicCalendarOperationRequest {
-  const parsed = requestSchema.safeParse(raw);
+  options: {
+    requireEmergencyAcknowledgement?: boolean;
+    requireRecoveryMode?: boolean;
+  } = {},
+): ParsedCalendarRequest {
+  const parsed = (
+    options.requireRecoveryMode === false ? previewRequestSchema : requestSchema
+  ).safeParse(raw);
   if (!parsed.success) throw validationError("Please correct the clinic calendar request.", parsed.error.flatten());
-  const request = parsed.data as ClinicCalendarOperationRequest;
+  const request = parsed.data as ParsedCalendarRequest;
   const today = manilaToday();
   const seen = new Set<string>();
   for (const change of request.changes) {
@@ -215,7 +250,7 @@ function parseRequest(
   return request;
 }
 
-function payloadHash(request: ClinicCalendarOperationRequest) {
+function payloadHash(request: ParsedCalendarRequest) {
   return createHash("sha256").update(JSON.stringify(request)).digest("hex");
 }
 
@@ -251,12 +286,16 @@ async function loadAffectedCycles(client: PoolClient, dates: string[], lock: boo
     is_manually_locked: boolean;
     schedule_pair_id: string | null;
     schedule_cycle_start: number;
+    created_at: Date;
+    scheduling_source_row_order: number | null;
+    ovpsa_batch_id: string | null;
+    ovpsa_revision_id: string | null;
+    ovpsa_service_reservation_id: string | null;
   }>(
     `WITH impacted AS (
        SELECT DISTINCT student_number,schedule_cycle_start
          FROM appointments
         WHERE appointment_date=ANY($1::date[])
-          AND ovpsa_batch_id IS NULL
           AND is_published=TRUE
           AND status NOT IN ('RESCHEDULED','CANCELLED')
      )
@@ -265,13 +304,16 @@ async function loadAffectedCycles(client: PoolClient, dates: string[], lock: boo
             appointment.appointment_date::text,appointment.status,
             appointment.is_published,appointment.is_manually_locked,
             appointment.schedule_pair_id::text,appointment.schedule_cycle_start
+            ,appointment.created_at,appointment.scheduling_source_row_order,
+            appointment.ovpsa_batch_id::text,appointment.ovpsa_revision_id::text,
+            appointment.ovpsa_service_reservation_id::text
        FROM appointments appointment
        JOIN impacted USING(student_number,schedule_cycle_start)
       WHERE appointment.is_published=TRUE
-        AND appointment.ovpsa_batch_id IS NULL
         AND appointment.status NOT IN ('RESCHEDULED','CANCELLED')
-      ORDER BY appointment.student_number,appointment.schedule_cycle_start,
-               appointment.schedule_pair_id,appointment.schedule_type,appointment.id
+      ORDER BY appointment.appointment_date,appointment.created_at,
+               appointment.scheduling_source_row_order NULLS LAST,
+               appointment.student_number,appointment.schedule_type,appointment.id
       ${lock ? "FOR UPDATE OF appointment" : ""}`,
     [dates],
   );
@@ -286,7 +328,7 @@ async function loadAffectedCycles(client: PoolClient, dates: string[], lock: boo
       key,
       studentNumber: row.student_number,
       scheduleCycleStart: row.schedule_cycle_start,
-      appointments: [],
+      appointments: [] as ClinicCycleAppointment[],
     };
     cycle.appointments.push({
       id: row.id,
@@ -299,18 +341,167 @@ async function loadAffectedCycles(client: PoolClient, dates: string[], lock: boo
       resultProtectionState: protectionStates.get(row.id) ?? { type: "CLEAR" },
       schedulePairId: row.schedule_pair_id,
       scheduleCycleStart: row.schedule_cycle_start,
+      createdAt: row.created_at.toISOString(),
+      sourceOrder: row.scheduling_source_row_order,
+      ovpsaBatchId: row.ovpsa_batch_id,
+      ovpsaRevisionId: row.ovpsa_revision_id,
+      ovpsaServiceReservationId: row.ovpsa_service_reservation_id,
     });
     cycleByKey.set(key, cycle);
   }
-  return [...cycleByKey.values()].sort((left, right) =>
-    left.studentNumber.localeCompare(right.studentNumber)
-    || left.scheduleCycleStart - right.scheduleCycleStart
-    || left.key.localeCompare(right.key));
+  return [...cycleByKey.values()];
 }
 
 function applicableGroups(cycle: CalendarCycle, groups: PersistedGroup[] | ReturnType<typeof groupContiguousClosureChanges>) {
   const appointmentDates = new Set(cycle.appointments.map((appointment) => appointment.appointmentDate));
   return groups.filter((group) => group.dates.some((date) => appointmentDates.has(date)));
+}
+
+type ClosureGroupLike = ReturnType<typeof groupContiguousClosureChanges>[number] & {
+  closureGroupId?: string;
+};
+
+type CycleRecoveryDecision = ClinicClosureRecoveryPolicyDecision & {
+  group: ClosureGroupLike;
+  affectedAppointment: ClinicCycleAppointment;
+  affectedAppointmentIds: Set<string>;
+  policyMetadata: Record<string, unknown>;
+};
+
+const manualReasonPriority: Record<ClinicManualCaseReason, number> = {
+  EMERGENCY_CLOSURE: 0,
+  OVPSA_LABORATORY_PROTECTED: 1,
+  NOTICE_PERIOD_PROTECTED: 2,
+  APPOINTMENT_MANUALLY_LOCKED: 3,
+  DRAFT_RESULT_FILES_EXIST: 4,
+  PROTECTED_RESULTS_EXIST: 5,
+  PHYSICAL_COMPLETED_BEFORE_LABORATORY: 6,
+  PAIR_MISSING_OR_INCONSISTENT: 7,
+  UNSAFE_RESTORATION: 8,
+  ADMIN_CHOSE_MANUAL_RECOVERY: 9,
+  NO_REPLACEMENT_CAPACITY: 10,
+  CONCURRENT_APPOINTMENT_CHANGE: 11,
+};
+
+function affectedAppointmentIds(
+  cycle: CalendarCycle,
+  groups: ClosureGroupLike[],
+) {
+  const dates = new Set(groups.flatMap((group) => group.dates));
+  return new Set(
+    cycle.appointments
+      .filter((appointment) => dates.has(appointment.appointmentDate))
+      .map((appointment) => appointment.id),
+  );
+}
+
+function evaluateCycleRecovery(input: {
+  cycle: CalendarCycle;
+  groups: ClosureGroupLike[];
+  recoveryMode: ClinicClosureRecoveryMode;
+  policyEffectiveDate: string;
+}): CycleRecoveryDecision {
+  const affectedIds = affectedAppointmentIds(input.cycle, input.groups);
+  const safetyClassification = classifyClinicCycle(input.cycle.appointments, {
+    affectedAppointmentIds: affectedIds,
+  });
+  const safetyReason = safetyClassification.strategy === "MANUAL_RESOLUTION_REQUIRED"
+    ? {
+        reasonCode: safetyClassification.reasonCode,
+        reasonMessage: safetyClassification.reasonMessage,
+      }
+    : null;
+  const candidates = input.groups.flatMap((group) =>
+    input.cycle.appointments
+      .filter((appointment) =>
+        affectedIds.has(appointment.id)
+        && group.dates.includes(appointment.appointmentDate))
+      .map((appointment) => {
+        const policy = evaluateClosureRecoveryPolicy({
+          category: group.category,
+          policyEffectiveDate: input.policyEffectiveDate,
+          affectedAppointmentDate: appointment.appointmentDate,
+          affectedService: appointment.scheduleType,
+          recoveryMode: input.recoveryMode,
+          isOvpsaControlledLaboratory: Boolean(
+            appointment.scheduleType === "LABORATORY" && appointment.ovpsaBatchId,
+          ),
+          safetyReason,
+        });
+        return { policy, group, appointment };
+      }));
+  const decisive = candidates.sort((left, right) => {
+    const leftPriority = left.policy.reasonCode
+      ? manualReasonPriority[left.policy.reasonCode]
+      : Number.MAX_SAFE_INTEGER;
+    const rightPriority = right.policy.reasonCode
+      ? manualReasonPriority[right.policy.reasonCode]
+      : Number.MAX_SAFE_INTEGER;
+    return leftPriority - rightPriority
+      || left.appointment.appointmentDate.localeCompare(right.appointment.appointmentDate)
+      || left.group.startDate.localeCompare(right.group.startDate)
+      || left.group.category.localeCompare(right.group.category)
+      || left.group.reason.localeCompare(right.group.reason);
+  })[0];
+  if (!decisive) throw new Error("Affected clinic cycle has no matching closure group.");
+  const completedWorkIsPreserved = input.cycle.appointments
+    .filter((appointment) => affectedIds.has(appointment.id))
+    .every((appointment) => appointment.status === "COMPLETED");
+  return {
+    ...decisive.policy,
+    ...(completedWorkIsPreserved ? {
+      decision: "AUTO_RECOVERY_ELIGIBLE" as const,
+      reasonCode: null,
+      reasonMessage: null,
+    } : {}),
+    group: decisive.group,
+    affectedAppointment: decisive.appointment,
+    affectedAppointmentIds: affectedIds,
+    policyMetadata: {
+      policyEffectiveDate: input.policyEffectiveDate,
+      originalAffectedAppointmentDate: decisive.appointment.appointmentDate,
+      noticeDays: decisive.policy.noticeDays,
+      closureCategory: decisive.group.category,
+      recoveryMode: input.recoveryMode,
+      affectedService: decisive.appointment.scheduleType,
+      ovpsaControlled: Boolean(decisive.appointment.ovpsaBatchId),
+      ovpsaBatchId: decisive.appointment.ovpsaBatchId ?? null,
+      ovpsaRevisionId: decisive.appointment.ovpsaRevisionId ?? null,
+      affectedAppointmentIds: [...affectedIds].sort(),
+    },
+  };
+}
+
+function sortRecoveryCycles(cycles: CalendarCycle[], groups: ClosureGroupLike[]) {
+  return [...cycles].sort((left, right) => {
+    const entry = (cycle: CalendarCycle) => {
+      const affected = cycle.appointments
+        .filter((appointment) => groups.some((group) => group.dates.includes(appointment.appointmentDate)))
+        .sort((a, b) => a.appointmentDate.localeCompare(b.appointmentDate))[0];
+      return {
+        affectedAppointmentDate: affected?.appointmentDate ?? "9999-12-31",
+        originalCreatedAt: affected?.createdAt ?? "9999-12-31T23:59:59.999Z",
+        originalOrder: affected?.sourceOrder ?? Number.MAX_SAFE_INTEGER,
+        studentNumber: cycle.studentNumber,
+      };
+    };
+    return compareClosureRecoveryQueueEntries(entry(left), entry(right));
+  });
+}
+
+function reasonGroups(reasonCounts: Map<ClinicManualCaseReason, number>) {
+  return [...reasonCounts.entries()]
+    .sort((left, right) =>
+      manualReasonPriority[left[0]] - manualReasonPriority[right[0]]
+      || left[0].localeCompare(right[0]))
+    .map(([reasonCode, count]) => ({ reasonCode, count }));
+}
+
+function addReasonCount(
+  counts: Map<ClinicManualCaseReason, number>,
+  reasonCode: ClinicManualCaseReason,
+) {
+  counts.set(reasonCode, (counts.get(reasonCode) ?? 0) + 1);
 }
 
 async function loadCapacity(client: PoolClient) {
@@ -381,10 +572,14 @@ async function createManualCase(
     classification: Extract<ClinicCycleClassification, { strategy: "MANUAL_RESOLUTION_REQUIRED" }>;
     closureGroupId: string;
     actorUserId: string;
+    affectedAppointmentIds: ReadonlySet<string>;
+    policyMetadata: Record<string, unknown>;
   },
 ) {
   const unfinishedIds = input.cycle.appointments
-    .filter((appointment) => appointment.status === "PENDING" || appointment.status === "DRAFT")
+    .filter((appointment) =>
+      input.affectedAppointmentIds.has(appointment.id)
+      && (appointment.status === "PENDING" || appointment.status === "DRAFT"))
     .map((appointment) => appointment.id);
   if (unfinishedIds.length) {
     await client.query(
@@ -406,8 +601,8 @@ async function createManualCase(
     `INSERT INTO clinic_closure_manual_cases (
        student_number,closure_group_id,schedule_pair_id,schedule_cycle_start,
        affected_laboratory_appointment_id,affected_physical_exam_appointment_id,
-       reason_code,reason_message
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id::text`,
+       reason_code,reason_message,policy_metadata
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb) RETURNING id::text`,
     [
       input.cycle.studentNumber,
       input.closureGroupId,
@@ -417,6 +612,7 @@ async function createManualCase(
       input.classification.physicalExam?.id ?? null,
       input.classification.reasonCode,
       input.classification.reasonMessage,
+      JSON.stringify(input.policyMetadata),
     ],
   );
   const protectionMetadata = resultProtectionAuditMetadata(input.cycle.appointments);
@@ -450,7 +646,7 @@ async function insertClosureEvent(
   input: {
     cycle: CalendarCycle;
     closureGroupId: string;
-    strategy: "MOVE_COMPLETE_PAIR" | "MOVE_PHYSICAL_ONLY" | "MANUAL_RESOLUTION_REQUIRED";
+    strategy: "MOVE_COMPLETE_PAIR" | "MOVE_LABORATORY_ONLY" | "MOVE_PHYSICAL_ONLY" | "MANUAL_RESOLUTION_REQUIRED";
     outcome: "REPLACED" | "AWAITING_RESCHEDULE";
     batchId: string;
     actorUserId: string;
@@ -458,6 +654,8 @@ async function insertClosureEvent(
     newPhysicalId?: string | null;
     manualCaseId?: string | null;
     unavailableDateIds: string[];
+    policyReasonCode?: ClinicManualCaseReason | null;
+    policyMetadata: Record<string, unknown>;
   },
 ) {
   const laboratory = input.cycle.appointments.find((appointment) => appointment.scheduleType === "LABORATORY");
@@ -468,8 +666,8 @@ async function insertClosureEvent(
        old_laboratory_appointment_id,new_laboratory_appointment_id,
        old_physical_exam_appointment_id,new_physical_exam_appointment_id,
        actor_user_id,block_batch_id,closure_group_id,schedule_cycle_start,
-       strategy,outcome,manual_case_id
-     ) VALUES ($1,$2,'CLINIC_CLOSURE',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       strategy,outcome,manual_case_id,policy_reason_code,policy_metadata
+     ) VALUES ($1,$2,'CLINIC_CLOSURE',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb)
      RETURNING id::text`,
     [
       input.cycle.studentNumber,
@@ -485,6 +683,8 @@ async function insertClosureEvent(
       input.strategy,
       input.outcome,
       input.manualCaseId ?? null,
+      input.policyReasonCode ?? null,
+      JSON.stringify(input.policyMetadata),
     ],
   );
   if (input.unavailableDateIds.length) {
@@ -497,22 +697,145 @@ async function insertClosureEvent(
   return inserted.rows[0].id;
 }
 
+async function markOvpsaLaboratoryClosure(
+  client: PoolClient,
+  input: {
+    cycle: CalendarCycle;
+    affectedAppointmentIds: ReadonlySet<string>;
+    closureGroupId: string;
+    actorUserId: string;
+  },
+) {
+  const laboratory = input.cycle.appointments.find((appointment) =>
+    appointment.scheduleType === "LABORATORY"
+    && input.affectedAppointmentIds.has(appointment.id)
+    && appointment.ovpsaBatchId
+    && appointment.ovpsaServiceReservationId);
+  if (!laboratory?.ovpsaBatchId || !laboratory.ovpsaServiceReservationId) return;
+  await client.query(
+    `UPDATE ovpsa_first_year_service_reservations
+        SET status='INVALIDATED',invalidated_by_closure_group_id=$2,
+            invalidated_at=clock_timestamp()
+      WHERE id=$1 AND status='ACTIVE' AND reservation_kind='EXCLUSIVE'`,
+    [laboratory.ovpsaServiceReservationId, input.closureGroupId],
+  );
+  await client.query(
+    `UPDATE ovpsa_first_year_batches
+        SET status='RESCHEDULE_REQUIRED',optimistic_token=gen_random_uuid(),
+            updated_by=$2,updated_at=clock_timestamp()
+      WHERE id=$1 AND status='PUBLISHED'`,
+    [laboratory.ovpsaBatchId, input.actorUserId],
+  );
+}
+
+function allocateCycleRecovery(input: {
+  cycle: CalendarCycle;
+  affectedAppointmentIds: ReadonlySet<string>;
+  afterDate: string;
+  blockedDates: Set<string>;
+  blockedDatesByService: Partial<Record<keyof ReplacementCapacity, Set<string>>>;
+  usedCapacity: UsedReplacementCapacity;
+  capacity: ReplacementCapacity;
+}) {
+  let classification = classifyClinicCycle(input.cycle.appointments, {
+    affectedAppointmentIds: input.affectedAppointmentIds,
+  });
+  if (
+    classification.strategy === "MOVE_COMPLETE_PAIR"
+    && input.affectedAppointmentIds.has(classification.laboratory.id)
+    && !input.affectedAppointmentIds.has(classification.physicalExam.id)
+  ) {
+    const laboratoryCandidate = allocateReplacementDates({
+      strategy: "MOVE_LABORATORY_ONLY",
+      afterDate: input.afterDate,
+      blockedDates: input.blockedDates,
+      blockedDatesByService: input.blockedDatesByService,
+      usedCapacity: input.usedCapacity,
+      capacity: input.capacity,
+    });
+    classification = classifyClinicCycle(input.cycle.appointments, {
+      affectedAppointmentIds: input.affectedAppointmentIds,
+      proposedLaboratoryDate: laboratoryCandidate.laboratoryDate,
+    });
+    if (classification.strategy === "MOVE_LABORATORY_ONLY") {
+      return { classification, dates: laboratoryCandidate };
+    }
+  }
+  if (
+    classification.strategy === "MANUAL_RESOLUTION_REQUIRED"
+    || classification.strategy === "PRESERVE_COMPLETION"
+  ) {
+    return { classification, dates: {} };
+  }
+  return {
+    classification,
+    dates: allocateReplacementDates({
+      strategy: classification.strategy,
+      afterDate: input.afterDate,
+      blockedDates: input.blockedDates,
+      blockedDatesByService: input.blockedDatesByService,
+      usedCapacity: input.usedCapacity,
+      capacity: input.capacity,
+    }),
+  };
+}
+
+function movedAppointmentCount(classification: ClinicCycleClassification) {
+  if (classification.strategy === "MOVE_COMPLETE_PAIR") return 2;
+  if (
+    classification.strategy === "MOVE_LABORATORY_ONLY"
+    || classification.strategy === "MOVE_PHYSICAL_ONLY"
+  ) return 1;
+  return 0;
+}
+
+async function createClosureNotification(
+  client: PoolClient,
+  input: Parameters<typeof createStudentNotificationIsolated>[1] & {
+    actorUserId: string;
+    auditEntityId: string;
+    auditEntityType?: "appointment_reschedule_event" | "clinic_closure_manual_case" | "ovpsa_first_year_batch";
+  },
+) {
+  const result = await createStudentNotificationIsolated(client, input);
+  for (const warning of result.warnings) {
+    await client.query(
+      `INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,metadata)
+       VALUES ($1,'CLINIC_CLOSURE_NOTIFICATION_WARNING',$5,$2,
+                jsonb_build_object('studentNumber',$3::text,'channel',$4::text))`,
+      [
+        input.actorUserId,
+        input.auditEntityId,
+        input.studentNumber,
+        warning.channel,
+        input.auditEntityType ?? "appointment_reschedule_event",
+      ],
+    );
+  }
+  return result.warnings.length;
+}
+
 async function applyAutomaticMove(
   client: PoolClient,
   input: {
     cycle: CalendarCycle;
-    classification: Extract<ClinicCycleClassification, { strategy: "MOVE_COMPLETE_PAIR" | "MOVE_PHYSICAL_ONLY" }>;
+    classification: Extract<ClinicCycleClassification, {
+      strategy: "MOVE_COMPLETE_PAIR" | "MOVE_LABORATORY_ONLY" | "MOVE_PHYSICAL_ONLY";
+    }>;
     dates: { laboratoryDate?: string; physicalExamDate?: string };
     group: PersistedGroup;
     unavailableDateIds: string[];
     batchId: string;
     actorUserId: string;
     clinicIds: { LABORATORY: string; PHYSICAL_EXAM: string };
+    policyMetadata: Record<string, unknown>;
   },
 ) {
   const originals = input.classification.strategy === "MOVE_COMPLETE_PAIR"
     ? [input.classification.laboratory, input.classification.physicalExam]
-    : [input.classification.physicalExam];
+    : input.classification.strategy === "MOVE_LABORATORY_ONLY"
+      ? [input.classification.laboratory]
+      : [input.classification.physicalExam];
   const update = await client.query(
     `UPDATE appointments
         SET status='RESCHEDULED',is_published=FALSE,updated_by=$2,updated_at=NOW()
@@ -542,24 +865,64 @@ async function applyAutomaticMove(
       ? input.dates.laboratoryDate
       : input.dates.physicalExamDate;
     if (!appointmentDate) throw new Error(`Missing ${original.scheduleType} replacement date`);
-    const inserted = await client.query<{ id: string }>(
-      `INSERT INTO appointments (
-         clinic_id,student_number,schedule_type,appointment_date,status,is_published,
-         notes,rescheduled_from,created_by,updated_by,schedule_pair_id,schedule_cycle_start
-       ) VALUES ($1,$2,$3,$4,'PENDING',TRUE,$5,$6,$7,$7,$8,$9)
-       RETURNING id::text`,
-      [
-        input.clinicIds[original.scheduleType],
-        input.cycle.studentNumber,
-        original.scheduleType,
-        appointmentDate,
-        `Automatically rescheduled after closure group ${input.group.closureGroupId}.`,
-        original.id,
-        input.actorUserId,
-        original.schedulePairId,
-        original.scheduleCycleStart,
-      ],
-    );
+    let recoveryReservationId: string | null = null;
+    if (original.ovpsaBatchId && original.ovpsaRevisionId) {
+      const reservation = await client.query<{ id: string }>(
+        `INSERT INTO ovpsa_first_year_service_reservations (
+           batch_id,revision_id,schedule_type,reservation_date,status,
+           reservation_kind,created_by
+         ) VALUES ($1,$2,$3,$4,'ACTIVE','CLOSURE_RECOVERY',$5)
+         RETURNING id::text`,
+        [
+          original.ovpsaBatchId,
+          original.ovpsaRevisionId,
+          original.scheduleType,
+          appointmentDate,
+          input.actorUserId,
+        ],
+      );
+      recoveryReservationId = reservation.rows[0].id;
+    }
+    const inserted = recoveryReservationId
+      ? await client.query<{ id: string }>(
+          `INSERT INTO appointments (
+             clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+             notes,rescheduled_from,created_by,updated_by,schedule_pair_id,schedule_cycle_start,
+             ovpsa_batch_id,ovpsa_revision_id,ovpsa_service_reservation_id,
+             scheduling_category,scheduling_accepted_at,scheduling_source_row_order,
+             scheduling_window_start,scheduling_window_end
+           ) SELECT clinic_id,student_number,schedule_type,$2,'PENDING',TRUE,$3,id,$4,$4,
+                    schedule_pair_id,schedule_cycle_start,ovpsa_batch_id,ovpsa_revision_id,$5,
+                    scheduling_category,scheduling_accepted_at,scheduling_source_row_order,
+                    scheduling_window_start,scheduling_window_end
+               FROM appointments WHERE id=$1
+           RETURNING id::text`,
+          [
+            original.id,
+            appointmentDate,
+            `Automatically recovered after closure group ${input.group.closureGroupId}.`,
+            input.actorUserId,
+            recoveryReservationId,
+          ],
+        )
+      : await client.query<{ id: string }>(
+          `INSERT INTO appointments (
+             clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+             notes,rescheduled_from,created_by,updated_by,schedule_pair_id,schedule_cycle_start
+           ) VALUES ($1,$2,$3,$4,'PENDING',TRUE,$5,$6,$7,$7,$8,$9)
+           RETURNING id::text`,
+          [
+            input.clinicIds[original.scheduleType],
+            input.cycle.studentNumber,
+            original.scheduleType,
+            appointmentDate,
+            `Automatically rescheduled after closure group ${input.group.closureGroupId}.`,
+            original.id,
+            input.actorUserId,
+            original.schedulePairId,
+            original.scheduleCycleStart,
+          ],
+        );
     replacementByType[original.scheduleType] = inserted.rows[0].id;
     await insertStatusLogs(
       client,
@@ -580,8 +943,9 @@ async function applyAutomaticMove(
     newLaboratoryId: replacementByType.LABORATORY,
     newPhysicalId: replacementByType.PHYSICAL_EXAM,
     unavailableDateIds: input.unavailableDateIds,
+    policyMetadata: input.policyMetadata,
   });
-  await createStudentNotification(client, {
+  const notificationWarningCount = await createClosureNotification(client, {
     studentNumber: input.cycle.studentNumber,
     notificationType: "CLINIC_CLOSURE_RESCHEDULED",
     title: "Clinic schedule updated",
@@ -594,8 +958,10 @@ async function applyAutomaticMove(
       previousDates: Object.fromEntries(originals.map((appointment) => [appointment.scheduleType, appointment.appointmentDate])),
       replacementDates: input.dates,
     },
+    actorUserId: input.actorUserId,
+    auditEntityId: eventId,
   });
-  return originals.length;
+  return { movedAppointmentCount: originals.length, notificationWarningCount };
 }
 
 async function createManualFallback(
@@ -608,6 +974,8 @@ async function createManualFallback(
     unavailableDateIds: string[];
     batchId: string;
     actorUserId: string;
+    affectedAppointmentIds: ReadonlySet<string>;
+    policyMetadata: Record<string, unknown>;
   },
 ) {
   const laboratory = input.cycle.appointments.find((appointment) => appointment.scheduleType === "LABORATORY") ?? null;
@@ -624,6 +992,8 @@ async function createManualFallback(
     classification,
     closureGroupId: input.group.closureGroupId,
     actorUserId: input.actorUserId,
+    affectedAppointmentIds: input.affectedAppointmentIds,
+    policyMetadata: input.policyMetadata,
   });
   const eventId = await insertClosureEvent(client, {
     cycle: input.cycle,
@@ -634,8 +1004,10 @@ async function createManualFallback(
     actorUserId: input.actorUserId,
     manualCaseId,
     unavailableDateIds: input.unavailableDateIds,
+    policyReasonCode: input.reasonCode,
+    policyMetadata: input.policyMetadata,
   });
-  await createStudentNotification(client, {
+  const notificationWarningCount = await createClosureNotification(client, {
     studentNumber: input.cycle.studentNumber,
     notificationType: "CLINIC_CLOSURE_AWAITING_RESCHEDULE",
     title: "Clinic schedule needs manual rescheduling",
@@ -646,184 +1018,10 @@ async function createManualFallback(
       closureGroupId: input.group.closureGroupId,
       reasonCode: input.reasonCode,
     },
+    actorUserId: input.actorUserId,
+    auditEntityId: eventId,
   });
-  return manualCaseId;
-}
-
-async function restoreForReopenedDates(
-  client: PoolClient,
-  unavailableDateIds: string[],
-  actor: SessionUser,
-  batchId: string,
-) {
-  if (!unavailableDateIds.length) return { students: new Set<string>(), appointments: 0, retained: 0 };
-  const eventRows = await client.query<{ id: string }>(
-    `SELECT event.id::text
-       FROM appointment_reschedule_events event
-      WHERE EXISTS (
-        SELECT 1 FROM appointment_reschedule_event_unavailable_dates link
-         WHERE link.event_id=event.id
-           AND link.unavailable_date_id=ANY($1::uuid[])
-      )
-        AND event.restored_at IS NULL
-      ORDER BY event.id
-      FOR UPDATE OF event`,
-    [unavailableDateIds],
-  );
-  const restoredStudents = new Set<string>();
-  let restoredAppointments = 0;
-  let retained = 0;
-  for (const { id: eventId } of eventRows.rows) {
-    const eventResult = await client.query<{
-      id: string;
-      student_number: string;
-      closure_group_id: string;
-      schedule_pair_id: string | null;
-      schedule_cycle_start: number;
-      strategy: "MOVE_COMPLETE_PAIR" | "MOVE_PHYSICAL_ONLY" | "MANUAL_RESOLUTION_REQUIRED";
-      old_laboratory_appointment_id: string | null;
-      new_laboratory_appointment_id: string | null;
-      old_physical_exam_appointment_id: string | null;
-      new_physical_exam_appointment_id: string | null;
-    }>(
-      `SELECT id::text,student_number,closure_group_id::text,schedule_pair_id::text,
-              schedule_cycle_start,strategy,old_laboratory_appointment_id::text,
-              new_laboratory_appointment_id::text,old_physical_exam_appointment_id::text,
-              new_physical_exam_appointment_id::text
-         FROM appointment_reschedule_events WHERE id=$1`,
-      [eventId],
-    );
-    const event = eventResult.rows[0];
-    if (!event || event.strategy === "MANUAL_RESOLUTION_REQUIRED") continue;
-    const stillBlocked = await client.query(
-      `SELECT 1
-         FROM appointment_reschedule_event_unavailable_dates link
-         JOIN clinic_unavailable_dates unavailable ON unavailable.id=link.unavailable_date_id
-        WHERE link.event_id=$1 AND unavailable.reopened_at IS NULL LIMIT 1`,
-      [eventId],
-    );
-    if (stillBlocked.rowCount) continue;
-    const originalIds = event.strategy === "MOVE_COMPLETE_PAIR"
-      ? [event.old_laboratory_appointment_id, event.old_physical_exam_appointment_id]
-      : [event.old_physical_exam_appointment_id];
-    const replacementIds = event.strategy === "MOVE_COMPLETE_PAIR"
-      ? [event.new_laboratory_appointment_id, event.new_physical_exam_appointment_id]
-      : [event.new_physical_exam_appointment_id];
-    if (originalIds.some((id) => !id) || replacementIds.some((id) => !id)) {
-      retained += 1;
-      continue;
-    }
-    const allIds = [...originalIds, ...replacementIds] as string[];
-    const appointments = await loadAppointmentStates(client, allIds);
-    const byId = new Map(appointments.map((appointment) => [appointment.id, appointment]));
-    const originals = (originalIds as string[]).map((id) => byId.get(id));
-    const replacements = (replacementIds as string[]).map((id) => byId.get(id));
-    const originalDates = originals.flatMap((appointment) => appointment ? [appointment.appointmentDate] : []);
-    const blockedOriginal = originalDates.length
-      ? await client.query(
-          "SELECT 1 FROM clinic_unavailable_dates WHERE reopened_at IS NULL AND blocked_date=ANY($1::date[]) LIMIT 1",
-          [originalDates],
-        )
-      : { rowCount: 0 };
-    const unsafe = originals.some((appointment) => !appointment || appointment.status !== "RESCHEDULED")
-      || replacements.some((appointment) =>
-        !appointment
-        || appointment.status !== "PENDING"
-        || !appointment.isPublished)
-      || appointments.some((appointment) =>
-        appointment.isManuallyLocked || appointment.resultProtectionState.type === "PROTECTED")
-      || Boolean(blockedOriginal.rowCount);
-    if (unsafe) {
-      const block = currentAssignmentBlock(appointments);
-      const reasonCode: ClinicManualCaseReason = block?.code ?? "UNSAFE_RESTORATION";
-      const reasonMessage = block?.message
-        ?? "The current replacement cannot be safely restored automatically.";
-      const existingCase = await client.query(
-        `SELECT 1 FROM clinic_closure_manual_cases
-          WHERE id=(SELECT manual_case_id FROM appointment_reschedule_events WHERE id=$1)
-            AND status='OPEN'`,
-        [eventId],
-      );
-      if (!existingCase.rowCount) {
-        const insertedCase = await client.query<{ id: string }>(
-          `INSERT INTO clinic_closure_manual_cases (
-             student_number,closure_group_id,schedule_pair_id,schedule_cycle_start,
-             affected_laboratory_appointment_id,affected_physical_exam_appointment_id,
-             reason_code,reason_message
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-           RETURNING id::text`,
-          [
-            event.student_number,
-            event.closure_group_id,
-            event.schedule_pair_id,
-            event.schedule_cycle_start,
-            event.old_laboratory_appointment_id,
-            event.old_physical_exam_appointment_id,
-            reasonCode,
-            reasonMessage,
-          ],
-        );
-        const protectionMetadata = resultProtectionAuditMetadata(appointments);
-        await client.query(
-          `INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,metadata)
-           VALUES ($1,'CLINIC_CLOSURE_MANUAL_CASE_CREATED','clinic_closure_manual_case',$2::text,
-                   jsonb_build_object(
-                     'studentNumber',$3::text,'closureGroupId',$4::text,'reasonCode',$5::text,
-                     'appointmentIds',$6::jsonb,'submissionIds',$7::jsonb,
-                     'activeDraftFileCount',$8::int
-                   ))`,
-          [
-            actor.userId,
-            insertedCase.rows[0].id,
-            event.student_number,
-            event.closure_group_id,
-            reasonCode,
-            JSON.stringify(protectionMetadata.appointmentIds),
-            JSON.stringify(protectionMetadata.submissionIds),
-            protectionMetadata.activeDraftFileCount,
-          ],
-        );
-        await client.query(
-          `UPDATE appointment_reschedule_events
-              SET manual_case_id=$2,restoration_decision='MANUAL_REVIEW_REQUIRED',
-                  restoration_details=jsonb_build_object('batchId',$3::text)
-            WHERE id=$1`,
-          [eventId, insertedCase.rows[0].id, batchId],
-        );
-      }
-      retained += 1;
-      continue;
-    }
-    await client.query(
-      `UPDATE appointments SET status='RESCHEDULED',is_published=FALSE,updated_by=$2,updated_at=NOW()
-        WHERE id=ANY($1::uuid[])`,
-      [replacementIds, actor.userId],
-    );
-    await client.query(
-      `UPDATE appointments SET status='PENDING',is_published=TRUE,updated_by=$2,updated_at=NOW()
-        WHERE id=ANY($1::uuid[])`,
-      [originalIds, actor.userId],
-    );
-    await client.query(
-      `UPDATE appointment_reschedule_events
-          SET restored_at=NOW(),restored_by=$2,restoration_batch_id=$3::uuid,
-              outcome='RESTORED',restoration_decision='AUTO_RESTORED',
-              restoration_details=jsonb_build_object('batchId',$3::text)
-        WHERE id=$1`,
-      [eventId, actor.userId, batchId],
-    );
-    await createStudentNotification(client, {
-      studentNumber: event.student_number,
-      notificationType: "CLINIC_CLOSURE_SCHEDULE_RESTORED",
-      title: "Original clinic schedule restored",
-      message: "The clinic date reopened and your original schedule was safely restored.",
-      eventKey: `clinic-closure:${eventId}:restored`,
-      metadata: { eventId, closureGroupId: event.closure_group_id },
-    });
-    restoredStudents.add(event.student_number);
-    restoredAppointments += originalIds.length;
-  }
-  return { students: restoredStudents, appointments: restoredAppointments, retained };
+  return { manualCaseId, notificationWarningCount };
 }
 
 export async function listClinicUnavailableDates(actor: SessionUser) {
@@ -836,47 +1034,107 @@ export async function previewClinicCalendarChanges(
   actor: SessionUser,
 ): Promise<ClinicCalendarPreviewResult> {
   assertAdmin(actor);
-  const request = parseRequest(raw, { requireEmergencyAcknowledgement: false });
+  const request = parseRequest(raw, {
+    requireEmergencyAcknowledgement: false,
+    requireRecoveryMode: false,
+  });
   return transaction(async (client) => {
     const active = await listActiveUnavailableDatesWithClient(client);
     await validateCalendarState(active, request.changes);
     const blockChanges = request.changes.filter((change): change is ClinicCalendarBlockChange => change.action === "BLOCK");
     const groups = groupContiguousClosureChanges(blockChanges);
-    const cycles = await loadAffectedCycles(client, blockChanges.map((change) => change.date), false);
-    let completePairMoveCount = 0;
-    let physicalOnlyMoveCount = 0;
-    let preservedCompletionCount = 0;
-    let expectedManualCaseCount = 0;
+    const cycles = sortRecoveryCycles(
+      await loadAffectedCycles(client, blockChanges.map((change) => change.date), false),
+      groups,
+    );
+    const blockedDates = await listUnifiedBlockedDateSet(client);
+    for (const change of blockChanges) blockedDates.add(change.date);
+    const serviceBlockedDates = await loadSchedulingBlockedDates(client, {
+      startDate: manilaToday(),
+      endDate: addCalendarDays(manilaToday(), 366 * 5),
+    });
+    const { capacity, usedCapacity } = await loadCapacity(client);
+    let automaticRecoveryEligibleCount = 0;
+    let manualResolutionRequiredCount = 0;
+    let completePairMoveEstimate = 0;
+    let laboratoryOnlyMoveEstimate = 0;
+    let physicalOnlyMoveEstimate = 0;
+    let preservedAppointmentCount = 0;
+    let expectedCapacityFallbackCount = 0;
+    const reasonCounts = new Map<ClinicManualCaseReason, number>();
     for (const cycle of cycles) {
-      const classification = classifyClinicCycle(cycle.appointments);
-      if (classification.strategy === "MOVE_COMPLETE_PAIR") completePairMoveCount += 1;
-      else if (classification.strategy === "MOVE_PHYSICAL_ONLY") physicalOnlyMoveCount += 1;
-      else if (classification.strategy === "PRESERVE_COMPLETION") preservedCompletionCount += 1;
-      else expectedManualCaseCount += 1;
+      const cycleGroups = applicableGroups(cycle, groups);
+      if (!cycleGroups.length) continue;
+      const policy = evaluateCycleRecovery({
+        cycle,
+        groups: cycleGroups,
+        recoveryMode: "AUTO_ELIGIBLE",
+        policyEffectiveDate: manilaToday(),
+      });
+      if (policy.decision === "MANUAL_RESOLUTION_REQUIRED") {
+        manualResolutionRequiredCount += 1;
+        addReasonCount(reasonCounts, policy.reasonCode!);
+        preservedAppointmentCount += cycle.appointments.filter((appointment) =>
+          !policy.affectedAppointmentIds.has(appointment.id)
+          || appointment.status === "COMPLETED").length;
+        continue;
+      }
+      try {
+        const planned = allocateCycleRecovery({
+          cycle,
+          affectedAppointmentIds: policy.affectedAppointmentIds,
+          afterDate: cycleGroups.reduce(
+            (latest, group) => group.endDate > latest ? group.endDate : latest,
+            cycleGroups[0].endDate,
+          ),
+          blockedDates,
+          blockedDatesByService: {
+            LABORATORY: new Set(serviceBlockedDates.laboratoryDates),
+            PHYSICAL_EXAM: new Set(serviceBlockedDates.physicalExamDates),
+          },
+          usedCapacity,
+          capacity,
+        });
+        if (planned.classification.strategy === "PRESERVE_COMPLETION") {
+          preservedAppointmentCount += cycle.appointments.length;
+          automaticRecoveryEligibleCount += 1;
+          continue;
+        }
+        if (planned.classification.strategy === "MANUAL_RESOLUTION_REQUIRED") {
+          manualResolutionRequiredCount += 1;
+          addReasonCount(reasonCounts, planned.classification.reasonCode);
+          continue;
+        }
+        automaticRecoveryEligibleCount += 1;
+        if (planned.classification.strategy === "MOVE_COMPLETE_PAIR") completePairMoveEstimate += 1;
+        if (planned.classification.strategy === "MOVE_LABORATORY_ONLY") laboratoryOnlyMoveEstimate += 1;
+        if (planned.classification.strategy === "MOVE_PHYSICAL_ONLY") physicalOnlyMoveEstimate += 1;
+        preservedAppointmentCount += cycle.appointments.length
+          - movedAppointmentCount(planned.classification);
+        reserveCapacity(usedCapacity, planned.dates);
+      } catch (error) {
+        if (!(error instanceof ClinicCalendarPlanningError)) throw error;
+        expectedCapacityFallbackCount += 1;
+        manualResolutionRequiredCount += 1;
+        addReasonCount(reasonCounts, error.reasonCode);
+        preservedAppointmentCount += cycle.appointments.filter((appointment) =>
+          !policy.affectedAppointmentIds.has(appointment.id)
+          || appointment.status === "COMPLETED").length;
+      }
     }
-    const reopenedIds = request.changes
-      .filter((change) => change.action === "REOPEN")
-      .map((change) => change.unavailableDateId);
-    const restorationEvents = reopenedIds.length
-      ? await client.query<{ count: number }>(
-          `SELECT COUNT(DISTINCT event.id)::int AS count
-             FROM appointment_reschedule_events event
-             JOIN appointment_reschedule_event_unavailable_dates link ON link.event_id=event.id
-            WHERE link.unavailable_date_id=ANY($1::uuid[]) AND event.restored_at IS NULL`,
-          [reopenedIds],
-        )
-      : { rows: [{ count: 0 }] };
     return {
       requestId: request.requestId,
       closureGroups: groups,
       datesBeingReopened: request.changes.filter((change) => change.action === "REOPEN").map((change) => change.date),
       affectedStudentCount: new Set(cycles.map((cycle) => cycle.studentNumber)).size,
-      completePairMoveCount,
-      physicalOnlyMoveCount,
-      preservedCompletionCount,
-      expectedManualCaseCount,
-      expectedRestorationCount: restorationEvents.rows[0].count,
-      retainedReplacementCount: 0,
+      automaticRecoveryEligibleCount,
+      manualResolutionRequiredCount,
+      completePairMoveEstimate,
+      laboratoryOnlyMoveEstimate,
+      physicalOnlyMoveEstimate,
+      preservedAppointmentCount,
+      expectedCapacityFallbackCount,
+      manualReasonGroups: reasonGroups(reasonCounts),
     };
   });
 }
@@ -886,7 +1144,9 @@ export async function saveClinicCalendarChanges(
   actor: SessionUser,
 ): Promise<ClinicCalendarOperationResult> {
   assertAdmin(actor);
-  const request = parseRequest(raw);
+  const request = parseRequest(raw, { requireRecoveryMode: true });
+  if (!request.recoveryMode) throw validationError("Choose a closure recovery mode.");
+  const recoveryMode = request.recoveryMode;
   const hash = payloadHash(request);
   try {
     return await transaction(async (client) => {
@@ -913,22 +1173,20 @@ export async function saveClinicCalendarChanges(
       const groups = groupContiguousClosureChanges(blockChanges);
       const persistedGroups: PersistedGroup[] = [];
       for (const group of groups) {
-        const inserted = await createClosureGroupWithDates(client, group, actor.userId, batchId);
+        const inserted = await createClosureGroupWithDates(
+          client,
+          group,
+          actor.userId,
+          batchId,
+          recoveryMode,
+          manilaToday(),
+        );
         persistedGroups.push({
           ...group,
           closureGroupId: inserted.closureGroupId,
           dateIds: inserted.dates,
         });
       }
-
-      await invalidateOvpsaReservationsForClosuresWithClient(
-        client,
-        persistedGroups.map((group) => ({
-          closureGroupId: group.closureGroupId,
-          dates: group.dateIds,
-        })),
-        actor.userId,
-      );
 
       const reopenChanges = request.changes.filter((change) => change.action === "REOPEN");
       const lockedReopenings = await lockActiveUnavailableDates(
@@ -948,7 +1206,10 @@ export async function saveClinicCalendarChanges(
         if (!reopened) throw new AppError("CLINIC_CALENDAR_STALE_REOPEN", "The calendar changed. Reload and try again.", 409);
       }
 
-      const cycles = await loadAffectedCycles(client, blockChanges.map((change) => change.date), true);
+      const cycles = sortRecoveryCycles(
+        await loadAffectedCycles(client, blockChanges.map((change) => change.date), true),
+        persistedGroups,
+      );
       const blockedDates = await listUnifiedBlockedDateSet(client);
       const serviceBlockedDates = await loadSchedulingBlockedDates(client, {
         startDate: manilaToday(),
@@ -968,38 +1229,78 @@ export async function saveClinicCalendarChanges(
       };
       let movedStudentCount = 0;
       let movedAppointmentCount = 0;
-      let preservedCompletionCount = 0;
+      let preservedAppointmentCount = 0;
       let manualCaseCount = 0;
+      let capacityFallbackCount = 0;
+      let notificationWarningCount = 0;
+      const manualReasonCounts = new Map<ClinicManualCaseReason, number>();
+      const ovpsaPhysicalReservationsToRelease = new Set<string>();
       for (const [index, cycle] of cycles.entries()) {
         const cycleGroups = applicableGroups(cycle, persistedGroups) as PersistedGroup[];
         if (!cycleGroups.length) continue;
-        const group = [...cycleGroups].sort((left, right) => right.endDate.localeCompare(left.endDate))[0];
-        const unavailableDateIds = [...new Set(cycleGroups.flatMap((item) => item.dateIds.map((date) => date.id)))];
-        const classification = classifyClinicCycle(cycle.appointments);
-        if (classification.strategy === "PRESERVE_COMPLETION") {
-          preservedCompletionCount += 1;
-          continue;
+        const policy = evaluateCycleRecovery({
+          cycle,
+          groups: cycleGroups,
+          recoveryMode,
+          policyEffectiveDate: manilaToday(),
+        });
+        const group = policy.group as PersistedGroup;
+        const affectsOvpsaLaboratory = cycle.appointments.some((appointment) =>
+          appointment.scheduleType === "LABORATORY"
+          && appointment.ovpsaBatchId
+          && policy.affectedAppointmentIds.has(appointment.id));
+        if (!affectsOvpsaLaboratory) {
+          for (const appointment of cycle.appointments) {
+            if (
+              appointment.scheduleType === "PHYSICAL_EXAM"
+              && appointment.ovpsaServiceReservationId
+              && policy.affectedAppointmentIds.has(appointment.id)
+            ) {
+              ovpsaPhysicalReservationsToRelease.add(appointment.ovpsaServiceReservationId);
+            }
+          }
         }
+        const unavailableDateIds = [...new Set(cycleGroups.flatMap((item) => item.dateIds.map((date) => date.id)))];
+        const policyMetadata = { ...policy.policyMetadata, recoveryQueuePosition: index + 1 };
         const savepoint = `clinic_student_${index}`;
         await client.query(`SAVEPOINT ${savepoint}`);
         try {
-          if (classification.strategy === "MANUAL_RESOLUTION_REQUIRED") {
-            await createManualFallback(client, {
+          if (policy.decision === "MANUAL_RESOLUTION_REQUIRED") {
+            if (policy.reasonCode === "OVPSA_LABORATORY_PROTECTED") {
+              await markOvpsaLaboratoryClosure(client, {
+                cycle,
+                affectedAppointmentIds: policy.affectedAppointmentIds,
+                closureGroupId: group.closureGroupId,
+                actorUserId: actor.userId,
+              });
+            }
+            const manual = await createManualFallback(client, {
               cycle,
-              reasonCode: classification.reasonCode,
-              reasonMessage: classification.reasonMessage,
+              reasonCode: policy.reasonCode!,
+              reasonMessage: policy.reasonMessage!,
               group,
               unavailableDateIds,
               batchId,
               actorUserId: actor.userId,
+              affectedAppointmentIds: policy.affectedAppointmentIds,
+              policyMetadata,
             });
             manualCaseCount += 1;
+            notificationWarningCount += manual.notificationWarningCount;
+            addReasonCount(manualReasonCounts, policy.reasonCode!);
+            preservedAppointmentCount += cycle.appointments.filter((appointment) =>
+              !policy.affectedAppointmentIds.has(appointment.id)
+              || appointment.status === "COMPLETED").length;
           } else {
-            let dates: { laboratoryDate?: string; physicalExamDate?: string };
+            let planned: ReturnType<typeof allocateCycleRecovery>;
             try {
-              dates = allocateReplacementDates({
-                strategy: classification.strategy,
-                afterDate: group.endDate,
+              planned = allocateCycleRecovery({
+                cycle,
+                affectedAppointmentIds: policy.affectedAppointmentIds,
+                afterDate: cycleGroups.reduce(
+                  (latest, item) => item.endDate > latest ? item.endDate : latest,
+                  cycleGroups[0].endDate,
+                ),
                 blockedDates,
                 blockedDatesByService: {
                   LABORATORY: new Set(serviceBlockedDates.laboratoryDates),
@@ -1010,7 +1311,7 @@ export async function saveClinicCalendarChanges(
               });
             } catch (error) {
               if (!(error instanceof ClinicCalendarPlanningError)) throw error;
-              await createManualFallback(client, {
+              const manual = await createManualFallback(client, {
                 cycle,
                 reasonCode: error.reasonCode,
                 reasonMessage: error.message,
@@ -1018,30 +1319,65 @@ export async function saveClinicCalendarChanges(
                 unavailableDateIds,
                 batchId,
                 actorUserId: actor.userId,
+                affectedAppointmentIds: policy.affectedAppointmentIds,
+                policyMetadata: { ...policyMetadata, fallbackReasonCode: error.reasonCode },
               });
               manualCaseCount += 1;
+              capacityFallbackCount += error.reasonCode === "NO_REPLACEMENT_CAPACITY" ? 1 : 0;
+              notificationWarningCount += manual.notificationWarningCount;
+              addReasonCount(manualReasonCounts, error.reasonCode);
+              preservedAppointmentCount += cycle.appointments.filter((appointment) =>
+                !policy.affectedAppointmentIds.has(appointment.id)
+                || appointment.status === "COMPLETED").length;
+              await client.query(`RELEASE SAVEPOINT ${savepoint}`);
+              continue;
+            }
+            if (planned.classification.strategy === "PRESERVE_COMPLETION") {
+              preservedAppointmentCount += cycle.appointments.length;
+              await client.query(`RELEASE SAVEPOINT ${savepoint}`);
+              continue;
+            }
+            if (planned.classification.strategy === "MANUAL_RESOLUTION_REQUIRED") {
+              const manual = await createManualFallback(client, {
+                cycle,
+                reasonCode: planned.classification.reasonCode,
+                reasonMessage: planned.classification.reasonMessage,
+                group,
+                unavailableDateIds,
+                batchId,
+                actorUserId: actor.userId,
+                affectedAppointmentIds: policy.affectedAppointmentIds,
+                policyMetadata,
+              });
+              manualCaseCount += 1;
+              notificationWarningCount += manual.notificationWarningCount;
+              addReasonCount(manualReasonCounts, planned.classification.reasonCode);
               await client.query(`RELEASE SAVEPOINT ${savepoint}`);
               continue;
             }
             const moved = await applyAutomaticMove(client, {
               cycle,
-              classification,
-              dates,
+              classification: planned.classification,
+              dates: planned.dates,
               group,
               unavailableDateIds,
               batchId,
               actorUserId: actor.userId,
               clinicIds,
+              policyMetadata,
             });
-            reserveCapacity(usedCapacity, dates);
+            reserveCapacity(usedCapacity, planned.dates);
             movedStudentCount += 1;
-            movedAppointmentCount += moved;
+            movedAppointmentCount += moved.movedAppointmentCount;
+            notificationWarningCount += moved.notificationWarningCount;
+            preservedAppointmentCount += cycle.appointments.length
+              - moved.movedAppointmentCount;
           }
           await client.query(`RELEASE SAVEPOINT ${savepoint}`);
         } catch (error) {
           if (!(error instanceof ClinicCalendarPlanningError)) throw error;
           await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
-          await createManualFallback(client, {
+          const manual = await createManualFallback(client, {
             cycle,
             reasonCode: error.reasonCode,
             reasonMessage: error.message,
@@ -1049,30 +1385,41 @@ export async function saveClinicCalendarChanges(
             unavailableDateIds,
             batchId,
             actorUserId: actor.userId,
+            affectedAppointmentIds: policy.affectedAppointmentIds,
+            policyMetadata: { ...policyMetadata, fallbackReasonCode: error.reasonCode },
           });
           manualCaseCount += 1;
+          capacityFallbackCount += error.reasonCode === "NO_REPLACEMENT_CAPACITY" ? 1 : 0;
+          notificationWarningCount += manual.notificationWarningCount;
+          addReasonCount(manualReasonCounts, error.reasonCode);
           await client.query(`RELEASE SAVEPOINT ${savepoint}`);
         }
       }
 
-      const restoration = await restoreForReopenedDates(
-        client,
-        reopenChanges.map((change) => change.unavailableDateId),
-        actor,
-        batchId,
-      );
+      if (ovpsaPhysicalReservationsToRelease.size) {
+        await client.query(
+          `UPDATE ovpsa_first_year_service_reservations
+              SET status='RELEASED',released_at=clock_timestamp(),released_by=$2,
+                  release_reason='Clinic closure recovery moved the assigned Physical Examination.'
+            WHERE id=ANY($1::uuid[]) AND status IN ('ACTIVE','INVALIDATED')`,
+          [[...ovpsaPhysicalReservationsToRelease], actor.userId],
+        );
+      }
+
       const result: ClinicCalendarOperationResult = {
         requestId: request.requestId,
         batchId,
         activeUnavailableDates: await listActiveUnavailableDatesWithClient(client),
         blockedDateCount: blockChanges.length,
         reopenedDateCount: reopenChanges.length,
+        autoRecoveredStudentCount: movedStudentCount,
         movedStudentCount,
         movedAppointmentCount,
-        preservedCompletionCount,
+        preservedAppointmentCount,
         manualCaseCount,
-        restoredStudentCount: restoration.students.size,
-        restoredAppointmentCount: restoration.appointments,
+        capacityFallbackCount,
+        manualReasonGroups: reasonGroups(manualReasonCounts),
+        notificationWarningCount,
       };
       await client.query(
         `INSERT INTO clinic_calendar_requests (
@@ -1086,9 +1433,10 @@ export async function saveClinicCalendarChanges(
                  jsonb_build_object(
                    'requestId',$2::text,'batchId',$3::text,'blockedDateCount',$4::int,
                    'reopenedDateCount',$5::int,'movedStudentCount',$6::int,
-                   'movedAppointmentCount',$7::int,'preservedCompletionCount',$8::int,
-                   'manualCaseCount',$9::int,'restoredStudentCount',$10::int,
-                   'restoredAppointmentCount',$11::int,'emergencyAcknowledged',$12::boolean
+                   'movedAppointmentCount',$7::int,'preservedAppointmentCount',$8::int,
+                   'manualCaseCount',$9::int,'capacityFallbackCount',$10::int,
+                   'notificationWarningCount',$11::int,'emergencyAcknowledged',$12::boolean,
+                   'recoveryMode',$13::text,'manualReasonGroups',$14::jsonb
                  ))`,
         [
           actor.userId,
@@ -1098,11 +1446,13 @@ export async function saveClinicCalendarChanges(
           result.reopenedDateCount,
           result.movedStudentCount,
           result.movedAppointmentCount,
-          result.preservedCompletionCount,
+          result.preservedAppointmentCount,
           result.manualCaseCount,
-          result.restoredStudentCount,
-          result.restoredAppointmentCount,
+          result.capacityFallbackCount,
+          result.notificationWarningCount,
           request.emergencyAcknowledged,
+          recoveryMode,
+          JSON.stringify(result.manualReasonGroups),
         ],
       );
       return result;
@@ -1158,6 +1508,7 @@ export async function listClinicClosureManualCases(
     resolved_at: Date | null;
     resolution_action: string | null;
     resolution_details: unknown;
+    policy_metadata: Record<string, unknown>;
     category: string;
     closure_reason: string;
     laboratory_id: string | null;
@@ -1168,6 +1519,7 @@ export async function listClinicClosureManualCases(
     physical_exam_date: string | null;
     physical_exam_status: string | null;
     physical_exam_is_manually_locked: boolean | null;
+    ovpsa_batch_optimistic_token: string | null;
     replacement_laboratory_id: string | null;
     replacement_laboratory_is_manually_locked: boolean | null;
     replacement_physical_exam_id: string | null;
@@ -1181,6 +1533,7 @@ export async function listClinicClosureManualCases(
             manual_case.reason_message,manual_case.status,
             manual_case.optimistic_token::text,manual_case.created_at,manual_case.resolved_at,
             manual_case.resolution_action,manual_case.resolution_details,
+            manual_case.policy_metadata,
             closure.category,closure.reason AS closure_reason,
             laboratory.id::text AS laboratory_id,laboratory.appointment_date::text AS laboratory_date,
             laboratory.status AS laboratory_status,
@@ -1192,6 +1545,7 @@ export async function listClinicClosureManualCases(
             replacement_laboratory.is_manually_locked AS replacement_laboratory_is_manually_locked,
             replacement_physical.id::text AS replacement_physical_exam_id,
             replacement_physical.is_manually_locked AS replacement_physical_exam_is_manually_locked,
+            ovpsa_batch.optimistic_token::text AS ovpsa_batch_optimistic_token,
             COUNT(*) OVER()::int AS total
        FROM clinic_closure_manual_cases manual_case
        JOIN students student ON student.student_number=manual_case.student_number
@@ -1203,6 +1557,8 @@ export async function listClinicClosureManualCases(
          ON replacement_laboratory.id=event.new_laboratory_appointment_id
        LEFT JOIN appointments replacement_physical
          ON replacement_physical.id=event.new_physical_exam_appointment_id
+       LEFT JOIN ovpsa_first_year_batches ovpsa_batch
+         ON ovpsa_batch.id::text=manual_case.policy_metadata->>'ovpsaBatchId'
       WHERE ($1::text IS NULL OR manual_case.student_number ILIKE '%'||$1||'%'
              OR student.first_name ILIKE '%'||$1||'%' OR student.last_name ILIKE '%'||$1||'%')
         AND ($2::text IS NULL OR manual_case.reason_code=$2)
@@ -1232,7 +1588,13 @@ export async function listClinicClosureManualCases(
     page,
     pageSize,
     total: result.rows[0]?.total ?? 0,
-    items: result.rows.map((row) => ({
+    items: result.rows.map((row) => {
+      const affectedIds = new Set(
+        Array.isArray(row.policy_metadata.affectedAppointmentIds)
+          ? row.policy_metadata.affectedAppointmentIds.filter((id): id is string => typeof id === "string")
+          : [],
+      );
+      return ({
       id: row.id,
       studentNumber: row.student_number,
       studentName: row.student_name,
@@ -1247,17 +1609,24 @@ export async function listClinicClosureManualCases(
       resolvedAt: row.resolved_at?.toISOString() ?? null,
       resolutionAction: row.resolution_action,
       resolutionDetails: row.resolution_details,
+      policyMetadata: row.policy_metadata,
+      ovpsaBatchId: typeof row.policy_metadata.ovpsaBatchId === "string"
+        ? row.policy_metadata.ovpsaBatchId
+        : null,
+      ovpsaBatchOptimisticToken: row.ovpsa_batch_optimistic_token,
       category: row.category,
       closureReason: row.closure_reason,
       laboratory: row.laboratory_id ? {
         id: row.laboratory_id,
         date: row.laboratory_date,
         status: row.laboratory_status,
+        affected: affectedIds.has(row.laboratory_id),
       } : null,
       physicalExam: row.physical_exam_id ? {
         id: row.physical_exam_id,
         date: row.physical_exam_date,
         status: row.physical_exam_status,
+        affected: affectedIds.has(row.physical_exam_id),
       } : null,
       currentAssignmentBlock: currentAssignmentBlock([
         ...(row.laboratory_id ? [{
@@ -1277,7 +1646,7 @@ export async function listClinicClosureManualCases(
           resultProtectionState: protectionStates.get(row.replacement_physical_exam_id) ?? { type: "CLEAR" as const },
         }] : []),
       ]),
-    })),
+    }); }),
   };
 }
 
@@ -1295,12 +1664,16 @@ async function loadAppointmentStates(client: PoolClient, ids: string[]) {
     schedule_pair_id: string | null;
     schedule_cycle_start: number;
     rescheduled_from: string | null;
+    ovpsa_batch_id: string | null;
+    ovpsa_revision_id: string | null;
+    ovpsa_service_reservation_id: string | null;
   }>(
     `SELECT appointment.id::text,appointment.clinic_id::text,appointment.student_number,
             appointment.schedule_type,appointment.appointment_date::text,appointment.status,
             appointment.is_published,appointment.is_manually_locked,
             appointment.schedule_pair_id::text,appointment.schedule_cycle_start,
-            appointment.rescheduled_from::text
+            appointment.rescheduled_from::text,appointment.ovpsa_batch_id::text,
+            appointment.ovpsa_revision_id::text,appointment.ovpsa_service_reservation_id::text
        FROM appointments appointment WHERE appointment.id=ANY($1::uuid[]) ORDER BY appointment.id FOR UPDATE`,
     [ids],
   );
@@ -1321,6 +1694,9 @@ async function loadAppointmentStates(client: PoolClient, ids: string[]) {
     schedulePairId: row.schedule_pair_id,
     scheduleCycleStart: row.schedule_cycle_start,
     rescheduledFrom: row.rescheduled_from,
+    ovpsaBatchId: row.ovpsa_batch_id,
+    ovpsaRevisionId: row.ovpsa_revision_id,
+    ovpsaServiceReservationId: row.ovpsa_service_reservation_id,
   }));
 }
 
@@ -1391,6 +1767,13 @@ export async function resolveClinicClosureManualCase(
     if (manualCase.optimistic_token !== request.expectedOptimisticToken) {
       throw new AppError("MANUAL_CASE_STALE", "The manual case changed. Reload and try again.", 409);
     }
+    if (manualCase.reason_code === "OVPSA_LABORATORY_PROTECTED") {
+      throw new AppError(
+        "OVPSA_BATCH_RECOVERY_REQUIRED",
+        "Resolve this Laboratory closure through the coordinated OVPSA batch recovery.",
+        409,
+      );
+    }
     const affectedIds = [
       manualCase.affected_laboratory_appointment_id,
       manualCase.affected_physical_exam_appointment_id,
@@ -1417,23 +1800,47 @@ export async function resolveClinicClosureManualCase(
       if (assignmentBlock) {
         throw new AppError(assignmentBlock.code, assignmentBlock.message, 409);
       }
-      const unfinished = affected.filter((appointment) => appointment.status === "AWAITING_RESCHEDULE");
-      if (!unfinished.length) throw new AppError("MANUAL_CASE_NO_AWAITING_APPOINTMENT", "No appointment is awaiting a replacement.", 409);
       const dateByType = {
         LABORATORY: request.laboratoryDate,
         PHYSICAL_EXAM: request.physicalExamDate,
       };
-      if (unfinished.some((appointment) => !dateByType[appointment.scheduleType])) {
+      const preserveByType = {
+        LABORATORY: request.preserveLaboratory,
+        PHYSICAL_EXAM: request.preservePhysicalExam,
+      };
+      const awaiting = affected.filter((appointment) => appointment.status === "AWAITING_RESCHEDULE");
+      if (!awaiting.length) throw new AppError("MANUAL_CASE_NO_AWAITING_APPOINTMENT", "No appointment is awaiting a replacement.", 409);
+      if (awaiting.some((appointment) => !dateByType[appointment.scheduleType])) {
         throw validationError("A replacement date is required for every unfinished service.");
       }
+      for (const appointment of affected) {
+        const date = dateByType[appointment.scheduleType];
+        const preserve = preserveByType[appointment.scheduleType];
+        if (date && preserve) {
+          throw validationError(`Choose either a replacement or preservation for ${appointment.scheduleType}.`);
+        }
+        if (appointment.status !== "AWAITING_RESCHEDULE" && !date && preserve !== true) {
+          throw validationError(`Explicitly preserve or replace the related ${appointment.scheduleType} appointment.`);
+        }
+        if (date && !["DRAFT", "PENDING", "AWAITING_RESCHEDULE"].includes(appointment.status)) {
+          throw validationError(`The ${appointment.scheduleType} appointment cannot be replaced in its current state.`);
+        }
+      }
+      const finalDateByType = {
+        LABORATORY: request.laboratoryDate
+          ?? affected.find((appointment) => appointment.scheduleType === "LABORATORY")?.appointmentDate,
+        PHYSICAL_EXAM: request.physicalExamDate
+          ?? affected.find((appointment) => appointment.scheduleType === "PHYSICAL_EXAM")?.appointmentDate,
+      };
       if (
-        request.laboratoryDate
-        && request.physicalExamDate
-        && request.physicalExamDate <= request.laboratoryDate
+        finalDateByType.LABORATORY
+        && finalDateByType.PHYSICAL_EXAM
+        && finalDateByType.PHYSICAL_EXAM <= finalDateByType.LABORATORY
       ) {
         throw validationError("Physical Examination must follow Laboratory.");
       }
-      for (const appointment of unfinished) {
+      const moving = affected.filter((appointment) => Boolean(dateByType[appointment.scheduleType]));
+      for (const appointment of moving) {
         const date = dateByType[appointment.scheduleType]!;
         await assertManualDateAvailable(client, appointment.scheduleType, date);
       }
@@ -1441,27 +1848,61 @@ export async function resolveClinicClosureManualCase(
         `UPDATE appointments
             SET status='RESCHEDULED',is_published=FALSE,updated_by=$2,updated_at=NOW()
           WHERE id=ANY($1::uuid[])`,
-        [unfinished.map((appointment) => appointment.id), actor.userId],
+        [moving.map((appointment) => appointment.id), actor.userId],
       );
-      for (const appointment of unfinished) {
+      for (const appointment of moving) {
         const date = dateByType[appointment.scheduleType]!;
-        const inserted = await client.query<{ id: string }>(
-          `INSERT INTO appointments (
-             clinic_id,student_number,schedule_type,appointment_date,status,is_published,
-             notes,rescheduled_from,created_by,updated_by,schedule_pair_id,schedule_cycle_start
-           ) VALUES ($1,$2,$3,$4,'PENDING',TRUE,$5,$6,$7,$7,$8,$9) RETURNING id::text`,
-          [
-            appointment.clinicId,
-            appointment.studentNumber,
-            appointment.scheduleType,
-            date,
-            `Manual clinic closure resolution ${caseId}.`,
-            appointment.id,
-            actor.userId,
-            appointment.schedulePairId,
-            appointment.scheduleCycleStart,
-          ],
-        );
+        let recoveryReservationId: string | null = null;
+        if (appointment.ovpsaBatchId && appointment.ovpsaRevisionId) {
+          const reservation = await client.query<{ id: string }>(
+            `INSERT INTO ovpsa_first_year_service_reservations (
+               batch_id,revision_id,schedule_type,reservation_date,status,
+               reservation_kind,created_by
+             ) VALUES ($1,$2,$3,$4,'ACTIVE','CLOSURE_RECOVERY',$5)
+             RETURNING id::text`,
+            [
+              appointment.ovpsaBatchId,
+              appointment.ovpsaRevisionId,
+              appointment.scheduleType,
+              date,
+              actor.userId,
+            ],
+          );
+          recoveryReservationId = reservation.rows[0].id;
+        }
+        const inserted = recoveryReservationId
+          ? await client.query<{ id: string }>(
+              `INSERT INTO appointments (
+                 clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+                 notes,rescheduled_from,created_by,updated_by,schedule_pair_id,schedule_cycle_start,
+                 ovpsa_batch_id,ovpsa_revision_id,ovpsa_service_reservation_id,
+                 scheduling_category,scheduling_accepted_at,scheduling_source_row_order,
+                 scheduling_window_start,scheduling_window_end
+               ) SELECT clinic_id,student_number,schedule_type,$2,'PENDING',TRUE,$3,id,$4,$4,
+                        schedule_pair_id,schedule_cycle_start,ovpsa_batch_id,ovpsa_revision_id,$5,
+                        scheduling_category,scheduling_accepted_at,scheduling_source_row_order,
+                        scheduling_window_start,scheduling_window_end
+                   FROM appointments WHERE id=$1
+               RETURNING id::text`,
+              [appointment.id, date, `Manual clinic closure resolution ${caseId}.`, actor.userId, recoveryReservationId],
+            )
+          : await client.query<{ id: string }>(
+              `INSERT INTO appointments (
+                 clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+                 notes,rescheduled_from,created_by,updated_by,schedule_pair_id,schedule_cycle_start
+               ) VALUES ($1,$2,$3,$4,'PENDING',TRUE,$5,$6,$7,$7,$8,$9) RETURNING id::text`,
+              [
+                appointment.clinicId,
+                appointment.studentNumber,
+                appointment.scheduleType,
+                date,
+                `Manual clinic closure resolution ${caseId}.`,
+                appointment.id,
+                actor.userId,
+                appointment.schedulePairId,
+                appointment.scheduleCycleStart,
+              ],
+            );
         insertedByType[appointment.scheduleType] = inserted.rows[0].id;
       }
     } else {
@@ -1478,6 +1919,8 @@ export async function resolveClinicClosureManualCase(
       reason: request.reason,
       laboratoryDate: request.action === "ASSIGN_REPLACEMENT" ? request.laboratoryDate ?? null : null,
       physicalExamDate: request.action === "ASSIGN_REPLACEMENT" ? request.physicalExamDate ?? null : null,
+      preserveLaboratory: request.action === "ASSIGN_REPLACEMENT" ? request.preserveLaboratory ?? false : false,
+      preservePhysicalExam: request.action === "ASSIGN_REPLACEMENT" ? request.preservePhysicalExam ?? false : false,
       laboratoryAppointmentId: insertedByType.LABORATORY ?? null,
       physicalExamAppointmentId: insertedByType.PHYSICAL_EXAM ?? null,
     };
@@ -1525,7 +1968,7 @@ export async function resolveClinicClosureManualCase(
         protectionMetadata.activeDraftFileCount,
       ],
     );
-    await createStudentNotification(client, {
+    const notificationWarningCount = await createClosureNotification(client, {
       studentNumber: manualCase.student_number,
       notificationType: "CLINIC_CLOSURE_MANUALLY_RESOLVED",
       title: "Clinic schedule resolved",
@@ -1534,7 +1977,568 @@ export async function resolveClinicClosureManualCase(
         : "An administrator confirmed your current replacement clinic schedule.",
       eventKey: `clinic-closure:manual-case:${caseId}:resolved`,
       metadata: { manualCaseId: caseId, resolutionAction: request.action },
+      actorUserId: actor.userId,
+      auditEntityId: caseId,
+      auditEntityType: "clinic_closure_manual_case",
     });
-    return { caseId, status: "RESOLVED" as const, resolutionAction: request.action };
+    return {
+      caseId,
+      status: "RESOLVED" as const,
+      resolutionAction: request.action,
+      notificationWarningCount,
+    };
+  });
+}
+
+type OvpsaRecoveryBatchRow = {
+  batch_id: string;
+  status: string;
+  optimistic_token: string;
+  schedule_cycle_start: number;
+  revision_id: string;
+  revision_number: number;
+  revision_status: string;
+};
+
+type OvpsaRecoveryCaseRow = {
+  case_id: string;
+  optimistic_token: string;
+  student_number: string;
+  laboratory_id: string;
+  laboratory_status: string;
+  laboratory_date: string;
+  laboratory_clinic_id: string;
+  physical_id: string;
+  physical_status: string;
+  physical_date: string;
+  physical_clinic_id: string;
+  schedule_pair_id: string;
+  physical_created_at: Date;
+  source_order: number | null;
+};
+
+async function planOvpsaClosureBatchRecovery(
+  client: PoolClient,
+  input: {
+    batchId: string;
+    optimisticToken: string;
+    replacementLaboratoryDate: string;
+    lock: boolean;
+  },
+) {
+  if (!isClinicSchedulingWeekday(input.replacementLaboratoryDate)) {
+    throw validationError("The replacement Mission Hospital Laboratory date must be a weekday.");
+  }
+  if (input.replacementLaboratoryDate < manilaToday()) {
+    throw validationError("The replacement Mission Hospital Laboratory date cannot be in the past.");
+  }
+  const batchResult = await client.query<OvpsaRecoveryBatchRow>(
+    `SELECT batch.id::text AS batch_id,batch.status,batch.optimistic_token::text,
+            batch.schedule_cycle_start,revision.id::text AS revision_id,
+            revision.revision_number,revision.status AS revision_status
+       FROM ovpsa_first_year_batches batch
+       JOIN ovpsa_first_year_batch_revisions revision
+         ON revision.id=batch.current_revision_id
+      WHERE batch.id=$1
+      ${input.lock ? "FOR UPDATE OF batch,revision" : ""}`,
+    [input.batchId],
+  );
+  const batch = batchResult.rows[0];
+  if (!batch) throw new AppError("OVPSA_BATCH_NOT_FOUND", "First Year batch not found.", 404);
+  if (batch.optimistic_token !== input.optimisticToken) {
+    throw new AppError("OVPSA_BATCH_STALE", "The OVPSA batch changed. Reload and try again.", 409);
+  }
+  if (batch.status !== "RESCHEDULE_REQUIRED" || batch.revision_status !== "PUBLISHED") {
+    throw new AppError(
+      "OVPSA_BATCH_RECOVERY_NOT_REQUIRED",
+      "This batch is not awaiting coordinated closure recovery.",
+      409,
+    );
+  }
+  if (await isSchedulingDateBlocked(client, {
+    scheduleType: "LABORATORY",
+    date: input.replacementLaboratoryDate,
+    excludeOvpsaBatchId: input.batchId,
+  })) {
+    throw new AppError(
+      "CLINIC_CALENDAR_CONFLICT",
+      `${input.replacementLaboratoryDate} is blocked or reserved.`,
+      409,
+    );
+  }
+  const cases = await client.query<OvpsaRecoveryCaseRow>(
+    `SELECT manual_case.id::text AS case_id,manual_case.optimistic_token::text,
+            manual_case.student_number,laboratory.id::text AS laboratory_id,
+            laboratory.status AS laboratory_status,laboratory.appointment_date::text AS laboratory_date,
+            laboratory.clinic_id::text AS laboratory_clinic_id,
+            physical.id::text AS physical_id,physical.status AS physical_status,
+            physical.appointment_date::text AS physical_date,
+            physical.clinic_id::text AS physical_clinic_id,
+            laboratory.schedule_pair_id::text,physical.created_at AS physical_created_at,
+            physical.scheduling_source_row_order AS source_order
+       FROM clinic_closure_manual_cases manual_case
+       JOIN appointments laboratory
+         ON laboratory.id=manual_case.affected_laboratory_appointment_id
+       JOIN appointments physical
+         ON physical.id=manual_case.affected_physical_exam_appointment_id
+      WHERE manual_case.status='OPEN'
+        AND manual_case.reason_code='OVPSA_LABORATORY_PROTECTED'
+        AND manual_case.policy_metadata->>'ovpsaBatchId'=$1::text
+      ORDER BY physical.appointment_date,physical.created_at,
+               physical.scheduling_source_row_order NULLS LAST,
+               manual_case.student_number,manual_case.id
+      ${input.lock ? "FOR UPDATE OF manual_case,laboratory,physical" : ""}`,
+    [input.batchId],
+  );
+  if (!cases.rowCount) {
+    throw new AppError(
+      "OVPSA_BATCH_RECOVERY_CASES_NOT_FOUND",
+      "No open OVPSA Laboratory recovery cases were found for this batch.",
+      409,
+    );
+  }
+  const invalidLaboratory = cases.rows.find((row) => row.laboratory_status !== "AWAITING_RESCHEDULE");
+  if (invalidLaboratory) {
+    throw new AppError(
+      "OVPSA_BATCH_RECOVERY_STALE",
+      "An affected Laboratory appointment changed. Reload and review the batch again.",
+      409,
+    );
+  }
+  const protectionStates = await loadAppointmentResultProtectionStates(
+    client,
+    cases.rows.flatMap((row) => [row.laboratory_id, row.physical_id]),
+  );
+  const blocked = await loadSchedulingBlockedDates(client, {
+    startDate: input.replacementLaboratoryDate,
+    endDate: addCalendarDays(input.replacementLaboratoryDate, 366 * 5),
+    excludeOvpsaBatchId: input.batchId,
+  });
+  const blockedDates = await listUnifiedBlockedDateSet(client);
+  const { capacity, usedCapacity } = await loadCapacity(client);
+  const minimumPhysicalExamDate = addCalendarDays(input.replacementLaboratoryDate, 7);
+  const allocations: OvpsaClosureBatchRecoveryPreview["allocations"] = [];
+  for (const row of cases.rows) {
+    const physicalProtected = protectionStates.get(row.physical_id)?.type === "PROTECTED";
+    const canPreserve = ["PENDING", "COMPLETED"].includes(row.physical_status)
+      && row.physical_date >= minimumPhysicalExamDate
+      && !blockedDates.has(row.physical_date)
+      && !blocked.physicalExamDates.includes(row.physical_date);
+    if (canPreserve) {
+      allocations.push({
+        studentNumber: row.student_number,
+        currentPhysicalExamDate: row.physical_date,
+        proposedPhysicalExamDate: row.physical_date,
+        physicalExamAction: "PRESERVE",
+      });
+      continue;
+    }
+    if (
+      row.physical_status === "COMPLETED"
+      || !["PENDING", "AWAITING_RESCHEDULE"].includes(row.physical_status)
+      || physicalProtected
+    ) {
+      throw new AppError(
+        "OVPSA_PROTECTED_APPOINTMENT_CONFLICT",
+        `The Physical Examination for ${row.student_number} cannot be moved safely.`,
+        409,
+      );
+    }
+    const dates = allocateReplacementDates({
+      strategy: "MOVE_PHYSICAL_ONLY",
+      afterDate: addCalendarDays(input.replacementLaboratoryDate, 6),
+      blockedDates,
+      blockedDatesByService: {
+        PHYSICAL_EXAM: new Set(blocked.physicalExamDates),
+      },
+      usedCapacity,
+      capacity,
+    });
+    reserveCapacity(usedCapacity, dates);
+    allocations.push({
+      studentNumber: row.student_number,
+      currentPhysicalExamDate: row.physical_date,
+      proposedPhysicalExamDate: dates.physicalExamDate!,
+      physicalExamAction: "MOVE",
+    });
+  }
+  const preview: OvpsaClosureBatchRecoveryPreview = {
+    batchId: input.batchId,
+    optimisticToken: batch.optimistic_token,
+    replacementLaboratoryDate: input.replacementLaboratoryDate,
+    linkedCaseCount: cases.rows.length,
+    preservedPhysicalExamCount: allocations.filter((row) => row.physicalExamAction === "PRESERVE").length,
+    movedPhysicalExamCount: allocations.filter((row) => row.physicalExamAction === "MOVE").length,
+    allocations,
+  };
+  return { batch, cases: cases.rows, protectionStates, preview };
+}
+
+export async function previewOvpsaClinicClosureBatchRecovery(
+  batchId: string,
+  raw: unknown,
+  actor: SessionUser,
+): Promise<OvpsaClosureBatchRecoveryPreview> {
+  assertAdmin(actor);
+  if (!z.string().uuid().safeParse(batchId).success) throw validationError("The OVPSA batch ID is invalid.");
+  const parsed = ovpsaBatchPreviewSchema.safeParse(raw);
+  if (!parsed.success) throw validationError("Please correct the OVPSA batch recovery preview.", parsed.error.flatten());
+  return transaction(async (client) => (
+    await planOvpsaClosureBatchRecovery(client, {
+      batchId,
+      ...parsed.data,
+      lock: false,
+    })
+  ).preview);
+}
+
+export async function confirmOvpsaClinicClosureBatchRecovery(
+  batchId: string,
+  raw: unknown,
+  actor: SessionUser,
+): Promise<OvpsaClosureBatchRecoveryConfirmation> {
+  assertAdmin(actor);
+  if (!z.string().uuid().safeParse(batchId).success) throw validationError("The OVPSA batch ID is invalid.");
+  const parsed = ovpsaBatchConfirmSchema.safeParse(raw);
+  if (!parsed.success) throw validationError("Please correct the OVPSA batch recovery confirmation.", parsed.error.flatten());
+  return transaction(async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('medclinic:schedule-import-queue'))");
+    const planned = await planOvpsaClosureBatchRecovery(client, {
+      batchId,
+      optimisticToken: parsed.data.optimisticToken,
+      replacementLaboratoryDate: parsed.data.replacementLaboratoryDate,
+      lock: true,
+    });
+    const expectedTokens = new Map(
+      parsed.data.caseTokens.map((item) => [item.caseId, item.expectedOptimisticToken]),
+    );
+    if (
+      expectedTokens.size !== planned.cases.length
+      || planned.cases.some((item) => expectedTokens.get(item.case_id) !== item.optimistic_token)
+    ) {
+      throw new AppError(
+        "OVPSA_BATCH_RECOVERY_CASES_STALE",
+        "The linked Manual Resolution cases changed. Reload and review the batch again.",
+        409,
+      );
+    }
+    const reason = parsed.data.reason.trim();
+    await client.query(
+      `UPDATE ovpsa_first_year_service_reservations
+          SET status='RELEASED',released_at=clock_timestamp(),released_by=$3,
+              release_reason=$4
+        WHERE batch_id=$1 AND revision_id=$2
+          AND status IN ('ACTIVE','INVALIDATED')`,
+      [batchId, planned.batch.revision_id, actor.userId, reason],
+    );
+    const earliestPhysicalExamDate = [...planned.preview.allocations]
+      .sort((left, right) => left.proposedPhysicalExamDate.localeCompare(right.proposedPhysicalExamDate))[0]
+      .proposedPhysicalExamDate;
+    const defaultPhysicalExamDate = addCalendarDays(parsed.data.replacementLaboratoryDate, 7);
+    const revision = await client.query<{ id: string }>(
+      `INSERT INTO ovpsa_first_year_batch_revisions (
+         batch_id,revision_number,status,laboratory_date,physical_exam_date,
+         physical_exam_exception_reason,validation_snapshot,validated_by,validated_at,
+         published_by,published_at,created_by
+       ) VALUES ($1,$2,'VALIDATED',$3,$4,$5,$6::jsonb,$7,clock_timestamp(),
+                 NULL,NULL,$7)
+       RETURNING id::text`,
+      [
+        batchId,
+        planned.batch.revision_number + 1,
+        parsed.data.replacementLaboratoryDate,
+        earliestPhysicalExamDate,
+        earliestPhysicalExamDate === defaultPhysicalExamDate ? null : reason,
+        JSON.stringify(planned.preview),
+        actor.userId,
+      ],
+    );
+    const revisionId = revision.rows[0].id;
+    const laboratoryReservation = await client.query<{ id: string }>(
+      `INSERT INTO ovpsa_first_year_service_reservations (
+         batch_id,revision_id,schedule_type,reservation_date,status,
+         reservation_kind,created_by
+       ) VALUES ($1,$2,'LABORATORY',$3,'ACTIVE','EXCLUSIVE',$4)
+       RETURNING id::text`,
+      [batchId, revisionId, parsed.data.replacementLaboratoryDate, actor.userId],
+    );
+    const preservedDates = [...new Set(
+      planned.preview.allocations
+        .filter((item) => item.physicalExamAction === "PRESERVE")
+        .map((item) => item.proposedPhysicalExamDate),
+    )];
+    const preservedReservations = preservedDates.length
+      ? await client.query<{ id: string; reservation_date: string }>(
+          `INSERT INTO ovpsa_first_year_service_reservations (
+             batch_id,revision_id,schedule_type,reservation_date,status,
+             reservation_kind,created_by
+           ) SELECT $1,$2,'PHYSICAL_EXAM',date,'ACTIVE','EXCLUSIVE',$4
+               FROM UNNEST($3::date[]) AS reservation(date)
+           RETURNING id::text,reservation_date::text`,
+          [batchId, revisionId, preservedDates, actor.userId],
+        )
+      : { rows: [] as Array<{ id: string; reservation_date: string }> };
+    const preservedReservationByDate = new Map(
+      preservedReservations.rows.map((item) => [item.reservation_date, item.id]),
+    );
+    const movedAllocations = planned.preview.allocations.filter(
+      (item) => item.physicalExamAction === "MOVE",
+    );
+    const movedReservationRows: Array<{ id: string; student_number: string }> = [];
+    for (const allocation of movedAllocations) {
+      const inserted = await client.query<{ id: string }>(
+        `INSERT INTO ovpsa_first_year_service_reservations (
+           batch_id,revision_id,schedule_type,reservation_date,status,
+           reservation_kind,created_by
+         ) VALUES ($1,$2,'PHYSICAL_EXAM',$3,'ACTIVE','CLOSURE_RECOVERY',$4)
+         RETURNING id::text`,
+        [batchId, revisionId, allocation.proposedPhysicalExamDate, actor.userId],
+      );
+      movedReservationRows.push({
+        id: inserted.rows[0].id,
+        student_number: allocation.studentNumber,
+      });
+    }
+    const movedReservationByStudent = new Map(
+      movedReservationRows.map((item) => [item.student_number, item.id]),
+    );
+    const allocationByStudent = new Map(
+      planned.preview.allocations.map((item) => [item.studentNumber, item]),
+    );
+    const membershipAssignments = planned.cases.map((item) => {
+      const allocation = allocationByStudent.get(item.student_number)!;
+      return {
+        student_number: item.student_number,
+        reservation_id: allocation.physicalExamAction === "PRESERVE"
+          ? preservedReservationByDate.get(allocation.proposedPhysicalExamDate)
+          : movedReservationByStudent.get(item.student_number),
+      };
+    });
+    if (membershipAssignments.some((item) => !item.reservation_id)) {
+      throw new Error("OVPSA closure recovery reservation assignment is incomplete.");
+    }
+    await client.query(
+      `INSERT INTO ovpsa_first_year_membership_snapshots (
+         revision_id,batch_id,student_number,academic_snapshot_id,student_name,
+         college_id,college_name,program_id,program_code,program_name,year_level,
+         source_row_number,allocation_position,assigned_pe_reservation_id
+       ) SELECT $1,membership.batch_id,membership.student_number,
+                membership.academic_snapshot_id,membership.student_name,
+                membership.college_id,membership.college_name,membership.program_id,
+                membership.program_code,membership.program_name,membership.year_level,
+                membership.source_row_number,membership.allocation_position,
+                CASE WHEN membership.source_row_number IS NULL THEN NULL
+                     ELSE COALESCE(row.reservation_id,membership.assigned_pe_reservation_id)
+                END
+           FROM ovpsa_first_year_membership_snapshots membership
+           LEFT JOIN jsonb_to_recordset($3::jsonb)
+             AS row(student_number text,reservation_id uuid)
+             ON row.student_number=membership.student_number
+          WHERE membership.revision_id=$2`,
+      [revisionId, planned.batch.revision_id, JSON.stringify(membershipAssignments)],
+    );
+    await client.query(
+      `UPDATE appointments
+          SET status='RESCHEDULED',is_published=FALSE,updated_by=$2,updated_at=clock_timestamp()
+        WHERE id=ANY($1::uuid[])`,
+      [planned.cases.map((item) => item.laboratory_id), actor.userId],
+    );
+    const newLaboratories = await client.query<{ id: string; student_number: string }>(
+      `INSERT INTO appointments (
+         clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+         notes,rescheduled_from,created_by,updated_by,schedule_pair_id,schedule_cycle_start,
+         ovpsa_batch_id,ovpsa_revision_id,ovpsa_service_reservation_id,
+         scheduling_category,scheduling_accepted_at,scheduling_source_row_order,
+         scheduling_window_start,scheduling_window_end
+       ) SELECT laboratory.clinic_id,laboratory.student_number,'LABORATORY',$2,'PENDING',TRUE,
+                $3,laboratory.id,$4,$4,laboratory.schedule_pair_id,laboratory.schedule_cycle_start,
+                $5,$6,$7,laboratory.scheduling_category,laboratory.scheduling_accepted_at,
+                laboratory.scheduling_source_row_order,laboratory.scheduling_window_start,
+                laboratory.scheduling_window_end
+           FROM appointments laboratory
+          WHERE laboratory.id=ANY($1::uuid[])
+       RETURNING id::text,student_number`,
+      [
+        planned.cases.map((item) => item.laboratory_id),
+        parsed.data.replacementLaboratoryDate,
+        reason,
+        actor.userId,
+        batchId,
+        revisionId,
+        laboratoryReservation.rows[0].id,
+      ],
+    );
+    const newLaboratoryByStudent = new Map(
+      newLaboratories.rows.map((item) => [item.student_number, item.id]),
+    );
+    const movedCaseRows = planned.cases.filter(
+      (item) => allocationByStudent.get(item.student_number)?.physicalExamAction === "MOVE",
+    );
+    if (movedCaseRows.length) {
+      await client.query(
+        `UPDATE appointments
+            SET status='RESCHEDULED',is_published=FALSE,updated_by=$2,updated_at=clock_timestamp()
+          WHERE id=ANY($1::uuid[])`,
+        [movedCaseRows.map((item) => item.physical_id), actor.userId],
+      );
+    }
+    const movedAppointmentInput = movedCaseRows.map((item) => ({
+      appointment_id: item.physical_id,
+      student_number: item.student_number,
+      date: allocationByStudent.get(item.student_number)!.proposedPhysicalExamDate,
+      reservation_id: movedReservationByStudent.get(item.student_number),
+    }));
+    const newPhysicals = movedAppointmentInput.length
+      ? await client.query<{ id: string; student_number: string }>(
+          `INSERT INTO appointments (
+             clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+             notes,rescheduled_from,created_by,updated_by,schedule_pair_id,schedule_cycle_start,
+             ovpsa_batch_id,ovpsa_revision_id,ovpsa_service_reservation_id,
+             scheduling_category,scheduling_accepted_at,scheduling_source_row_order,
+             scheduling_window_start,scheduling_window_end
+           ) SELECT physical.clinic_id,physical.student_number,'PHYSICAL_EXAM',row.date,
+                    'PENDING',TRUE,$2,physical.id,$3,$3,physical.schedule_pair_id,
+                    physical.schedule_cycle_start,$4,$5,row.reservation_id,
+                    physical.scheduling_category,physical.scheduling_accepted_at,
+                    physical.scheduling_source_row_order,physical.scheduling_window_start,
+                    physical.scheduling_window_end
+               FROM jsonb_to_recordset($1::jsonb)
+                 AS row(appointment_id uuid,student_number text,date date,reservation_id uuid)
+               JOIN appointments physical ON physical.id=row.appointment_id
+           RETURNING id::text,student_number`,
+          [JSON.stringify(movedAppointmentInput), reason, actor.userId, batchId, revisionId],
+        )
+      : { rows: [] as Array<{ id: string; student_number: string }> };
+    const newPhysicalByStudent = new Map(
+      newPhysicals.rows.map((item) => [item.student_number, item.id]),
+    );
+    for (const item of planned.cases) {
+      const allocation = allocationByStudent.get(item.student_number)!;
+      if (allocation.physicalExamAction === "PRESERVE") {
+        await client.query(
+          `UPDATE appointments
+              SET ovpsa_revision_id=$2,ovpsa_service_reservation_id=$3,
+                  updated_by=$4,updated_at=clock_timestamp()
+            WHERE id=$1`,
+          [
+            item.physical_id,
+            revisionId,
+            preservedReservationByDate.get(allocation.proposedPhysicalExamDate),
+            actor.userId,
+          ],
+        );
+      }
+      const newLaboratoryId = newLaboratoryByStudent.get(item.student_number)!;
+      const newPhysicalId = allocation.physicalExamAction === "PRESERVE"
+        ? item.physical_id
+        : newPhysicalByStudent.get(item.student_number)!;
+      await client.query(
+        `UPDATE clinic_closure_manual_cases
+            SET status='RESOLVED',resolved_at=clock_timestamp(),resolved_by=$2,
+                resolution_action='ASSIGN_REPLACEMENT',
+                resolution_details=jsonb_build_object(
+                  'batchRecovery',TRUE,'revisionId',$3::text,
+                  'laboratoryDate',$4::text,'physicalExamDate',$5::text,
+                  'physicalExamAction',$6::text,'reason',$7::text
+                ),optimistic_token=gen_random_uuid(),updated_at=clock_timestamp()
+          WHERE id=$1 AND status='OPEN'`,
+        [
+          item.case_id,
+          actor.userId,
+          revisionId,
+          parsed.data.replacementLaboratoryDate,
+          allocation.proposedPhysicalExamDate,
+          allocation.physicalExamAction,
+          reason,
+        ],
+      );
+      await client.query(
+        `UPDATE appointment_reschedule_events
+            SET outcome='MANUALLY_RESOLVED',new_laboratory_appointment_id=$2,
+                new_physical_exam_appointment_id=$3,ovpsa_target_revision_id=$4,
+                policy_metadata=policy_metadata||jsonb_build_object(
+                  'batchRecovery',TRUE,'physicalExamAction',$5::text
+                )
+          WHERE manual_case_id=$1`,
+        [item.case_id, newLaboratoryId, newPhysicalId, revisionId, allocation.physicalExamAction],
+      );
+    }
+    await client.query(
+      `UPDATE ovpsa_first_year_active_memberships
+          SET released_at=clock_timestamp(),released_by=$3,release_reason=$4
+        WHERE batch_id=$1 AND revision_id=$2 AND released_at IS NULL`,
+      [batchId, planned.batch.revision_id, actor.userId, reason],
+    );
+    await client.query(
+      `INSERT INTO ovpsa_first_year_active_memberships (
+         batch_id,revision_id,student_number,schedule_cycle_start
+       ) SELECT $1,$2,student_number,$3
+           FROM ovpsa_first_year_membership_snapshots WHERE revision_id=$2`,
+      [batchId, revisionId, planned.batch.schedule_cycle_start],
+    );
+    await client.query(
+      `UPDATE ovpsa_first_year_batch_revisions
+          SET status='SUPERSEDED',superseded_by_revision_id=$2,
+              superseded_at=clock_timestamp()
+        WHERE id=$1 AND status='PUBLISHED'`,
+      [planned.batch.revision_id, revisionId],
+    );
+    await client.query(
+      `UPDATE ovpsa_first_year_batch_revisions
+          SET status='PUBLISHED',published_by=$2,published_at=clock_timestamp()
+        WHERE id=$1 AND status='VALIDATED'`,
+      [revisionId, actor.userId],
+    );
+    const nextToken = randomUUID();
+    await client.query(
+      `UPDATE ovpsa_first_year_batches
+          SET status='PUBLISHED',current_revision_id=$2,optimistic_token=$3,
+              updated_by=$4,updated_at=clock_timestamp()
+        WHERE id=$1 AND status='RESCHEDULE_REQUIRED'`,
+      [batchId, revisionId, nextToken, actor.userId],
+    );
+    let notificationWarningCount = 0;
+    for (const item of planned.cases) {
+      const allocation = allocationByStudent.get(item.student_number)!;
+      notificationWarningCount += await createClosureNotification(client, {
+        studentNumber: item.student_number,
+        notificationType: "CLINIC_CLOSURE_MANUALLY_RESOLVED",
+        title: "First Year OVPSA schedule recovered",
+        message: `Your Laboratory date is ${parsed.data.replacementLaboratoryDate} and Physical Examination date is ${allocation.proposedPhysicalExamDate}.`,
+        eventKey: `clinic-closure:ovpsa-batch:${batchId}:revision:${revisionId}:${item.student_number}`,
+        metadata: { batchId, revisionId, physicalExamAction: allocation.physicalExamAction },
+        actorUserId: actor.userId,
+        auditEntityId: batchId,
+        auditEntityType: "ovpsa_first_year_batch",
+      });
+    }
+    await client.query(
+      `INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,metadata)
+       VALUES ($1,'OVPSA_CLINIC_CLOSURE_BATCH_RECOVERED','ovpsa_first_year_batch',$2,
+               jsonb_build_object(
+                 'previousRevisionId',$3::text,'revisionId',$4::text,
+                 'linkedCaseCount',$5::int,'preservedPhysicalExamCount',$6::int,
+                 'movedPhysicalExamCount',$7::int,'notificationWarningCount',$8::int,
+                 'reason',$9::text
+               ))`,
+      [
+        actor.userId,
+        batchId,
+        planned.batch.revision_id,
+        revisionId,
+        planned.preview.linkedCaseCount,
+        planned.preview.preservedPhysicalExamCount,
+        planned.preview.movedPhysicalExamCount,
+        notificationWarningCount,
+        reason,
+      ],
+    );
+    return {
+      ...planned.preview,
+      optimisticToken: nextToken,
+      revisionId,
+      revisionNumber: planned.batch.revision_number + 1,
+      notificationWarningCount,
+    };
   });
 }

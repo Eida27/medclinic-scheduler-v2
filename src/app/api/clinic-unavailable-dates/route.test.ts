@@ -18,6 +18,7 @@ const admin = { userId: "admin-id", role: "ADMIN" as const };
 const body = {
   requestId: "90000000-0000-4000-8000-000000000001",
   emergencyAcknowledged: false,
+  recoveryMode: "AUTO_ELIGIBLE",
   changes: [
     { action: "BLOCK", date: "2027-07-15", category: "CLOSURE", reason: "Planned maintenance" },
     {

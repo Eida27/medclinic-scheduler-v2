@@ -8,11 +8,13 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
+import type { OvpsaClosureBatchRecoveryPreview } from "@/types/clinic-calendar";
 
 type AppointmentSummary = {
   id: string;
   date: string | null;
   status: string | null;
+  affected: boolean;
 };
 
 type ManualCase = {
@@ -32,6 +34,8 @@ type ManualCase = {
   resolvedAt: string | null;
   resolutionAction: string | null;
   resolutionDetails: unknown;
+  ovpsaBatchId: string | null;
+  ovpsaBatchOptimisticToken: string | null;
   laboratory: AppointmentSummary | null;
   physicalExam: AppointmentSummary | null;
   currentAssignmentBlock: {
@@ -69,6 +73,10 @@ const initialFilters: Filters = {
 };
 
 const reasonOptions = [
+  "EMERGENCY_CLOSURE",
+  "NOTICE_PERIOD_PROTECTED",
+  "OVPSA_LABORATORY_PROTECTED",
+  "ADMIN_CHOSE_MANUAL_RECOVERY",
   "PHYSICAL_COMPLETED_BEFORE_LABORATORY",
   "APPOINTMENT_MANUALLY_LOCKED",
   "DRAFT_RESULT_FILES_EXIST",
@@ -83,9 +91,23 @@ function label(value: string) {
   return value.toLowerCase().replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
 }
 
-function appointmentLine(service: string, appointment: AppointmentSummary | null) {
-  if (!appointment) return `${service}: not affected`;
-  return `${service}: ${appointment.date ?? "no current date"} - ${operationalStatusLabel(appointment.status ?? "")}`;
+function AppointmentLine({ service, appointment }: {
+  service: string;
+  appointment: AppointmentSummary | null;
+}) {
+  if (!appointment) return <p>{service}: not present</p>;
+  return (
+    <p className="grid gap-0.5 sm:grid-cols-[auto_1fr] sm:items-baseline sm:gap-2">
+      <span className={`w-fit rounded-full px-2 py-0.5 text-xs font-bold ${
+        appointment.affected
+          ? "bg-red-100 text-red-900"
+          : "bg-slate-100 text-slate-700"
+      }`}>
+        {appointment.affected ? "Affected" : "Related / currently unaffected"}
+      </span>
+      <span>{service}: {appointment.date ?? "no current date"} - {operationalStatusLabel(appointment.status ?? "")}</span>
+    </p>
+  );
 }
 
 function CaseResolutionCard({ manualCase, onResolved }: {
@@ -94,6 +116,8 @@ function CaseResolutionCard({ manualCase, onResolved }: {
 }) {
   const [laboratoryDate, setLaboratoryDate] = useState("");
   const [physicalExamDate, setPhysicalExamDate] = useState("");
+  const [laboratoryDecision, setLaboratoryDecision] = useState<"" | "PRESERVE" | "REPLACE">("");
+  const [physicalExamDecision, setPhysicalExamDecision] = useState<"" | "PRESERVE" | "REPLACE">("");
   const [assignmentReason, setAssignmentReason] = useState("");
   const [keepReason, setKeepReason] = useState("");
   const [busy, setBusy] = useState(false);
@@ -121,9 +145,15 @@ function CaseResolutionCard({ manualCase, onResolved }: {
     }
   }
 
+  const serviceReady = (
+    appointment: AppointmentSummary | null,
+    date: string,
+    decision: "" | "PRESERVE" | "REPLACE",
+  ) => !appointment
+    || (appointment.affected ? Boolean(date) : decision === "PRESERVE" || (decision === "REPLACE" && Boolean(date)));
   const assignmentReady = assignmentReason.trim().length >= 3
-    && (!manualCase.laboratory || laboratoryDate)
-    && (!manualCase.physicalExam || physicalExamDate);
+    && serviceReady(manualCase.laboratory, laboratoryDate, laboratoryDecision)
+    && serviceReady(manualCase.physicalExam, physicalExamDate, physicalExamDecision);
   const resolutionBlocked = Boolean(manualCase.currentAssignmentBlock);
 
   return (
@@ -143,8 +173,8 @@ function CaseResolutionCard({ manualCase, onResolved }: {
         <p><span className="font-semibold">Category:</span> {label(manualCase.category)}</p>
         <p><span className="font-semibold">Reason:</span> {manualCase.closureReason}</p>
         <p>{manualCase.reasonMessage}</p>
-        <p>{appointmentLine("Laboratory", manualCase.laboratory)}</p>
-        <p>{appointmentLine("Physical Examination", manualCase.physicalExam)}</p>
+        <AppointmentLine service="Laboratory" appointment={manualCase.laboratory} />
+        <AppointmentLine service="Physical Examination" appointment={manualCase.physicalExam} />
         <p className="text-xs text-muted">
           Opened {manualCase.createdAt.slice(0, 10)}
           {manualCase.resolvedAt ? ` - resolved ${manualCase.resolvedAt.slice(0, 10)} by ${label(manualCase.resolutionAction ?? "")}` : " - awaiting administrator resolution"}
@@ -170,7 +200,7 @@ function CaseResolutionCard({ manualCase, onResolved }: {
           <section className="grid content-start gap-3 rounded-xl border border-line p-3">
             <h4 className="font-bold text-ink">Assign replacement</h4>
             <p className="text-xs text-muted">Dates are revalidated for closures, service capacity, and required-service order when submitted.</p>
-            {manualCase.laboratory ? (
+            {manualCase.laboratory?.affected ? (
               <label className="grid gap-1 text-sm font-semibold">
                 Laboratory date
                 <Input
@@ -181,8 +211,15 @@ function CaseResolutionCard({ manualCase, onResolved }: {
                   onInput={(event) => setLaboratoryDate(event.currentTarget.value)}
                 />
               </label>
+            ) : manualCase.laboratory ? (
+              <fieldset className="grid gap-2 rounded-lg border border-line p-3 text-sm">
+                <legend className="px-1 font-semibold">Related Laboratory decision</legend>
+                <label className="flex gap-2"><input type="radio" name={`laboratory-${manualCase.id}`} checked={laboratoryDecision === "PRESERVE"} onChange={() => { setLaboratoryDecision("PRESERVE"); setLaboratoryDate(""); }} />Preserve current Laboratory</label>
+                <label className="flex gap-2"><input type="radio" name={`laboratory-${manualCase.id}`} checked={laboratoryDecision === "REPLACE"} onChange={() => setLaboratoryDecision("REPLACE")} />Replace Laboratory</label>
+                {laboratoryDecision === "REPLACE" ? <Input aria-label={`Laboratory replacement date for ${manualCase.studentNumber}`} type="date" value={laboratoryDate} disabled={resolutionBlocked} onInput={(event) => setLaboratoryDate(event.currentTarget.value)} /> : null}
+              </fieldset>
             ) : null}
-            {manualCase.physicalExam ? (
+            {manualCase.physicalExam?.affected ? (
               <label className="grid gap-1 text-sm font-semibold">
                 Physical Examination date
                 <Input
@@ -193,6 +230,13 @@ function CaseResolutionCard({ manualCase, onResolved }: {
                   onInput={(event) => setPhysicalExamDate(event.currentTarget.value)}
                 />
               </label>
+            ) : manualCase.physicalExam ? (
+              <fieldset className="grid gap-2 rounded-lg border border-line p-3 text-sm">
+                <legend className="px-1 font-semibold">Related Physical Examination decision</legend>
+                <label className="flex gap-2"><input type="radio" name={`physical-${manualCase.id}`} checked={physicalExamDecision === "PRESERVE"} onChange={() => { setPhysicalExamDecision("PRESERVE"); setPhysicalExamDate(""); }} />Preserve current Physical Examination</label>
+                <label className="flex gap-2"><input type="radio" name={`physical-${manualCase.id}`} checked={physicalExamDecision === "REPLACE"} onChange={() => setPhysicalExamDecision("REPLACE")} />Replace Physical Examination</label>
+                {physicalExamDecision === "REPLACE" ? <Input aria-label={`Physical Examination replacement date for ${manualCase.studentNumber}`} type="date" value={physicalExamDate} disabled={resolutionBlocked} onInput={(event) => setPhysicalExamDate(event.currentTarget.value)} /> : null}
+              </fieldset>
             ) : null}
             <label className="grid gap-1 text-sm font-semibold">
               Resolution reason
@@ -210,6 +254,8 @@ function CaseResolutionCard({ manualCase, onResolved }: {
                 expectedOptimisticToken: manualCase.optimisticToken,
                 ...(laboratoryDate ? { laboratoryDate } : {}),
                 ...(physicalExamDate ? { physicalExamDate } : {}),
+                ...(laboratoryDecision === "PRESERVE" ? { preserveLaboratory: true } : {}),
+                ...(physicalExamDecision === "PRESERVE" ? { preservePhysicalExam: true } : {}),
                 reason: assignmentReason,
               }); }}
               aria-label={`Assign replacement for ${manualCase.studentNumber}`}
@@ -243,6 +289,109 @@ function CaseResolutionCard({ manualCase, onResolved }: {
               Keep current replacement
             </Button>
           </section>
+        </div>
+      ) : null}
+      {error ? <Alert tone="danger">{error}</Alert> : null}
+    </Card>
+  );
+}
+
+function OvpsaBatchRecoveryCard({ cases, onResolved }: {
+  cases: ManualCase[];
+  onResolved(message: string): Promise<void>;
+}) {
+  const batchId = cases[0].ovpsaBatchId!;
+  const optimisticToken = cases[0].ovpsaBatchOptimisticToken!;
+  const [laboratoryDate, setLaboratoryDate] = useState("");
+  const [reason, setReason] = useState("");
+  const [preview, setPreview] = useState<OvpsaClosureBatchRecoveryPreview>();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+
+  async function previewBatch() {
+    setBusy(true);
+    setError(undefined);
+    try {
+      const response = await fetch(
+        `/api/clinic-unavailable-dates/manual-cases/ovpsa-batches/${batchId}/preview`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ optimisticToken, replacementLaboratoryDate: laboratoryDate }),
+        },
+      );
+      const payload = await response.json() as { data?: OvpsaClosureBatchRecoveryPreview; error?: { message?: string } };
+      if (!response.ok || !payload.data) throw new Error(payload.error?.message ?? "Unable to preview OVPSA recovery.");
+      setPreview(payload.data);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to preview OVPSA recovery.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmBatch() {
+    if (!preview) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const response = await fetch(
+        `/api/clinic-unavailable-dates/manual-cases/ovpsa-batches/${batchId}/resolve`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            optimisticToken,
+            replacementLaboratoryDate: laboratoryDate,
+            caseTokens: cases.map((item) => ({
+              caseId: item.id,
+              expectedOptimisticToken: item.optimisticToken,
+            })),
+            reason,
+          }),
+        },
+      );
+      const payload = await response.json() as { error?: { message?: string } };
+      if (!response.ok) throw new Error(payload.error?.message ?? "Unable to confirm OVPSA recovery.");
+      await onResolved(`Recovered ${cases.length} linked OVPSA cases atomically.`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to confirm OVPSA recovery.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card className="grid gap-4 border-cpu-gold/50 p-5">
+      <div>
+        <h3 className="text-lg font-bold text-ink">Coordinated OVPSA batch recovery</h3>
+        <p className="text-sm text-muted">{cases.length} linked students · Mission Hospital Laboratory coordination required</p>
+      </div>
+      <div className="grid gap-1 text-sm">
+        {cases.map((item) => <p key={item.id}>{item.studentNumber} · {item.studentName}</p>)}
+      </div>
+      <label className="grid gap-1 text-sm font-semibold">
+        Replacement Mission Hospital Laboratory date
+        <Input
+          aria-label="Replacement Mission Hospital Laboratory date"
+          type="date"
+          value={laboratoryDate}
+          onInput={(event) => { setLaboratoryDate(event.currentTarget.value); setPreview(undefined); }}
+        />
+      </label>
+      <Button disabled={busy || !laboratoryDate} onClick={() => { void previewBatch(); }} aria-label="Preview OVPSA batch recovery">
+        {busy ? "Checking…" : "Preview coordinated recovery"}
+      </Button>
+      {preview ? (
+        <div className="grid gap-3 rounded-xl border border-line bg-canvas/60 p-3 text-sm">
+          <p>{preview.preservedPhysicalExamCount} Physical Examination preserved; {preview.movedPhysicalExamCount} moved.</p>
+          <label className="grid gap-1 font-semibold">
+            Confirmation reason
+            <Input aria-label="OVPSA batch recovery reason" value={reason} onChange={(event) => setReason(event.target.value)} />
+          </label>
+          <Button disabled={busy || reason.trim().length < 3} onClick={() => { void confirmBatch(); }} aria-label="Confirm OVPSA batch recovery">
+            Confirm and publish revision
+          </Button>
         </div>
       ) : null}
       {error ? <Alert tone="danger">{error}</Alert> : null}
@@ -289,6 +438,17 @@ export function ManualResolutionQueue() {
     setFilters(draftFilters);
     setMessage(undefined);
   }
+
+  const ovpsaGroups = new Map<string, ManualCase[]>();
+  for (const item of data?.items ?? []) {
+    if (!item.ovpsaBatchId || item.status !== "OPEN") continue;
+    ovpsaGroups.set(item.ovpsaBatchId, [
+      ...(ovpsaGroups.get(item.ovpsaBatchId) ?? []),
+      item,
+    ]);
+  }
+  const individualCases = (data?.items ?? []).filter((item) =>
+    !item.ovpsaBatchId || item.status !== "OPEN");
 
   return (
     <div className="grid gap-5">
@@ -366,7 +526,17 @@ export function ManualResolutionQueue() {
       {error ? <Alert tone="danger">{error}</Alert> : null}
       {busy && !data ? <Card className="p-5 text-sm text-muted">Loading manual cases...</Card> : null}
       {!busy && data?.items.length === 0 ? <Card className="p-5 text-sm text-muted">No manual cases match these filters.</Card> : null}
-      {data?.items.map((manualCase) => (
+      {[...ovpsaGroups.entries()].map(([batchId, cases]) => (
+        <OvpsaBatchRecoveryCard
+          key={batchId}
+          cases={cases}
+          onResolved={async (nextMessage) => {
+            setMessage(nextMessage);
+            await load();
+          }}
+        />
+      ))}
+      {individualCases.map((manualCase) => (
         <CaseResolutionCard
           key={manualCase.id}
           manualCase={manualCase}

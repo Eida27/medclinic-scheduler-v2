@@ -41,6 +41,9 @@ const requestIds = {
   mixedDraft: "90000000-0000-4000-8000-000000000011",
   restorationDraftBlock: "90000000-0000-4000-8000-000000000012",
   restorationDraftReopen: "90000000-0000-4000-8000-000000000013",
+  manualAll: "90000000-0000-4000-8000-000000000014",
+  notificationWarning: "90000000-0000-4000-8000-000000000015",
+  mixedPolicy: "90000000-0000-4000-8000-000000000016",
 } as const;
 
 async function cleanup() {
@@ -195,11 +198,100 @@ describe("unified clinic calendar lifecycle", () => {
     }, admin);
     expect(preview).toMatchObject({
       affectedStudentCount: 1,
-      completePairMoveCount: 1,
-      expectedManualCaseCount: 0,
+      automaticRecoveryEligibleCount: 1,
+      manualResolutionRequiredCount: 0,
+      completePairMoveEstimate: 1,
+      preservedAppointmentCount: 0,
       closureGroups: [{ startDate: "2049-08-09", endDate: "2049-08-10" }],
     });
     await expect(pool.query("SELECT 1 FROM clinic_unavailable_dates")).resolves.toMatchObject({ rowCount: 0 });
+  });
+
+  it("uses MANUAL_ALL for otherwise eligible students and marks only the affected appointment", async () => {
+    await createPair({
+      studentNumber: "UCAL-MANUAL-ALL",
+      laboratoryDate: "2049-08-12",
+      physicalExamDate: "2049-08-20",
+    });
+
+    const result = await saveClinicCalendarChanges({
+      requestId: requestIds.manualAll,
+      emergencyAcknowledged: false,
+      recoveryMode: "MANUAL_ALL",
+      changes: [{
+        action: "BLOCK",
+        date: "2049-08-12",
+        category: "CLOSURE",
+        reason: "TEST-UNIFIED manual all",
+      }],
+    }, admin);
+
+    expect(result).toMatchObject({
+      autoRecoveredStudentCount: 0,
+      manualCaseCount: 1,
+      manualReasonGroups: [{ reasonCode: "ADMIN_CHOSE_MANUAL_RECOVERY", count: 1 }],
+    });
+    const appointments = await pool.query<{ schedule_type: string; status: string }>(
+      `SELECT schedule_type,status FROM appointments
+        WHERE student_number='UCAL-MANUAL-ALL' ORDER BY schedule_type`,
+    );
+    expect(appointments.rows).toEqual([
+      { schedule_type: "LABORATORY", status: "AWAITING_RESCHEDULE" },
+      { schedule_type: "PHYSICAL_EXAM", status: "PENDING" },
+    ]);
+    const manualCase = (await listClinicClosureManualCases({
+      search: "UCAL-MANUAL-ALL",
+    }, admin)).items[0];
+    await expect(resolveClinicClosureManualCase(manualCase.id, {
+      action: "ASSIGN_REPLACEMENT",
+      expectedOptimisticToken: manualCase.optimisticToken,
+      laboratoryDate: "2049-08-16",
+      reason: "Missing explicit related-service decision.",
+    }, admin)).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 422 });
+    await resolveClinicClosureManualCase(manualCase.id, {
+      action: "ASSIGN_REPLACEMENT",
+      expectedOptimisticToken: manualCase.optimisticToken,
+      laboratoryDate: "2049-08-16",
+      preservePhysicalExam: true,
+      reason: "The existing Physical Examination remains safely later.",
+    }, admin);
+    const published = await pool.query<{ schedule_type: string; appointment_date: string }>(
+      `SELECT schedule_type,appointment_date::text FROM appointments
+        WHERE student_number='UCAL-MANUAL-ALL' AND is_published=TRUE
+        ORDER BY schedule_type`,
+    );
+    expect(published.rows).toEqual([
+      { schedule_type: "LABORATORY", appointment_date: "2049-08-16" },
+      { schedule_type: "PHYSICAL_EXAM", appointment_date: "2049-08-20" },
+    ]);
+  });
+
+  it("keeps emergency cases manual in a mixed-category automatic batch", async () => {
+    await createPair({
+      studentNumber: "UCAL-MIX-EMERGENCY",
+      laboratoryDate: "2049-08-12",
+      physicalExamDate: "2049-08-20",
+    });
+    await createPair({
+      studentNumber: "UCAL-MIX-PLANNED",
+      laboratoryDate: "2049-08-13",
+      physicalExamDate: "2049-08-21",
+    });
+    const result = await saveClinicCalendarChanges({
+      requestId: requestIds.mixedPolicy,
+      emergencyAcknowledged: true,
+      recoveryMode: "AUTO_ELIGIBLE",
+      changes: [
+        { action: "BLOCK", date: "2049-08-12", category: "EMERGENCY_CLOSURE", reason: "TEST-UNIFIED mixed emergency" },
+        { action: "BLOCK", date: "2049-08-13", category: "MAINTENANCE", reason: "TEST-UNIFIED mixed planned" },
+      ],
+    }, admin);
+    expect(result).toMatchObject({
+      autoRecoveredStudentCount: 1,
+      movedAppointmentCount: 1,
+      manualCaseCount: 1,
+      manualReasonGroups: [{ reasonCode: "EMERGENCY_CLOSURE", count: 1 }],
+    });
   });
 
   it("moves a complete pair after the group end and returns an idempotent stored result", async () => {
@@ -211,6 +303,7 @@ describe("unified clinic calendar lifecycle", () => {
     const request = {
       requestId: requestIds.pair,
       emergencyAcknowledged: false,
+      recoveryMode: "AUTO_ELIGIBLE" as const,
       changes: [
         { action: "BLOCK" as const, date: "2049-08-09", category: "CLOSURE" as const, reason: "TEST-UNIFIED pair" },
         { action: "BLOCK" as const, date: "2049-08-10", category: "CLOSURE" as const, reason: "TEST-UNIFIED pair" },
@@ -255,6 +348,7 @@ describe("unified clinic calendar lifecycle", () => {
     const result = await saveClinicCalendarChanges({
       requestId: requestIds.physical,
       emergencyAcknowledged: false,
+      recoveryMode: "AUTO_ELIGIBLE",
       changes: [{ action: "BLOCK", date: "2049-08-10", category: "CLOSURE", reason: "TEST-UNIFIED physical only" }],
     }, admin);
     expect(result).toMatchObject({ movedStudentCount: 1, movedAppointmentCount: 1 });
@@ -274,13 +368,14 @@ describe("unified clinic calendar lifecycle", () => {
     const result = await saveClinicCalendarChanges({
       requestId: requestIds.manual,
       emergencyAcknowledged: false,
+      recoveryMode: "AUTO_ELIGIBLE",
       changes: [{ action: "BLOCK", date: "2049-08-12", category: "CLOSURE", reason: "TEST-UNIFIED manual" }],
     }, admin);
     expect(result).toMatchObject({ blockedDateCount: 1, manualCaseCount: 1, movedAppointmentCount: 0 });
     const states = await pool.query<{ status: string }>(
       "SELECT status FROM appointments WHERE student_number='UCAL-MANUAL' ORDER BY schedule_type",
     );
-    expect(states.rows).toEqual([{ status: "AWAITING_RESCHEDULE" }, { status: "AWAITING_RESCHEDULE" }]);
+    expect(states.rows).toEqual([{ status: "AWAITING_RESCHEDULE" }, { status: "PENDING" }]);
     const cases = await listClinicClosureManualCases({
       page: 1,
       pageSize: 20,
@@ -295,7 +390,7 @@ describe("unified clinic calendar lifecycle", () => {
         category: "CLOSURE",
         closureReason: "TEST-UNIFIED manual",
         laboratory: expect.objectContaining({ date: "2049-08-12", status: "AWAITING_RESCHEDULE" }),
-        physicalExam: expect.objectContaining({ date: "2049-08-13", status: "AWAITING_RESCHEDULE" }),
+        physicalExam: expect.objectContaining({ date: "2049-08-13", status: "PENDING" }),
         currentAssignmentBlock: expect.objectContaining({ code: "APPOINTMENT_MANUALLY_LOCKED" }),
       })],
     });
@@ -352,6 +447,7 @@ describe("unified clinic calendar lifecycle", () => {
     const saved = await saveClinicCalendarChanges({
       requestId: requestIds.mixedDraft,
       emergencyAcknowledged: false,
+      recoveryMode: "AUTO_ELIGIBLE",
       changes: [{
         action: "BLOCK",
         date: "2049-08-12",
@@ -432,7 +528,7 @@ describe("unified clinic calendar lifecycle", () => {
     });
   });
 
-  it("waits for complete reopening and then restores the original pair atomically", async () => {
+  it("reopening changes calendar availability without restoring appointments", async () => {
     await createPair({
       studentNumber: "UCAL-RESTORE",
       laboratoryDate: "2049-08-09",
@@ -441,6 +537,7 @@ describe("unified clinic calendar lifecycle", () => {
     const blocked = await saveClinicCalendarChanges({
       requestId: requestIds.pair,
       emergencyAcknowledged: false,
+      recoveryMode: "AUTO_ELIGIBLE",
       changes: [
         { action: "BLOCK", date: "2049-08-09", category: "CLOSURE", reason: "TEST-UNIFIED restore" },
         { action: "BLOCK", date: "2049-08-10", category: "CLOSURE", reason: "TEST-UNIFIED restore" },
@@ -448,25 +545,26 @@ describe("unified clinic calendar lifecycle", () => {
     }, admin);
     const first = blocked.activeUnavailableDates.find((date) => date.blockedDate === "2049-08-09")!;
     const second = blocked.activeUnavailableDates.find((date) => date.blockedDate === "2049-08-10")!;
-    const partial = await saveClinicCalendarChanges({
+    await saveClinicCalendarChanges({
       requestId: requestIds.pairReopenOne,
       emergencyAcknowledged: false,
+      recoveryMode: "AUTO_ELIGIBLE",
       changes: [{ action: "REOPEN", date: first.blockedDate, unavailableDateId: first.id, expectedUpdatedAt: first.updatedAt }],
     }, admin);
-    expect(partial.restoredAppointmentCount).toBe(0);
     const final = await saveClinicCalendarChanges({
       requestId: requestIds.pairReopenTwo,
       emergencyAcknowledged: false,
+      recoveryMode: "AUTO_ELIGIBLE",
       changes: [{ action: "REOPEN", date: second.blockedDate, unavailableDateId: second.id, expectedUpdatedAt: second.updatedAt }],
     }, admin);
-    expect(final).toMatchObject({ restoredStudentCount: 1, restoredAppointmentCount: 2 });
+    expect(final).toMatchObject({ reopenedDateCount: 1, movedAppointmentCount: 0 });
     const current = await pool.query<{ appointment_date: string; status: string }>(
       `SELECT appointment_date::text,status FROM appointments
         WHERE student_number='UCAL-RESTORE' AND is_published=TRUE ORDER BY appointment_date`,
     );
     expect(current.rows).toEqual([
-      { appointment_date: "2049-08-09", status: "PENDING" },
-      { appointment_date: "2049-08-10", status: "PENDING" },
+      { appointment_date: "2049-08-11", status: "PENDING" },
+      { appointment_date: "2049-08-12", status: "PENDING" },
     ]);
     const notificationTypes = await pool.query<{ notification_type: string }>(
       `SELECT notification_type FROM student_portal_notifications
@@ -474,11 +572,78 @@ describe("unified clinic calendar lifecycle", () => {
     );
     expect(notificationTypes.rows).toEqual([
       { notification_type: "CLINIC_CLOSURE_RESCHEDULED" },
-      { notification_type: "CLINIC_CLOSURE_SCHEDULE_RESTORED" },
     ]);
+    await expect(pool.query(
+      `SELECT COUNT(*)::int AS total,
+              COUNT(*) FILTER (WHERE restored_at IS NOT NULL OR outcome='RESTORED')::int AS restored
+         FROM appointment_reschedule_events WHERE student_number='UCAL-RESTORE'`,
+    )).resolves.toMatchObject({ rows: [{ total: 1, restored: 0 }] });
   });
 
-  it("retains replacements and creates a draft-specific case when protection changes before restoration", async () => {
+  it("commits scheduling and audits a warning when email enqueue fails", async () => {
+    await createPair({
+      studentNumber: "UCAL-WARN",
+      laboratoryDate: "2049-08-09",
+      physicalExamDate: "2049-08-10",
+    });
+    await pool.query(
+      `UPDATE students SET email=$2,email_verified_at=clock_timestamp()
+        WHERE student_number=$1`,
+      ["UCAL-WARN", "ucal-warning@example.test"],
+    );
+    await pool.query(
+      `CREATE OR REPLACE FUNCTION test_clinic_closure_email_enqueue_failure()
+       RETURNS trigger LANGUAGE plpgsql AS $$
+       BEGIN
+         IF NEW.student_number='UCAL-WARN' THEN
+           RAISE EXCEPTION 'TEST clinic closure email enqueue failure';
+         END IF;
+         RETURN NEW;
+       END
+       $$`,
+    );
+    await pool.query(
+      `CREATE TRIGGER test_clinic_closure_email_enqueue_failure_trigger
+         BEFORE INSERT ON email_outbox FOR EACH ROW
+         EXECUTE FUNCTION test_clinic_closure_email_enqueue_failure()`,
+    );
+    try {
+      const result = await saveClinicCalendarChanges({
+        requestId: requestIds.notificationWarning,
+        emergencyAcknowledged: false,
+        recoveryMode: "AUTO_ELIGIBLE",
+        changes: [{
+          action: "BLOCK",
+          date: "2049-08-09",
+          category: "CLOSURE",
+          reason: "TEST-UNIFIED notification warning",
+        }],
+      }, admin);
+      expect(result).toMatchObject({
+        movedStudentCount: 1,
+        notificationWarningCount: 1,
+      });
+      await expect(pool.query(
+        `SELECT
+           (SELECT COUNT(*)::int FROM appointments
+             WHERE student_number='UCAL-WARN' AND status='PENDING' AND is_published=TRUE) AS pending,
+           (SELECT COUNT(*)::int FROM student_portal_notifications
+             WHERE student_number='UCAL-WARN') AS portal,
+           (SELECT COUNT(*)::int FROM email_outbox
+             WHERE student_number='UCAL-WARN') AS email,
+           (SELECT COUNT(*)::int FROM audit_logs
+             WHERE action='CLINIC_CLOSURE_NOTIFICATION_WARNING'
+               AND metadata->>'studentNumber'='UCAL-WARN') AS warnings`,
+      )).resolves.toMatchObject({
+        rows: [{ pending: 2, portal: 1, email: 0, warnings: 1 }],
+      });
+    } finally {
+      await pool.query("DROP TRIGGER IF EXISTS test_clinic_closure_email_enqueue_failure_trigger ON email_outbox");
+      await pool.query("DROP FUNCTION IF EXISTS test_clinic_closure_email_enqueue_failure()");
+    }
+  });
+
+  it("reopening leaves replacements and manual-case state untouched", async () => {
     await createPair({
       studentNumber: "UCAL-RESTORE-DRAFT",
       laboratoryDate: "2049-08-09",
@@ -487,6 +652,7 @@ describe("unified clinic calendar lifecycle", () => {
     const blocked = await saveClinicCalendarChanges({
       requestId: requestIds.restorationDraftBlock,
       emergencyAcknowledged: false,
+      recoveryMode: "AUTO_ELIGIBLE",
       changes: [
         { action: "BLOCK", date: "2049-08-09", category: "CLOSURE", reason: "TEST-UNIFIED restoration draft" },
         { action: "BLOCK", date: "2049-08-10", category: "CLOSURE", reason: "TEST-UNIFIED restoration draft" },
@@ -504,6 +670,7 @@ describe("unified clinic calendar lifecycle", () => {
     const reopened = await saveClinicCalendarChanges({
       requestId: requestIds.restorationDraftReopen,
       emergencyAcknowledged: false,
+      recoveryMode: "AUTO_ELIGIBLE",
       changes: unavailable.map((date) => ({
         action: "REOPEN" as const,
         date: date.blockedDate,
@@ -511,17 +678,14 @@ describe("unified clinic calendar lifecycle", () => {
         expectedUpdatedAt: date.updatedAt,
       })),
     }, admin);
-    expect(reopened).toMatchObject({ restoredAppointmentCount: 0, restoredStudentCount: 0 });
+    expect(reopened).toMatchObject({ reopenedDateCount: 2, movedAppointmentCount: 0, manualCaseCount: 0 });
 
     const cases = await listClinicClosureManualCases({
       page: 1,
       pageSize: 20,
       search: "UCAL-RESTORE-DRAFT",
     }, admin);
-    expect(cases.items[0]).toMatchObject({
-      reasonCode: "DRAFT_RESULT_FILES_EXIST",
-      currentAssignmentBlock: expect.objectContaining({ code: "DRAFT_RESULT_FILES_EXIST" }),
-    });
+    expect(cases).toMatchObject({ total: 0, items: [] });
     const published = await pool.query<{ status: string; count: number }>(
       `SELECT status,COUNT(*)::int AS count FROM appointments
         WHERE student_number='UCAL-RESTORE-DRAFT' AND is_published=TRUE
@@ -542,6 +706,7 @@ describe("unified clinic calendar lifecycle", () => {
     await expect(saveClinicCalendarChanges({
       requestId: randomUUID(),
       emergencyAcknowledged: false,
+      recoveryMode: "AUTO_ELIGIBLE",
       changes: [{ action: "BLOCK", date: "2049-08-09", category: "CLOSURE", reason: "TEST-UNIFIED forbidden" }],
     }, staff)).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
   });
@@ -550,6 +715,7 @@ describe("unified clinic calendar lifecycle", () => {
     await expect(saveClinicCalendarChanges({
       requestId: randomUUID(),
       emergencyAcknowledged: false,
+      recoveryMode: "AUTO_ELIGIBLE",
       changes: [{
         action: "BLOCK",
         clinicId: TEST_REFERENCE_IDS.laboratoryClinic,
@@ -561,6 +727,7 @@ describe("unified clinic calendar lifecycle", () => {
     await expect(saveClinicCalendarChanges({
       requestId: randomUUID(),
       emergencyAcknowledged: false,
+      recoveryMode: "AUTO_ELIGIBLE",
       changes: [{
         action: "UNBLOCK",
         date: "2049-08-09",
@@ -584,6 +751,7 @@ describe("unified clinic calendar lifecycle", () => {
       const pending = saveClinicCalendarChanges({
         requestId: requestIds.concurrency,
         emergencyAcknowledged: false,
+        recoveryMode: "AUTO_ELIGIBLE",
         changes: [{ action: "BLOCK", date: "2049-08-12", category: "CLOSURE", reason: "TEST-UNIFIED shared lock" }],
       }, admin).finally(() => { settled = true; });
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -627,6 +795,7 @@ describe("unified clinic calendar lifecycle", () => {
       await expect(saveClinicCalendarChanges({
         requestId: requestIds.rollback,
         emergencyAcknowledged: false,
+        recoveryMode: "AUTO_ELIGIBLE",
         changes: [{ action: "BLOCK", date: "2049-08-12", category: "CLOSURE", reason: "TEST-UNIFIED rollback" }],
       }, admin)).rejects.toThrow(/TEST unexpected unified failure/);
       await expect(pool.query(
@@ -652,6 +821,7 @@ describe("unified clinic calendar lifecycle", () => {
     await saveClinicCalendarChanges({
       requestId: requestIds.keepBlock,
       emergencyAcknowledged: false,
+      recoveryMode: "AUTO_ELIGIBLE",
       changes: [{ action: "BLOCK", date: "2049-08-12", category: "CLOSURE", reason: "TEST-UNIFIED keep" }],
     }, admin);
     const event = await pool.query<{

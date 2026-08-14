@@ -17,7 +17,7 @@ describe("loadSchedulingBlockedDates", () => {
     );
 
     expect(query).toHaveBeenCalledWith(
-      expect.stringContaining("ovpsa_first_year_service_reservations"),
+      expect.stringMatching(/ovpsa_first_year_service_reservations[\s\S]+reservation_kind='EXCLUSIVE'/),
       ["2026-09-01", "2026-09-30", null],
     );
     expect(result).toEqual({

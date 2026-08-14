@@ -21,12 +21,14 @@ const preview = {
   closureGroups: [],
   datesBeingReopened: [],
   affectedStudentCount: 2,
-  completePairMoveCount: 1,
-  physicalOnlyMoveCount: 1,
-  preservedCompletionCount: 0,
-  expectedManualCaseCount: 0,
-  expectedRestorationCount: 0,
-  retainedReplacementCount: 0,
+  automaticRecoveryEligibleCount: 2,
+  manualResolutionRequiredCount: 0,
+  completePairMoveEstimate: 1,
+  laboratoryOnlyMoveEstimate: 0,
+  physicalOnlyMoveEstimate: 1,
+  preservedAppointmentCount: 0,
+  expectedCapacityFallbackCount: 0,
+  manualReasonGroups: [],
 };
 
 const operationResult = {
@@ -35,12 +37,14 @@ const operationResult = {
   activeUnavailableDates: unavailableDates,
   blockedDateCount: 1,
   reopenedDateCount: 0,
+  autoRecoveredStudentCount: 2,
   movedStudentCount: 2,
   movedAppointmentCount: 3,
-  preservedCompletionCount: 0,
+  preservedAppointmentCount: 0,
   manualCaseCount: 0,
-  restoredStudentCount: 0,
-  restoredAppointmentCount: 0,
+  capacityFallbackCount: 0,
+  manualReasonGroups: [],
+  notificationWarningCount: 0,
 };
 
 function renderCalendar(props: Partial<React.ComponentProps<typeof ClinicUnavailableCalendar>> = {}) {
@@ -117,6 +121,8 @@ describe("ClinicUnavailableCalendar", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Review impact" }));
     expect(await screen.findByRole("dialog", { name: "Confirm clinic calendar impact" })).toBeVisible();
+    expect(screen.getByText("Automatic eligible").nextSibling).toHaveTextContent("2");
+    expect(screen.getByRole("radio", { name: /Automatically reschedule eligible appointments/ })).toBeChecked();
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/clinic-unavailable-dates/preview", expect.objectContaining({
       method: "POST",
     }));
@@ -136,12 +142,20 @@ describe("ClinicUnavailableCalendar", () => {
       changes: [expectedChange],
       emergencyAcknowledged: false,
     });
-    expect(savePayload).toEqual(previewPayload);
+    expect(savePayload).toEqual({
+      ...previewPayload,
+      recoveryMode: "AUTO_ELIGIBLE",
+    });
     expect(await screen.findByText(/Saved 1 blocked and 0 reopened dates/)).toBeVisible();
   });
 
   it("permits today only for an acknowledged emergency closure", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: preview }));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: {
+      ...preview,
+      automaticRecoveryEligibleCount: 0,
+      manualResolutionRequiredCount: 2,
+      manualReasonGroups: [{ reasonCode: "EMERGENCY_CLOSURE", count: 2 }],
+    } }));
     vi.stubGlobal("fetch", fetchMock);
     renderCalendar();
     const todayButton = screen.getByRole("button", { name: /July 27, 2026: Available/ });
@@ -154,6 +168,8 @@ describe("ClinicUnavailableCalendar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Review impact" }));
 
     const confirm = await screen.findByRole("button", { name: "Confirm and save" });
+    expect(screen.getByRole("radio", { name: /Automatically reschedule eligible appointments/ })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /Send eligible appointments to Manual Resolution/ })).toBeChecked();
     expect(confirm).toBeDisabled();
     fireEvent.click(screen.getByRole("checkbox", { name: /acknowledge this same-day emergency closure/i }));
     expect(confirm).toBeEnabled();

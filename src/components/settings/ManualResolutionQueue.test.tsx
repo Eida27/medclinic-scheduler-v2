@@ -20,8 +20,10 @@ const manualCase = {
   resolvedAt: null,
   resolutionAction: null,
   resolutionDetails: null,
-  laboratory: { id: "lab-1", date: "2026-08-18", status: "AWAITING_RESCHEDULE" },
-  physicalExam: { id: "pe-1", date: "2026-08-19", status: "AWAITING_RESCHEDULE" },
+  laboratory: { id: "lab-1", date: "2026-08-18", status: "AWAITING_RESCHEDULE", affected: true },
+  physicalExam: { id: "pe-1", date: "2026-08-19", status: "AWAITING_RESCHEDULE", affected: true },
+  ovpsaBatchId: null,
+  ovpsaBatchOptimisticToken: null,
   currentAssignmentBlock: null,
 };
 
@@ -103,6 +105,81 @@ describe("ManualResolutionQueue", () => {
     expect(screen.getByRole("button", { name: "Keep current replacement for 24-0001" })).toBeDisabled();
     await user.type(screen.getByLabelText("Keep-current reason for 24-0001"), "Existing replacement was reviewed and is safe");
     expect(screen.getByRole("button", { name: "Keep current replacement for 24-0001" })).toBeEnabled();
+  });
+
+  it("requires an explicit preservation decision for a related unaffected appointment", async () => {
+    const relatedCase = {
+      ...manualCase,
+      laboratory: { ...manualCase.laboratory!, affected: true },
+      physicalExam: { ...manualCase.physicalExam!, status: "PENDING", affected: false },
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ data: { page: 1, pageSize: 20, total: 1, items: [relatedCase] } }))
+      .mockResolvedValueOnce(jsonResponse({ data: { status: "RESOLVED" } }))
+      .mockResolvedValueOnce(jsonResponse({ data: { page: 1, pageSize: 20, total: 0, items: [] } }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ManualResolutionQueue />);
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "Santos, Ana M." });
+
+    expect(screen.getByText("Affected", { selector: "span" })).toBeVisible();
+    expect(screen.getByText("Related / currently unaffected", { selector: "span" })).toBeVisible();
+    expect(screen.queryByLabelText("Physical Examination replacement date for 24-0001")).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText("Laboratory replacement date for 24-0001"), "2026-08-24");
+    await user.click(screen.getByRole("radio", { name: "Preserve current Physical Examination" }));
+    await user.type(screen.getByLabelText("Assignment reason for 24-0001"), "The related examination remains safely later");
+    await user.click(screen.getByRole("button", { name: "Assign replacement for 24-0001" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toMatchObject({
+      laboratoryDate: "2026-08-24",
+      preservePhysicalExam: true,
+    });
+  });
+
+  it("groups OVPSA Laboratory cases into one coordinated preview and confirmation", async () => {
+    const ovpsaCases = ["24-0001", "24-0002"].map((studentNumber, index) => ({
+      ...manualCase,
+      id: `80000000-0000-4000-8000-00000000000${index + 1}`,
+      studentNumber,
+      studentName: `OVPSA Student ${index + 1}`,
+      optimisticToken: `82000000-0000-4000-8000-00000000000${index + 1}`,
+      reasonCode: "OVPSA_LABORATORY_PROTECTED",
+      ovpsaBatchId: "83000000-0000-4000-8000-000000000001",
+      ovpsaBatchOptimisticToken: "84000000-0000-4000-8000-000000000001",
+      laboratory: { ...manualCase.laboratory!, affected: true },
+      physicalExam: { ...manualCase.physicalExam!, status: "PENDING", affected: false },
+    }));
+    const batchPreview = {
+      batchId: ovpsaCases[0].ovpsaBatchId,
+      optimisticToken: ovpsaCases[0].ovpsaBatchOptimisticToken,
+      replacementLaboratoryDate: "2026-09-01",
+      linkedCaseCount: 2,
+      preservedPhysicalExamCount: 1,
+      movedPhysicalExamCount: 1,
+      allocations: [],
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ data: { page: 1, pageSize: 20, total: 2, items: ovpsaCases } }))
+      .mockResolvedValueOnce(jsonResponse({ data: batchPreview }))
+      .mockResolvedValueOnce(jsonResponse({ data: { ...batchPreview, revisionId: "revision-2", revisionNumber: 2 } }))
+      .mockResolvedValueOnce(jsonResponse({ data: { page: 1, pageSize: 20, total: 0, items: [] } }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ManualResolutionQueue />);
+    const user = userEvent.setup();
+    expect(await screen.findByRole("heading", { name: "Coordinated OVPSA batch recovery" })).toBeVisible();
+    await user.type(screen.getByLabelText("Replacement Mission Hospital Laboratory date"), "2026-09-01");
+    await user.click(screen.getByRole("button", { name: "Preview OVPSA batch recovery" }));
+    expect(await screen.findByText("1 Physical Examination preserved; 1 moved.")).toBeVisible();
+    await user.type(screen.getByLabelText("OVPSA batch recovery reason"), "Mission Hospital date approved");
+    await user.click(screen.getByRole("button", { name: "Confirm OVPSA batch recovery" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toMatchObject({
+      caseTokens: ovpsaCases.map((item) => ({
+        caseId: item.id,
+        expectedOptimisticToken: item.optimisticToken,
+      })),
+    });
   });
 
   it("explains live draft protection, links to result review, and disables resolution controls", async () => {

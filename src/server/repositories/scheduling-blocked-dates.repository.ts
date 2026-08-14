@@ -31,6 +31,7 @@ export async function loadSchedulingBlockedDates(
          FROM ovpsa_first_year_service_reservations reservation
         WHERE reservation.reservation_date BETWEEN $1::date AND $2::date
           AND reservation.status IN ('ACTIVE','INVALIDATED')
+          AND reservation.reservation_kind='EXCLUSIVE'
           AND ($3::uuid IS NULL OR reservation.batch_id<>$3::uuid)
      )
      SELECT DISTINCT schedule_type,date
