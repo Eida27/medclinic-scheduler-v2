@@ -31,10 +31,11 @@ import {
   reviewFirstYearScheduleImportPlan,
   type FirstYearScheduleImportReview,
 } from "./first-year-schedule-import.service";
+import { validateScheduleImportYearCategory } from "./schedule-import-year-category-policy";
 
 const importMetadataSchema = z.object({
   importMode: z.enum(["STANDARD", "FIRST_YEAR_OVPSA"]).default("STANDARD"),
-  studentCategory: z.enum(["REGULAR", "OJT", "TOUR", "SPECIALIZED"]),
+  studentCategory: z.enum(["REGULAR", "OJT", "TOUR"]),
   academicYearStart: z.coerce.number().int().min(2020).max(2100),
   preferredMonth: z.preprocess(
     (value) => value === "" || value === null || value === undefined ? null : value,
@@ -164,25 +165,25 @@ function validatedFile(raw: unknown) {
   return { fileName, contents };
 }
 
-function validatedFirstYearRows(contents: CsvContents) {
-  const rows = parseStudentImportCsv(contents);
-  const fields: Record<string, string[]> = {};
-  for (const row of rows) {
-    if (row.yearLevel !== 1) {
-      fields[`rows.${row.rowNumber}.Year`] = [
-        "First Year imports require Year 1 for every row.",
-      ];
-    }
-  }
-  if (Object.keys(fields).length > 0) {
-    throw new AppError(
-      "CSV_IMPORT_INVALID",
-      "Please correct the CSV import errors.",
-      422,
-      fields,
-    );
-  }
-  return rows;
+function prepareScheduleImportRequest(raw: unknown) {
+  const file = validatedFile(raw);
+  const metadata = importMetadataSchema.parse(raw);
+  const rows = parseStudentImportCsv(file.contents);
+  validateScheduleImportYearCategory({
+    rows,
+    importMode: metadata.importMode,
+    studentCategory: metadata.studentCategory,
+  });
+  return { file, metadata, rows };
+}
+
+export async function preflightScheduleImport(
+  raw: unknown,
+  actor: SessionUser,
+): Promise<{ valid: true }> {
+  assertImportOperator(actor);
+  prepareScheduleImportRequest(raw);
+  return { valid: true };
 }
 
 export async function reviewFirstYearScheduleImport(
@@ -190,8 +191,7 @@ export async function reviewFirstYearScheduleImport(
   actor: SessionUser,
 ): Promise<FirstYearScheduleImportReview> {
   assertImportOperator(actor);
-  const file = validatedFile(raw);
-  const metadata = importMetadataSchema.parse(raw);
+  const { file, metadata, rows } = prepareScheduleImportRequest(raw);
   if (metadata.importMode !== "FIRST_YEAR_OVPSA" || !metadata.firstYearLaboratoryDate) {
     throw new AppError(
       "FIRST_YEAR_IMPORT_REQUIRED",
@@ -203,7 +203,7 @@ export async function reviewFirstYearScheduleImport(
     sourceFilename: file.fileName,
     academicYearStart: metadata.academicYearStart,
     laboratoryDate: metadata.firstYearLaboratoryDate,
-    rows: validatedFirstYearRows(file.contents),
+    rows,
   });
 }
 
@@ -212,12 +212,11 @@ export async function importStudentScheduleCsv(
   actor: SessionUser,
 ): Promise<ScheduleImportResult> {
   assertImportOperator(actor);
-  const file = validatedFile(raw);
-  const metadata = importMetadataSchema.parse(raw);
+  const { file, metadata, rows } = prepareScheduleImportRequest(raw);
   const result = await createScheduleImport({
     ...metadata,
     sourceFilename: file.fileName,
-    rows: parseStudentImportCsv(file.contents),
+    rows,
   }, actor.userId);
   if ("fields" in result) {
     throw new AppError(
@@ -493,14 +492,13 @@ export async function acceptAndScheduleImport(
   actor: SessionUser,
 ): Promise<ScheduleImportResult> {
   assertImportOperator(actor);
-  const file = validatedFile(raw);
-  const metadata = importMetadataSchema.parse(raw);
+  const { file, metadata, rows } = prepareScheduleImportRequest(raw);
   if (metadata.importMode === "FIRST_YEAR_OVPSA") {
     return publishFirstYearScheduleImport({
       sourceFilename: file.fileName,
       academicYearStart: metadata.academicYearStart,
       laboratoryDate: metadata.firstYearLaboratoryDate!,
-      rows: validatedFirstYearRows(file.contents),
+      rows,
     }, actor.userId);
   }
   const result = await createScheduleImport({
@@ -508,7 +506,7 @@ export async function acceptAndScheduleImport(
     academicYearStart: metadata.academicYearStart,
     preferredMonth: metadata.preferredMonth,
     sourceFilename: file.fileName,
-    rows: parseStudentImportCsv(file.contents),
+    rows,
   }, actor.userId);
   if ("fields" in result) {
     throw new AppError(

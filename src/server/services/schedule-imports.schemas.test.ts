@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { importNameFromFileName, importStudentScheduleCsv } from "./schedule-imports.service";
+import {
+  importNameFromFileName,
+  importStudentScheduleCsv,
+  preflightScheduleImport,
+} from "./schedule-imports.service";
 
 const admin = {
   userId: "admin-user",
@@ -36,6 +40,25 @@ describe("importNameFromFileName", () => {
       code: "CSV_IMPORT_INVALID",
       status: 422,
       fields: { file: ["Choose a file with a .csv extension."] },
+    });
+  });
+
+  it("rejects the retired Specialized category before policy evaluation", async () => {
+    const contents = [
+      "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth",
+      "23-1212-97,Abad,Aaron,Abella,,College of Computer Studies,BSIT,3,2004-08-04",
+    ].join("\n");
+
+    await expect(preflightScheduleImport({
+      fileName: "students.csv",
+      fileSize: Buffer.byteLength(contents),
+      contents,
+      importMode: "STANDARD",
+      studentCategory: "SPECIALIZED",
+      academicYearStart: 2026,
+      preferredMonth: 9,
+    }, admin)).rejects.toMatchObject({
+      name: "ZodError",
     });
   });
 });

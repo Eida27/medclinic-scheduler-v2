@@ -153,7 +153,7 @@ async function setup(client: pg.Client, identity: string) {
       { student: STUDENTS[0], pair: "cc210000-0000-4000-8000-000000000011", lab: "2026-09-10", pe: "2026-09-17", category: "REGULAR", order: 1, lockedPe: false },
       { student: STUDENTS[1], pair: "cc210000-0000-4000-8000-000000000012", lab: "2026-09-11", pe: "2026-09-18", category: "OJT", order: 2, lockedPe: false },
       { student: STUDENTS[2], pair: "cc210000-0000-4000-8000-000000000013", lab: "2026-09-14", pe: "2026-09-21", category: "TOUR", order: 3, lockedPe: false },
-      { student: STUDENTS[4], pair: "cc210000-0000-4000-8000-000000000015", lab: "2026-09-29", pe: "2026-10-06", category: "SPECIALIZED", order: 4, lockedPe: false },
+      { student: STUDENTS[4], pair: "cc210000-0000-4000-8000-000000000015", lab: "2026-09-29", pe: "2026-10-06", category: "TOUR", order: 4, lockedPe: false },
       { student: STUDENTS[5], pair: "cc210000-0000-4000-8000-000000000016", lab: "2026-09-30", pe: "2026-10-07", category: "REGULAR", order: 5, lockedPe: true },
     ];
     await client.query(

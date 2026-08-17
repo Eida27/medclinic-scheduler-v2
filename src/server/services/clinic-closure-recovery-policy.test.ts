@@ -111,9 +111,8 @@ describe("clinic closure recovery policy", () => {
     ]);
   });
 
-  it("does not reprioritize Regular, OJT, Tour, or Specialized recoveries", () => {
+  it("does not reprioritize active category recoveries", () => {
     const entries = [
-      { category: "SPECIALIZED", affectedAppointmentDate: "2026-10-01", originalCreatedAt: "2026-08-01T04:00:00.000Z", originalOrder: 4, studentNumber: "2026-0004" },
       { category: "TOUR", affectedAppointmentDate: "2026-10-01", originalCreatedAt: "2026-08-01T03:00:00.000Z", originalOrder: 3, studentNumber: "2026-0003" },
       { category: "OJT", affectedAppointmentDate: "2026-10-01", originalCreatedAt: "2026-08-01T02:00:00.000Z", originalOrder: 2, studentNumber: "2026-0002" },
       { category: "REGULAR", affectedAppointmentDate: "2026-10-01", originalCreatedAt: "2026-08-01T01:00:00.000Z", originalOrder: 1, studentNumber: "2026-0001" },
@@ -122,7 +121,6 @@ describe("clinic closure recovery policy", () => {
       "REGULAR",
       "OJT",
       "TOUR",
-      "SPECIALIZED",
     ]);
   });
 });

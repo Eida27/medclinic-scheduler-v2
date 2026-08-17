@@ -10,7 +10,7 @@ import { Field } from "@/components/ui/Field";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 
-type StudentCategory = "REGULAR" | "OJT" | "TOUR" | "SPECIALIZED";
+type StudentCategory = "REGULAR" | "OJT" | "TOUR";
 type VisibleCategory = StudentCategory | "FIRST_YEAR";
 type ImportError = { message: string; fields?: Record<string, string[]> };
 type FirstYearReview = {
@@ -31,7 +31,6 @@ const categoryLabels: Record<VisibleCategory, string> = {
   FIRST_YEAR: "First Year",
   OJT: "OJT",
   TOUR: "Tour",
-  SPECIALIZED: "Specialized",
 };
 
 function currentManilaYear() {
@@ -61,28 +60,46 @@ export function ScheduleImportForm() {
   const [error, setError] = useState<ImportError>();
   const [firstYearReview, setFirstYearReview] = useState<FirstYearReview>();
 
+  function clearStaleReviewState() {
+    setError(undefined);
+    setConfirmOpen(false);
+    setFirstYearReview(undefined);
+  }
+
   async function review(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (pending) return;
+    if (pending || !formRef.current) return;
+    const preflightFormData = new FormData(formRef.current);
+    const firstYearReviewFormData = new FormData(formRef.current);
     setError(undefined);
-    if (visibleCategory !== "FIRST_YEAR") {
-      setConfirmOpen(true);
-      return;
-    }
-    if (!formRef.current) return;
-    setPending(true);
+    setConfirmOpen(false);
     setFirstYearReview(undefined);
+    setPending(true);
     try {
-      const response = await fetch("/api/schedule-imports/review", {
+      const preflightResponse = await fetch("/api/schedule-imports/preflight", {
         method: "POST",
-        body: new FormData(formRef.current),
+        body: preflightFormData,
       });
-      const payload = await response.json();
-      if (!response.ok) {
-        setError(payload.error ?? { message: "Unable to review the First Year import." });
+      const preflightPayload = await preflightResponse.json();
+      if (!preflightResponse.ok) {
+        setError(preflightPayload.error ?? { message: "Unable to review the import." });
         return;
       }
-      const plan = payload.data as FirstYearReview;
+      if (visibleCategory !== "FIRST_YEAR") {
+        setConfirmOpen(true);
+        return;
+      }
+
+      const reviewResponse = await fetch("/api/schedule-imports/review", {
+        method: "POST",
+        body: firstYearReviewFormData,
+      });
+      const reviewPayload = await reviewResponse.json();
+      if (!reviewResponse.ok) {
+        setError(reviewPayload.error ?? { message: "Unable to review the First Year import." });
+        return;
+      }
+      const plan = reviewPayload.data as FirstYearReview;
       if (!plan.canPublish) {
         setError({
           message: plan.blockers.map((blocker) => blocker.message).join(" ")
@@ -93,7 +110,7 @@ export function ScheduleImportForm() {
       setFirstYearReview(plan);
       setConfirmOpen(true);
     } catch {
-      setError({ message: "Unable to review the First Year import." });
+      setError({ message: "Unable to review the import." });
     } finally {
       setPending(false);
     }
@@ -130,7 +147,7 @@ export function ScheduleImportForm() {
 
   return (
     <>
-      <form ref={formRef} onSubmit={review}>
+      <form ref={formRef} onSubmit={review} className="min-w-0">
         <input
           type="hidden"
           name="importMode"
@@ -149,8 +166,25 @@ export function ScheduleImportForm() {
             </p>
           </div>
 
-          <div className="grid gap-3 rounded-xl border border-cpu-navy/10 bg-cpu-navy-soft/55 p-4 text-sm text-muted-strong">
-            <div>
+          <div className="grid min-w-0 gap-3 rounded-xl border border-cpu-navy/10 bg-cpu-navy-soft/55 p-4 text-sm text-muted-strong">
+            <div className="grid gap-2 rounded-lg border border-cpu-gold/40 bg-white/70 p-3">
+              <p className="font-bold text-ink">CSV Import Reminder</p>
+              <p>
+                Prepare a separate CSV file for each student group before importing. Each CSV must contain students
+                from only <strong>one year level</strong> and <strong>one category</strong>.
+              </p>
+              <div className="grid gap-1 font-semibold text-ink sm:grid-cols-2">
+                <p>Year 1 → First Year</p>
+                <p>Year 2 → Regular</p>
+                <p>Year 3 → Regular or Tour</p>
+                <p>Year 4 → OJT</p>
+              </div>
+              <p>
+                For Year 3, prepare separate CSV files for students joining the <strong>Tour</strong> and students
+                remaining <strong>Regular</strong>.
+              </p>
+            </div>
+            <div className="min-w-0">
               <p className="font-semibold text-ink">Required headers in this exact order</p>
               <code className="mt-1 block overflow-x-auto whitespace-nowrap font-mono text-xs text-cpu-navy">
                 {REQUIRED_HEADERS}
@@ -201,16 +235,21 @@ export function ScheduleImportForm() {
                 accept=".csv,text/csv"
                 required
                 disabled={pending}
-                onChange={(event) => setSelectedFileName(event.target.files?.[0]?.name ?? "")}
+                aria-invalid={error?.fields?.file ? true : undefined}
+                onChange={(event) => {
+                  setSelectedFileName(event.target.files?.[0]?.name ?? "");
+                  clearStaleReviewState();
+                }}
               />
             </div>
             <Field label="Student category">
               <Select
                 value={visibleCategory}
                 disabled={pending}
+                aria-invalid={error?.fields?.studentCategory ? true : undefined}
                 onChange={(event) => {
                   setVisibleCategory(event.target.value as VisibleCategory);
-                  setFirstYearReview(undefined);
+                  clearStaleReviewState();
                 }}
               >
                 {Object.entries(categoryLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
@@ -222,7 +261,10 @@ export function ScheduleImportForm() {
                 value={academicYearStart}
                 required
                 disabled={pending}
-                onChange={(event) => setAcademicYearStart(event.target.value)}
+                onChange={(event) => {
+                  setAcademicYearStart(event.target.value);
+                  clearStaleReviewState();
+                }}
               >
                 {academicYears.map((year) => <option key={year} value={year}>{year}–{year + 1}</option>)}
               </Select>
@@ -236,13 +278,21 @@ export function ScheduleImportForm() {
                     type="date"
                     required
                     disabled={pending}
+                    onChange={clearStaleReviewState}
                   />
                   <span className="text-xs font-medium text-muted">Iloilo Mission Hospital</span>
                 </div>
               </Field>
             ) : visibleCategory === "REGULAR" ? null : (
               <Field label="Preferred month">
-                <Select name="preferredMonth" required defaultValue="" disabled={pending} key={visibleCategory}>
+                <Select
+                  name="preferredMonth"
+                  required
+                  defaultValue=""
+                  disabled={pending}
+                  key={visibleCategory}
+                  onChange={clearStaleReviewState}
+                >
                   <option value="" disabled>Select preferred month</option>
                   {Array.from({ length: 12 }, (_, index) => (
                     <option key={index + 1} value={index + 1}>

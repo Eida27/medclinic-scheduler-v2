@@ -105,7 +105,7 @@ describe("ScheduleImportDetailPage", () => {
       laboratoryItemCount: 2,
       physicalExaminationItemCount: 1,
       status: "GENERATED",
-      studentCategory: "SPECIALIZED",
+      studentCategory: "TOUR",
       academicYearStart: 2026,
       preferredMonth: 12,
       acceptedAt: "2026-07-11T06:30:00.000Z",
@@ -142,7 +142,7 @@ describe("ScheduleImportDetailPage", () => {
     expect(screen.getByRole("heading", { name: "December graduation schedules", level: 1 })).toBeVisible();
     expect(screen.getByText("graduation-schedules.csv")).toBeVisible();
     expect(screen.getByText("System Admin")).toBeVisible();
-    expect(screen.getByText("SPECIALIZED")).toBeVisible();
+    expect(screen.getByText("TOUR")).toBeVisible();
     expect(screen.getByText("2026–2027")).toBeVisible();
     expect(screen.getByText("Students")).toBeVisible();
     expect(screen.getByText("3", { selector: "dd" })).toBeVisible();

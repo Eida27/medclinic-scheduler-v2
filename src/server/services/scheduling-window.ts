@@ -1,4 +1,4 @@
-export type StudentCategory = "REGULAR" | "OJT" | "TOUR" | "SPECIALIZED";
+export type StudentCategory = "REGULAR" | "OJT" | "TOUR";
 
 export type SchedulingWindowInput = {
   category: StudentCategory;

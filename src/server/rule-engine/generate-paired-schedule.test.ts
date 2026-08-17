@@ -83,7 +83,7 @@ describe("generatePairedSchedule", () => {
       request({ requestId: "regular", studentNumber: "23-0004-04", category: "REGULAR" }),
       request({ requestId: "later-priority", studentNumber: "23-0003-03", category: "OJT", acceptedAt: "2026-07-02T00:00:00.000Z" }),
       request({ requestId: "row-two", studentNumber: "23-0002-02", category: "TOUR", sourceRowOrder: 2 }),
-      request({ requestId: "row-one-b", studentNumber: "23-0001-02", category: "SPECIALIZED" }),
+      request({ requestId: "row-one-b", studentNumber: "23-0001-02", category: "TOUR" }),
       request({ requestId: "row-one-a", studentNumber: "23-0001-01", category: "OJT" }),
     ];
     expect(generate(requests).assignments.map((assignment) => assignment.requestId)).toEqual([

@@ -181,7 +181,7 @@ ALTER TABLE appointments
   ADD COLUMN IF NOT EXISTS ovpsa_service_reservation_id UUID
     REFERENCES ovpsa_first_year_service_reservations(id),
   ADD COLUMN IF NOT EXISTS scheduling_category VARCHAR(30)
-    CHECK (scheduling_category IN ('REGULAR','OJT','TOUR','SPECIALIZED')),
+    CHECK (scheduling_category IN ('REGULAR','OJT','TOUR')),
   ADD COLUMN IF NOT EXISTS scheduling_accepted_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS scheduling_source_row_order INTEGER
     CHECK (scheduling_source_row_order IS NULL OR scheduling_source_row_order >= 0),

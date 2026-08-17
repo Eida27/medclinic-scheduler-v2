@@ -143,7 +143,7 @@ async function insertStudent(studentNumber: string, yearLevel: number) {
 
 async function insertLowerPriorityConflict(
   studentNumber: string,
-  category: "REGULAR" | "OJT" | "TOUR" | "SPECIALIZED",
+  category: "REGULAR" | "OJT" | "TOUR",
   sourceRowOrder: number,
   options: { manuallyLocked?: boolean; withLineage?: boolean } = {},
 ) {
@@ -473,9 +473,9 @@ describe("First Year OVPSA publication", () => {
     ]);
   });
 
-  it("replaces conflicts from all four existing categories with original scheduling lineage", async () => {
+  it("replaces conflicts from all active categories with original scheduling lineage", async () => {
     await insertStudent(`${studentPrefix}0100`, 1);
-    const categories = ["REGULAR", "OJT", "TOUR", "SPECIALIZED"] as const;
+    const categories = ["REGULAR", "OJT", "TOUR"] as const;
     for (const [index, category] of categories.entries()) {
       await insertLowerPriorityConflict(
         `${studentPrefix}01${index + 1}`,
@@ -496,11 +496,11 @@ describe("First Year OVPSA publication", () => {
       TEST_REFERENCE_IDS.adminUser,
     );
 
-    expect(validated.displacements).toHaveLength(4);
+    expect(validated.displacements).toHaveLength(3);
     expect(validated.displacements.map((item) => item.category).sort()).toEqual(
       [...categories].sort(),
     );
-    expect(validated.proposedReplacements).toHaveLength(4);
+    expect(validated.proposedReplacements).toHaveLength(3);
     expect(validated.canPublish).toBe(true);
     await publishOvpsaFirstYearBatch(
       created.batchId,
@@ -532,7 +532,6 @@ describe("First Year OVPSA publication", () => {
     expect(replacements.rows).toEqual([
       { category: "OJT", count: 2, lineage_count: 2 },
       { category: "REGULAR", count: 2, lineage_count: 2 },
-      { category: "SPECIALIZED", count: 2, lineage_count: 2 },
       { category: "TOUR", count: 2, lineage_count: 2 },
     ]);
   });

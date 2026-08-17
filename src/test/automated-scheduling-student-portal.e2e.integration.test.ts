@@ -135,7 +135,7 @@ describe("unified calendar scheduling and student flow", () => {
       fileSize: 100,
       contents: [
         "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth",
-        `${studentNumber},Calendar,Unified,Maria Angela,,College of Computer Studies,BSIT,4,2003-05-06`,
+        `${studentNumber},Calendar,Unified,Maria Angela,,College of Computer Studies,BSIT,3,2003-05-06`,
       ].join("\n"),
       studentCategory: "REGULAR",
       academicYearStart,

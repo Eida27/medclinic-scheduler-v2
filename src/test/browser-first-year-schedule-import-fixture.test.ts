@@ -23,7 +23,7 @@ describe("First Year import Browser fixture", () => {
         { date: "2026-09-30", studentCount: 150 },
         { date: "2026-10-01", studentCount: 130 },
       ],
-      displacementTotal: 4,
+      displacementTotal: 3,
     });
   });
 });

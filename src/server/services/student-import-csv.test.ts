@@ -88,6 +88,16 @@ describe("parseStudentImportCsv", () => {
     ]);
   });
 
+  it("parses canonical unsupported whole-number years for the import policy to reject", () => {
+    const input = [
+      header,
+      "23-1212-97,Abad,Aaron,Abella,,College of Computer Studies,BSIT,0,2004-08-04",
+      "24-0001-01,Santos,Ana,Rosa,Jr.,College of Nursing,BSN,5,2005-01-31",
+    ].join("\n");
+
+    expect(parseStudentImportCsv(input).map((row) => row.yearLevel)).toEqual([0, 5]);
+  });
+
   it("rejects blank and whitespace-only Middle Names with row-specific errors", () => {
     expect(fieldsFrom([
       header,

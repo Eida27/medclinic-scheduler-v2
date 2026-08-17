@@ -65,7 +65,7 @@ export type GenerateScheduleOutput = {
   capacityResults: CapacityCheckResult[];
 };
 
-export type StudentCategory = "REGULAR" | "OJT" | "TOUR" | "SPECIALIZED";
+export type StudentCategory = "REGULAR" | "OJT" | "TOUR";
 
 export type PairedScheduleRequest = {
   requestId: string;

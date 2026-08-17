@@ -278,11 +278,15 @@ describe("First Year schedule imports", () => {
     });
   });
 
-  it("rejects a non-Year-1 row before review or publication", async () => {
+  it("rejects mixed First Year rows before review or publication", async () => {
     await expect(reviewFirstYearScheduleImport(input(csvRows(2)), admin)).rejects.toMatchObject({
       code: "CSV_IMPORT_INVALID",
       status: 422,
-      fields: { "rows.2.Year": ["First Year imports require Year 1 for every row."] },
+      fields: {
+        file: [
+          "Mixed year levels detected. Each CSV import must contain students from only one year level. Please separate the students into different CSV files before importing.",
+        ],
+      },
     });
   });
 

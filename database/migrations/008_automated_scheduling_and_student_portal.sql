@@ -9,7 +9,7 @@ ALTER TABLE students
 
 ALTER TABLE schedule_import_groups
   ADD COLUMN student_category VARCHAR(30)
-    CHECK (student_category IN ('REGULAR', 'OJT', 'TOUR', 'SPECIALIZED')),
+    CHECK (student_category IN ('REGULAR', 'OJT', 'TOUR')),
   ADD COLUMN academic_year_start INTEGER
     CHECK (academic_year_start BETWEEN 2020 AND 2100),
   ADD COLUMN preferred_month INTEGER

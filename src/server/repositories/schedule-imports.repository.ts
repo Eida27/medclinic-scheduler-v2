@@ -46,7 +46,7 @@ export function deriveScheduleImportStatus(statuses: string[]): ScheduleImportSt
 
 export type CreateScheduleImportInput = {
   sourceFilename: string;
-  studentCategory: "REGULAR" | "OJT" | "TOUR" | "SPECIALIZED";
+  studentCategory: "REGULAR" | "OJT" | "TOUR";
   academicYearStart: number;
   preferredMonth: number | null;
   rows: ImportedStudentRow[];

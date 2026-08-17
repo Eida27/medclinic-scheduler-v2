@@ -18,7 +18,6 @@ const FIXTURE_STUDENT_NUMBERS = [
   "86-9002-91",
   "86-9003-91",
   "86-9004-91",
-  "86-9005-91",
 ];
 
 export const FIRST_YEAR_IMPORT_ACCEPTANCE = {
@@ -39,15 +38,15 @@ export const FIRST_YEAR_IMPORT_ACCEPTANCE = {
       { date: "2026-09-30", studentCount: 150 },
       { date: "2026-10-01", studentCount: 130 },
     ],
-    displacementTotal: 4,
+    displacementTotal: 3,
   },
   login: {
     email: "admin@medclinic.local",
     password: "Admin123!",
   },
   conflictStudents: {
-    movable: ["86-9001-91", "86-9002-91", "86-9003-91", "86-9004-91"],
-    protected: "86-9005-91",
+    movable: ["86-9001-91", "86-9002-91", "86-9003-91"],
+    protected: "86-9004-91",
   },
 } as const;
 
@@ -320,7 +319,7 @@ async function publicationProof(client: PoolClient): Promise<PublicationProof | 
         lastAllocationPosition: 280,
       },
     ],
-    displacedCategories: ["OJT", "REGULAR", "SPECIALIZED", "TOUR"],
+    displacedCategories: ["OJT", "REGULAR", "TOUR"],
     protectedCandidate: { date: "2026-09-29", status: "PENDING", manuallyLocked: true },
   } satisfies PublicationProof;
   if (JSON.stringify(proof) !== JSON.stringify(expected)) {
@@ -484,7 +483,7 @@ async function setup(client: PoolClient, databaseIdentity: DatabaseIdentity) {
                 '10000000-0000-4000-8000-000000000003',
                 '20000000-0000-4000-8000-000000000003',4,'2004-01-01'
            FROM UNNEST($1::varchar[],$2::varchar[]) AS row(student_number,last_name)`,
-      [conflictStudents, ["Regular", "OJT", "Tour", "Specialized", "Protected"]],
+      [conflictStudents, ["Regular", "OJT", "Tour", "Protected"]],
     );
     await client.query(
       `INSERT INTO schedule_batches (
@@ -494,7 +493,7 @@ async function setup(client: PoolClient, databaseIdentity: DatabaseIdentity) {
                  '20000000-0000-4000-8000-000000000003','PUBLISHED',$3,$3,clock_timestamp())`,
       [LOWER_BATCH_ID, LAB_CLINIC_ID, ADMIN_ID],
     );
-    const categories = ["REGULAR", "OJT", "TOUR", "SPECIALIZED"];
+    const categories = ["REGULAR", "OJT", "TOUR"];
     const pairIds = FIRST_YEAR_IMPORT_ACCEPTANCE.conflictStudents.movable.map(
       (_, index) => `bf200000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
     );

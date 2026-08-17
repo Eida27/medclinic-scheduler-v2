@@ -27,7 +27,10 @@
     "acceptance:reports:cleanup": "tsx --env-file=.env.local scripts/browser-reports-acceptance-fixture.ts cleanup",
     "acceptance:first-year-ovpsa:setup": "tsx --env-file=.env.local scripts/browser-first-year-ovpsa-fixture.ts setup",
     "acceptance:first-year-ovpsa:status": "tsx --env-file=.env.local scripts/browser-first-year-ovpsa-fixture.ts status",
-    "acceptance:first-year-ovpsa:cleanup": "tsx --env-file=.env.local scripts/browser-first-year-ovpsa-fixture.ts cleanup"
+    "acceptance:first-year-ovpsa:cleanup": "tsx --env-file=.env.local scripts/browser-first-year-ovpsa-fixture.ts cleanup",
+    "acceptance:schedule-import-validation:setup": "tsx --env-file=.env.local scripts/browser-schedule-import-year-category-fixture.ts setup",
+    "acceptance:schedule-import-validation:status": "tsx --env-file=.env.local scripts/browser-schedule-import-year-category-fixture.ts status",
+    "acceptance:schedule-import-validation:cleanup": "tsx --env-file=.env.local scripts/browser-schedule-import-year-category-fixture.ts cleanup"
   },
   "dependencies": {
     "archiver": "^8.0.0",

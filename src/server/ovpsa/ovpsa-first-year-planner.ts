@@ -1,6 +1,6 @@
 export const OVPSA_LABORATORY_LOCATION = "Iloilo Mission Hospital";
 
-export type LowerPriorityCategory = "REGULAR" | "OJT" | "TOUR" | "SPECIALIZED";
+export type LowerPriorityCategory = "REGULAR" | "OJT" | "TOUR";
 export type ScheduleType = "LABORATORY" | "PHYSICAL_EXAM";
 
 export type OvpsaPlanningStudent = {

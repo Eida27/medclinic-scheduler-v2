@@ -178,8 +178,9 @@ export function parseStudentImportCsv(
     if (suffix && characterCount(suffix) > 50) {
       rowError("Suffix", "Suffix must contain at most 50 characters.");
     }
-    if (!/^[1-6]$/.test(year)) {
-      rowError("Year", "Year must be a whole number from 1 to 6.");
+    const numericYear = Number(year);
+    if (!/^-?(0|[1-9]\d*)$/.test(year) || !Number.isSafeInteger(numericYear)) {
+      rowError("Year", "Year must be a whole number.");
     }
     if (!dateOfBirth) {
       rowError(
@@ -198,7 +199,7 @@ export function parseStudentImportCsv(
         suffix,
         collegeName,
         courseCode,
-        yearLevel: Number(year),
+        yearLevel: numericYear,
         dateOfBirth,
       });
     }

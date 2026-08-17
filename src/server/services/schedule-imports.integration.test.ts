@@ -7,7 +7,11 @@ import {
   TEST_REFERENCE_IDS,
 } from "@/test/integration-fixtures";
 import type { SessionUser } from "@/types/roles";
-import { importStudentScheduleCsv } from "./schedule-imports.service";
+import {
+  acceptAndScheduleImport,
+  importStudentScheduleCsv,
+  preflightScheduleImport,
+} from "./schedule-imports.service";
 
 const header = "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth";
 const studentPattern = "99-91%";
@@ -79,6 +83,48 @@ describe("student scheduling imports", () => {
     });
   });
 
+  it("preflights a valid combination without database writes", async () => {
+    const studentNumber = "99-9190-90";
+    const contents = csv(
+      `${studentNumber},Preflight,Valid,Maria Angela,,College of Computer Studies,BSIT,3,2003-05-06`,
+    );
+
+    await expect(preflightScheduleImport(input(contents), admin)).resolves.toEqual({ valid: true });
+    const writes = await pool.query(
+      `SELECT
+         (SELECT COUNT(*)::int FROM students WHERE student_number=$1) AS students,
+         (SELECT COUNT(*)::int FROM schedule_import_groups WHERE source_filename=$2) AS imports,
+         (SELECT COUNT(*)::int FROM appointments WHERE student_number=$1) AS appointments`,
+      [studentNumber, sourceFilename],
+    );
+    expect(writes.rows[0]).toEqual({ students: 0, imports: 0, appointments: 0 });
+  });
+
+  it("rejects a direct final wrong-category import before database writes", async () => {
+    const studentNumber = "99-9191-91";
+    const contents = csv(
+      `${studentNumber},Final,Rejected,Maria Angela,,College of Computer Studies,BSIT,4,2003-05-06`,
+    );
+
+    await expect(acceptAndScheduleImport(input(contents), admin)).rejects.toMatchObject({
+      code: "CSV_IMPORT_INVALID",
+      status: 422,
+      fields: {
+        studentCategory: [
+          "This CSV contains Year 4 students. Year 4 students can only be imported as OJT.",
+        ],
+      },
+    });
+    const writes = await pool.query(
+      `SELECT
+         (SELECT COUNT(*)::int FROM students WHERE student_number=$1) AS students,
+         (SELECT COUNT(*)::int FROM schedule_import_groups WHERE source_filename=$2) AS imports,
+         (SELECT COUNT(*)::int FROM appointments WHERE student_number=$1) AS appointments`,
+      [studentNumber, sourceFilename],
+    );
+    expect(writes.rows[0]).toEqual({ students: 0, imports: 0, appointments: 0 });
+  });
+
   it("upserts demographics in bulk and preserves an existing same-cycle appointment", async () => {
     const existingStudentNumber = "99-9101-01";
     const newStudentNumber = "99-9102-02";
@@ -101,7 +147,7 @@ describe("student scheduling imports", () => {
     );
 
     const contents = csv(
-      `${existingStudentNumber},Updated,Alex,Q.,Jr.,College of Computer Studies,BSIT,4,2003-05-06`,
+      `${existingStudentNumber},Updated,Alex,Q.,Jr.,College of Computer Studies,BSIT,3,2003-05-06`,
       `${newStudentNumber},New,Bea,Rosa,,College of Computer Studies,BSIT,3,2004-07-08`,
     );
     const created = await importStudentScheduleCsv(input(contents), admin);
@@ -136,7 +182,7 @@ describe("student scheduling imports", () => {
         middle_name: "Q.",
         last_name: "Updated",
         suffix: "Jr.",
-        year_level: 4,
+        year_level: 3,
         date_of_birth: "2003-05-06",
       },
       {
@@ -182,7 +228,7 @@ describe("student scheduling imports", () => {
         college_name: "College of Computer Studies",
         program_code: "BSIT",
         program_name: "Bachelor of Science in Information Technology",
-        year_level: 4,
+        year_level: 3,
         source_type: "VERIFIED_HISTORICAL",
       },
       {
@@ -226,7 +272,7 @@ describe("student scheduling imports", () => {
       [`${studentNumber}:2026`],
     );
     await expect(importStudentScheduleCsv(input(csv(
-      `${studentNumber},Changed,Student,Maria Angela,,College of Computer Studies,BSIT,4,2004-06-07`,
+      `${studentNumber},Changed,Student,Maria Angela,,College of Computer Studies,BSIT,3,2004-06-07`,
     )), admin)).rejects.toMatchObject({
       code: "SNAPSHOT_CONFLICT",
       status: 409,
