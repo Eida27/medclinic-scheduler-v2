@@ -250,7 +250,12 @@ describe("appointment mutation authorization and automatic no-show correction", 
     rescheduleAppointmentWithClient.mockResolvedValue(replacementId);
     setAppointmentManualLockWithClient.mockResolvedValue(true);
     writeAudit.mockResolvedValue(undefined);
-    query.mockResolvedValue({ rows: [] });
+    query.mockImplementation(async (statement: unknown) => ({
+      rows: typeof statement === "string" &&
+        statement.includes("INSERT INTO appointment_reschedule_events")
+        ? [{ id: "44444444-4444-4444-8444-444444444444" }]
+        : [],
+    }));
     transaction.mockImplementation(async (callback: (transactionClient: PoolClient) => Promise<unknown>) => (
       callback(client)
     ));
