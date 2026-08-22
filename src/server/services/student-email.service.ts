@@ -15,6 +15,7 @@ const VERIFICATION_LIFETIME_MINUTES = 30;
 const RESEND_COOLDOWN_SECONDS = 60;
 const THROTTLE_WINDOW_MINUTES = 15;
 const THROTTLE_LIMIT = 5;
+const OWNERSHIP_CONFLICT_PENDING_EMAIL = "ownership-conflict@invalid.local";
 
 function tokenHash(token: string) {
   return createHash("sha256").update(token).digest("hex");
@@ -42,6 +43,13 @@ async function writeVerificationAudit(
   );
 }
 
+async function readCurrentDatabaseTime(client: PoolClient) {
+  const result = await client.query<{ databaseNow: Date }>(
+    `SELECT clock_timestamp() AS "databaseNow"`,
+  );
+  return result.rows[0].databaseNow;
+}
+
 function retryDetails(retryAt: Date, databaseNow: Date) {
   return {
     retryAfterSeconds: Math.max(1, Math.ceil((retryAt.getTime() - databaseNow.getTime()) / 1000)),
@@ -58,12 +66,8 @@ export async function requestStudentEmailVerification(studentNumber: string, ema
   const token = randomBytes(32).toString("base64url");
   const hash = tokenHash(token);
   const outcome = await transaction<RequestOutcome>(async (client) => {
-    const studentResult = await client.query<{
-      email: string | null;
-      emailVerifiedAt: Date | null;
-      databaseNow: Date;
-    }>(
-      `SELECT email,email_verified_at AS "emailVerifiedAt",NOW() AS "databaseNow"
+    const studentResult = await client.query<{ email: string | null; emailVerifiedAt: Date | null }>(
+      `SELECT email,email_verified_at AS "emailVerifiedAt"
          FROM students WHERE student_number=$1 AND is_active=TRUE FOR UPDATE`,
       [studentNumber],
     );
@@ -71,10 +75,11 @@ export async function requestStudentEmailVerification(studentNumber: string, ema
     if (!student) {
       return { type: "error", error: new AppError("STUDENT_NOT_FOUND", "Student not found.", 404) };
     }
+    const databaseNow = await readCurrentDatabaseTime(client);
 
     const recent = await client.query<{ createdAt: Date }>(
       `SELECT created_at AS "createdAt" FROM student_email_verifications
-        WHERE student_number=$1 AND created_at > NOW()-INTERVAL '15 minutes'
+        WHERE student_number=$1 AND created_at > clock_timestamp()-INTERVAL '15 minutes'
         ORDER BY created_at`,
       [studentNumber],
     );
@@ -87,14 +92,14 @@ export async function requestStudentEmailVerification(studentNumber: string, ema
           "Too many verification emails were requested. Try again shortly.",
           429,
           undefined,
-          retryDetails(retryAt, student.databaseNow),
+          retryDetails(retryAt, databaseNow),
         ),
       };
     }
     const latest = recent.rows.at(-1);
     if (latest) {
       const resendAvailableAt = new Date(latest.createdAt.getTime() + RESEND_COOLDOWN_SECONDS * 1_000);
-      if (resendAvailableAt.getTime() > student.databaseNow.getTime()) {
+      if (resendAvailableAt.getTime() > databaseNow.getTime()) {
         return {
           type: "error",
           error: new AppError(
@@ -102,7 +107,7 @@ export async function requestStudentEmailVerification(studentNumber: string, ema
             "Please wait before requesting another verification email.",
             429,
             undefined,
-            retryDetails(resendAvailableAt, student.databaseNow),
+            retryDetails(resendAvailableAt, databaseNow),
           ),
         };
       }
@@ -116,10 +121,13 @@ export async function requestStudentEmailVerification(studentNumber: string, ema
     );
     if (owner.rowCount) {
       await client.query(
-        `INSERT INTO student_email_verifications (
-           student_number,pending_email,token_hash,expires_at,consumed_at
-         ) VALUES ($1,$2,$3,NOW()+INTERVAL '30 minutes',NOW())`,
-        [studentNumber, normalizedEmail, hash],
+        `WITH timing AS (SELECT clock_timestamp() AS observed_at)
+         INSERT INTO student_email_verifications (
+           student_number,pending_email,token_hash,expires_at,consumed_at,created_at
+         )
+         SELECT $1,$2,$3,observed_at+INTERVAL '30 minutes',observed_at,observed_at
+           FROM timing`,
+        [studentNumber, OWNERSHIP_CONFLICT_PENDING_EMAIL, hash],
       );
       await writeVerificationAudit(client, studentNumber, "STUDENT_EMAIL_OWNERSHIP_CONFLICT", normalizedEmail, {
         stage: "request",
@@ -135,7 +143,7 @@ export async function requestStudentEmailVerification(studentNumber: string, ema
     }
 
     const previous = await client.query<{ id: string; pendingEmail: string }>(
-      `UPDATE student_email_verifications SET consumed_at=COALESCE(consumed_at,NOW())
+      `UPDATE student_email_verifications SET consumed_at=COALESCE(consumed_at,clock_timestamp())
         WHERE student_number=$1 AND consumed_at IS NULL
         RETURNING id::text,pending_email AS "pendingEmail"`,
       [studentNumber],
@@ -146,7 +154,7 @@ export async function requestStudentEmailVerification(studentNumber: string, ema
         `WITH obsolete AS (
            UPDATE email_outbox
               SET status='OBSOLETE',verification_body_encrypted=NULL,locked_at=NULL,
-                  last_attempt_at=NOW(),last_attempt_status='OBSOLETE'
+                  last_attempt_at=clock_timestamp(),last_attempt_status='OBSOLETE'
             WHERE message_kind='VERIFICATION' AND source_type='STUDENT_EMAIL_VERIFICATION'
               AND source_id=ANY($1::text[]) AND status NOT IN ('SENT','OBSOLETE')
             RETURNING id,student_number,to_email,message_kind,notification_type,source_type,source_id
@@ -164,8 +172,11 @@ export async function requestStudentEmailVerification(studentNumber: string, ema
     }
 
     const verification = await client.query<{ id: string; expiresAt: Date; resendAvailableAt: Date }>(
-      `INSERT INTO student_email_verifications (student_number,pending_email,token_hash,expires_at)
-       VALUES ($1,$2,$3,NOW()+INTERVAL '30 minutes')
+      `WITH timing AS (SELECT clock_timestamp() AS created_at)
+       INSERT INTO student_email_verifications (
+         student_number,pending_email,token_hash,expires_at,created_at
+       )
+       SELECT $1,$2,$3,created_at+INTERVAL '30 minutes',created_at FROM timing
        RETURNING id::text,expires_at AS "expiresAt",
                  created_at+INTERVAL '60 seconds' AS "resendAvailableAt"`,
       [studentNumber, normalizedEmail, hash],
@@ -218,11 +229,12 @@ export async function getStudentEmailVerificationStatus(studentNumber: string) {
       `SELECT student.email,student.email_verified_at AS "emailVerifiedAt",
               pending.pending_email AS "pendingEmail",pending.expires_at AS "expiresAt",
               pending.created_at+INTERVAL '60 seconds' AS "resendAvailableAt",
-              NOW() AS "databaseNow"
+              clock_timestamp() AS "databaseNow"
          FROM students student
          LEFT JOIN LATERAL (
            SELECT pending_email,expires_at,created_at FROM student_email_verifications
-            WHERE student_number=student.student_number AND consumed_at IS NULL AND expires_at>NOW()
+            WHERE student_number=student.student_number
+              AND consumed_at IS NULL AND expires_at>clock_timestamp()
             ORDER BY created_at DESC LIMIT 1
          ) pending ON TRUE
         WHERE student.student_number=$1 AND student.is_active=TRUE`,
@@ -276,15 +288,17 @@ export async function verifyStudentEmail(token: string, dependencies: VerifyDepe
       studentNumber: string;
       pendingEmail: string;
       consumedAt: Date | null;
-      isValid: boolean;
+      expiresAt: Date;
     }>(
       `SELECT id::text,student_number AS "studentNumber",pending_email AS "pendingEmail",
-              consumed_at AS "consumedAt",expires_at>NOW() AS "isValid"
+              consumed_at AS "consumedAt",expires_at AS "expiresAt"
          FROM student_email_verifications WHERE token_hash=$1 FOR UPDATE`,
       [hash],
     );
     const request = verification.rows[0];
-    if (!request || request.consumedAt || !request.isValid) return { type: "invalid" };
+    if (!request || request.consumedAt) return { type: "invalid" };
+    const databaseNow = await readCurrentDatabaseTime(client);
+    if (request.expiresAt.getTime() <= databaseNow.getTime()) return { type: "invalid" };
     const normalizedEmail = emailSchema.parse(request.pendingEmail);
     const owner = await client.query(
       `SELECT student_number FROM students
@@ -293,7 +307,10 @@ export async function verifyStudentEmail(token: string, dependencies: VerifyDepe
       [normalizedEmail, request.studentNumber],
     );
     if (owner.rowCount) {
-      await client.query("UPDATE student_email_verifications SET consumed_at=NOW() WHERE id=$1", [request.id]);
+      await client.query(
+        "UPDATE student_email_verifications SET consumed_at=clock_timestamp() WHERE id=$1",
+        [request.id],
+      );
       await writeVerificationAudit(client, request.studentNumber, "STUDENT_EMAIL_OWNERSHIP_CONFLICT", normalizedEmail, {
         stage: "completion",
       });
@@ -303,21 +320,28 @@ export async function verifyStudentEmail(token: string, dependencies: VerifyDepe
     await client.query("SAVEPOINT verify_email_ownership");
     try {
       await client.query(
-        "UPDATE students SET email=$2,email_verified_at=NOW() WHERE student_number=$1 AND is_active=TRUE",
+        `UPDATE students SET email=$2,email_verified_at=clock_timestamp()
+          WHERE student_number=$1 AND is_active=TRUE`,
         [request.studentNumber, normalizedEmail],
       );
       await client.query("RELEASE SAVEPOINT verify_email_ownership");
     } catch (error) {
       await client.query("ROLLBACK TO SAVEPOINT verify_email_ownership");
       if (!isPostgresUniqueViolation(error)) throw error;
-      await client.query("UPDATE student_email_verifications SET consumed_at=NOW() WHERE id=$1", [request.id]);
+      await client.query(
+        "UPDATE student_email_verifications SET consumed_at=clock_timestamp() WHERE id=$1",
+        [request.id],
+      );
       await writeVerificationAudit(client, request.studentNumber, "STUDENT_EMAIL_OWNERSHIP_CONFLICT", normalizedEmail, {
         stage: "completion-race",
       });
       return { type: "conflict" };
     }
 
-    await client.query("UPDATE student_email_verifications SET consumed_at=NOW() WHERE id=$1", [request.id]);
+    await client.query(
+      "UPDATE student_email_verifications SET consumed_at=clock_timestamp() WHERE id=$1",
+      [request.id],
+    );
     const firstVerification = !student.emailVerifiedAt;
     await writeVerificationAudit(client, request.studentNumber, "STUDENT_EMAIL_VERIFICATION_COMPLETED", normalizedEmail, {
       firstVerification,

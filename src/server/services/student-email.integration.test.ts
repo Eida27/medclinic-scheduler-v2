@@ -422,6 +422,81 @@ describe("student notifications and optional email", () => {
     }
   });
 
+  it("uses the current database clock after a student lock wait crosses the resend boundary", async () => {
+    await insertTestStudent({
+      studentNumber: "99-9523-23", firstName: "Boundary", lastName: "Cooldown", yearLevel: 2,
+    });
+    await requestStudentEmailVerification("99-9523-23", "boundary-cooldown@example.test");
+    await pool.query(
+      `UPDATE student_email_verifications
+          SET created_at=clock_timestamp()-INTERVAL '59 seconds'
+        WHERE student_number='99-9523-23'`,
+    );
+
+    const blocker = await pool.connect();
+    let released = false;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query(
+        "SELECT student_number FROM students WHERE student_number='99-9523-23' FOR UPDATE",
+      );
+      const resend = requestStudentEmailVerification(
+        "99-9523-23",
+        "boundary-cooldown@example.test",
+      );
+      await waitForStudentLockWaiters(1);
+      await blocker.query("SELECT pg_sleep(2)");
+      await blocker.query("COMMIT");
+      released = true;
+
+      await expect(resend).resolves.toMatchObject({
+        expiresAt: expect.any(Date),
+        resendAvailableAt: expect.any(Date),
+      });
+    } finally {
+      if (!released) await blocker.query("ROLLBACK");
+      blocker.release();
+    }
+  });
+
+  it("uses the current database clock after a student lock wait crosses token expiry", async () => {
+    await insertTestStudent({
+      studentNumber: "99-9524-24", firstName: "Boundary", lastName: "Expiry", yearLevel: 2,
+    });
+    const request = await requestStudentEmailVerification(
+      "99-9524-24",
+      "boundary-expiry@example.test",
+    );
+    await pool.query(
+      `UPDATE student_email_verifications
+          SET expires_at=clock_timestamp()+INTERVAL '2 seconds'
+        WHERE token_hash=$1`,
+      [createHash("sha256").update(request.token).digest("hex")],
+    );
+
+    const blocker = await pool.connect();
+    let released = false;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query(
+        "SELECT student_number FROM students WHERE student_number='99-9524-24' FOR UPDATE",
+      );
+      const confirmation = verifyStudentEmail(request.token);
+      await waitForStudentLockWaiters(1);
+      await blocker.query("SELECT pg_sleep(3)");
+      await blocker.query("COMMIT");
+      released = true;
+
+      await expect(confirmation).rejects.toMatchObject({
+        code: "EMAIL_VERIFICATION_INVALID",
+        status: 422,
+      });
+    } finally {
+      if (!released) await blocker.query("ROLLBACK");
+      blocker.release();
+    }
+  });
+
   it("counts ownership conflicts toward cooldown and the rolling attempt limit", async () => {
     await insertTestStudent({
       studentNumber: "99-9519-19", firstName: "Conflict", lastName: "Owner", yearLevel: 2,
@@ -446,9 +521,22 @@ describe("student notifications and optional email", () => {
 
     await expect(requestStudentEmailVerification("99-9520-20", "claimed@example.test"))
       .rejects.toMatchObject({ code: "EMAIL_VERIFICATION_THROTTLED", status: 429 });
-    await expect(pool.query(
-      "SELECT id FROM student_email_verifications WHERE student_number='99-9520-20'",
-    )).resolves.toMatchObject({ rowCount: 5 });
+    const attempts = await pool.query<{
+      pendingEmail: string;
+      tokenHash: string;
+      consumed: boolean;
+    }>(
+      `SELECT pending_email AS "pendingEmail",token_hash AS "tokenHash",
+              consumed_at IS NOT NULL AS consumed
+         FROM student_email_verifications WHERE student_number='99-9520-20'`,
+    );
+    expect(attempts.rowCount).toBe(5);
+    expect(attempts.rows).toEqual(Array.from({ length: 5 }, () => ({
+      pendingEmail: "ownership-conflict@invalid.local",
+      tokenHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      consumed: true,
+    })));
+    expect(JSON.stringify(attempts.rows)).not.toContain("claimed@example.test");
     const audits = await pool.query<{ metadata: Record<string, unknown> }>(
       `SELECT metadata FROM audit_logs
         WHERE entity_type='student_email_verification' AND entity_id='99-9520-20'
