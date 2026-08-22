@@ -15,6 +15,7 @@ const header = "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,
 const studentPattern = "99-92%";
 const importPattern = "REGULAR 20%-20% - TEST-FCFS%";
 let capacityFixture: CapacityFixtureLock | null = null;
+let createdAcademicYears: number[] = [];
 
 const admin: SessionUser = {
   userId: TEST_REFERENCE_IDS.adminUser,
@@ -44,12 +45,14 @@ async function cleanup() {
 
 beforeAll(async () => {
   capacityFixture = await setupCapacityFixtureLock(pool, cleanup);
-  await pool.query(
+  const insertedAcademicYears = await pool.query<{ start_year: number }>(
     `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
      VALUES (2026,'2027-07-31',$1,$1),(2027,'2028-07-31',$1,$1)
-     ON CONFLICT (start_year) DO NOTHING`,
+     ON CONFLICT (start_year) DO NOTHING
+     RETURNING start_year`,
     [TEST_REFERENCE_IDS.adminUser],
   );
+  createdAcademicYears = insertedAcademicYears.rows.map((row) => row.start_year);
 });
 
 afterEach(async () => {
@@ -62,7 +65,16 @@ afterEach(async () => {
 });
 afterAll(async () => {
   if (!capacityFixture) return;
-  await teardownCapacityFixtureLock(pool, capacityFixture, cleanup);
+  try {
+    await teardownCapacityFixtureLock(pool, capacityFixture, cleanup);
+  } finally {
+    if (createdAcademicYears.length) {
+      await pool.query(
+        "DELETE FROM academic_years WHERE start_year=ANY($1::integer[])",
+        [createdAcademicYears],
+      );
+    }
+  }
 });
 
 describe("atomic academic-year import lifecycle", () => {
