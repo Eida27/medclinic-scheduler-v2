@@ -4,8 +4,11 @@ import { isClinicCode } from "@/server/clinics";
 import { dashboardMetrics } from "@/server/repositories/tracking.repository";
 export async function GET(request: Request) {
   try {
-    await requireUser();
+    const user = await requireUser();
     const clinicCode = new URL(request.url).searchParams.get("clinicCode");
-    return dataResponse(await dashboardMetrics({ clinicCode: isClinicCode(clinicCode) ? clinicCode : undefined }));
+    return dataResponse(await dashboardMetrics({
+      clinicCode: isClinicCode(clinicCode) ? clinicCode : undefined,
+      includeEmailDeliveryIssues: user.role === "ADMIN",
+    }));
   } catch (error) { return errorResponse(error); }
 }

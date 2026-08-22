@@ -21,12 +21,16 @@ export async function complianceReport(filters: {
   });
 }
 
-export async function dashboardMetrics(filters: { clinicCode?: ClinicCode } = {}) {
+export async function dashboardMetrics(filters: {
+  clinicCode?: ClinicCode;
+  includeEmailDeliveryIssues?: boolean;
+} = {}) {
   const clinicWhere = filters.clinicCode ? " AND c.code=$1" : "";
   const values = filters.clinicCode ? [filters.clinicCode] : [];
   const result = await query<{
     total_students: number; pending_appointments: number; completed_exam: number; completed_lab: number;
     no_shows: number; rescheduled: number; over_capacity_dates: number;
+    actionable_email_delivery_failures?: number;
   }>(`
     SELECT
       (SELECT COUNT(*)::int FROM students WHERE is_active=TRUE) AS total_students,
@@ -43,7 +47,21 @@ export async function dashboardMetrics(filters: { clinicCode?: ClinicCode } = {}
         GROUP BY a.clinic_id,a.appointment_date,a.schedule_type,c.max_daily_capacity
         HAVING COUNT(*) > c.max_daily_capacity
       ) x) AS over_capacity_dates
+      ${filters.includeEmailDeliveryIssues
+        ? ", (SELECT COUNT(*)::int FROM email_outbox WHERE status='PERMANENT_FAILURE') AS actionable_email_delivery_failures"
+        : ""}
   `, values);
   const row = result.rows[0];
-  return { totalStudents: row.total_students, pendingAppointments: row.pending_appointments, completedPhysicalExams: row.completed_exam, completedLaboratory: row.completed_lab, noShows: row.no_shows, rescheduled: row.rescheduled, capacityConflicts: row.over_capacity_dates };
+  return {
+    totalStudents: row.total_students,
+    pendingAppointments: row.pending_appointments,
+    completedPhysicalExams: row.completed_exam,
+    completedLaboratory: row.completed_lab,
+    noShows: row.no_shows,
+    rescheduled: row.rescheduled,
+    capacityConflicts: row.over_capacity_dates,
+    ...(filters.includeEmailDeliveryIssues
+      ? { actionableEmailDeliveryFailures: row.actionable_email_delivery_failures ?? 0 }
+      : {}),
+  };
 }

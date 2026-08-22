@@ -1,0 +1,157 @@
+import "server-only";
+import type { PoolClient } from "pg";
+import { query } from "@/server/db/pool";
+
+export type EmailDeliveryDatabaseStatus =
+  | "PENDING"
+  | "PROCESSING"
+  | "SENT"
+  | "PERMANENT_FAILURE"
+  | "OBSOLETE";
+export type EmailDeliveryState = "Pending" | "Sent" | "Retrying" | "Failed";
+
+export type AdminEmailDeliveryRow = {
+  id: string;
+  studentNumber: string | null;
+  toEmail: string;
+  status: EmailDeliveryDatabaseStatus;
+  attempts: number;
+  lastAttemptAt: Date | null;
+  lastAttemptStatus: EmailDeliveryDatabaseStatus | null;
+  lastError: string | null;
+  messageKind: "SCHEDULE" | "VERIFICATION";
+  notificationType: string | null;
+  sourceType: string | null;
+  sourceId: string | null;
+  scheduleFingerprint: string | null;
+};
+
+export type LockedAdminEmailDeliveryRow = AdminEmailDeliveryRow & {
+  verificationRetryEligible: boolean;
+};
+
+export type AdminEmailDelivery = ReturnType<typeof mapAdminEmailDeliveryRow>;
+
+export function maskEmailDestination(destination: string) {
+  const separator = destination.indexOf("@");
+  if (separator < 1 || separator === destination.length - 1) return "***";
+  return `${destination.slice(0, 1)}***${destination.slice(separator)}`;
+}
+
+export function sanitizeEmailDeliveryFailure(failure: string | null) {
+  if (!failure) return null;
+  if (/auth|credential|password|535/i.test(failure)) return "Email service authentication failed.";
+  if (/timeout|timedout|etimedout/i.test(failure)) return "Email service timed out.";
+  if (/quota|rate|limit|throttl/i.test(failure)) return "Email service temporarily limited.";
+  if (/connect|socket|dns|enotfound|econn/i.test(failure)) return "Email service connection failed.";
+  return "Email delivery failed.";
+}
+
+function mapState(status: EmailDeliveryDatabaseStatus, attempts: number): EmailDeliveryState {
+  if (status === "SENT") return "Sent";
+  if (status === "PERMANENT_FAILURE" || status === "OBSOLETE") return "Failed";
+  if (status === "PROCESSING" || attempts > 0) return "Retrying";
+  return "Pending";
+}
+
+export function mapAdminEmailDeliveryRow(row: AdminEmailDeliveryRow) {
+  const state = mapState(row.status, row.attempts);
+  return {
+    id: row.id,
+    destination: maskEmailDestination(row.toEmail),
+    state,
+    attempts: row.attempts,
+    lastAttempt: row.lastAttemptAt
+      ? {
+          at: row.lastAttemptAt.toISOString(),
+          state: mapState(row.lastAttemptStatus ?? row.status, row.attempts),
+        }
+      : null,
+    context: {
+      studentNumber: row.studentNumber,
+      messageKind: row.messageKind,
+      notificationType: row.notificationType,
+      sourceType: row.sourceType,
+      sourceId: row.sourceId,
+    },
+    failureReason: state === "Failed" ? sanitizeEmailDeliveryFailure(row.lastError) : null,
+    actionable: row.status === "PERMANENT_FAILURE",
+  };
+}
+
+const deliveryColumns = `outbox.id::text,outbox.student_number AS "studentNumber",
+  outbox.to_email AS "toEmail",outbox.status,outbox.attempts,
+  outbox.last_attempt_at AS "lastAttemptAt",
+  outbox.last_attempt_status AS "lastAttemptStatus",outbox.last_error AS "lastError",
+  outbox.message_kind AS "messageKind",outbox.notification_type AS "notificationType",
+  outbox.source_type AS "sourceType",outbox.source_id AS "sourceId",
+  outbox.schedule_fingerprint AS "scheduleFingerprint"`;
+
+export async function listAdminEmailDeliveryRows(filters: {
+  scope: "actionable" | "history";
+  state?: EmailDeliveryState;
+}) {
+  const conditions: string[] = [];
+  const values: unknown[] = [];
+  if (filters.scope === "actionable") conditions.push("outbox.status='PERMANENT_FAILURE'");
+  if (filters.state) {
+    values.push(filters.state);
+    conditions.push(`CASE
+      WHEN outbox.status='SENT' THEN 'Sent'
+      WHEN outbox.status IN ('PERMANENT_FAILURE','OBSOLETE') THEN 'Failed'
+      WHEN outbox.status='PROCESSING' OR outbox.attempts>0 THEN 'Retrying'
+      ELSE 'Pending' END=$${values.length}`);
+  }
+  const result = await query<AdminEmailDeliveryRow>(
+    `SELECT ${deliveryColumns}
+       FROM email_outbox outbox
+       ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
+      ORDER BY outbox.created_at DESC,outbox.id DESC
+      LIMIT 100`,
+    values,
+  );
+  return result.rows;
+}
+
+export async function lockAdminEmailDeliveryRow(client: PoolClient, id: string) {
+  const result = await client.query<LockedAdminEmailDeliveryRow>(
+    `SELECT ${deliveryColumns},
+            COALESCE(
+              verification.consumed_at IS NULL
+              AND verification.expires_at>clock_timestamp()
+              AND outbox.verification_body_encrypted IS NOT NULL,
+              FALSE
+            ) AS "verificationRetryEligible"
+       FROM email_outbox outbox
+       LEFT JOIN student_email_verifications verification
+         ON outbox.message_kind='VERIFICATION'
+        AND outbox.source_type='STUDENT_EMAIL_VERIFICATION'
+        AND verification.id::text=outbox.source_id
+      WHERE outbox.id=$1
+      FOR UPDATE OF outbox`,
+    [id],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function resetAdminEmailDeliveryFailure(client: PoolClient, id: string) {
+  const result = await client.query<AdminEmailDeliveryRow>(
+    `UPDATE email_outbox outbox
+        SET status='PENDING',attempts=0,next_attempt_at=clock_timestamp(),locked_at=NULL,last_error=NULL
+      WHERE outbox.id=$1 AND outbox.status='PERMANENT_FAILURE'
+      RETURNING ${deliveryColumns}`,
+    [id],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function obsoleteAdminEmailDeliveryFailure(client: PoolClient, id: string) {
+  const result = await client.query(
+    `UPDATE email_outbox
+        SET status='OBSOLETE',locked_at=NULL,last_error=NULL,last_attempt_at=clock_timestamp(),
+            last_attempt_status='OBSOLETE',verification_body_encrypted=NULL
+      WHERE id=$1 AND status='PERMANENT_FAILURE'`,
+    [id],
+  );
+  return Boolean(result.rowCount);
+}

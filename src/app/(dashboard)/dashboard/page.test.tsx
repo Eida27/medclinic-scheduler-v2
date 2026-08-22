@@ -4,13 +4,39 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { dashboardMetrics } = vi.hoisted(() => ({
   dashboardMetrics: vi.fn(),
 }));
+const { requireUser } = vi.hoisted(() => ({ requireUser: vi.fn() }));
 
 vi.mock("@/server/repositories/tracking.repository", () => ({ dashboardMetrics }));
+vi.mock("@/server/auth/current-user", () => ({ requireUser }));
 
 import DashboardPage from "./page";
 
 describe("DashboardPage", () => {
   beforeEach(() => {
+    requireUser.mockResolvedValue({ userId: "admin", role: "ADMIN" });
+    dashboardMetrics.mockResolvedValue({
+      totalStudents: 12,
+      pendingAppointments: 4,
+      completedPhysicalExams: 3,
+      completedLaboratory: 2,
+      noShows: 1,
+      rescheduled: 1,
+      capacityConflicts: 0,
+      actionableEmailDeliveryFailures: 2,
+    });
+  });
+
+  it("shows actionable email delivery failures only to administrators", async () => {
+    const administratorView = render(await DashboardPage());
+    expect(dashboardMetrics).toHaveBeenCalledWith({ includeEmailDeliveryIssues: true });
+    expect(screen.getByText("Email delivery issues")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Review email delivery issues" })).toHaveAttribute(
+      "href",
+      "/settings/email-delivery",
+    );
+    administratorView.unmount();
+
+    requireUser.mockResolvedValue({ userId: "coordinator", role: "COORDINATOR" });
     dashboardMetrics.mockResolvedValue({
       totalStudents: 12,
       pendingAppointments: 4,
@@ -20,6 +46,9 @@ describe("DashboardPage", () => {
       rescheduled: 1,
       capacityConflicts: 0,
     });
+    render(await DashboardPage());
+    expect(dashboardMetrics).toHaveBeenLastCalledWith({ includeEmailDeliveryIssues: false });
+    expect(screen.queryByText("Email delivery issues")).not.toBeInTheDocument();
   });
 
   it("keeps administrator-only unpublished import state off the shared dashboard", async () => {

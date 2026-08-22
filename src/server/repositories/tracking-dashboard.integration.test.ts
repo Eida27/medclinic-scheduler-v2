@@ -40,6 +40,20 @@ afterAll(async () => {
 });
 
 describe("dashboard metrics publication boundaries", () => {
+  it("returns permanent delivery failures only when the administrator count is requested", async () => {
+    const baseline = await dashboardMetrics({ includeEmailDeliveryIssues: true });
+    await pool.query(
+      `INSERT INTO email_outbox (
+         student_number,to_email,subject,text_body,status,attempts,message_kind,last_attempt_status
+       ) VALUES ($1,'masked@example.test','Failure','Safe body','PERMANENT_FAILURE',10,'SCHEDULE','PERMANENT_FAILURE')`,
+      [counterStudentNumbers[0]],
+    );
+    await expect(dashboardMetrics()).resolves.not.toHaveProperty("actionableEmailDeliveryFailures");
+    await expect(dashboardMetrics({ includeEmailDeliveryIssues: true })).resolves.toMatchObject({
+      actionableEmailDeliveryFailures: baseline.actionableEmailDeliveryFailures! + 1,
+    });
+  });
+
   it("does not expose administrator-only unpublished batch state", async () => {
     await expect(dashboardMetrics()).resolves.not.toHaveProperty("unpublishedBatches");
   });

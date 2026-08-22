@@ -1,9 +1,12 @@
+import Link from "next/link";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { requireUser } from "@/server/auth/current-user";
 import { dashboardMetrics } from "@/server/repositories/tracking.repository";
 
 export default async function DashboardPage() {
-  const metrics = await dashboardMetrics();
+  const user = await requireUser();
+  const metrics = await dashboardMetrics({ includeEmailDeliveryIssues: user.role === "ADMIN" });
   const cards = [
     ["Students", metrics.totalStudents, "Active master records"],
     ["Pending appointments", metrics.pendingAppointments, "Published appointments awaiting completion"],
@@ -25,6 +28,16 @@ export default async function DashboardPage() {
             <p className="mt-2 text-xs leading-5 text-muted">{description}</p>
           </Card>
         ))}
+        {"actionableEmailDeliveryFailures" in metrics ? (
+          <Card className="relative overflow-hidden">
+            <span aria-hidden="true" className="absolute inset-x-0 top-0 h-1 bg-red-700" />
+            <p className="text-sm font-semibold text-muted">Email delivery issues</p>
+            <p className="mt-2 text-3xl font-black tracking-tight text-ink">{metrics.actionableEmailDeliveryFailures}</p>
+            <Link className="mt-2 inline-block text-xs font-bold text-cpu-navy underline" href="/settings/email-delivery">
+              Review email delivery issues
+            </Link>
+          </Card>
+        ) : null}
       </section>
       <Card>
         <CardTitle>Core workflow</CardTitle>
