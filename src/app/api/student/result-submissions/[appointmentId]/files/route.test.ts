@@ -2,12 +2,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppError } from "@/lib/errors";
 
-const { addStudentResultFiles, requireStudent } = vi.hoisted(() => ({
+const { addStudentResultFiles, requireVerifiedStudent } = vi.hoisted(() => ({
   addStudentResultFiles: vi.fn(),
-  requireStudent: vi.fn(),
+  requireVerifiedStudent: vi.fn(),
 }));
 
-vi.mock("@/server/auth/current-student", () => ({ requireStudent }));
+vi.mock("@/server/auth/current-student", () => ({ requireVerifiedStudent }));
 vi.mock("@/server/services/student-result-submissions.service", () => ({
   addStudentResultFiles,
 }));
@@ -56,7 +56,7 @@ function requestWith(form: FormData) {
 describe("POST /api/student/result-submissions/[appointmentId]/files", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    requireStudent.mockResolvedValue(student);
+    requireVerifiedStudent.mockResolvedValue(student);
     addStudentResultFiles.mockResolvedValue(submission);
   });
 
@@ -167,11 +167,13 @@ describe("POST /api/student/result-submissions/[appointmentId]/files", () => {
   });
 
   it("preserves student authentication before reading upload data", async () => {
-    requireStudent.mockRejectedValue(new AppError("UNAUTHORIZED", "Unauthorized", 401));
+    requireVerifiedStudent.mockRejectedValue(new AppError(
+      "STUDENT_EMAIL_VERIFICATION_REQUIRED", "Verify your email address to continue.", 403,
+    ));
 
     const response = await POST(requestWith(new FormData()), context);
 
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(403);
     expect(addStudentResultFiles).not.toHaveBeenCalled();
   });
 });

@@ -9,8 +9,12 @@ export async function POST(request: Request) {
   try {
     const student = await requireStudent();
     const input = schema.parse(await request.json());
-    await requestStudentEmailVerification(student.studentNumber, input.email);
-    return dataResponse({ success: true });
+    const result = await requestStudentEmailVerification(student.studentNumber, input.email);
+    return dataResponse({
+      success: true,
+      expiresAt: result.expiresAt,
+      resendAvailableAt: result.resendAvailableAt,
+    });
   } catch (error) {
     return errorResponse(error);
   }

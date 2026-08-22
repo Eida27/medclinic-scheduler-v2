@@ -5,17 +5,17 @@ import { AppError } from "@/lib/errors";
 const {
   beginStudentResultEdit,
   cancelStudentResultEdit,
-  requireStudent,
+  requireVerifiedStudent,
   revalidatePath,
 } = vi.hoisted(() => ({
   beginStudentResultEdit: vi.fn(),
   cancelStudentResultEdit: vi.fn(),
-  requireStudent: vi.fn(),
+  requireVerifiedStudent: vi.fn(),
   revalidatePath: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath }));
-vi.mock("@/server/auth/current-student", () => ({ requireStudent }));
+vi.mock("@/server/auth/current-student", () => ({ requireVerifiedStudent }));
 vi.mock("@/server/services/student-result-submissions.service", () => ({
   beginStudentResultEdit,
   cancelStudentResultEdit,
@@ -86,7 +86,7 @@ function request(method: "POST" | "DELETE", body?: unknown) {
 describe("/api/student/result-submissions/[appointmentId]/edit", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    requireStudent.mockResolvedValue(student);
+    requireVerifiedStudent.mockResolvedValue(student);
     beginStudentResultEdit.mockResolvedValue(edit);
     cancelStudentResultEdit.mockResolvedValue({ success: true });
   });
@@ -202,7 +202,9 @@ describe("/api/student/result-submissions/[appointmentId]/edit", () => {
   });
 
   it("authenticates before parsing a cancel body", async () => {
-    requireStudent.mockRejectedValue(new AppError("UNAUTHORIZED", "Unauthorized", 401));
+    requireVerifiedStudent.mockRejectedValue(new AppError(
+      "STUDENT_EMAIL_VERIFICATION_REQUIRED", "Verify your email address to continue.", 403,
+    ));
     const malformed = new Request(
       "http://localhost/api/student/result-submissions/appointment-1/edit",
       { method: "DELETE", body: "not-json" },
@@ -210,7 +212,7 @@ describe("/api/student/result-submissions/[appointmentId]/edit", () => {
 
     const response = await DELETE(malformed, context);
 
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(403);
     expect(cancelStudentResultEdit).not.toHaveBeenCalled();
     expect(revalidatePath).not.toHaveBeenCalled();
   });

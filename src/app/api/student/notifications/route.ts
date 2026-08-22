@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { dataResponse, errorResponse } from "@/lib/api-response";
-import { requireStudent } from "@/server/auth/current-student";
+import { requireVerifiedStudent } from "@/server/auth/current-student";
 import {
   listStudentNotifications,
   markStudentNotificationRead,
@@ -10,7 +10,7 @@ const readSchema = z.object({ notificationId: z.string().uuid() });
 
 export async function GET() {
   try {
-    const student = await requireStudent();
+    const student = await requireVerifiedStudent();
     return dataResponse(await listStudentNotifications(student.studentNumber));
   } catch (error) {
     return errorResponse(error);
@@ -19,7 +19,7 @@ export async function GET() {
 
 export async function PATCH(request: Request) {
   try {
-    const student = await requireStudent();
+    const student = await requireVerifiedStudent();
     const { notificationId } = readSchema.parse(await request.json());
     return dataResponse({
       success: await markStudentNotificationRead(student.studentNumber, notificationId),

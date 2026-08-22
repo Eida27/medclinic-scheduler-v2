@@ -2,12 +2,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppError } from "@/lib/errors";
 
-const { removeStudentResultFile, requireStudent } = vi.hoisted(() => ({
+const { removeStudentResultFile, requireVerifiedStudent } = vi.hoisted(() => ({
   removeStudentResultFile: vi.fn(),
-  requireStudent: vi.fn(),
+  requireVerifiedStudent: vi.fn(),
 }));
 
-vi.mock("@/server/auth/current-student", () => ({ requireStudent }));
+vi.mock("@/server/auth/current-student", () => ({ requireVerifiedStudent }));
 vi.mock("@/server/services/student-result-submissions.service", () => ({
   removeStudentResultFile,
 }));
@@ -38,7 +38,7 @@ function request(body: unknown) {
 describe("DELETE /api/student/result-submissions/[appointmentId]/files/[fileId]", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    requireStudent.mockResolvedValue(student);
+    requireVerifiedStudent.mockResolvedValue(student);
     removeStudentResultFile.mockResolvedValue({ success: true });
   });
 

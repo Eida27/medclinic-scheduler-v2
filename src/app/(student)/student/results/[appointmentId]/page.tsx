@@ -1,13 +1,12 @@
-import { redirect } from "next/navigation";
 import { ResultDraftManager } from "@/components/student-results/ResultDraftManager";
-import { requireStudent } from "@/server/auth/current-student";
+import { requireVerifiedStudentPage } from "@/server/auth/verified-student-page";
 import { getStudentResultSubmission } from "@/server/services/student-result-submissions.service";
 import { toStudentResultDraftView } from "@/server/student-results/student-result-draft-view";
 
 type Props = { params: Promise<{ appointmentId: string }> };
 
 export default async function StudentResultDraftPage({ params }: Props) {
-  const student = await requireStudent().catch(() => redirect("/student/login"));
+  const student = await requireVerifiedStudentPage();
   const { appointmentId } = await params;
   const submission = await getStudentResultSubmission(student.studentNumber, appointmentId);
   return (

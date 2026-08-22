@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { createHash } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { pool, transaction } from "@/server/db/pool";
 import { cleanupTestFixtures, insertTestStudent } from "@/test/integration-fixtures";
@@ -8,7 +9,11 @@ import {
   listStudentNotifications,
   markStudentNotificationRead,
 } from "./student-notifications.service";
-import { requestStudentEmailVerification, verifyStudentEmail } from "./student-email.service";
+import {
+  getStudentEmailVerificationStatus,
+  requestStudentEmailVerification,
+  verifyStudentEmail,
+} from "./student-email.service";
 import { decryptVerificationEmailBody } from "@/server/email/verification-body-encryption";
 
 const studentPattern = "99-95%";
@@ -141,6 +146,8 @@ describe("student notifications and optional email", () => {
         WHERE student_number='99-9503-03'`,
     );
     const request = await requestStudentEmailVerification("99-9503-03", " New@Example.Test ");
+    expect(request.expiresAt.getTime() - Date.now()).toBeGreaterThan(29 * 60 * 1000);
+    expect(request.resendAvailableAt.getTime() - Date.now()).toBeGreaterThan(59 * 1000);
     const stored = await pool.query<{
       pending_email: string;
       token_hash: string;
@@ -187,13 +194,152 @@ describe("student notifications and optional email", () => {
     await expect(pool.query(
       "SELECT email FROM students WHERE student_number='99-9503-03'",
     )).resolves.toMatchObject({ rows: [{ email: "old@example.test" }] });
+    await transaction((client) => createStudentNotification(client, {
+      studentNumber: "99-9503-03",
+      notificationType: "SCHEDULE_RESCHEDULED",
+      title: "Schedule updated",
+      message: "Use the current verified delivery address.",
+      eventKey: "TEST-STUDENT-EMAIL-REPLACEMENT-SAFETY",
+    }));
+    await expect(pool.query(
+      `SELECT to_email FROM email_outbox
+        WHERE student_number='99-9503-03' AND message_kind='SCHEDULE'`,
+    )).resolves.toMatchObject({ rows: [{ to_email: "old@example.test" }] });
 
-    await verifyStudentEmail("99-9503-03", request.token);
+    await verifyStudentEmail(request.token);
     const verified = await pool.query(
       `SELECT email, email_verified_at IS NOT NULL AS verified
          FROM students WHERE student_number='99-9503-03'`,
     );
     expect(verified.rows).toEqual([{ email: "new@example.test", verified: true }]);
+    const verificationAudits = await pool.query<{ action: string; metadata: Record<string, unknown> }>(
+      `SELECT action,metadata FROM audit_logs
+        WHERE entity_type='student_email_verification' AND entity_id='99-9503-03'
+        ORDER BY created_at,action`,
+    );
+    expect(verificationAudits.rows.map((row) => row.action)).toEqual(expect.arrayContaining([
+      "STUDENT_EMAIL_REPLACEMENT_REQUESTED",
+      "STUDENT_EMAIL_VERIFICATION_COMPLETED",
+      "STUDENT_EMAIL_ADDRESS_REPLACED",
+    ]));
+    const auditText = JSON.stringify(verificationAudits.rows);
+    expect(auditText).not.toContain("new@example.test");
+    expect(auditText).not.toContain("old@example.test");
+    expect(auditText).not.toContain(request.token);
+  });
+
+  it("enforces cooldown, invalidates older requests, and reports retry timing", async () => {
+    await insertTestStudent({
+      studentNumber: "99-9510-10", firstName: "Cool", lastName: "Down", yearLevel: 2,
+    });
+    const first = await requestStudentEmailVerification("99-9510-10", "first@example.test");
+
+    await expect(requestStudentEmailVerification("99-9510-10", "second@example.test"))
+      .rejects.toMatchObject({ code: "EMAIL_VERIFICATION_COOLDOWN", status: 429 });
+
+    await pool.query(
+      "UPDATE student_email_verifications SET created_at=NOW()-INTERVAL '61 seconds' WHERE student_number=$1",
+      ["99-9510-10"],
+    );
+    const second = await requestStudentEmailVerification("99-9510-10", "second@example.test");
+    await expect(verifyStudentEmail(first.token)).rejects.toMatchObject({ code: "EMAIL_VERIFICATION_INVALID" });
+    await expect(verifyStudentEmail(second.token)).resolves.toMatchObject({ email: "second@example.test" });
+  });
+
+  it("limits verification requests to five in a rolling 15 minutes", async () => {
+    await insertTestStudent({
+      studentNumber: "99-9511-11", firstName: "Rate", lastName: "Limited", yearLevel: 2,
+    });
+    for (let index = 0; index < 5; index += 1) {
+      await pool.query(
+        `INSERT INTO student_email_verifications
+           (student_number,pending_email,token_hash,expires_at,consumed_at,created_at)
+         VALUES ($1,$2,$3,NOW()+INTERVAL '30 minutes',NOW(),NOW()-($4::int*INTERVAL '61 seconds'))`,
+        ["99-9511-11", `rate${index}@example.test`, String(index).padStart(64, "a"), index + 1],
+      );
+    }
+
+    await expect(requestStudentEmailVerification("99-9511-11", "sixth@example.test"))
+      .rejects.toMatchObject({
+        code: "EMAIL_VERIFICATION_THROTTLED",
+        status: 429,
+        details: { retryAfterSeconds: expect.any(Number), retryAt: expect.any(String) },
+      });
+  });
+
+  it("rejects expired and reused tokens without changing a replacement address", async () => {
+    await insertTestStudent({
+      studentNumber: "99-9512-12", firstName: "Token", lastName: "Safety", yearLevel: 2,
+    });
+    await pool.query(
+      "UPDATE students SET email='safe@example.test',email_verified_at=NOW() WHERE student_number='99-9512-12'",
+    );
+    const expired = await requestStudentEmailVerification("99-9512-12", "expired@example.test");
+    await pool.query("UPDATE student_email_verifications SET expires_at=NOW()-INTERVAL '1 second' WHERE token_hash=$1", [
+      createHash("sha256").update(expired.token).digest("hex"),
+    ]);
+    await expect(verifyStudentEmail(expired.token)).rejects.toMatchObject({ code: "EMAIL_VERIFICATION_INVALID" });
+    await expect(pool.query("SELECT email FROM students WHERE student_number='99-9512-12'"))
+      .resolves.toMatchObject({ rows: [{ email: "safe@example.test" }] });
+
+    await pool.query("UPDATE student_email_verifications SET created_at=NOW()-INTERVAL '61 seconds' WHERE student_number='99-9512-12'");
+    const valid = await requestStudentEmailVerification("99-9512-12", "valid@example.test");
+    await verifyStudentEmail(valid.token);
+    await expect(verifyStudentEmail(valid.token)).rejects.toMatchObject({ code: "EMAIL_VERIFICATION_INVALID" });
+  });
+
+  it("permits only one concurrent verified owner and audits conflict without raw addresses or tokens", async () => {
+    for (const studentNumber of ["99-9513-13", "99-9514-14"]) {
+      await insertTestStudent({ studentNumber, firstName: "Concurrent", lastName: "Owner", yearLevel: 2 });
+    }
+    const first = await requestStudentEmailVerification("99-9513-13", " Shared@Example.Test ");
+    const second = await requestStudentEmailVerification("99-9514-14", "shared@example.test");
+    const outcomes = await Promise.allSettled([
+      verifyStudentEmail(first.token),
+      verifyStudentEmail(second.token),
+    ]);
+
+    expect(outcomes.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(outcomes.filter((result) => result.status === "rejected")).toHaveLength(1);
+    const owners = await pool.query(
+      `SELECT student_number FROM students
+        WHERE is_active=TRUE AND email_verified_at IS NOT NULL AND LOWER(BTRIM(email))='shared@example.test'`,
+    );
+    expect(owners.rows).toHaveLength(1);
+    const audits = await pool.query<{ action: string; metadata: Record<string, unknown> }>(
+      `SELECT action,metadata FROM audit_logs
+        WHERE entity_type='student_email_verification'
+          AND entity_id IN ('99-9513-13','99-9514-14')`,
+    );
+    expect(audits.rows.map((row) => row.action)).toEqual(expect.arrayContaining([
+      "STUDENT_EMAIL_VERIFICATION_REQUESTED",
+      "STUDENT_EMAIL_VERIFICATION_COMPLETED",
+      "STUDENT_EMAIL_OWNERSHIP_CONFLICT",
+    ]));
+    const serialized = JSON.stringify(audits.rows);
+    expect(serialized).not.toContain("shared@example.test");
+    expect(serialized).not.toContain(first.token);
+    expect(serialized).not.toContain(second.token);
+  });
+
+  it("invokes the catch-up boundary only for first-ever verification and exposes current status", async () => {
+    await insertTestStudent({
+      studentNumber: "99-9515-15", firstName: "Catch", lastName: "Up", yearLevel: 2,
+    });
+    const catchUp = vi.fn().mockResolvedValue(undefined);
+    const first = await requestStudentEmailVerification("99-9515-15", "firstverified@example.test");
+    await verifyStudentEmail(first.token, { queueCurrentStateCatchUp: catchUp });
+    expect(catchUp).toHaveBeenCalledTimes(1);
+
+    await pool.query("UPDATE student_email_verifications SET created_at=NOW()-INTERVAL '61 seconds' WHERE student_number='99-9515-15'");
+    const replacement = await requestStudentEmailVerification("99-9515-15", "replacement@example.test");
+    await verifyStudentEmail(replacement.token, { queueCurrentStateCatchUp: catchUp });
+    expect(catchUp).toHaveBeenCalledTimes(1);
+
+    await expect(getStudentEmailVerificationStatus("99-9515-15")).resolves.toMatchObject({
+      verified: true,
+      verifiedEmail: "replacement@example.test",
+    });
   });
 
   it("keeps portal changes transactional when SMTP is not configured and scopes read actions to the owner", async () => {

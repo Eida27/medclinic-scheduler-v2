@@ -2,17 +2,17 @@ import { isValidElement, type ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { StudentResultDraftView } from "@/components/student-results/ResultDraftManager";
 
-const { getStudentResultSubmission, redirect, requireStudent } = vi.hoisted(() => ({
+const { getStudentResultSubmission, redirect, requireVerifiedStudentPage } = vi.hoisted(() => ({
   getStudentResultSubmission: vi.fn(),
   redirect: vi.fn((location: string) => { throw new Error(`NEXT_REDIRECT:${location}`); }),
-  requireStudent: vi.fn(),
+  requireVerifiedStudentPage: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
   redirect,
   useRouter: () => ({ refresh: vi.fn() }),
 }));
-vi.mock("@/server/auth/current-student", () => ({ requireStudent }));
+vi.mock("@/server/auth/verified-student-page", () => ({ requireVerifiedStudentPage }));
 vi.mock("@/server/services/student-result-submissions.service", () => ({
   getStudentResultSubmission,
 }));
@@ -62,7 +62,7 @@ const rawSubmission = {
 describe("StudentResultDraftPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    requireStudent.mockResolvedValue({ studentNumber: "23/8200 01" });
+    requireVerifiedStudentPage.mockResolvedValue({ studentNumber: "23/8200 01" });
     getStudentResultSubmission.mockResolvedValue(rawSubmission);
   });
 

@@ -1,23 +1,20 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-const { getStudentPortalSchedule, requireStudent } = vi.hoisted(() => ({
+const { getStudentPortalSchedule, requireVerifiedStudentPage } = vi.hoisted(() => ({
   getStudentPortalSchedule: vi.fn(),
-  requireStudent: vi.fn(),
+  requireVerifiedStudentPage: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
-vi.mock("@/server/auth/current-student", () => ({ requireStudent }));
+vi.mock("@/server/auth/verified-student-page", () => ({ requireVerifiedStudentPage }));
 vi.mock("@/server/repositories/student-portal.repository", () => ({ getStudentPortalSchedule }));
-vi.mock("@/components/student/EmailVerificationReminder", () => ({
-  EmailVerificationReminder: () => null,
-}));
 
 import StudentSchedulePage from "./page";
 
 describe("StudentSchedulePage", () => {
   it("shows readable appointment status labels", async () => {
-    requireStudent.mockResolvedValue({ studentNumber: "24-0001" });
+    requireVerifiedStudentPage.mockResolvedValue({ studentNumber: "24-0001" });
     getStudentPortalSchedule.mockResolvedValue({
       studentNumber: "24-0001",
       studentName: "Santos, Ana M.",
@@ -38,7 +35,7 @@ describe("StudentSchedulePage", () => {
   });
 
   it("splits unresolved current items from dated closure history", async () => {
-    requireStudent.mockResolvedValue({ studentNumber: "24-0001" });
+    requireVerifiedStudentPage.mockResolvedValue({ studentNumber: "24-0001" });
     getStudentPortalSchedule.mockResolvedValue({
       studentNumber: "24-0001",
       studentName: "Santos, Ana M.",

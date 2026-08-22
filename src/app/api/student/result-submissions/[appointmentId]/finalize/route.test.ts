@@ -2,14 +2,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppError } from "@/lib/errors";
 
-const { finalizeStudentResultSubmission, requireStudent, revalidatePath } = vi.hoisted(() => ({
+const { finalizeStudentResultSubmission, requireVerifiedStudent, revalidatePath } = vi.hoisted(() => ({
   finalizeStudentResultSubmission: vi.fn(),
-  requireStudent: vi.fn(),
+  requireVerifiedStudent: vi.fn(),
   revalidatePath: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath }));
-vi.mock("@/server/auth/current-student", () => ({ requireStudent }));
+vi.mock("@/server/auth/current-student", () => ({ requireVerifiedStudent }));
 vi.mock("@/server/services/student-result-submissions.service", () => ({
   finalizeStudentResultSubmission,
 }));
@@ -38,7 +38,7 @@ function request(body: unknown) {
 describe("POST /api/student/result-submissions/[appointmentId]/finalize", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    requireStudent.mockResolvedValue(student);
+    requireVerifiedStudent.mockResolvedValue(student);
     finalizeStudentResultSubmission.mockResolvedValue({
       id: draftId,
       appointmentId: "appointment-1",

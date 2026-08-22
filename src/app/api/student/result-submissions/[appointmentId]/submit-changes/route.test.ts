@@ -2,14 +2,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppError } from "@/lib/errors";
 
-const { requireStudent, revalidatePath, submitStudentResultChanges } = vi.hoisted(() => ({
-  requireStudent: vi.fn(),
+const { requireVerifiedStudent, revalidatePath, submitStudentResultChanges } = vi.hoisted(() => ({
+  requireVerifiedStudent: vi.fn(),
   revalidatePath: vi.fn(),
   submitStudentResultChanges: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath }));
-vi.mock("@/server/auth/current-student", () => ({ requireStudent }));
+vi.mock("@/server/auth/current-student", () => ({ requireVerifiedStudent }));
 vi.mock("@/server/services/student-result-submissions.service", () => ({
   submitStudentResultChanges,
 }));
@@ -64,7 +64,7 @@ function request(body: unknown) {
 describe("POST /api/student/result-submissions/[appointmentId]/submit-changes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    requireStudent.mockResolvedValue(student);
+    requireVerifiedStudent.mockResolvedValue(student);
     submitStudentResultChanges.mockResolvedValue(promoted);
   });
 
@@ -160,7 +160,9 @@ describe("POST /api/student/result-submissions/[appointmentId]/submit-changes", 
   });
 
   it("authenticates before parsing the expected edit id", async () => {
-    requireStudent.mockRejectedValue(new AppError("UNAUTHORIZED", "Unauthorized", 401));
+    requireVerifiedStudent.mockRejectedValue(new AppError(
+      "STUDENT_EMAIL_VERIFICATION_REQUIRED", "Verify your email address to continue.", 403,
+    ));
     const malformed = new Request(
       "http://localhost/api/student/result-submissions/appointment-1/submit-changes",
       { method: "POST", body: "not-json" },
@@ -168,7 +170,7 @@ describe("POST /api/student/result-submissions/[appointmentId]/submit-changes", 
 
     const response = await POST(malformed, context);
 
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(403);
     expect(submitStudentResultChanges).not.toHaveBeenCalled();
     expect(revalidatePath).not.toHaveBeenCalled();
   });

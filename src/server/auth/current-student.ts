@@ -17,6 +17,18 @@ export async function requireStudent() {
   }
 }
 
+export async function requireVerifiedStudent() {
+  const student = await requireStudent();
+  if (!student.email || !student.emailVerifiedAt) {
+    throw new AppError(
+      "STUDENT_EMAIL_VERIFICATION_REQUIRED",
+      "Verify your email address to continue.",
+      403,
+    );
+  }
+  return student;
+}
+
 export async function optionalStudent() {
   try {
     return await requireStudent();

@@ -1,10 +1,9 @@
-import { redirect } from "next/navigation";
 import { NotificationList } from "@/components/student/NotificationList";
-import { requireStudent } from "@/server/auth/current-student";
+import { requireVerifiedStudentPage } from "@/server/auth/verified-student-page";
 import { listStudentNotifications } from "@/server/services/student-notifications.service";
 
 export default async function StudentNotificationsPage() {
-  const student = await requireStudent().catch(() => redirect("/student/login"));
+  const student = await requireVerifiedStudentPage();
   const notifications = await listStudentNotifications(student.studentNumber);
   return (
     <section>

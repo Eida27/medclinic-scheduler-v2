@@ -1,6 +1,6 @@
 import { AppError } from "@/lib/errors";
 import { dataResponse, errorResponse } from "@/lib/api-response";
-import { requireStudent } from "@/server/auth/current-student";
+import { requireVerifiedStudent } from "@/server/auth/current-student";
 import { removeStudentResultFile } from "@/server/services/student-result-submissions.service";
 import { z } from "zod";
 
@@ -32,7 +32,7 @@ async function parseSubmissionId(request: Request) {
 
 export async function DELETE(request: Request, context: Context) {
   try {
-    const student = await requireStudent();
+    const student = await requireVerifiedStudent();
     const submissionId = await parseSubmissionId(request);
     const params = await context.params;
     return dataResponse(await removeStudentResultFile(

@@ -1,6 +1,6 @@
 import { AppError } from "@/lib/errors";
 import { dataResponse, errorResponse } from "@/lib/api-response";
-import { requireStudent } from "@/server/auth/current-student";
+import { requireVerifiedStudent } from "@/server/auth/current-student";
 import { addStudentResultFiles } from "@/server/services/student-result-submissions.service";
 import { toStudentResultDraftView } from "@/server/student-results/student-result-draft-view";
 import { z } from "zod";
@@ -23,7 +23,7 @@ function parseSubmissionId(value: FormDataEntryValue | null) {
 
 export async function POST(request: Request, context: Context) {
   try {
-    const student = await requireStudent();
+    const student = await requireVerifiedStudent();
     const form = await request.formData();
     const submissionId = parseSubmissionId(form.get("submissionId"));
     const files = form.getAll("file").filter((entry): entry is File => entry instanceof File);

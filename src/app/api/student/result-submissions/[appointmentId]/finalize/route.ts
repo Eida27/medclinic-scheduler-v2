@@ -1,7 +1,7 @@
 import { revalidatePath } from "next/cache";
 import { AppError } from "@/lib/errors";
 import { dataResponse, errorResponse } from "@/lib/api-response";
-import { requireStudent } from "@/server/auth/current-student";
+import { requireVerifiedStudent } from "@/server/auth/current-student";
 import { finalizeStudentResultSubmission } from "@/server/services/student-result-submissions.service";
 import { toStudentResultDraftView } from "@/server/student-results/student-result-draft-view";
 import { z } from "zod";
@@ -34,7 +34,7 @@ async function parseSubmissionId(request: Request) {
 
 export async function POST(request: Request, context: Context) {
   try {
-    const student = await requireStudent();
+    const student = await requireVerifiedStudent();
     const submissionId = await parseSubmissionId(request);
     const submission = await finalizeStudentResultSubmission(
       student.studentNumber,

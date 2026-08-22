@@ -2,7 +2,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { dataResponse, errorResponse } from "@/lib/api-response";
 import { AppError } from "@/lib/errors";
-import { requireStudent } from "@/server/auth/current-student";
+import { requireVerifiedStudent } from "@/server/auth/current-student";
 import {
   beginStudentResultEdit,
   cancelStudentResultEdit,
@@ -55,7 +55,7 @@ function revalidateResultViews(studentNumber: string) {
 
 export async function POST(_request: Request, context: Context) {
   try {
-    const student = await requireStudent();
+    const student = await requireVerifiedStudent();
     const edit = await beginStudentResultEdit(
       student.studentNumber,
       (await context.params).appointmentId,
@@ -69,7 +69,7 @@ export async function POST(_request: Request, context: Context) {
 
 export async function DELETE(request: Request, context: Context) {
   try {
-    const student = await requireStudent();
+    const student = await requireVerifiedStudent();
     const submissionId = await parseSubmissionId(request);
     const result = await cancelStudentResultEdit(
       student.studentNumber,

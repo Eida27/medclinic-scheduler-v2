@@ -4,15 +4,15 @@ import { describe, expect, it, vi } from "vitest";
 const {
   getCurrentEffectiveAppointmentsForStudent,
   getStudentPortalSchedule,
-  requireStudent,
+  requireVerifiedStudentPage,
 } = vi.hoisted(() => ({
   getCurrentEffectiveAppointmentsForStudent: vi.fn(),
   getStudentPortalSchedule: vi.fn(),
-  requireStudent: vi.fn(),
+  requireVerifiedStudentPage: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
-vi.mock("@/server/auth/current-student", () => ({ requireStudent }));
+vi.mock("@/server/auth/verified-student-page", () => ({ requireVerifiedStudentPage }));
 vi.mock("@/server/repositories/current-effective-appointments.repository", () => ({
   getCurrentEffectiveAppointmentsForStudent,
 }));
@@ -22,7 +22,7 @@ import StudentResultsPage from "./page";
 
 describe("StudentResultsPage", () => {
   it("links only completed current-effective appointments after replacements become current", async () => {
-    requireStudent.mockResolvedValue({ studentNumber: "24-0001" });
+    requireVerifiedStudentPage.mockResolvedValue({ studentNumber: "24-0001" });
     getStudentPortalSchedule.mockResolvedValue({
       appointments: [
         {

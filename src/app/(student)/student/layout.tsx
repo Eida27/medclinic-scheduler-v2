@@ -13,10 +13,10 @@ export default async function StudentLayout({ children }: PropsWithChildren) {
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-5 py-4">
           <BrandMark />
           <nav aria-label="Student portal" className="flex flex-wrap items-center gap-4 text-sm font-semibold">
-            <Link href="/student">Schedule</Link>
-            <Link href="/student/notifications">Notifications</Link>
+            {student.emailVerifiedAt ? <Link href="/student">Schedule</Link> : null}
+            {student.emailVerifiedAt ? <Link href="/student/notifications">Notifications</Link> : null}
             <Link href="/student/email-verification">Email verification</Link>
-            <Link href="/student/results">Results</Link>
+            {student.emailVerifiedAt ? <Link href="/student/results">Results</Link> : null}
           </nav>
           <StudentLogoutButton />
         </div>

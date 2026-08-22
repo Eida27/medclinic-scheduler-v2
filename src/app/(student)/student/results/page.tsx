@@ -1,14 +1,13 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
 import { Card } from "@/components/ui/Card";
-import { requireStudent } from "@/server/auth/current-student";
+import { requireVerifiedStudentPage } from "@/server/auth/verified-student-page";
 import {
   getCurrentEffectiveAppointmentsForStudent,
   type CurrentEffectiveAppointment,
 } from "@/server/repositories/current-effective-appointments.repository";
 
 export default async function StudentResultsPage() {
-  const student = await requireStudent().catch(() => redirect("/student/login"));
+  const student = await requireVerifiedStudentPage();
   const current = await getCurrentEffectiveAppointmentsForStudent(student.studentNumber);
   const completed = [current.laboratory, current.physicalExam].filter(
     (appointment): appointment is CurrentEffectiveAppointment => appointment?.status === "COMPLETED",

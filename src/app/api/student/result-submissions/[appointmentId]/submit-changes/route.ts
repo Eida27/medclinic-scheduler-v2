@@ -2,7 +2,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { dataResponse, errorResponse } from "@/lib/api-response";
 import { AppError } from "@/lib/errors";
-import { requireStudent } from "@/server/auth/current-student";
+import { requireVerifiedStudent } from "@/server/auth/current-student";
 import { submitStudentResultChanges } from "@/server/services/student-result-submissions.service";
 import { toStudentResultDraftView } from "@/server/student-results/student-result-draft-view";
 
@@ -45,7 +45,7 @@ function editErrorResponse(error: unknown) {
 
 export async function POST(request: Request, context: Context) {
   try {
-    const student = await requireStudent();
+    const student = await requireVerifiedStudent();
     const submissionId = await parseSubmissionId(request);
     const submission = await submitStudentResultChanges(
       student.studentNumber,

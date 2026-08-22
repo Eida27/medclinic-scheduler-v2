@@ -1,12 +1,12 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getStudentResultSubmission, requireStudent } = vi.hoisted(() => ({
+const { getStudentResultSubmission, requireVerifiedStudent } = vi.hoisted(() => ({
   getStudentResultSubmission: vi.fn(),
-  requireStudent: vi.fn(),
+  requireVerifiedStudent: vi.fn(),
 }));
 
-vi.mock("@/server/auth/current-student", () => ({ requireStudent }));
+vi.mock("@/server/auth/current-student", () => ({ requireVerifiedStudent }));
 vi.mock("@/server/services/student-result-submissions.service", () => ({
   getStudentResultSubmission,
 }));
@@ -61,7 +61,7 @@ const rawSubmission = {
 describe("GET /api/student/result-submissions/[appointmentId]", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    requireStudent.mockResolvedValue(student);
+    requireVerifiedStudent.mockResolvedValue(student);
     getStudentResultSubmission.mockResolvedValue(rawSubmission);
   });
 
