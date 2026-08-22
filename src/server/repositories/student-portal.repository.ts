@@ -1,6 +1,11 @@
 import "server-only";
 import { query } from "@/server/db/pool";
 import { studentDisplayNameSql } from "@/server/students/student-display-name";
+import {
+  authoritativeScheduleDateSql,
+  authoritativeScheduleLocationSql,
+  currentPublishedSchedulePredicate,
+} from "@/server/schedule/schedule-state-sql";
 
 export type ActiveStudentIdentity = {
   studentNumber: string;
@@ -38,13 +43,10 @@ export async function getStudentPortalSchedule(studentNumber: string) {
     `SELECT appointment.id,
             appointment.student_number AS "studentNumber",
             appointment.schedule_type AS "scheduleType",
-            CASE WHEN appointment.status='AWAITING_RESCHEDULE'
-                 THEN NULL ELSE appointment.appointment_date::text END AS "appointmentDate",
+            ${authoritativeScheduleDateSql("appointment")} AS "appointmentDate",
             appointment.status,
             appointment.rescheduled_from AS "rescheduledFrom",
-            CASE WHEN appointment.ovpsa_batch_id IS NOT NULL
-                       AND appointment.schedule_type='LABORATORY'
-                 THEN 'Iloilo Mission Hospital' ELSE clinic.name END AS "locationName",
+            ${authoritativeScheduleLocationSql("appointment", "clinic")} AS "locationName",
             (appointment.ovpsa_batch_id IS NOT NULL) AS "isOvpsaFirstYear",
             CASE WHEN appointment.ovpsa_batch_id IS NOT NULL
                        AND appointment.schedule_type='LABORATORY'
@@ -54,8 +56,8 @@ export async function getStudentPortalSchedule(studentNumber: string) {
        JOIN clinics clinic ON clinic.id=appointment.clinic_id
        LEFT JOIN ovpsa_external_laboratory_verifications verification
          ON verification.appointment_id=appointment.id
-      WHERE appointment.student_number=$1 AND appointment.is_published=TRUE
-        AND appointment.status NOT IN ('RESCHEDULED','CANCELLED')
+      WHERE appointment.student_number=$1
+        AND ${currentPublishedSchedulePredicate("appointment")}
       ORDER BY appointment.appointment_date, appointment.schedule_type, appointment.created_at`,
     [studentNumber],
   );

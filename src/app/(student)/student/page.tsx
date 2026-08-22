@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { operationalStatusLabel } from "@/components/appointments/status-labels";
 import { Card } from "@/components/ui/Card";
+import { SCHEDULE_NOTICE } from "@/lib/schedule-notice";
 import { requireVerifiedStudentPage } from "@/server/auth/verified-student-page";
 import { getStudentPortalSchedule } from "@/server/repositories/student-portal.repository";
 
@@ -12,6 +13,9 @@ export default async function StudentSchedulePage() {
     <section>
       <p className="text-sm font-semibold text-muted">{portal.studentNumber}</p>
       <h1 className="mt-1 text-3xl font-bold">{portal.studentName}</h1>
+      <Card className="mt-6 border-cpu-gold/40 p-5 text-sm leading-6">
+        {SCHEDULE_NOTICE}
+      </Card>
       <h2 className="mt-8 text-xl font-bold">Current schedule</h2>
       <div className="mt-4 grid gap-3">
         {portal.appointments.length ? portal.appointments.map((appointment) => (

@@ -9,6 +9,12 @@ export type StudentNotificationInput = {
   message: string;
   metadata?: Record<string, unknown>;
   eventKey?: string;
+  emailSubject?: string;
+  emailTextBody?: string;
+  messageKind?: "SCHEDULE" | "VERIFICATION";
+  sourceType?: string;
+  sourceId?: string;
+  scheduleFingerprint?: string;
 };
 
 export async function insertStudentNotifications(
@@ -19,10 +25,14 @@ export async function insertStudentNotifications(
   const result = await client.query<{ id: string }>(
     `WITH source AS MATERIALIZED (
        SELECT row.student_number,row.notification_type,row.title,row.message,
-              row.metadata,row.event_key
+              row.metadata,row.event_key,row.email_subject,row.email_text_body,
+              row.message_kind,row.source_type,row.source_id,row.schedule_fingerprint,
+              row.input_order
          FROM jsonb_to_recordset($1::jsonb) AS row(
            student_number text,notification_type text,title text,message text,
-           metadata jsonb,event_key text
+           metadata jsonb,event_key text,email_subject text,email_text_body text,
+           message_kind text,source_type text,source_id text,schedule_fingerprint text,
+           input_order integer
          )
      ),
      inserted AS (
@@ -34,16 +44,40 @@ export async function insertStudentNotifications(
        ON CONFLICT (event_key) WHERE event_key IS NOT NULL DO NOTHING
        RETURNING id,student_number,notification_type,title,message,event_key
      ),
+     prepared AS (
+       SELECT inserted.*,
+              detail.email_subject,detail.email_text_body,detail.message_kind,
+              detail.source_type,detail.source_id,detail.schedule_fingerprint
+         FROM inserted
+         CROSS JOIN LATERAL (
+           SELECT source.email_subject,source.email_text_body,source.message_kind,
+                  source.source_type,source.source_id,source.schedule_fingerprint
+             FROM source
+            WHERE source.student_number=inserted.student_number
+              AND source.notification_type=inserted.notification_type
+              AND source.title=inserted.title AND source.message=inserted.message
+              AND source.event_key IS NOT DISTINCT FROM inserted.event_key
+            ORDER BY source.input_order
+            LIMIT 1
+         ) detail
+     ),
      enqueued AS (
        INSERT INTO email_outbox (
          student_number,to_email,subject,text_body,html_body,event_key,
-         message_kind,notification_type,portal_notification_id
+         message_kind,notification_type,source_type,source_id,
+         portal_notification_id,schedule_fingerprint
        )
-       SELECT inserted.student_number,student.email,inserted.title,
-              inserted.message || E'\\n\\nOpen the student portal to review the details.',
-              NULL,inserted.event_key,'SCHEDULE',inserted.notification_type,inserted.id
-         FROM inserted
-         JOIN students student ON student.student_number=inserted.student_number
+       SELECT prepared.student_number,student.email,
+              COALESCE(prepared.email_subject,prepared.title),
+              COALESCE(
+                prepared.email_text_body,
+                prepared.message || E'\\n\\nOpen the student portal to review the details.'
+              ),
+              NULL,prepared.event_key,COALESCE(prepared.message_kind,'SCHEDULE'),
+              prepared.notification_type,prepared.source_type,prepared.source_id,
+              prepared.id,prepared.schedule_fingerprint
+         FROM prepared
+         JOIN students student ON student.student_number=prepared.student_number
         WHERE student.email_verified_at IS NOT NULL AND student.email IS NOT NULL
        ON CONFLICT (event_key) WHERE event_key IS NOT NULL DO NOTHING
        RETURNING id,student_number,to_email,message_kind,notification_type
@@ -60,13 +94,20 @@ export async function insertStudentNotifications(
          FROM enqueued
      )
      SELECT id::text FROM inserted`,
-    [JSON.stringify(inputs.map((input) => ({
+    [JSON.stringify(inputs.map((input, index) => ({
       student_number: input.studentNumber,
       notification_type: input.notificationType,
       title: input.title,
       message: input.message,
       metadata: input.metadata ?? {},
       event_key: input.eventKey ?? null,
+      email_subject: input.emailSubject ?? null,
+      email_text_body: input.emailTextBody ?? null,
+      message_kind: input.messageKind ?? null,
+      source_type: input.sourceType ?? null,
+      source_id: input.sourceId ?? null,
+      schedule_fingerprint: input.scheduleFingerprint ?? null,
+      input_order: index,
     })))],
   );
   return result.rows.map((row) => row.id);

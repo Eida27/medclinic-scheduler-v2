@@ -1,12 +1,17 @@
 import "server-only";
 import type { PoolClient } from "pg";
+import { loadAuthoritativeScheduleState } from "@/server/repositories/schedule-state.repository";
+import {
+  buildCurrentStateNotification,
+  hasAuthoritativeScheduleState,
+} from "@/server/schedule/schedule-notifications";
+import { createStudentNotificationIsolated } from "./student-notifications.service";
 
-/** Task 3 supplies authoritative state loading and idempotent notification content here. */
 export async function queueFirstVerificationCurrentStateCatchUp(
-  _client: PoolClient,
-  _studentNumber: string,
+  client: PoolClient,
+  studentNumber: string,
 ) {
-  void _client;
-  void _studentNumber;
-  // Intentionally empty until the authoritative schedule-state engine is available.
+  const state = await loadAuthoritativeScheduleState(client, studentNumber);
+  if (!state || !hasAuthoritativeScheduleState(state)) return undefined;
+  return createStudentNotificationIsolated(client, buildCurrentStateNotification(state));
 }

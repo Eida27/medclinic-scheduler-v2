@@ -26,11 +26,15 @@ export async function createStudentNotification(
     await enqueueStudentEmail(client, {
       studentNumber: input.studentNumber,
       toEmail: inserted.email,
-      subject: input.title,
-      textBody: `${input.message}\n\nOpen the student portal to review the details.`,
+      subject: input.emailSubject ?? input.title,
+      textBody: input.emailTextBody ?? `${input.message}\n\nOpen the student portal to review the details.`,
       eventKey: input.eventKey,
+      messageKind: input.messageKind,
       notificationType: input.notificationType,
+      sourceType: input.sourceType,
+      sourceId: input.sourceId,
       portalNotificationId: inserted.id,
+      scheduleFingerprint: input.scheduleFingerprint,
     });
   }
   return inserted.id;
@@ -63,11 +67,15 @@ export async function createStudentNotificationIsolated(
       await enqueueStudentEmail(client, {
         studentNumber: input.studentNumber,
         toEmail: inserted.email,
-        subject: input.title,
-        textBody: `${input.message}\n\nOpen the student portal to review the details.`,
+        subject: input.emailSubject ?? input.title,
+        textBody: input.emailTextBody ?? `${input.message}\n\nOpen the student portal to review the details.`,
         eventKey: input.eventKey,
+        messageKind: input.messageKind,
         notificationType: input.notificationType,
+        sourceType: input.sourceType,
+        sourceId: input.sourceId,
         portalNotificationId: inserted.id,
+        scheduleFingerprint: input.scheduleFingerprint,
       });
       await client.query("RELEASE SAVEPOINT student_notification_email");
     } catch {

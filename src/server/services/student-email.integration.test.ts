@@ -2,7 +2,11 @@
 import { createHash } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { pool, transaction } from "@/server/db/pool";
-import { cleanupTestFixtures, insertTestStudent } from "@/test/integration-fixtures";
+import {
+  cleanupTestFixtures,
+  insertTestStudent,
+  TEST_REFERENCE_IDS,
+} from "@/test/integration-fixtures";
 import {
   createStudentNotification,
   createStudentNotifications,
@@ -15,6 +19,7 @@ import {
   verifyStudentEmail,
 } from "./student-email.service";
 import { decryptVerificationEmailBody } from "@/server/email/verification-body-encryption";
+import { queueFirstVerificationCurrentStateCatchUp } from "./student-verification-catch-up.service";
 
 const studentPattern = "99-95%";
 const encryptionKey = Buffer.alloc(32, 11).toString("base64");
@@ -80,6 +85,12 @@ describe("student notifications and optional email", () => {
           notificationType: "SCHEDULE_PUBLISHED",
           title: "Schedule published",
           message: "Your First Year schedule is ready.",
+          emailSubject: "Your current First Year schedule",
+          emailTextBody: "Authoritative First Year schedule body.",
+          messageKind: "SCHEDULE",
+          sourceType: "FIRST_YEAR_IMPORT",
+          sourceId: "import-1",
+          scheduleFingerprint: "b".repeat(64),
         },
         {
           studentNumber: "99-9506-06",
@@ -101,9 +112,20 @@ describe("student notifications and optional email", () => {
       ],
     });
     await expect(pool.query(
-      "SELECT student_number,to_email FROM email_outbox ORDER BY student_number",
+      `SELECT student_number,to_email,subject,text_body,message_kind,source_type,source_id,
+              schedule_fingerprint
+         FROM email_outbox ORDER BY student_number`,
     )).resolves.toMatchObject({
-      rows: [{ student_number: "99-9505-05", to_email: "batch@example.test" }],
+      rows: [{
+        student_number: "99-9505-05",
+        to_email: "batch@example.test",
+        subject: "Your current First Year schedule",
+        text_body: "Authoritative First Year schedule body.",
+        message_kind: "SCHEDULE",
+        source_type: "FIRST_YEAR_IMPORT",
+        source_id: "import-1",
+        schedule_fingerprint: "b".repeat(64),
+      }],
     });
     await expect(pool.query(
       `SELECT action,metadata->>'studentNumber' AS student_number
@@ -360,6 +382,81 @@ describe("student notifications and optional email", () => {
       verified: true,
       verifiedEmail: "replacement@example.test",
     });
+  });
+
+  it("queues only the latest current state after late first verification and remains idempotent", async () => {
+    const studentNumber = "99-9525-25";
+    await insertTestStudent({
+      studentNumber, firstName: "Late", lastName: "Verifier", yearLevel: 3,
+    });
+    const oldLaboratory = await pool.query<{ id: string }>(
+      `INSERT INTO appointments (
+         clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+         schedule_cycle_start
+       ) VALUES ($1,$2,'LABORATORY','2091-09-03','RESCHEDULED',TRUE,2091)
+       RETURNING id::text`,
+      [TEST_REFERENCE_IDS.laboratoryClinic, studentNumber],
+    );
+    const oldPhysical = await pool.query<{ id: string }>(
+      `INSERT INTO appointments (
+         clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+         schedule_cycle_start
+       ) VALUES ($1,$2,'PHYSICAL_EXAM','2091-09-10','RESCHEDULED',TRUE,2091)
+       RETURNING id::text`,
+      [TEST_REFERENCE_IDS.physicalExamClinic, studentNumber],
+    );
+    await pool.query(
+      `INSERT INTO appointments (
+         clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+         schedule_cycle_start,rescheduled_from
+       ) VALUES
+         ($1,$3,'LABORATORY','2091-09-18','PENDING',TRUE,2091,$4),
+         ($2,$3,'PHYSICAL_EXAM','2091-09-25','PENDING',TRUE,2091,$5)`,
+      [
+        TEST_REFERENCE_IDS.laboratoryClinic,
+        TEST_REFERENCE_IDS.physicalExamClinic,
+        studentNumber,
+        oldLaboratory.rows[0].id,
+        oldPhysical.rows[0].id,
+      ],
+    );
+
+    const first = await requestStudentEmailVerification(studentNumber, "latest@example.test");
+    await verifyStudentEmail(first.token);
+    await transaction((client) => queueFirstVerificationCurrentStateCatchUp(client, studentNumber));
+
+    const notifications = await pool.query<{ event_key: string }>(
+      `SELECT event_key FROM student_portal_notifications
+        WHERE student_number=$1 AND notification_type='SCHEDULE_CURRENT_STATE'`,
+      [studentNumber],
+    );
+    const outbox = await pool.query<{ text_body: string; schedule_fingerprint: string }>(
+      `SELECT text_body,schedule_fingerprint FROM email_outbox
+        WHERE student_number=$1 AND notification_type='SCHEDULE_CURRENT_STATE'`,
+      [studentNumber],
+    );
+    expect(notifications.rows).toHaveLength(1);
+    expect(notifications.rows[0].event_key).toMatch(
+      /^schedule:current:99-9525-25:[0-9a-f]{64}$/,
+    );
+    expect(outbox.rows).toHaveLength(1);
+    expect(outbox.rows[0].schedule_fingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(outbox.rows[0].text_body).toContain("Laboratory: 2091-09-18 at KABALAKA Clinic (Pending).");
+    expect(outbox.rows[0].text_body).toContain("Physical Examination: 2091-09-25 at CPU Clinic (Pending).");
+    expect(outbox.rows[0].text_body).not.toContain("2091-09-03");
+    expect(outbox.rows[0].text_body).not.toContain("2091-09-10");
+
+    await pool.query(
+      "UPDATE student_email_verifications SET created_at=clock_timestamp()-INTERVAL '61 seconds' WHERE student_number=$1",
+      [studentNumber],
+    );
+    const replacement = await requestStudentEmailVerification(studentNumber, "latest-new@example.test");
+    await verifyStudentEmail(replacement.token);
+    await expect(pool.query(
+      `SELECT id FROM email_outbox
+        WHERE student_number=$1 AND notification_type='SCHEDULE_CURRENT_STATE'`,
+      [studentNumber],
+    )).resolves.toMatchObject({ rows: [expect.objectContaining({ id: expect.any(String) })] });
   });
 
   it("uses the database clock for cooldown retry timing despite application clock skew", async () => {
