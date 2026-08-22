@@ -48,6 +48,18 @@ describe("proxy route boundaries", () => {
     expect(verifySessionToken).not.toHaveBeenCalled();
   });
 
+  it("allows signed-out students to open token-only email confirmation", async () => {
+    const request = new NextRequest(
+      "http://localhost/student/email-verification/confirm?token=verification-token",
+    );
+
+    const response = await proxy(request);
+
+    expect(response.headers.get("location")).toBeNull();
+    expect(verifyStudentSessionToken).not.toHaveBeenCalled();
+    expect(verifySessionToken).not.toHaveBeenCalled();
+  });
+
   it("authenticates reports while retaining appointment route matching", () => {
     expect(config.matcher).toContain("/reports/:path*");
     expect(config.matcher).toContain("/appointments/:path*");

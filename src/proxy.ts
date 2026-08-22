@@ -7,7 +7,12 @@ export async function proxy(request: NextRequest) {
     request.nextUrl.pathname === "/student" || request.nextUrl.pathname.startsWith("/student/");
 
   if (isStudentPortal) {
-    if (request.nextUrl.pathname === "/student/login") return NextResponse.next();
+    if (
+      request.nextUrl.pathname === "/student/login" ||
+      request.nextUrl.pathname === "/student/email-verification/confirm"
+    ) {
+      return NextResponse.next();
+    }
     const studentToken = request.cookies.get(STUDENT_SESSION_COOKIE)?.value;
     if (!studentToken) return NextResponse.redirect(new URL("/student/login", request.url));
     try {
