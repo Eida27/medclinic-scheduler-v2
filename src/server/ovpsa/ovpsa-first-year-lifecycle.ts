@@ -8,8 +8,11 @@ import {
 import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import { isSchedulingDateBlocked } from "@/server/repositories/scheduling-blocked-dates.repository";
 import { loadAppointmentResultProtectionStates } from "@/server/repositories/student-result-submissions.repository";
-import type { StudentNotificationInput } from "@/server/repositories/student-notifications.repository";
-import { createStudentNotifications } from "@/server/services/student-notifications.service";
+import { queueAuthoritativeScheduleNotification } from "@/server/schedule/schedule-notification-hooks";
+import {
+  buildAwaitingResolutionNotification,
+  buildRestorationNotification,
+} from "@/server/schedule/schedule-notifications";
 
 export type PersistedClosureDateGroup = {
   closureGroupId: string;
@@ -69,7 +72,6 @@ export async function restoreAppointmentsDisplacedByReservationsWithClient(
   }));
   let restored = 0;
   let skipped = 0;
-  const notifications: StudentNotificationInput[] = [];
   const audits: AuditInput[] = [];
   for (const event of events.rows) {
     const pairs = [
@@ -173,13 +175,6 @@ export async function restoreAppointmentsDisplacedByReservationsWithClient(
          SELECT id,'RESCHEDULED','PENDING',$2,$3::uuid FROM UNNEST($4::uuid[]) row(id)`,
         [replacementIds, `OVPSA displacement restoration: ${input.reason}`, input.actorUserId, originalIds],
       );
-      notifications.push({
-        studentNumber: event.studentNumber,
-        notificationType: "SCHEDULE_RESCHEDULED",
-        title: "Previous schedule restored",
-        message: "Your earlier clinic schedule was restored after the First Year reservation was released.",
-        metadata: { reason: "OVPSA_RESTORATION", rescheduleEventId: event.id },
-      });
       restored += 1;
     } else {
       skipped += 1;
@@ -191,6 +186,35 @@ export async function restoreAppointmentsDisplacedByReservationsWithClient(
         WHERE id=$1`,
       [event.id, decision, details, input.actorUserId, event.batchId],
     );
+    if (decision === "RESTORED") {
+      const previousLaboratory = replacements.find(
+        (appointment) => appointment.scheduleType === "LABORATORY",
+      );
+      const previousPhysicalExam = replacements.find(
+        (appointment) => appointment.scheduleType === "PHYSICAL_EXAM",
+      );
+      const previous = {
+        laboratory: previousLaboratory ? {
+          date: previousLaboratory.appointmentDate,
+          location: "KABALAKA Clinic",
+        } : undefined,
+        physicalExam: previousPhysicalExam ? {
+          date: previousPhysicalExam.appointmentDate,
+          location: "CPU Clinic",
+        } : undefined,
+      };
+      await queueAuthoritativeScheduleNotification(
+        client,
+        event.studentNumber,
+        (state) => buildRestorationNotification({
+          state,
+          eventId: event.id,
+          eventKeyDiscriminator: "restored",
+          reason: input.reason,
+          previous,
+        }),
+      );
+    }
     audits.push({
       actorUserId: input.actorUserId,
       action: "OVPSA_DISPLACEMENT_RESTORATION_DECIDED",
@@ -204,7 +228,6 @@ export async function restoreAppointmentsDisplacedByReservationsWithClient(
       },
     });
   }
-  await createStudentNotifications(client, notifications);
   await writeAudits(client, audits);
   return { restored, skipped };
 }
@@ -293,24 +316,38 @@ export async function invalidateOvpsaReservationsForClosuresWithClient(
       [affected.rows.map((appointment) => appointment.id), actorUserId],
     );
   }
-  await createStudentNotifications(
-    client,
-    affected.rows.map((appointment) => ({
-      studentNumber: appointment.student_number,
-      notificationType: "OVPSA_RESCHEDULE_REQUIRED",
-      title: "First Year schedule update required",
-      message: `An official closure affected your ${
-        appointment.schedule_type === "LABORATORY" ? "Laboratory" : "Physical Examination"
-      } on ${appointment.appointment_date}. Wait for the replacement schedule.`,
-      metadata: {
-        reason: "OFFICIAL_CLOSURE",
-        batchId: appointment.ovpsa_batch_id,
-        appointmentId: appointment.id,
-        scheduleType: appointment.schedule_type,
-        previousDate: appointment.appointment_date,
-      },
-    })),
-  );
+  const affectedStudents = new Map<string, typeof affected.rows>();
+  for (const appointment of affected.rows) {
+    affectedStudents.set(appointment.student_number, [
+      ...(affectedStudents.get(appointment.student_number) ?? []),
+      appointment,
+    ]);
+  }
+  for (const [studentNumber, appointments] of affectedStudents) {
+    const laboratory = appointments.find((appointment) => appointment.schedule_type === "LABORATORY");
+    const physicalExam = appointments.find((appointment) => appointment.schedule_type === "PHYSICAL_EXAM");
+    await queueAuthoritativeScheduleNotification(
+      client,
+      studentNumber,
+      (state) => buildAwaitingResolutionNotification({
+        state,
+        eventId: appointments[0].ovpsa_batch_id,
+        eventKeyDiscriminator: `awaiting-${appointments.map((appointment) => appointment.id).sort().join(".")}`,
+        sourceType: "OVPSA_FIRST_YEAR_BATCH",
+        reason: "Official closure requires an administrator-approved First Year OVPSA replacement",
+        previous: {
+          laboratory: laboratory ? {
+            date: laboratory.appointment_date,
+            location: "Iloilo Mission Hospital",
+          } : undefined,
+          physicalExam: physicalExam ? {
+            date: physicalExam.appointment_date,
+            location: "CPU Clinic",
+          } : undefined,
+        },
+      }),
+    );
+  }
   await writeAudits(
     client,
     batchIds.map((batchId) => {

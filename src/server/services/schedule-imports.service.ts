@@ -3,6 +3,8 @@ import { z } from "zod";
 import { AppError } from "@/lib/errors";
 import { writeAudit } from "@/server/repositories/audit.repository";
 import { ensureBatchStudentAcademicSnapshotsWithClient } from "@/server/repositories/student-academic-snapshots.repository";
+import { queueAuthoritativeScheduleNotification } from "@/server/schedule/schedule-notification-hooks";
+import { buildInitialPublicationNotification } from "@/server/schedule/schedule-notifications";
 import {
   createScheduleImport,
   deriveScheduleImportStatus,
@@ -446,6 +448,23 @@ export async function publishScheduleImport(
         throw new Error("Snapshot preflight invariant violated");
       }
       publishedAppointmentCount += published.count;
+    }
+    const publishedStudents = await client.query<{ student_number: string }>(
+      `SELECT DISTINCT student_number FROM appointments
+        WHERE batch_id=ANY($1::uuid[]) AND is_published=TRUE
+        ORDER BY student_number`,
+      [batchIds],
+    );
+    for (const student of publishedStudents.rows) {
+      await queueAuthoritativeScheduleNotification(
+        client,
+        student.student_number,
+        (state) => buildInitialPublicationNotification({
+          state,
+          sourceType: "SCHEDULE_IMPORT_GROUP",
+          sourceId: validImportId,
+        }),
+      );
     }
 
     await writeAudit(

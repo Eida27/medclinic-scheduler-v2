@@ -9,7 +9,12 @@ import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-
 import { loadSchedulingBlockedDates } from "@/server/repositories/scheduling-blocked-dates.repository";
 import { ensureStudentAcademicSnapshotsWithClient } from "@/server/repositories/student-academic-snapshots.repository";
 import { loadAppointmentResultProtectionStates } from "@/server/repositories/student-result-submissions.repository";
-import { createStudentNotifications } from "@/server/services/student-notifications.service";
+import { queueAuthoritativeScheduleNotification } from "@/server/schedule/schedule-notification-hooks";
+import {
+  buildAdministratorRescheduledNotification,
+  buildCancellationNotification,
+  buildInitialPublicationNotification,
+} from "@/server/schedule/schedule-notifications";
 import {
   buildOvpsaBatchPreview,
   type OvpsaBatchPreview,
@@ -774,22 +779,17 @@ export async function publishOvpsaFirstYearBatch(
           ],
         );
       }
-      await createStudentNotifications(
-        client,
-        memberPairs.map((member) => ({
-          studentNumber: member.studentNumber,
-          notificationType: "SCHEDULE_PUBLISHED",
-          title: "First Year OVPSA schedule published",
-          message: `Your Laboratory is at Iloilo Mission Hospital on ${batch.laboratoryDate}. Your Physical Examination is at CPU Clinic on ${batch.physicalExamDate}.`,
-          metadata: {
-            reason: "OVPSA_FIRST_YEAR_PUBLICATION",
-            batchId,
-            revisionId: batch.revisionId,
-            laboratoryDate: batch.laboratoryDate,
-            physicalExamDate: batch.physicalExamDate,
-          },
-        })),
-      );
+      for (const member of memberPairs) {
+        await queueAuthoritativeScheduleNotification(
+          client,
+          member.studentNumber,
+          (state) => buildInitialPublicationNotification({
+            state,
+            sourceType: "OVPSA_FIRST_YEAR_REVISION",
+            sourceId: batch.revisionId,
+          }),
+        );
+      }
       await client.query(
         `UPDATE ovpsa_first_year_batch_revisions
             SET status='PUBLISHED',published_by=$2,published_at=clock_timestamp()
@@ -1365,7 +1365,7 @@ export async function rescheduleOvpsaFirstYearBatch(
         )?.id,
       };
     });
-    await client.query(
+    const rescheduleEvents = await client.query<{ id: string; student_number: string }>(
       `INSERT INTO appointment_reschedule_events (
          student_number,schedule_pair_id,cause,schedule_cycle_start,
          old_laboratory_appointment_id,new_laboratory_appointment_id,
@@ -1379,7 +1379,8 @@ export async function rescheduleOvpsaFirstYearBatch(
              student_number text,schedule_pair_id uuid,old_laboratory_id uuid,
              new_laboratory_id uuid,old_physical_id uuid,new_physical_id uuid,
              source_reservation_id uuid
-           )`,
+           )
+       RETURNING id::text,student_number`,
       [
         eventRows.length ? JSON.stringify(eventRows) : "[]",
         current.scheduleCycleStart,
@@ -1446,23 +1447,30 @@ export async function rescheduleOvpsaFirstYearBatch(
         WHERE id=$1 AND status='RESCHEDULE_REQUIRED'`,
       [batchId, revisionId, nextToken, actorUserId],
     );
-    await createStudentNotifications(
-      client,
-      affectedMembers.map((member) => ({
-        studentNumber: member.studentNumber,
-        notificationType: "SCHEDULE_RESCHEDULED",
-        title: "First Year OVPSA schedule replaced",
-        message: `Your updated Laboratory date is ${laboratoryDate} and Physical Examination date is ${physicalExamDate}.`,
-        metadata: {
-          reason: "OVPSA_RESCHEDULE",
-          batchId,
-          revisionId,
-          previousRevisionId: current.revisionId,
-          laboratoryDate,
-          physicalExamDate,
-        },
-      })),
+    const rescheduleEventByStudent = new Map(
+      rescheduleEvents.rows.map((event) => [event.student_number, event.id]),
     );
+    for (const member of affectedMembers) {
+      await queueAuthoritativeScheduleNotification(
+        client,
+        member.studentNumber,
+        (state) => buildAdministratorRescheduledNotification({
+          state,
+          eventId: rescheduleEventByStudent.get(member.studentNumber)!,
+          reason,
+          previous: {
+            laboratory: {
+              date: current.laboratoryDate,
+              location: "Iloilo Mission Hospital",
+            },
+            physicalExam: {
+              date: current.physicalExamDate,
+              location: "CPU Clinic",
+            },
+          },
+        }),
+      );
+    }
     await writeAudit(
       actorUserId,
       "OVPSA_FIRST_YEAR_BATCH_RESCHEDULED",
@@ -1617,20 +1625,27 @@ export async function cancelOvpsaFirstYearBatch(
         WHERE id=$1`,
       [batchId, actorUserId, reason, nextToken],
     );
-    await createStudentNotifications(
-      client,
-      memberships.rows.map((membership) => ({
-        studentNumber: membership.student_number,
-        notificationType: "OVPSA_BATCH_CANCELLED",
-        title: "First Year OVPSA schedule cancelled",
-        message: `The unfinished First Year OVPSA schedule was cancelled: ${reason}`,
-        metadata: {
-          reason: "OVPSA_CANCELLATION",
-          batchId,
-          cancellationReason: reason,
-        },
-      })),
-    );
+    for (const membership of memberships.rows) {
+      await queueAuthoritativeScheduleNotification(
+        client,
+        membership.student_number,
+        (state) => buildCancellationNotification({
+          state,
+          eventId: batchId,
+          reason,
+          previous: {
+            laboratory: {
+              date: batch.laboratoryDate,
+              location: "Iloilo Mission Hospital",
+            },
+            physicalExam: {
+              date: batch.physicalExamDate,
+              location: "CPU Clinic",
+            },
+          },
+        }),
+      );
+    }
     await writeAudit(
       actorUserId,
       "OVPSA_FIRST_YEAR_BATCH_CANCELLED",

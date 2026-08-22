@@ -23,6 +23,13 @@ import {
 import type { SessionUser } from "@/types/roles";
 import { assertOvpsaAppointmentCompletionAllowed } from "@/server/ovpsa/external-laboratory-verification.service";
 import { isSchedulingDateBlocked } from "@/server/repositories/scheduling-blocked-dates.repository";
+import { queueAuthoritativeScheduleNotification } from "@/server/schedule/schedule-notification-hooks";
+import {
+  buildAdministratorRescheduledNotification,
+  buildCancellationNotification,
+  buildInitialPublicationNotification,
+  type PreviousScheduleState,
+} from "@/server/schedule/schedule-notifications";
 
 const transitions: Record<AppointmentStatus, AppointmentStatus[]> = {
   DRAFT: ["PENDING", "CANCELLED"],
@@ -127,6 +134,54 @@ function assertManualNoShowNotRequested(status?: AppointmentStatus) {
       422,
     );
   }
+}
+
+function previousStateForAppointment(appointment: {
+  scheduleType: string;
+  appointmentDate: string;
+  clinicCode: string;
+}): PreviousScheduleState {
+  const previous = {
+    date: appointment.appointmentDate,
+    location: appointment.clinicCode === "KABALAKA_CLINIC"
+      ? "KABALAKA Clinic"
+      : "CPU Clinic",
+  };
+  return appointment.scheduleType === "LABORATORY"
+    ? { laboratory: previous }
+    : { physicalExam: previous };
+}
+
+async function recordManualScheduleEvent(
+  client: PoolClient,
+  appointment: AppointmentMutationContext & { appointmentDate: string },
+  replacementId: string | null,
+  actorUserId: string,
+) {
+  const event = await client.query<{ id: string }>(
+    `INSERT INTO appointment_reschedule_events (
+       student_number,schedule_pair_id,cause,schedule_cycle_start,
+       old_laboratory_appointment_id,new_laboratory_appointment_id,
+       old_physical_exam_appointment_id,new_physical_exam_appointment_id,
+       actor_user_id
+     ) VALUES (
+       $1,$2,'MANUAL',$3,
+       CASE WHEN $4='LABORATORY' THEN $5::uuid END,
+       CASE WHEN $4='LABORATORY' THEN $6::uuid END,
+       CASE WHEN $4='PHYSICAL_EXAM' THEN $5::uuid END,
+       CASE WHEN $4='PHYSICAL_EXAM' THEN $6::uuid END,$7
+     ) RETURNING id::text`,
+    [
+      appointment.studentNumber,
+      appointment.schedulePairId,
+      appointment.scheduleCycleStart,
+      appointment.scheduleType,
+      appointment.id,
+      replacementId,
+      actorUserId,
+    ],
+  );
+  return event.rows[0].id;
 }
 
 async function applyAppointmentManualLockWithClient(
@@ -514,6 +569,22 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
           { replacementId: replacementAppointmentId, appointmentDate },
           client,
         );
+        const eventId = await recordManualScheduleEvent(
+          client,
+          appointment,
+          replacementAppointmentId,
+          actor.userId,
+        );
+        await queueAuthoritativeScheduleNotification(
+          client,
+          appointment.studentNumber,
+          (state) => buildAdministratorRescheduledNotification({
+            state,
+            eventId,
+            reason: input.notes?.trim() || "Administrator-authorized reschedule",
+            previous: previousStateForAppointment(appointment),
+          }),
+        );
         return replacementAppointmentId;
       });
       return getPublishedAppointment(String(replacementId));
@@ -591,6 +662,25 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
         { oldStatus: appointment.status, newStatus: requestedStatus },
         client,
       );
+      if (requestedStatus === "CANCELLED") {
+        const eventId = await recordManualScheduleEvent(
+          client,
+          appointment,
+          null,
+          actor.userId,
+        );
+        await queueAuthoritativeScheduleNotification(
+          client,
+          appointment.studentNumber,
+          (state) => buildCancellationNotification({
+            state,
+            eventId,
+            reason: input.notes?.trim() || "Administrator-authorized cancellation",
+            previous: previousStateForAppointment(appointment),
+            sourceType: "APPOINTMENT_RESCHEDULE_EVENT",
+          }),
+        );
+      }
     });
   }
   return getPublishedAppointment(id);
@@ -633,6 +723,24 @@ export async function publishScheduleBatchWithClient(
       result,
       transactionClient,
     );
+    if (!allowGrouped) {
+      const students = await transactionClient.query<{ student_number: string }>(
+        `SELECT DISTINCT student_number FROM appointments
+          WHERE batch_id=$1 AND is_published=TRUE ORDER BY student_number`,
+        [batchId],
+      );
+      for (const student of students.rows) {
+        await queueAuthoritativeScheduleNotification(
+          transactionClient,
+          student.student_number,
+          (state) => buildInitialPublicationNotification({
+            state,
+            sourceType: "SCHEDULE_BATCH",
+            sourceId: batchId,
+          }),
+        );
+      }
+    }
     return result;
   };
   return client ? publish(client) : transaction(publish);

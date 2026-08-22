@@ -300,6 +300,10 @@ describe("unified clinic calendar lifecycle", () => {
       laboratoryDate: "2049-08-09",
       physicalExamDate: "2049-08-10",
     });
+    await pool.query(
+      `UPDATE students SET email='ucal.pair@example.test',email_verified_at=NOW()
+        WHERE student_number='UCAL-PAIR'`,
+    );
     const request = {
       requestId: requestIds.pair,
       emergencyAcknowledged: false,
@@ -324,13 +328,18 @@ describe("unified clinic calendar lifecycle", () => {
       expect.objectContaining({ status: "PENDING", is_published: true, appointment_date: "2049-08-11", rescheduled_from: expect.any(String) }),
       expect.objectContaining({ status: "PENDING", is_published: true, appointment_date: "2049-08-12", rescheduled_from: expect.any(String) }),
     ]);
-    const notifications = await pool.query<{ notification_type: string; event_key: string }>(
-      `SELECT notification_type,event_key FROM student_portal_notifications
-        WHERE student_number='UCAL-PAIR'`,
+    const notifications = await pool.query<{ notification_type: string; event_key: string; source_type: string; text_body: string }>(
+      `SELECT notification.notification_type,notification.event_key,
+              notification.metadata->>'sourceType' AS source_type,outbox.text_body
+         FROM student_portal_notifications notification
+         JOIN email_outbox outbox ON outbox.portal_notification_id=notification.id
+        WHERE notification.student_number='UCAL-PAIR'`,
     );
     expect(notifications.rows).toEqual([{
-      notification_type: "CLINIC_CLOSURE_RESCHEDULED",
-      event_key: expect.stringMatching(/^clinic-closure:.+:rescheduled$/),
+      notification_type: "SCHEDULE_CLOSURE_RESCHEDULED",
+      event_key: expect.stringMatching(/^schedule:event:[0-9a-f-]+:UCAL-PAIR$/),
+      source_type: "APPOINTMENT_RESCHEDULE_EVENT",
+      text_body: expect.stringMatching(/Previous Laboratory: 2049-08-09 at KABALAKA Clinic[\s\S]*Previous Physical Examination: 2049-08-10 at CPU Clinic[\s\S]*Reason: TEST-UNIFIED pair/),
     }]);
     await expect(saveClinicCalendarChanges({
       ...request,
@@ -421,13 +430,21 @@ describe("unified clinic calendar lifecycle", () => {
       { schedule_type: "LABORATORY", appointment_date: "2049-08-16", status: "PENDING" },
       { schedule_type: "PHYSICAL_EXAM", appointment_date: "2049-08-17", status: "PENDING" },
     ]);
-    const notificationTypes = await pool.query<{ notification_type: string }>(
-      `SELECT notification_type FROM student_portal_notifications
+    const notificationTypes = await pool.query<{ notification_type: string; source_type: string; message: string }>(
+      `SELECT notification_type,metadata->>'sourceType' AS source_type,message FROM student_portal_notifications
         WHERE student_number='UCAL-MANUAL' ORDER BY created_at,id`,
     );
     expect(notificationTypes.rows).toEqual([
-      { notification_type: "CLINIC_CLOSURE_AWAITING_RESCHEDULE" },
-      { notification_type: "CLINIC_CLOSURE_MANUALLY_RESOLVED" },
+      {
+        notification_type: "SCHEDULE_AWAITING_RESOLUTION",
+        source_type: "CLINIC_CLOSURE_MANUAL_CASE",
+        message: expect.stringContaining("replacement date is pending administrator resolution"),
+      },
+      {
+        notification_type: "SCHEDULE_MANUAL_RESOLUTION_COMPLETED",
+        source_type: "CLINIC_CLOSURE_MANUAL_CASE",
+        message: expect.stringContaining("2049-08-16 at KABALAKA Clinic"),
+      },
     ]);
   });
 
@@ -571,7 +588,7 @@ describe("unified clinic calendar lifecycle", () => {
         WHERE student_number='UCAL-RESTORE' ORDER BY created_at,id`,
     );
     expect(notificationTypes.rows).toEqual([
-      { notification_type: "CLINIC_CLOSURE_RESCHEDULED" },
+      { notification_type: "SCHEDULE_CLOSURE_RESCHEDULED" },
     ]);
     await expect(pool.query(
       `SELECT COUNT(*)::int AS total,

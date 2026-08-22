@@ -12,7 +12,8 @@ import { writeAudit } from "@/server/repositories/audit.repository";
 import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import { loadSchedulingBlockedDates } from "@/server/repositories/scheduling-blocked-dates.repository";
 import { ensureStudentAcademicSnapshotsWithClient } from "@/server/repositories/student-academic-snapshots.repository";
-import { createStudentNotifications } from "@/server/services/student-notifications.service";
+import { queueAuthoritativeScheduleNotification } from "@/server/schedule/schedule-notification-hooks";
+import { buildInitialPublicationNotification } from "@/server/schedule/schedule-notifications";
 import type { ImportedStudentRow } from "@/server/services/student-import-csv";
 
 type FirstYearScheduleImportInput = {
@@ -777,19 +778,17 @@ export async function publishFirstYearScheduleImport(
            FROM UNNEST($1::uuid[]) row(id)`,
         [appointments.rows.map((appointment) => appointment.id), actorUserId],
       );
-      await createStudentNotifications(client, pairs.map((pair) => ({
-        studentNumber: pair.studentNumber,
-        notificationType: "SCHEDULE_PUBLISHED",
-        title: "First Year clinic schedule published",
-        message: `Laboratory: ${input.laboratoryDate} at Iloilo Mission Hospital. Physical Examination: ${pair.assignedPhysicalExamDate} at CPU Clinic.`,
-        metadata: {
-          importId,
-          batchId,
-          laboratoryDate: input.laboratoryDate,
-          laboratoryLocation: "Iloilo Mission Hospital",
-          physicalExamDate: pair.assignedPhysicalExamDate,
-        },
-      })));
+      for (const pair of pairs) {
+        await queueAuthoritativeScheduleNotification(
+          client,
+          pair.studentNumber,
+          (state) => buildInitialPublicationNotification({
+            state,
+            sourceType: "SCHEDULE_IMPORT_GROUP",
+            sourceId: importId,
+          }),
+        );
+      }
       const allDates = [
         input.laboratoryDate,
         ...prepared.plan.allocations.map((allocation) => allocation.date),

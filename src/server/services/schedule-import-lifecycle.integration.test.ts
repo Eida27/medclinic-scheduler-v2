@@ -44,6 +44,12 @@ async function cleanup() {
 
 beforeAll(async () => {
   capacityFixture = await setupCapacityFixtureLock(pool, cleanup);
+  await pool.query(
+    `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+     VALUES (2026,'2027-07-31',$1,$1),(2027,'2028-07-31',$1,$1)
+     ON CONFLICT (start_year) DO NOTHING`,
+    [TEST_REFERENCE_IDS.adminUser],
+  );
 });
 
 afterEach(async () => {
@@ -122,6 +128,24 @@ describe("atomic academic-year import lifecycle", () => {
     expect(appointments.rows[1]).toMatchObject({ schedule_type: "PHYSICAL_EXAM" });
     expect(appointments.rows[0].appointment_date < appointments.rows[1].appointment_date).toBe(true);
     expect(appointments.rows[0].schedule_pair_id).toBe(appointments.rows[1].schedule_pair_id);
+    const delivery = await pool.query(
+      `SELECT notification.notification_type,notification.event_key,
+              notification.metadata->>'sourceType' AS source_type,
+              notification.metadata->>'sourceId' AS source_id,
+              notification.metadata->>'scheduleFingerprint' AS fingerprint,
+              (SELECT COUNT(*)::int FROM email_outbox outbox
+                WHERE outbox.student_number=notification.student_number) AS email_count
+         FROM student_portal_notifications notification
+        WHERE notification.student_number='99-9201-01'`,
+    );
+    expect(delivery.rows).toEqual([{
+      notification_type: "SCHEDULE_INITIAL_PUBLICATION",
+      event_key: `schedule:initial:SCHEDULE_IMPORT_GROUP:${result.importId}:99-9201-01`,
+      source_type: "SCHEDULE_IMPORT_GROUP",
+      source_id: result.importId,
+      fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      email_count: 0,
+    }]);
   });
 
   it("serializes simultaneous imports by immutable accepted_at FCFS order", async () => {

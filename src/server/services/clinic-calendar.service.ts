@@ -26,7 +26,15 @@ import type {
   OvpsaClosureBatchRecoveryPreview,
 } from "@/types/clinic-calendar";
 import type { SessionUser } from "@/types/roles";
-import { createStudentNotificationIsolated } from "@/server/services/student-notifications.service";
+import { queueAuthoritativeScheduleNotification } from "@/server/schedule/schedule-notification-hooks";
+import {
+  buildAwaitingResolutionNotification,
+  buildClosureRescheduledNotification,
+  buildManualResolutionCompletedNotification,
+  type AuthoritativeScheduleState,
+  type PreviousScheduleState,
+} from "@/server/schedule/schedule-notifications";
+import type { StudentNotificationInput } from "@/server/repositories/student-notifications.repository";
 import { studentDisplayNameSql } from "@/server/students/student-display-name";
 import { loadAppointmentResultProtectionStates } from "@/server/repositories/student-result-submissions.repository";
 import {
@@ -791,13 +799,19 @@ function movedAppointmentCount(classification: ClinicCycleClassification) {
 
 async function createClosureNotification(
   client: PoolClient,
-  input: Parameters<typeof createStudentNotificationIsolated>[1] & {
+  input: {
+    studentNumber: string;
+    build: (state: AuthoritativeScheduleState) => StudentNotificationInput;
     actorUserId: string;
     auditEntityId: string;
     auditEntityType?: "appointment_reschedule_event" | "clinic_closure_manual_case" | "ovpsa_first_year_batch";
   },
 ) {
-  const result = await createStudentNotificationIsolated(client, input);
+  const result = await queueAuthoritativeScheduleNotification(
+    client,
+    input.studentNumber,
+    input.build,
+  );
   for (const warning of result.warnings) {
     await client.query(
       `INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,metadata)
@@ -813,6 +827,25 @@ async function createClosureNotification(
     );
   }
   return result.warnings.length;
+}
+
+function previousScheduleForAppointments(appointments: Array<{
+  scheduleType: "LABORATORY" | "PHYSICAL_EXAM";
+  appointmentDate: string;
+  ovpsaBatchId?: string | null;
+}>): PreviousScheduleState {
+  const laboratory = appointments.find((appointment) => appointment.scheduleType === "LABORATORY");
+  const physicalExam = appointments.find((appointment) => appointment.scheduleType === "PHYSICAL_EXAM");
+  return {
+    laboratory: laboratory ? {
+      date: laboratory.appointmentDate,
+      location: laboratory.ovpsaBatchId ? "Iloilo Mission Hospital" : "KABALAKA Clinic",
+    } : undefined,
+    physicalExam: physicalExam ? {
+      date: physicalExam.appointmentDate,
+      location: "CPU Clinic",
+    } : undefined,
+  };
 }
 
 async function applyAutomaticMove(
@@ -947,17 +980,12 @@ async function applyAutomaticMove(
   });
   const notificationWarningCount = await createClosureNotification(client, {
     studentNumber: input.cycle.studentNumber,
-    notificationType: "CLINIC_CLOSURE_RESCHEDULED",
-    title: "Clinic schedule updated",
-    message: "A clinic closure changed your schedule. Review your new appointment date or dates.",
-    eventKey: `clinic-closure:${eventId}:rescheduled`,
-    metadata: {
+    build: (state) => buildClosureRescheduledNotification({
+      state,
       eventId,
-      closureGroupId: input.group.closureGroupId,
-      strategy: input.classification.strategy,
-      previousDates: Object.fromEntries(originals.map((appointment) => [appointment.scheduleType, appointment.appointmentDate])),
-      replacementDates: input.dates,
-    },
+      reason: input.group.reason,
+      previous: previousScheduleForAppointments(originals),
+    }),
     actorUserId: input.actorUserId,
     auditEntityId: eventId,
   });
@@ -1009,15 +1037,13 @@ async function createManualFallback(
   });
   const notificationWarningCount = await createClosureNotification(client, {
     studentNumber: input.cycle.studentNumber,
-    notificationType: "CLINIC_CLOSURE_AWAITING_RESCHEDULE",
-    title: "Clinic schedule needs manual rescheduling",
-    message: "A clinic closure affected your schedule. An administrator will provide a safe replacement date.",
-    eventKey: `clinic-closure:${eventId}:awaiting`,
-    metadata: {
-      eventId,
-      closureGroupId: input.group.closureGroupId,
-      reasonCode: input.reasonCode,
-    },
+    build: (state) => buildAwaitingResolutionNotification({
+      state,
+      eventId: manualCaseId,
+      eventKeyDiscriminator: "awaiting",
+      reason: `${input.reasonCode}: ${input.reasonMessage}`,
+      previous: previousScheduleForAppointments(input.cycle.appointments),
+    }),
     actorUserId: input.actorUserId,
     auditEntityId: eventId,
   });
@@ -1970,13 +1996,13 @@ export async function resolveClinicClosureManualCase(
     );
     const notificationWarningCount = await createClosureNotification(client, {
       studentNumber: manualCase.student_number,
-      notificationType: "CLINIC_CLOSURE_MANUALLY_RESOLVED",
-      title: "Clinic schedule resolved",
-      message: request.action === "ASSIGN_REPLACEMENT"
-        ? "An administrator assigned your replacement clinic schedule."
-        : "An administrator confirmed your current replacement clinic schedule.",
-      eventKey: `clinic-closure:manual-case:${caseId}:resolved`,
-      metadata: { manualCaseId: caseId, resolutionAction: request.action },
+      build: (state) => buildManualResolutionCompletedNotification({
+        state,
+        eventId: caseId,
+        eventKeyDiscriminator: "resolved",
+        reason: request.reason,
+        previous: previousScheduleForAppointments(affected),
+      }),
       actorUserId: actor.userId,
       auditEntityId: caseId,
       auditEntityType: "clinic_closure_manual_case",
@@ -2499,14 +2525,24 @@ export async function confirmOvpsaClinicClosureBatchRecovery(
     );
     let notificationWarningCount = 0;
     for (const item of planned.cases) {
-      const allocation = allocationByStudent.get(item.student_number)!;
       notificationWarningCount += await createClosureNotification(client, {
         studentNumber: item.student_number,
-        notificationType: "CLINIC_CLOSURE_MANUALLY_RESOLVED",
-        title: "First Year OVPSA schedule recovered",
-        message: `Your Laboratory date is ${parsed.data.replacementLaboratoryDate} and Physical Examination date is ${allocation.proposedPhysicalExamDate}.`,
-        eventKey: `clinic-closure:ovpsa-batch:${batchId}:revision:${revisionId}:${item.student_number}`,
-        metadata: { batchId, revisionId, physicalExamAction: allocation.physicalExamAction },
+        build: (state) => buildManualResolutionCompletedNotification({
+          state,
+          eventId: item.case_id,
+          eventKeyDiscriminator: "resolved",
+          reason,
+          previous: {
+            laboratory: {
+              date: item.laboratory_date,
+              location: "Iloilo Mission Hospital",
+            },
+            physicalExam: {
+              date: item.physical_date,
+              location: "CPU Clinic",
+            },
+          },
+        }),
         actorUserId: actor.userId,
         auditEntityId: batchId,
         auditEntityType: "ovpsa_first_year_batch",

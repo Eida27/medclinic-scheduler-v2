@@ -219,5 +219,17 @@ describe("priority displacement with the unified closure calendar", () => {
     await expect(publish("99-9402-02")).resolves.toEqual([
       expect.objectContaining({ laboratoryDate: "2027-09-01", physicalExamDate: "2027-09-02" }),
     ]);
+    const notification = await pool.query(
+      `SELECT notification_type,event_key,metadata->>'sourceType' AS source_type,
+              metadata->>'sourceId' AS source_id,message
+         FROM student_portal_notifications WHERE student_number='99-9402-02'`,
+    );
+    expect(notification.rows).toEqual([{
+      notification_type: "SCHEDULE_PRIORITY_DISPLACEMENT",
+      event_key: expect.stringMatching(/^schedule:event:[0-9a-f-]+:99-9402-02$/),
+      source_type: "APPOINTMENT_RESCHEDULE_EVENT",
+      source_id: expect.any(String),
+      message: expect.stringContaining("2027-09-01 at KABALAKA Clinic"),
+    }]);
   });
 });

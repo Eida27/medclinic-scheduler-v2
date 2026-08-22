@@ -8,8 +8,9 @@ import {
   markDisplacedAppointmentsRescheduled,
   type DisplacementCandidate,
 } from "@/server/repositories/priority-displacement.repository";
-import { createStudentNotification } from "@/server/services/student-notifications.service";
 import { loadSchedulingBlockedDates } from "@/server/repositories/scheduling-blocked-dates.repository";
+import { queueAuthoritativeScheduleNotification } from "@/server/schedule/schedule-notification-hooks";
+import { buildPriorityDisplacementNotification } from "@/server/schedule/schedule-notifications";
 
 export function priorityDisplacementScopes(candidates: DisplacementCandidate[]) {
   return candidates.flatMap((candidate) => (
@@ -327,7 +328,7 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
   );
   const labByStudent = new Map(laboratory.rows.map((row) => [row.student_number, row.id]));
   const peByStudent = new Map(physical.rows.map((row) => [row.student_number, row.id]));
-  await client.query(
+  const pairEvents = await client.query<{ id: string; student_number: string }>(
     `INSERT INTO appointment_reschedule_events (
        student_number, schedule_pair_id, cause, source_import_group_id,
        old_laboratory_appointment_id, new_laboratory_appointment_id,
@@ -343,7 +344,8 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
        ) AS fixture(
          student_number, schedule_pair_id, old_laboratory_id,
          new_laboratory_id, old_physical_id, new_physical_id
-       )`,
+       )
+     RETURNING id::text,student_number`,
     [
       input.sourceImportGroupId,
       input.actorUserId,
@@ -362,7 +364,7 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
   const physicalExamOnlyByStudent = new Map(
     physicalExamOnly.rows.map((row) => [row.student_number, row.id]),
   );
-  await client.query(
+  const physicalEvents = await client.query<{ id: string; student_number: string }>(
     `INSERT INTO appointment_reschedule_events (
        student_number, schedule_pair_id, cause, source_import_group_id,
        old_laboratory_appointment_id, new_laboratory_appointment_id,
@@ -378,7 +380,8 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
        ) AS fixture(
          student_number, schedule_pair_id, laboratory_id,
          old_physical_id, new_physical_id
-       )`,
+       )
+     RETURNING id::text,student_number`,
     [
       input.sourceImportGroupId,
       input.actorUserId,
@@ -391,37 +394,42 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
       )),
     ],
   );
+  const eventByStudent = new Map(
+    [...pairEvents.rows, ...physicalEvents.rows].map((event) => [
+      event.student_number,
+      event.id,
+    ]),
+  );
   for (const assignment of generated.assignments) {
     const previous = candidateByStudent.get(assignment.studentNumber)!;
-    await createStudentNotification(client, {
-      studentNumber: assignment.studentNumber,
-      notificationType: "SCHEDULE_RESCHEDULED",
-      title: "Schedule updated",
-      message: "Priority scheduling changed your Laboratory and Physical Examination dates. Review the new dates in the student portal.",
-      metadata: {
-        reason: "PRIORITY_DISPLACEMENT",
-        sourceImportId: input.sourceImportGroupId,
-        previousLaboratoryDate: previous.laboratoryDate,
-        replacementLaboratoryDate: assignment.laboratoryDate,
-        previousPhysicalExamDate: previous.physicalExamDate,
-        replacementPhysicalExamDate: assignment.physicalExamDate,
-      },
-    });
+    await queueAuthoritativeScheduleNotification(
+      client,
+      assignment.studentNumber,
+      (state) => buildPriorityDisplacementNotification({
+        state,
+        eventId: eventByStudent.get(assignment.studentNumber)!,
+        reason: "Priority scheduling displacement",
+        previous: {
+          laboratory: { date: previous.laboratoryDate, location: "KABALAKA Clinic" },
+          physicalExam: { date: previous.physicalExamDate, location: "CPU Clinic" },
+        },
+      }),
+    );
   }
-  for (const { candidate, physicalExamDate } of physicalExamOnlyAssignments) {
-    await createStudentNotification(client, {
-      studentNumber: candidate.studentNumber,
-      notificationType: "SCHEDULE_RESCHEDULED",
-      title: "Schedule updated",
-      message: "Priority scheduling changed your Physical Examination date. Your Laboratory date is unchanged.",
-      metadata: {
-        reason: "PRIORITY_DISPLACEMENT",
-        sourceImportId: input.sourceImportGroupId,
-        laboratoryDate: candidate.laboratoryDate,
-        previousPhysicalExamDate: candidate.physicalExamDate,
-        replacementPhysicalExamDate: physicalExamDate,
-      },
-    });
+  for (const { candidate } of physicalExamOnlyAssignments) {
+    await queueAuthoritativeScheduleNotification(
+      client,
+      candidate.studentNumber,
+      (state) => buildPriorityDisplacementNotification({
+        state,
+        eventId: eventByStudent.get(candidate.studentNumber)!,
+        reason: "Priority scheduling displacement",
+        previous: {
+          laboratory: { date: candidate.laboratoryDate, location: "KABALAKA Clinic" },
+          physicalExam: { date: candidate.physicalExamDate, location: "CPU Clinic" },
+        },
+      }),
+    );
   }
   await client.query(
     `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata)

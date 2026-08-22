@@ -19,6 +19,8 @@ import {
   publishDisplacedRegularReplacementsWithLockedScopes,
 } from "@/server/services/priority-displacement.service";
 import { studentDisplayNameSql } from "@/server/students/student-display-name";
+import { queueAuthoritativeScheduleNotification } from "@/server/schedule/schedule-notification-hooks";
+import { buildInitialPublicationNotification } from "@/server/schedule/schedule-notifications";
 import { ensureStudentAcademicSnapshotsWithClient } from "./student-academic-snapshots.repository";
 import { loadSchedulingBlockedDates } from "./scheduling-blocked-dates.repository";
 
@@ -725,6 +727,17 @@ export async function createScheduleImport(
       replacementWindowStart: nextDateAfter(preferredWindowEnd),
       searchEndDate,
     }, client);
+    for (const assignment of assignments.assignments) {
+      await queueAuthoritativeScheduleNotification(
+        client,
+        assignment.studentNumber,
+        (state) => buildInitialPublicationNotification({
+          state,
+          sourceType: "SCHEDULE_IMPORT_GROUP",
+          sourceId: importId,
+        }),
+      );
+    }
 
     const laboratoryItemCount = assignments.assignments.length;
     const physicalExaminationItemCount = assignments.assignments.length;

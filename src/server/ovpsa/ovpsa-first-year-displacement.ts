@@ -9,7 +9,8 @@ import {
   resolveSchedulingWindow,
   type StudentCategory,
 } from "@/server/services/scheduling-window";
-import { createStudentNotifications } from "@/server/services/student-notifications.service";
+import { queueAuthoritativeScheduleNotification } from "@/server/schedule/schedule-notification-hooks";
+import { buildPriorityDisplacementNotification } from "@/server/schedule/schedule-notifications";
 import type {
   OvpsaBatchBlocker,
   OvpsaDisplacement,
@@ -803,7 +804,7 @@ export async function applyOvpsaLowerPriorityDisplacements(
         : input.physicalExamReservationIdsByDate?.[candidate.physicalExam.appointmentDate]
           ?? input.physicalExamReservationId,
   }));
-  await client.query(
+  const events = await client.query<{ id: string; student_number: string }>(
     `INSERT INTO appointment_reschedule_events (
        student_number,schedule_pair_id,cause,schedule_cycle_start,
        old_laboratory_appointment_id,new_laboratory_appointment_id,
@@ -818,7 +819,8 @@ export async function applyOvpsaLowerPriorityDisplacements(
          student_number text,schedule_pair_id uuid,schedule_cycle_start integer,
          old_laboratory_id uuid,new_laboratory_id uuid,
          old_physical_id uuid,new_physical_id uuid,reservation_id uuid
-       )`,
+       )
+     RETURNING id::text,student_number`,
     [
       JSON.stringify(eventRows),
       input.actorUserId,
@@ -826,26 +828,29 @@ export async function applyOvpsaLowerPriorityDisplacements(
       input.batch.revisionId,
     ],
   );
-  await createStudentNotifications(
-    client,
-    input.plannedReplacements.map(({ candidate, ...replacement }) => ({
-      studentNumber: candidate.studentNumber,
-      notificationType: "SCHEDULE_RESCHEDULED",
-      title: "Schedule updated",
-      message:
-        candidate.displacementType === "PAIR"
-          ? "First Year priority scheduling changed your Laboratory and Physical Examination dates."
-          : "First Year priority scheduling changed your Physical Examination date. Your Laboratory is unchanged.",
-      metadata: {
-        reason: "OVPSA_PUBLICATION",
-        batchId: input.batch.batchId,
-        category: candidate.category,
-        previousLaboratoryDate: candidate.laboratory.appointmentDate,
-        replacementLaboratoryDate: replacement.laboratoryDate,
-        previousPhysicalExamDate: candidate.physicalExam.appointmentDate,
-        replacementPhysicalExamDate: replacement.physicalExamDate,
-      },
-    })),
+  const eventByStudent = new Map(
+    events.rows.map((event) => [event.student_number, event.id]),
   );
+  for (const { candidate } of input.plannedReplacements) {
+    await queueAuthoritativeScheduleNotification(
+      client,
+      candidate.studentNumber,
+      (state) => buildPriorityDisplacementNotification({
+        state,
+        eventId: eventByStudent.get(candidate.studentNumber)!,
+        reason: "First Year OVPSA priority scheduling",
+        previous: {
+          laboratory: {
+            date: candidate.laboratory.appointmentDate,
+            location: "KABALAKA Clinic",
+          },
+          physicalExam: {
+            date: candidate.physicalExam.appointmentDate,
+            location: "CPU Clinic",
+          },
+        },
+      }),
+    );
+  }
   return { displacedCount: input.plannedReplacements.length };
 }

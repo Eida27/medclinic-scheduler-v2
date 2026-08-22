@@ -8,6 +8,7 @@ import {
   cancelOvpsaFirstYearBatch,
   createOvpsaFirstYearBatch,
   publishOvpsaFirstYearBatch,
+  rescheduleOvpsaFirstYearBatch,
   validateOvpsaFirstYearBatch,
 } from "./ovpsa-first-year.service";
 import {
@@ -363,6 +364,79 @@ describe("First Year OVPSA publication", () => {
       linked_appointments: 4,
       old_rescheduled: 2,
     }]);
+    const initial = await pool.query(
+      `SELECT notification_type,event_key,metadata->>'sourceType' AS source_type,
+              metadata->>'sourceId' AS source_id,message
+         FROM student_portal_notifications
+        WHERE student_number=$1 AND notification_type='SCHEDULE_INITIAL_PUBLICATION'`,
+      [memberTwo],
+    );
+    expect(initial.rows).toEqual([{
+      notification_type: "SCHEDULE_INITIAL_PUBLICATION",
+      event_key: `schedule:initial:OVPSA_FIRST_YEAR_REVISION:${created.revisionId}:${memberTwo}`,
+      source_type: "OVPSA_FIRST_YEAR_REVISION",
+      source_id: created.revisionId,
+      message: expect.stringContaining("Iloilo Mission Hospital"),
+    }]);
+  });
+
+  it("publishes a typed event for the direct OVPSA replacement revision", async () => {
+    const member = `${studentPrefix}0004`;
+    await insertStudent(member, 1);
+    const created = await createOvpsaFirstYearBatch({
+      scheduleCycleStart: cycleStart,
+      collegeId: TEST_REFERENCE_IDS.college,
+      laboratoryDate: "2096-12-03",
+      physicalExamDateOverride: null,
+      physicalExamExceptionReason: null,
+    }, TEST_REFERENCE_IDS.adminUser);
+    const validated = await validateOvpsaFirstYearBatch(
+      created.batchId,
+      { optimisticToken: created.optimisticToken },
+      TEST_REFERENCE_IDS.adminUser,
+    );
+    await publishOvpsaFirstYearBatch(
+      created.batchId,
+      { optimisticToken: validated.optimisticToken },
+      TEST_REFERENCE_IDS.adminUser,
+    );
+    await saveClinicCalendarChanges({
+      requestId: randomUUID(),
+      emergencyAcknowledged: false,
+      recoveryMode: "AUTO_ELIGIBLE",
+      changes: [{
+        action: "BLOCK",
+        date: "2096-12-03",
+        category: "CLOSURE",
+        reason: "OVP-T1 closure direct reschedule",
+      }],
+    }, adminActor);
+    const invalidated = await pool.query<{ optimistic_token: string }>(
+      "SELECT optimistic_token::text FROM ovpsa_first_year_batches WHERE id=$1",
+      [created.batchId],
+    );
+    const replacement = await rescheduleOvpsaFirstYearBatch(created.batchId, {
+      optimisticToken: invalidated.rows[0].optimistic_token,
+      laboratoryDate: "2096-12-10",
+      physicalExamDateOverride: null,
+      physicalExamExceptionReason: null,
+      reason: "Official closure replacement",
+    }, TEST_REFERENCE_IDS.adminUser);
+    const event = await pool.query(
+      `SELECT notification.notification_type,notification.metadata->>'sourceType' AS source_type,
+              notification.metadata->>'sourceId' AS source_id,notification.message
+         FROM student_portal_notifications notification
+        WHERE notification.student_number=$1
+          AND notification.notification_type='SCHEDULE_ADMINISTRATOR_RESCHEDULED'`,
+      [member],
+    );
+    expect(event.rows).toEqual([{
+      notification_type: "SCHEDULE_ADMINISTRATOR_RESCHEDULED",
+      source_type: "APPOINTMENT_RESCHEDULE_EVENT",
+      source_id: expect.any(String),
+      message: expect.stringContaining("2096-12-10 at Iloilo Mission Hospital"),
+    }]);
+    expect(replacement).toMatchObject({ status: "PUBLISHED", revisionNumber: 2 });
   });
 
   it("rejects a stale optimistic token without publishing anything", async () => {
@@ -534,6 +608,14 @@ describe("First Year OVPSA publication", () => {
       { category: "REGULAR", count: 2, lineage_count: 2 },
       { category: "TOUR", count: 2, lineage_count: 2 },
     ]);
+    const displacementNotifications = await pool.query(
+      `SELECT COUNT(*)::int AS count FROM student_portal_notifications
+        WHERE student_number LIKE $1
+          AND notification_type='SCHEDULE_PRIORITY_DISPLACEMENT'
+          AND metadata->>'sourceType'='APPOINTMENT_RESCHEDULE_EVENT'`,
+      [`${studentPrefix}01%`],
+    );
+    expect(displacementNotifications.rows).toEqual([{ count: 3 }]);
   });
 
   it("reports protected and unknown-lineage conflicts without reserving dates", async () => {
@@ -638,6 +720,17 @@ describe("First Year OVPSA publication", () => {
       [displacedStudent, created.batchId],
     );
     expect(restoration.rows).toEqual([{ decision: "RESTORED", audits: 1 }]);
+    const restoredNotification = await pool.query(
+      `SELECT notification_type,metadata->>'sourceId' AS source_id,message
+         FROM student_portal_notifications
+        WHERE student_number=$1 AND notification_type='SCHEDULE_RESTORED'`,
+      [displacedStudent],
+    );
+    expect(restoredNotification.rows).toEqual([{
+      notification_type: "SCHEDULE_RESTORED",
+      source_id: expect.any(String),
+      message: expect.stringContaining("2096-09-10 at KABALAKA Clinic"),
+    }]);
   });
 
   it("automatically recovers an OVPSA PE-only closure without claiming an exclusive date", async () => {
@@ -908,5 +1001,14 @@ describe("First Year OVPSA publication", () => {
       active_memberships: 0,
       active_reservations: 0,
     }]);
+    const cancellationNotifications = await pool.query(
+      `SELECT COUNT(*)::int AS count FROM student_portal_notifications
+        WHERE student_number=ANY($1::text[])
+          AND notification_type='SCHEDULE_CANCELLED'
+          AND metadata->>'sourceType'='OVPSA_FIRST_YEAR_BATCH'
+          AND metadata->>'sourceId'=$2`,
+      [[preservedMember, affectedMember, safePhysicalMember], created.batchId],
+    );
+    expect(cancellationNotifications.rows).toEqual([{ count: 3 }]);
   });
 });

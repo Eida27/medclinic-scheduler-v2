@@ -198,6 +198,7 @@ export function buildCurrentStateNotification(state: AuthoritativeScheduleState)
 type ScheduleEventInput = {
   state: AuthoritativeScheduleState;
   eventId: string;
+  eventKeyDiscriminator?: string;
   reason: string;
   previous?: PreviousScheduleState;
 };
@@ -213,7 +214,9 @@ function buildEvent(input: ScheduleEventInput, copy: {
   return notificationBase({
     ...input,
     ...copy,
-    eventKey: `schedule:event:${input.eventId}:${input.state.studentNumber}`,
+    eventKey: `schedule:event:${input.eventId}${
+      input.eventKeyDiscriminator ? `-${input.eventKeyDiscriminator}` : ""
+    }:${input.state.studentNumber}`,
     sourceType: copy.sourceType,
     sourceId: input.eventId,
   });
@@ -241,14 +244,16 @@ export function buildClosureRescheduledNotification(input: ScheduleEventInput) {
   });
 }
 
-export function buildAwaitingResolutionNotification(input: ScheduleEventInput) {
+export function buildAwaitingResolutionNotification(input: ScheduleEventInput & {
+  sourceType?: string;
+}) {
   return buildEvent(input, {
     notificationType: "SCHEDULE_AWAITING_RESOLUTION",
     title: "Schedule awaiting administrator resolution",
     portalMessage: "An affected schedule is awaiting administrator resolution.",
     emailSubject: "Your MedClinic schedule needs administrator resolution",
     introduction: "Your prior schedule was affected. No replacement date has been authorized yet.",
-    sourceType: "CLINIC_CLOSURE_MANUAL_CASE",
+    sourceType: input.sourceType ?? "CLINIC_CLOSURE_MANUAL_CASE",
   });
 }
 
@@ -285,13 +290,15 @@ export function buildRestorationNotification(input: ScheduleEventInput) {
   });
 }
 
-export function buildCancellationNotification(input: ScheduleEventInput) {
+export function buildCancellationNotification(input: ScheduleEventInput & {
+  sourceType?: string;
+}) {
   return buildEvent(input, {
     notificationType: "SCHEDULE_CANCELLED",
     title: "Schedule cancelled",
     portalMessage: "An authorized scheduling action cancelled your schedule.",
     emailSubject: "Your MedClinic schedule was cancelled",
     introduction: "An authorized scheduling action cancelled your MedClinic schedule.",
-    sourceType: "OVPSA_FIRST_YEAR_BATCH",
+    sourceType: input.sourceType ?? "OVPSA_FIRST_YEAR_BATCH",
   });
 }

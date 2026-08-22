@@ -235,6 +235,11 @@ describe("appointment lifecycle", () => {
   });
 
   it("hides drafts, publishes them, and creates a logged replacement on reschedule", async () => {
+    await pool.query(
+      `UPDATE students SET email='appointment.fixture@example.test',email_verified_at=NOW()
+        WHERE student_number=$1`,
+      [studentNumber],
+    );
     const batch = await addScheduleBatch({
       batchName: "TEST appointment lifecycle fixture",
       collegeId: TEST_REFERENCE_IDS.college,
@@ -258,6 +263,21 @@ describe("appointment lifecycle", () => {
       appointments: [expect.any(Object)],
     });
     expect(publicSchedule).not.toHaveProperty("studentName");
+    await expect(pool.query(
+      `SELECT notification.notification_type,notification.event_key,
+              notification.metadata->>'sourceType' AS source_type,
+              outbox.notification_type AS outbox_type,outbox.source_id
+         FROM student_portal_notifications notification
+         LEFT JOIN email_outbox outbox ON outbox.portal_notification_id=notification.id
+        WHERE notification.student_number=$1`,
+      [studentNumber],
+    )).resolves.toMatchObject({ rows: [{
+      notification_type: "SCHEDULE_INITIAL_PUBLICATION",
+      event_key: `schedule:initial:SCHEDULE_BATCH:${batchId}:${studentNumber}`,
+      source_type: "SCHEDULE_BATCH",
+      outbox_type: "SCHEDULE_INITIAL_PUBLICATION",
+      source_id: batchId,
+    }] });
 
     const snapshot = await pool.query(
       `SELECT student_name,college_name,program_code,program_name,year_level,source_type
@@ -300,6 +320,42 @@ describe("appointment lifecycle", () => {
     expect(replacement?.rescheduledFrom).toBe(current.rows[0].id);
     const logs = await pool.query("SELECT new_status FROM appointment_status_logs WHERE appointment_id IN ($1,$2)", [current.rows[0].id, replacement?.id]);
     expect(logs.rows.map((row) => row.new_status)).toEqual(expect.arrayContaining(["PENDING", "RESCHEDULED"]));
+    const rescheduled = await pool.query(
+      `SELECT notification.notification_type,notification.message,
+              notification.metadata->>'sourceType' AS source_type,
+              notification.metadata->>'sourceId' AS source_id,
+              outbox.text_body
+         FROM student_portal_notifications notification
+         JOIN email_outbox outbox ON outbox.portal_notification_id=notification.id
+        WHERE notification.student_number=$1
+          AND notification.notification_type='SCHEDULE_ADMINISTRATOR_RESCHEDULED'`,
+      [studentNumber],
+    );
+    expect(rescheduled.rows).toEqual([{
+      notification_type: "SCHEDULE_ADMINISTRATOR_RESCHEDULED",
+      message: expect.stringContaining("2026-08-06 at CPU Clinic (Pending)"),
+      source_type: "APPOINTMENT_RESCHEDULE_EVENT",
+      source_id: expect.any(String),
+      text_body: expect.stringMatching(/Previous Physical Examination: 2026-08-05 at CPU Clinic[\s\S]*Reason: Student conflict/),
+    }]);
+
+    await updateAppointment(replacement!.id, {
+      status: "CANCELLED",
+      notes: "Administrator cancelled the appointment",
+    }, admin);
+    await expect(pool.query(
+      `SELECT notification.notification_type,notification.metadata->>'sourceType' AS source_type,
+              outbox.text_body
+         FROM student_portal_notifications notification
+         JOIN email_outbox outbox ON outbox.portal_notification_id=notification.id
+        WHERE notification.student_number=$1
+          AND notification.notification_type='SCHEDULE_CANCELLED'`,
+      [studentNumber],
+    )).resolves.toMatchObject({ rows: [{
+      notification_type: "SCHEDULE_CANCELLED",
+      source_type: "APPOINTMENT_RESCHEDULE_EVENT",
+      text_body: expect.stringContaining("Reason: Administrator cancelled the appointment"),
+    }] });
   });
 
   it("commits a legacy publication conflict without publishing draft appointments", async () => {

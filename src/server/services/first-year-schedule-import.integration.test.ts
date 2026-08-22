@@ -253,13 +253,20 @@ describe("First Year schedule imports", () => {
     });
     expect(detail.childBatches).toHaveLength(2);
 
-    const sideEffects = await pool.query<{ notifications: number; audits: number }>(
+    const sideEffects = await pool.query<{ notifications: number; typed: number; mission: number; audits: number }>(
       `SELECT
          (SELECT COUNT(*)::int FROM student_portal_notifications WHERE student_number LIKE $1) AS notifications,
+         (SELECT COUNT(*)::int FROM student_portal_notifications
+           WHERE student_number LIKE $1
+             AND notification_type='SCHEDULE_INITIAL_PUBLICATION'
+             AND metadata->>'sourceType'='SCHEDULE_IMPORT_GROUP'
+             AND metadata->>'sourceId'=$2) AS typed,
+         (SELECT COUNT(*)::int FROM student_portal_notifications
+           WHERE student_number LIKE $1 AND message LIKE '%Iloilo Mission Hospital%') AS mission,
          (SELECT COUNT(*)::int FROM audit_logs WHERE metadata->>'importId'=$2) AS audits`,
       [studentPattern, published.importId],
     );
-    expect(sideEffects.rows[0]).toEqual({ notifications: 4, audits: 3 });
+    expect(sideEffects.rows[0]).toEqual({ notifications: 4, typed: 4, mission: 4, audits: 3 });
 
     const importedPair = await pool.query<{ id: string; schedule_type: string }>(
       `SELECT id::text,schedule_type FROM appointments
