@@ -14,6 +14,7 @@ import {
   buildAdministratorRescheduledNotification,
   buildCancellationNotification,
   buildInitialPublicationNotification,
+  type PreviousScheduleState,
 } from "@/server/schedule/schedule-notifications";
 import {
   buildOvpsaBatchPreview,
@@ -1557,9 +1558,12 @@ export async function cancelOvpsaFirstYearBatch(
       id: string;
       student_number: string;
       old_status: string;
+      schedule_type: "LABORATORY" | "PHYSICAL_EXAM";
+      appointment_date: string;
+      location: string;
     }>(
       `WITH target AS (
-         SELECT id,status AS old_status FROM appointments
+         SELECT id,status AS old_status,schedule_type,appointment_date FROM appointments
           WHERE ovpsa_batch_id=$1 AND is_published=TRUE
             AND status IN ('PENDING','AWAITING_RESCHEDULE')
           FOR UPDATE
@@ -1568,7 +1572,12 @@ export async function cancelOvpsaFirstYearBatch(
           SET status='CANCELLED',updated_by=$2,updated_at=clock_timestamp()
          FROM target
         WHERE appointment.id=target.id
-        RETURNING appointment.id::text,appointment.student_number,target.old_status`,
+        RETURNING appointment.id::text,appointment.student_number,target.old_status,
+                  target.schedule_type,target.appointment_date::text,
+                  CASE target.schedule_type
+                    WHEN 'LABORATORY' THEN 'Iloilo Mission Hospital'
+                    ELSE 'CPU Clinic'
+                  END AS location`,
       [batchId, actorUserId],
     );
     if (cancelled.rowCount) {
@@ -1625,6 +1634,15 @@ export async function cancelOvpsaFirstYearBatch(
         WHERE id=$1`,
       [batchId, actorUserId, reason, nextToken],
     );
+    const cancelledScheduleByStudent = new Map<string, PreviousScheduleState>();
+    for (const appointment of cancelled.rows) {
+      const previous = cancelledScheduleByStudent.get(appointment.student_number) ?? {};
+      previous[appointment.schedule_type === "LABORATORY" ? "laboratory" : "physicalExam"] = {
+        date: appointment.appointment_date,
+        location: appointment.location,
+      };
+      cancelledScheduleByStudent.set(appointment.student_number, previous);
+    }
     for (const membership of memberships.rows) {
       await queueAuthoritativeScheduleNotification(
         client,
@@ -1633,16 +1651,7 @@ export async function cancelOvpsaFirstYearBatch(
           state,
           eventId: batchId,
           reason,
-          previous: {
-            laboratory: {
-              date: batch.laboratoryDate,
-              location: "Iloilo Mission Hospital",
-            },
-            physicalExam: {
-              date: batch.physicalExamDate,
-              location: "CPU Clinic",
-            },
-          },
+          previous: cancelledScheduleByStudent.get(membership.student_number),
         }),
       );
     }

@@ -736,6 +736,10 @@ describe("First Year OVPSA publication", () => {
   it("automatically recovers an OVPSA PE-only closure without claiming an exclusive date", async () => {
     const member = `${studentPrefix}0299`;
     await insertStudent(member, 1);
+    await pool.query(
+      "UPDATE students SET email='ovpsa.pe.recovery@example.test',email_verified_at=NOW() WHERE student_number=$1",
+      [member],
+    );
     const created = await createOvpsaFirstYearBatch({
       scheduleCycleStart: cycleStart,
       collegeId: TEST_REFERENCE_IDS.college,
@@ -805,6 +809,71 @@ describe("First Year OVPSA publication", () => {
       recovery_reservations: 1,
       exclusive_physical_active: 0,
     }]);
+    const recoveredPhysical = await pool.query<{ appointment_date: string }>(
+      `SELECT appointment_date::text FROM appointments
+        WHERE student_number=$1 AND ovpsa_batch_id=$2
+          AND schedule_type='PHYSICAL_EXAM' AND status='PENDING' AND is_published=TRUE`,
+      [member, created.batchId],
+    );
+    expect(recoveredPhysical.rows).toEqual([{ appointment_date: "2096-11-13" }]);
+    const closureNotification = await pool.query(
+      `SELECT notification.notification_type,notification.event_key,
+              notification.metadata->>'sourceType' AS source_type,
+              notification.metadata->>'sourceId' AS source_id,
+              notification.metadata->>'scheduleFingerprint' AS fingerprint,
+              outbox.text_body
+         FROM student_portal_notifications notification
+         JOIN email_outbox outbox ON outbox.portal_notification_id=notification.id
+        WHERE notification.student_number=$1
+          AND notification.notification_type='SCHEDULE_CLOSURE_RESCHEDULED'`,
+      [member],
+    );
+    expect(closureNotification.rows).toEqual([{
+      notification_type: "SCHEDULE_CLOSURE_RESCHEDULED",
+      event_key: expect.stringMatching(/^schedule:event:[0-9a-f-]+:OVP-T1-0299$/),
+      source_type: "APPOINTMENT_RESCHEDULE_EVENT",
+      source_id: expect.any(String),
+      fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      text_body: expect.stringMatching(/Previous Physical Examination: 2096-11-12 at CPU Clinic[\s\S]*Physical Examination: 2096-11-13 at CPU Clinic \(Pending\)[\s\S]*Reason: OVP-T1 closure PE only/),
+    }]);
+
+    const currentBatch = await pool.query<{ optimistic_token: string }>(
+      "SELECT optimistic_token::text FROM ovpsa_first_year_batches WHERE id=$1",
+      [created.batchId],
+    );
+    const cancellationReason = "OVPSA cancelled after automatic PE recovery.";
+    await cancelOvpsaFirstYearBatch(created.batchId, {
+      optimisticToken: currentBatch.rows[0].optimistic_token,
+      reason: cancellationReason,
+    }, TEST_REFERENCE_IDS.adminUser);
+    const cancellation = await pool.query(
+      `SELECT notification.notification_type,notification.event_key,
+              notification.message,
+              notification.metadata->>'sourceType' AS source_type,
+              notification.metadata->>'sourceId' AS source_id,
+              notification.metadata->>'scheduleFingerprint' AS fingerprint,
+              outbox.source_id AS outbox_source_id,outbox.schedule_fingerprint,
+              outbox.text_body
+         FROM student_portal_notifications notification
+         JOIN email_outbox outbox ON outbox.portal_notification_id=notification.id
+        WHERE notification.student_number=$1
+          AND notification.notification_type='SCHEDULE_CANCELLED'`,
+      [member],
+    );
+    expect(cancellation.rows).toEqual([{
+      notification_type: "SCHEDULE_CANCELLED",
+      event_key: `schedule:event:${created.batchId}:${member}`,
+      message: expect.stringContaining("No current Laboratory or Physical Examination appointment is assigned."),
+      source_type: "OVPSA_FIRST_YEAR_BATCH",
+      source_id: created.batchId,
+      fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      outbox_source_id: created.batchId,
+      schedule_fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      text_body: expect.stringMatching(/Previous Laboratory: 2096-11-05 at Iloilo Mission Hospital[\s\S]*Previous Physical Examination: 2096-11-13 at CPU Clinic[\s\S]*Reason: OVPSA cancelled after automatic PE recovery\./),
+    }]);
+    expect(cancellation.rows[0].text_body).not.toContain(
+      "Previous Physical Examination: 2096-11-12 at CPU Clinic",
+    );
   });
 
   it("marks a closed OVPSA date for reschedule, publishes a replacement revision, and cancels safely", async () => {
@@ -889,8 +958,16 @@ describe("First Year OVPSA publication", () => {
       completed_preserved: 2,
     })]);
 
-    const manualCases = await pool.query<{ id: string; optimistic_token: string }>(
-      `SELECT id::text,optimistic_token::text FROM clinic_closure_manual_cases
+    await pool.query(
+      "UPDATE students SET email='ovpsa.manual.completion@example.test',email_verified_at=NOW() WHERE student_number=$1",
+      [affectedMember],
+    );
+    const manualCases = await pool.query<{
+      id: string;
+      optimistic_token: string;
+      student_number: string;
+    }>(
+      `SELECT id::text,optimistic_token::text,student_number FROM clinic_closure_manual_cases
         WHERE policy_metadata->>'ovpsaBatchId'=$1 AND status='OPEN' ORDER BY id`,
       [created.batchId],
     );
@@ -942,6 +1019,27 @@ describe("First Year OVPSA publication", () => {
       adminActor,
     );
     expect(rescheduled).toMatchObject({ revisionNumber: 2 });
+    const affectedCase = manualCases.rows.find((item) => item.student_number === affectedMember)!;
+    const completion = await pool.query(
+      `SELECT notification.notification_type,notification.event_key,
+              notification.metadata->>'sourceType' AS source_type,
+              notification.metadata->>'sourceId' AS source_id,
+              notification.metadata->>'scheduleFingerprint' AS fingerprint,
+              outbox.text_body
+         FROM student_portal_notifications notification
+         JOIN email_outbox outbox ON outbox.portal_notification_id=notification.id
+        WHERE notification.student_number=$1
+          AND notification.notification_type='SCHEDULE_MANUAL_RESOLUTION_COMPLETED'`,
+      [affectedMember],
+    );
+    expect(completion.rows).toEqual([{
+      notification_type: "SCHEDULE_MANUAL_RESOLUTION_COMPLETED",
+      event_key: `schedule:event:${affectedCase.id}-resolved:${affectedMember}`,
+      source_type: "CLINIC_CLOSURE_MANUAL_CASE",
+      source_id: affectedCase.id,
+      fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      text_body: expect.stringMatching(/Previous Laboratory: 2096-11-05 at Iloilo Mission Hospital[\s\S]*Laboratory: 2096-11-19 at Iloilo Mission Hospital \(Pending\)[\s\S]*Reason: OVPSA approved replacement after closure\./),
+    }]);
     const replacement = await pool.query<{
       revision_count: number;
       active_reservations: number;

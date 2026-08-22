@@ -9,9 +9,13 @@ import {
 import type { SessionUser } from "@/types/roles";
 import {
   acceptAndScheduleImport,
+  generateScheduleImport,
   importStudentScheduleCsv,
   preflightScheduleImport,
+  publishScheduleImport,
+  validateScheduleImport,
 } from "./schedule-imports.service";
+import { addScheduleBatch } from "./coordinator-schedules.service";
 
 const header = "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth";
 const studentPattern = "99-91%";
@@ -76,6 +80,77 @@ afterAll(async () => {
 });
 
 describe("student scheduling imports", () => {
+  it("publishes one parent notification for grouped child batches", async () => {
+    const studentNumber = "99-9109-09";
+    await insertTestStudent({
+      studentNumber,
+      firstName: "Grouped",
+      middleName: "Maria",
+      lastName: "Publication",
+      yearLevel: 3,
+    });
+    await pool.query(
+      "UPDATE students SET email='grouped.publication@example.test',email_verified_at=NOW() WHERE student_number=$1",
+      [studentNumber],
+    );
+    const created = await addScheduleBatch({
+      batchName: "TEST-AY grouped parent notification",
+      collegeId: TEST_REFERENCE_IDS.college,
+      programId: TEST_REFERENCE_IDS.program,
+      submittedByName: "Grouped Fixture",
+      description: "Grouped notification fixture",
+      items: [{
+        studentNumber,
+        scheduleType: "BOTH",
+        priorityGroupId: TEST_REFERENCE_IDS.regularPriority,
+        targetDate: "2026-12-01",
+        targetWeekStart: null,
+        targetWeekEnd: null,
+        remarks: null,
+      }],
+    }, admin);
+    const importGroup = await pool.query<{ id: string }>(
+      `INSERT INTO schedule_import_groups (
+         import_name,source_filename,total_rows,created_by,student_category,
+         academic_year_start,accepted_at
+       ) VALUES (
+         'REGULAR 2026-2027 - TEST-AY-grouped-parent.csv',
+         'TEST-AY-grouped-parent.csv',1,$1,'REGULAR',2026,clock_timestamp()
+       ) RETURNING id::text`,
+      [TEST_REFERENCE_IDS.adminUser],
+    );
+    const importId = importGroup.rows[0].id;
+    await pool.query(
+      "UPDATE schedule_batches SET import_group_id=$1 WHERE id=ANY($2::uuid[])",
+      [importId, created!.batchIds],
+    );
+
+    await validateScheduleImport(importId, admin);
+    await generateScheduleImport(importId, admin);
+    await publishScheduleImport(importId, admin);
+
+    const delivery = await pool.query(
+      `SELECT notification.notification_type,notification.event_key,
+              notification.metadata->>'sourceType' AS source_type,
+              notification.metadata->>'sourceId' AS source_id,
+              notification.metadata->>'scheduleFingerprint' AS fingerprint,
+              COUNT(outbox.id)::int AS outbox_count
+         FROM student_portal_notifications notification
+         LEFT JOIN email_outbox outbox ON outbox.portal_notification_id=notification.id
+        WHERE notification.student_number=$1
+        GROUP BY notification.id`,
+      [studentNumber],
+    );
+    expect(delivery.rows).toEqual([{
+      notification_type: "SCHEDULE_INITIAL_PUBLICATION",
+      event_key: `schedule:initial:SCHEDULE_IMPORT_GROUP:${importId}:${studentNumber}`,
+      source_type: "SCHEDULE_IMPORT_GROUP",
+      source_id: importId,
+      fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      outbox_count: 1,
+    }]);
+  });
+
   it("denies clinic staff before parsing input", async () => {
     await expect(importStudentScheduleCsv(undefined, clinicStaff)).rejects.toMatchObject({
       code: "FORBIDDEN",
