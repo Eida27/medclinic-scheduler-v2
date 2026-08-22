@@ -45,6 +45,7 @@ Doctor scheduling, QR check-in, student self-rescheduling, and cloud document st
    APP_URL=http://localhost:3000
    JWT_SECRET=replace-with-at-least-32-random-characters
    APP_TIMEZONE=Asia/Manila
+   EMAIL_OUTBOX_ENCRYPTION_KEY=replace-with-a-dedicated-base64-encoded-32-byte-key
    RESULT_UPLOAD_ROOT=.data/private-result-uploads
    ```
 
@@ -144,7 +145,11 @@ SMTP_PASS=optional-password
 SMTP_FROM=clinic@example.edu
 ```
 
-Verification links use 32 random bytes, store only a SHA-256 token hash in the verification table, and expire after 30 minutes. A previous verified address remains active until its replacement is verified. The email worker polls every minute, uses `FOR UPDATE SKIP LOCKED`, retries up to ten attempts, and caps exponential delay at one hour.
+`EMAIL_OUTBOX_ENCRYPTION_KEY` is required even when SMTP is disabled. It must be a dedicated Base64 encoding of exactly
+32 random bytes and must not reuse `JWT_SECRET`. Verification links use 32 random bytes, store only a SHA-256 token hash
+in the verification table, and expire after 30 minutes. A previous verified address remains active until its replacement
+is verified. The email worker polls every minute, uses `FOR UPDATE SKIP LOCKED`, retries up to ten attempts, and caps
+exponential delay at one hour.
 
 ## Private Result Documents
 

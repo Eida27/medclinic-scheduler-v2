@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
 import { AppError } from "@/lib/errors";
 import { serverEnv } from "@/lib/env";
+import { encryptVerificationEmailBody } from "@/server/email/verification-body-encryption";
 import { transaction } from "@/server/db/pool";
 import { enqueueStudentEmail } from "@/server/repositories/student-notifications.repository";
 
@@ -28,18 +29,28 @@ export async function requestStudentEmailVerification(studentNumber: string, ema
         WHERE student_number=$1 AND consumed_at IS NULL`,
       [studentNumber],
     );
-    await client.query(
+    const verification = await client.query<{ id: string }>(
       `INSERT INTO student_email_verifications (
          student_number, pending_email, token_hash, expires_at
-       ) VALUES ($1,$2,$3,NOW() + INTERVAL '30 minutes')`,
+       ) VALUES ($1,$2,$3,NOW() + INTERVAL '30 minutes')
+       RETURNING id::text`,
       [studentNumber, normalizedEmail, hash],
     );
-    const verifyUrl = `${serverEnv().APP_URL}/student/email-verification?token=${encodeURIComponent(token)}`;
+    const env = serverEnv();
+    const verifyUrl = `${env.APP_URL}/student/email-verification?token=${encodeURIComponent(token)}`;
     await enqueueStudentEmail(client, {
       studentNumber,
       toEmail: normalizedEmail,
       subject: "Verify your MedClinic notification email",
-      textBody: `Verify your email within 30 minutes: ${verifyUrl}`,
+      textBody: "Verification email content is encrypted.",
+      messageKind: "VERIFICATION",
+      notificationType: "EMAIL_VERIFICATION",
+      sourceType: "STUDENT_EMAIL_VERIFICATION",
+      sourceId: verification.rows[0].id,
+      verificationBodyEncrypted: encryptVerificationEmailBody(
+        `Verify your email within 30 minutes: ${verifyUrl}`,
+        env.EMAIL_OUTBOX_ENCRYPTION_KEY,
+      ),
     });
   });
   return { token, expiresInMinutes: 30 };

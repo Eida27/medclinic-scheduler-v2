@@ -1,5 +1,9 @@
 import "server-only";
-import { query, transaction } from "@/server/db/pool";
+import { createHash } from "node:crypto";
+import type { PoolClient } from "pg";
+import { transaction } from "@/server/db/pool";
+
+export type EmailOutboxMessageKind = "SCHEDULE" | "VERIFICATION";
 
 export type ClaimedEmailOutboxMessage = {
   id: string;
@@ -8,8 +12,49 @@ export type ClaimedEmailOutboxMessage = {
   subject: string;
   textBody: string;
   htmlBody: string | null;
+  messageKind: EmailOutboxMessageKind;
+  verificationBodyEncrypted: string | null;
   attempts: number;
 };
+
+type EmailOutboxAuditRow = {
+  id: string;
+  studentNumber: string | null;
+  toEmail: string;
+  messageKind: EmailOutboxMessageKind;
+  notificationType: string | null;
+  sourceType: string | null;
+  sourceId: string | null;
+};
+
+function destinationHash(toEmail: string) {
+  return createHash("sha256").update(toEmail.trim().toLowerCase()).digest("hex");
+}
+
+async function writeLifecycleAudit(
+  client: PoolClient,
+  row: EmailOutboxAuditRow,
+  action: string,
+  metadata: Record<string, unknown> = {},
+) {
+  await client.query(
+    `INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,metadata)
+     VALUES (NULL,$1,'email_outbox',$2,$3::jsonb)`,
+    [
+      action,
+      row.id,
+      JSON.stringify({
+        messageKind: row.messageKind,
+        studentNumber: row.studentNumber,
+        notificationType: row.notificationType,
+        sourceType: row.sourceType,
+        sourceId: row.sourceId,
+        destinationHash: destinationHash(row.toEmail),
+        ...metadata,
+      }),
+    ],
+  );
+}
 
 export async function claimEmailOutboxRows(limit: number, now: Date) {
   return transaction(async (client) => {
@@ -33,6 +78,8 @@ export async function claimEmailOutboxRows(limit: number, now: Date) {
        RETURNING outbox.id, outbox.student_number AS "studentNumber",
                  outbox.to_email AS "toEmail", outbox.subject,
                  outbox.text_body AS "textBody", outbox.html_body AS "htmlBody",
+                 outbox.message_kind AS "messageKind",
+                 outbox.verification_body_encrypted AS "verificationBodyEncrypted",
                  outbox.attempts`,
       [limit, now],
     );
@@ -41,13 +88,21 @@ export async function claimEmailOutboxRows(limit: number, now: Date) {
 }
 
 export async function markEmailOutboxSent(id: string, attempts: number, now: Date) {
-  await query(
-    `UPDATE email_outbox
-        SET status='SENT', attempts=$2, sent_at=$3, locked_at=NULL,
-            last_error=NULL
-      WHERE id=$1 AND status='PROCESSING'`,
-    [id, attempts, now],
-  );
+  await transaction(async (client) => {
+    const result = await client.query<EmailOutboxAuditRow>(
+      `UPDATE email_outbox
+          SET status='SENT',attempts=$2,sent_at=$3,locked_at=NULL,last_error=NULL,
+              verification_body_encrypted=NULL,last_attempt_at=$3,last_attempt_status='SENT'
+        WHERE id=$1 AND status='PROCESSING'
+        RETURNING id,student_number AS "studentNumber",to_email AS "toEmail",
+                  message_kind AS "messageKind",notification_type AS "notificationType",
+                  source_type AS "sourceType",source_id AS "sourceId"`,
+      [id, attempts, now],
+    );
+    if (result.rows[0]) {
+      await writeLifecycleAudit(client, result.rows[0], "EMAIL_OUTBOX_DELIVERED", { attempts });
+    }
+  });
 }
 
 export async function markEmailOutboxFailed(
@@ -55,12 +110,57 @@ export async function markEmailOutboxFailed(
   attempts: number,
   nextAttemptAt: Date,
   error: string,
+  now: Date,
 ) {
-  await query(
-    `UPDATE email_outbox
-        SET status=CASE WHEN $2 >= 10 THEN 'PERMANENT_FAILURE' ELSE 'PENDING' END,
-            attempts=$2, next_attempt_at=$3, locked_at=NULL, last_error=$4
-      WHERE id=$1 AND status='PROCESSING'`,
-    [id, attempts, nextAttemptAt, error.slice(0, 2000)],
-  );
+  await transaction(async (client) => {
+    const result = await client.query<EmailOutboxAuditRow & { status: "PENDING" | "PERMANENT_FAILURE" }>(
+      `UPDATE email_outbox
+          SET status=CASE WHEN $2 >= 10 THEN 'PERMANENT_FAILURE' ELSE 'PENDING' END,
+              attempts=$2,next_attempt_at=$3,locked_at=NULL,last_error=$4,
+              last_attempt_at=$5,
+              last_attempt_status=CASE WHEN $2 >= 10 THEN 'PERMANENT_FAILURE' ELSE 'PENDING' END
+        WHERE id=$1 AND status='PROCESSING'
+        RETURNING id,student_number AS "studentNumber",to_email AS "toEmail",
+                  message_kind AS "messageKind",notification_type AS "notificationType",
+                  source_type AS "sourceType",source_id AS "sourceId",status`,
+      [id, attempts, nextAttemptAt, error.slice(0, 2000), now],
+    );
+    const row = result.rows[0];
+    if (row) {
+      await writeLifecycleAudit(
+        client,
+        row,
+        row.status === "PERMANENT_FAILURE"
+          ? "EMAIL_OUTBOX_PERMANENT_FAILURE"
+          : "EMAIL_OUTBOX_RETRY_SCHEDULED",
+        { attempts, ...(row.status === "PENDING" ? { nextAttemptAt: nextAttemptAt.toISOString() } : {}) },
+      );
+    }
+  });
+}
+
+export type EmailOutboxObsoleteReason = "EXPIRED" | "SUPERSEDED";
+
+export async function markEmailOutboxObsolete(
+  id: string,
+  reason: EmailOutboxObsoleteReason,
+  now: Date,
+) {
+  return transaction(async (client) => {
+    const result = await client.query<EmailOutboxAuditRow>(
+      `UPDATE email_outbox
+          SET status='OBSOLETE',locked_at=NULL,last_error=NULL,
+              verification_body_encrypted=NULL,last_attempt_at=$2,
+              last_attempt_status='OBSOLETE'
+        WHERE id=$1 AND status NOT IN ('SENT','OBSOLETE')
+        RETURNING id,student_number AS "studentNumber",to_email AS "toEmail",
+                  message_kind AS "messageKind",notification_type AS "notificationType",
+                  source_type AS "sourceType",source_id AS "sourceId"`,
+      [id, now],
+    );
+    const row = result.rows[0];
+    if (!row) return false;
+    await writeLifecycleAudit(client, row, "EMAIL_OUTBOX_OBSOLETE", { reason });
+    return true;
+  });
 }

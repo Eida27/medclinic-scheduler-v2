@@ -9,18 +9,26 @@ import {
   markStudentNotificationRead,
 } from "./student-notifications.service";
 import { requestStudentEmailVerification, verifyStudentEmail } from "./student-email.service";
+import { decryptVerificationEmailBody } from "@/server/email/verification-body-encryption";
 
 const studentPattern = "99-95%";
+const encryptionKey = Buffer.alloc(32, 11).toString("base64");
+const originalEncryptionKey = process.env.EMAIL_OUTBOX_ENCRYPTION_KEY;
 
 async function cleanup() {
   await cleanupTestFixtures(studentPattern, "TEST-STUDENT-EMAIL%", "TEST-STUDENT-EMAIL%");
 }
 
-beforeAll(cleanup);
+beforeAll(async () => {
+  process.env.EMAIL_OUTBOX_ENCRYPTION_KEY = encryptionKey;
+  await cleanup();
+});
 afterEach(cleanup);
 afterAll(async () => {
   await cleanup();
   await pool.end();
+  if (originalEncryptionKey === undefined) delete process.env.EMAIL_OUTBOX_ENCRYPTION_KEY;
+  else process.env.EMAIL_OUTBOX_ENCRYPTION_KEY = originalEncryptionKey;
 });
 
 describe("student notifications and optional email", () => {
@@ -71,6 +79,15 @@ describe("student notifications and optional email", () => {
       "SELECT student_number,to_email FROM email_outbox ORDER BY student_number",
     )).resolves.toMatchObject({
       rows: [{ student_number: "99-9505-05", to_email: "batch@example.test" }],
+    });
+    await expect(pool.query(
+      `SELECT action,metadata->>'studentNumber' AS student_number
+         FROM audit_logs
+        WHERE action='EMAIL_OUTBOX_QUEUED'
+          AND metadata->>'studentNumber' LIKE '99-95%'
+        ORDER BY student_number`,
+    )).resolves.toMatchObject({
+      rows: [{ action: "EMAIL_OUTBOX_QUEUED", student_number: "99-9505-05" }],
     });
   });
 
@@ -136,6 +153,37 @@ describe("student notifications and optional email", () => {
     expect(stored.rows[0]).toMatchObject({ pending_email: "new@example.test", lifetime_minutes: 30 });
     expect(stored.rows[0].token_hash).toMatch(/^[a-f0-9]{64}$/);
     expect(stored.rows[0].token_hash).not.toContain(request.token);
+    const queued = await pool.query<{
+      message_kind: string;
+      subject: string;
+      text_body: string;
+      html_body: string | null;
+      verification_body_encrypted: string;
+    }>(
+      `SELECT message_kind,subject,text_body,html_body,verification_body_encrypted
+         FROM email_outbox WHERE student_number='99-9503-03'`,
+    );
+    expect(queued.rows[0]).toMatchObject({
+      message_kind: "VERIFICATION",
+      subject: "Verify your MedClinic notification email",
+      text_body: "Verification email content is encrypted.",
+      html_body: null,
+    });
+    expect(JSON.stringify(queued.rows[0])).not.toContain(request.token);
+    expect(JSON.stringify(queued.rows[0])).not.toContain("token=");
+    expect(decryptVerificationEmailBody(
+      queued.rows[0].verification_body_encrypted,
+      encryptionKey,
+    )).toContain(encodeURIComponent(request.token));
+
+    const audits = await pool.query<{ metadata: Record<string, unknown> }>(
+      `SELECT metadata FROM audit_logs
+        WHERE action='EMAIL_OUTBOX_QUEUED' AND entity_type='email_outbox'
+          AND metadata->>'studentNumber'='99-9503-03'`,
+    );
+    expect(audits.rows).toHaveLength(1);
+    expect(JSON.stringify(audits.rows)).not.toContain(request.token);
+    expect(JSON.stringify(audits.rows)).not.toContain("token=");
     await expect(pool.query(
       "SELECT email FROM students WHERE student_number='99-9503-03'",
     )).resolves.toMatchObject({ rows: [{ email: "old@example.test" }] });

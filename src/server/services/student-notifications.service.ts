@@ -29,6 +29,8 @@ export async function createStudentNotification(
       subject: input.title,
       textBody: `${input.message}\n\nOpen the student portal to review the details.`,
       eventKey: input.eventKey,
+      notificationType: input.notificationType,
+      portalNotificationId: inserted.id,
     });
   }
   return inserted.id;
@@ -64,6 +66,8 @@ export async function createStudentNotificationIsolated(
         subject: input.title,
         textBody: `${input.message}\n\nOpen the student portal to review the details.`,
         eventKey: input.eventKey,
+        notificationType: input.notificationType,
+        portalNotificationId: inserted.id,
       });
       await client.query("RELEASE SAVEPOINT student_notification_email");
     } catch {

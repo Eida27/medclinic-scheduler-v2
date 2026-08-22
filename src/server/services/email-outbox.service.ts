@@ -1,10 +1,13 @@
 import "server-only";
 import nodemailer from "nodemailer";
 import { serverEnv } from "@/lib/env";
+import { decryptVerificationEmailBody } from "@/server/email/verification-body-encryption";
 import {
   claimEmailOutboxRows,
   markEmailOutboxFailed,
+  markEmailOutboxObsolete,
   markEmailOutboxSent,
+  type EmailOutboxObsoleteReason,
   type ClaimedEmailOutboxMessage,
 } from "@/server/repositories/email-outbox.repository";
 
@@ -27,15 +30,19 @@ export async function deliverClaimedEmail(
   transport: EmailTransport,
   now = new Date(),
   from: string,
+  encryptionKey = serverEnv().EMAIL_OUTBOX_ENCRYPTION_KEY,
 ) {
   const attempts = message.attempts + 1;
   try {
+    const textBody = message.messageKind === "VERIFICATION"
+      ? decryptVerificationEmailBody(message.verificationBodyEncrypted ?? "", encryptionKey)
+      : message.textBody;
     await transport.sendMail({
       from,
       to: message.toEmail,
       subject: message.subject,
-      text: message.textBody,
-      ...(message.htmlBody ? { html: message.htmlBody } : {}),
+      text: textBody,
+      ...(message.messageKind === "SCHEDULE" && message.htmlBody ? { html: message.htmlBody } : {}),
     });
     await markEmailOutboxSent(message.id, attempts, now);
     return { status: "SENT" as const };
@@ -46,10 +53,21 @@ export async function deliverClaimedEmail(
       message.id,
       attempts,
       nextAttemptAt,
-      error instanceof Error ? error.message : "Unknown SMTP error",
+      message.messageKind === "VERIFICATION"
+        ? "Verification email delivery failed."
+        : error instanceof Error ? error.message : "Unknown SMTP error",
+      now,
     );
     return { status: attempts >= 10 ? "PERMANENT_FAILURE" as const : "PENDING" as const };
   }
+}
+
+export function obsoleteEmailOutboxMessage(
+  id: string,
+  reason: EmailOutboxObsoleteReason,
+  now = new Date(),
+) {
+  return markEmailOutboxObsolete(id, reason, now);
 }
 
 export async function deliverEmailOutboxBatch(now = new Date()) {
@@ -65,7 +83,13 @@ export async function deliverEmailOutboxBatch(now = new Date()) {
   });
   const messages = await claimEmailOutboxMessages(25, now);
   for (const message of messages) {
-    await deliverClaimedEmail(message, transport, now, env.SMTP_FROM);
+    await deliverClaimedEmail(
+      message,
+      transport,
+      now,
+      env.SMTP_FROM,
+      env.EMAIL_OUTBOX_ENCRYPTION_KEY,
+    );
   }
   return { skipped: false, processedCount: messages.length };
 }

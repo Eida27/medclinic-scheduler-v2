@@ -1,4 +1,16 @@
 import { z } from "zod";
+import { parseEmailOutboxEncryptionKey } from "@/server/email/verification-body-encryption";
+
+const emailOutboxEncryptionKeySchema = z.string().superRefine((value, context) => {
+  try {
+    parseEmailOutboxEncryptionKey(value);
+  } catch (error) {
+    context.addIssue({
+      code: "custom",
+      message: error instanceof Error ? error.message : "Invalid email outbox encryption key.",
+    });
+  }
+});
 
 const serverEnvSchema = z.object({
   DATABASE_URL: z.string().url(),
@@ -10,6 +22,7 @@ const serverEnvSchema = z.object({
   SMTP_USER: z.string().min(1).optional(),
   SMTP_PASS: z.string().min(1).optional(),
   SMTP_FROM: z.string().email().optional(),
+  EMAIL_OUTBOX_ENCRYPTION_KEY: emailOutboxEncryptionKeySchema,
   RESULT_UPLOAD_ROOT: z.string().min(1).default(".data/private-result-uploads"),
 });
 
@@ -24,6 +37,7 @@ export function serverEnv() {
     SMTP_USER: process.env.SMTP_USER || undefined,
     SMTP_PASS: process.env.SMTP_PASS || undefined,
     SMTP_FROM: process.env.SMTP_FROM || undefined,
+    EMAIL_OUTBOX_ENCRYPTION_KEY: process.env.EMAIL_OUTBOX_ENCRYPTION_KEY || undefined,
     RESULT_UPLOAD_ROOT: process.env.RESULT_UPLOAD_ROOT || undefined,
   });
 }

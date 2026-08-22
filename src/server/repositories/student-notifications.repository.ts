@@ -32,20 +32,32 @@ export async function insertStudentNotifications(
        SELECT student_number,notification_type,title,message,metadata,event_key
          FROM source
        ON CONFLICT (event_key) WHERE event_key IS NOT NULL DO NOTHING
-       RETURNING id,student_number,title,message,event_key
+       RETURNING id,student_number,notification_type,title,message,event_key
      ),
      enqueued AS (
        INSERT INTO email_outbox (
-         student_number,to_email,subject,text_body,html_body,event_key
+         student_number,to_email,subject,text_body,html_body,event_key,
+         message_kind,notification_type,portal_notification_id
        )
        SELECT inserted.student_number,student.email,inserted.title,
               inserted.message || E'\\n\\nOpen the student portal to review the details.',
-              NULL,inserted.event_key
+              NULL,inserted.event_key,'SCHEDULE',inserted.notification_type,inserted.id
          FROM inserted
          JOIN students student ON student.student_number=inserted.student_number
         WHERE student.email_verified_at IS NOT NULL AND student.email IS NOT NULL
        ON CONFLICT (event_key) WHERE event_key IS NOT NULL DO NOTHING
-       RETURNING student_number
+       RETURNING id,student_number,to_email,message_kind,notification_type
+     ),
+     audited AS (
+       INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,metadata)
+       SELECT NULL,'EMAIL_OUTBOX_QUEUED','email_outbox',enqueued.id::text,
+              jsonb_build_object(
+                'studentNumber',enqueued.student_number,
+                'messageKind',enqueued.message_kind,
+                'notificationType',enqueued.notification_type,
+                'destinationHash',encode(digest(LOWER(BTRIM(enqueued.to_email)),'sha256'),'hex')
+              )
+         FROM enqueued
      )
      SELECT id::text FROM inserted`,
     [JSON.stringify(inputs.map((input) => ({
@@ -97,13 +109,39 @@ export async function enqueueStudentEmail(
     textBody: string;
     htmlBody?: string | null;
     eventKey?: string;
+    messageKind?: "SCHEDULE" | "VERIFICATION";
+    notificationType?: string | null;
+    sourceType?: string | null;
+    sourceId?: string | null;
+    portalNotificationId?: string | null;
+    scheduleFingerprint?: string | null;
+    verificationBodyEncrypted?: string | null;
   },
 ) {
-  await client.query(
-    `INSERT INTO email_outbox (
-       student_number, to_email, subject, text_body, html_body, event_key
-     ) VALUES ($1,$2,$3,$4,$5,$6)
-     ON CONFLICT (event_key) WHERE event_key IS NOT NULL DO NOTHING`,
+  const result = await client.query<{ id: string }>(
+    `WITH inserted AS (
+       INSERT INTO email_outbox (
+         student_number,to_email,subject,text_body,html_body,event_key,
+         message_kind,notification_type,source_type,source_id,
+         portal_notification_id,schedule_fingerprint,verification_body_encrypted
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       ON CONFLICT (event_key) WHERE event_key IS NOT NULL DO NOTHING
+       RETURNING id,student_number,to_email,message_kind,notification_type,source_type,source_id
+     ),
+     audited AS (
+       INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,metadata)
+       SELECT NULL,'EMAIL_OUTBOX_QUEUED','email_outbox',inserted.id::text,
+              jsonb_strip_nulls(jsonb_build_object(
+                'studentNumber',inserted.student_number,
+                'messageKind',inserted.message_kind,
+                'notificationType',inserted.notification_type,
+                'sourceType',inserted.source_type,
+                'sourceId',inserted.source_id,
+                'destinationHash',encode(digest(LOWER(BTRIM(inserted.to_email)),'sha256'),'hex')
+              ))
+         FROM inserted
+     )
+     SELECT id::text FROM inserted`,
     [
       input.studentNumber,
       input.toEmail,
@@ -111,8 +149,16 @@ export async function enqueueStudentEmail(
       input.textBody,
       input.htmlBody ?? null,
       input.eventKey ?? null,
+      input.messageKind ?? "SCHEDULE",
+      input.notificationType ?? null,
+      input.sourceType ?? null,
+      input.sourceId ?? null,
+      input.portalNotificationId ?? null,
+      input.scheduleFingerprint ?? null,
+      input.verificationBodyEncrypted ?? null,
     ],
   );
+  return result.rows[0]?.id ?? null;
 }
 
 export async function listStudentNotificationRows(studentNumber: string) {
