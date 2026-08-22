@@ -14,7 +14,8 @@ vi.mock("./student-notifications.service", () => ({
 
 import { queueFirstVerificationCurrentStateCatchUp } from "./student-verification-catch-up.service";
 
-const client = { query: vi.fn() } as never;
+const query = vi.fn();
+const client = { query } as never;
 const state = {
   studentNumber: "24-0001",
   studentName: "Santos, Ana M.",
@@ -27,7 +28,7 @@ const state = {
     location: "CPU Medical Center",
   },
   physicalExam: null,
-  openManualResolutionId: null,
+  openManualResolutionIds: [],
 };
 
 describe("first-verification current-state catch-up", () => {
@@ -48,9 +49,30 @@ describe("first-verification current-state catch-up", () => {
     await expect(queueFirstVerificationCurrentStateCatchUp(client, "24-0001"))
       .resolves.toEqual({ id: "notification-1", warnings: [] });
     expect(createStudentNotificationIsolated).toHaveBeenCalledWith(client, expect.objectContaining({
-      eventKey: "schedule:current:24-0001:9bd953b9d1a559c23160ca4c52570e70e573825728d1a9aad817005b49bf7958",
+      eventKey: "schedule:current:24-0001:640d9172a7a9b1bdc88d298494a92b3a8895f79db92d8a01035013f1aee6cdb2",
       emailTextBody: expect.stringContaining("Laboratory: 2026-09-10 at CPU Medical Center (Pending)."),
-      scheduleFingerprint: "9bd953b9d1a559c23160ca4c52570e70e573825728d1a9aad817005b49bf7958",
+      scheduleFingerprint: "640d9172a7a9b1bdc88d298494a92b3a8895f79db92d8a01035013f1aee6cdb2",
     }));
+  });
+
+  it("audits an isolated channel warning while preserving it for the caller", async () => {
+    loadAuthoritativeScheduleState.mockResolvedValue(state);
+    createStudentNotificationIsolated.mockResolvedValue({
+      id: "notification-1",
+      warnings: [{ channel: "EMAIL_OUTBOX" }],
+    });
+
+    await expect(queueFirstVerificationCurrentStateCatchUp(client, "24-0001")).resolves.toEqual({
+      id: "notification-1",
+      warnings: [{ channel: "EMAIL_OUTBOX" }],
+    });
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("STUDENT_SCHEDULE_CATCH_UP_NOTIFICATION_WARNING"),
+      [
+        "24-0001",
+        "EMAIL_OUTBOX",
+        "640d9172a7a9b1bdc88d298494a92b3a8895f79db92d8a01035013f1aee6cdb2",
+      ],
+    );
   });
 });

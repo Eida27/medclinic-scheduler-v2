@@ -28,7 +28,7 @@ export type AuthoritativeScheduleState = {
   studentName: string;
   laboratory: AuthoritativeScheduleAppointment | null;
   physicalExam: AuthoritativeScheduleAppointment | null;
-  openManualResolutionId: string | null;
+  openManualResolutionIds: string[];
 };
 
 export type PreviousScheduleState = {
@@ -37,7 +37,11 @@ export type PreviousScheduleState = {
 };
 
 export function hasAuthoritativeScheduleState(state: AuthoritativeScheduleState) {
-  return Boolean(state.laboratory || state.physicalExam || state.openManualResolutionId);
+  return Boolean(
+    state.laboratory
+    || state.physicalExam
+    || state.openManualResolutionIds.length,
+  );
 }
 
 export function fingerprintScheduleState(state: AuthoritativeScheduleState) {
@@ -52,7 +56,7 @@ export function fingerprintScheduleState(state: AuthoritativeScheduleState) {
         appointment.affectedDate,
         appointment.location,
       ]),
-    openManualResolutionId: state.openManualResolutionId,
+    openManualResolutionIds: [...state.openManualResolutionIds].sort(),
   };
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
@@ -111,7 +115,7 @@ function emailBody(input: {
     ...previousLines(input.previous),
     ...currentLines(input.state),
     input.reason ? `Reason: ${input.reason}` : null,
-    input.state.openManualResolutionId
+    input.state.openManualResolutionIds.length
       ? "Status: Manual Resolution is open and awaiting administrator action."
       : null,
     "",

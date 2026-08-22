@@ -33,21 +33,21 @@ const currentState: AuthoritativeScheduleState = {
     affectedDate: null,
     location: "CPU Clinic",
   },
-  openManualResolutionId: null,
+  openManualResolutionIds: [],
 };
 
 describe("authoritative schedule fingerprints", () => {
   it("uses a stable literal SHA-256 value and ignores display object insertion order", () => {
     expect(fingerprintScheduleState(currentState)).toBe(
-      "a02bfddd7a99792dcf7f27dee660aba28fe1c4529feae2af38777d8ef8b89382",
+      "fd13b94a7f23689f836e5c616d7346e74be98e22b4b87f1b88bc0fbbe7aa3cd4",
     );
     expect(fingerprintScheduleState({
-      openManualResolutionId: null,
+      openManualResolutionIds: [],
       physicalExam: currentState.physicalExam,
       laboratory: currentState.laboratory,
       studentName: currentState.studentName,
       studentNumber: currentState.studentNumber,
-    })).toBe("a02bfddd7a99792dcf7f27dee660aba28fe1c4529feae2af38777d8ef8b89382");
+    })).toBe("fd13b94a7f23689f836e5c616d7346e74be98e22b4b87f1b88bc0fbbe7aa3cd4");
   });
 
   it("changes for affected-state and open Manual Resolution identity changes", () => {
@@ -59,15 +59,31 @@ describe("authoritative schedule fingerprints", () => {
         date: null,
         affectedDate: "2026-09-10",
       },
-      openManualResolutionId: "manual-case-1",
+      openManualResolutionIds: ["manual-case-1"],
     };
     expect(fingerprintScheduleState(awaiting)).toBe(
-      "b8f55c0e29f23d6147d29639daa5b7776ddf82e70f31b6466c57a88af08c0162",
+      "94c1d33fb642b00707a6054c346ceae171a12cb56e76f524b61599d6ca8b0f99",
     );
     expect(fingerprintScheduleState({
       ...awaiting,
-      openManualResolutionId: "manual-case-2",
+      openManualResolutionIds: ["manual-case-2"],
     })).not.toBe(fingerprintScheduleState(awaiting));
+
+    const everyOpenCase = {
+      ...currentState,
+      openManualResolutionIds: ["manual-case-2", "manual-case-1"],
+    };
+    expect(fingerprintScheduleState(everyOpenCase)).toBe(
+      "dda730cb20989fd87b1a3d3ad3c389d867fb3b2bcf8648b44b364d07cb10bfee",
+    );
+    expect(fingerprintScheduleState({
+      ...everyOpenCase,
+      openManualResolutionIds: ["manual-case-1", "manual-case-2"],
+    })).toBe(fingerprintScheduleState(everyOpenCase));
+    expect(fingerprintScheduleState({
+      ...everyOpenCase,
+      openManualResolutionIds: ["manual-case-1"],
+    })).not.toBe(fingerprintScheduleState(everyOpenCase));
   });
 });
 
@@ -87,15 +103,15 @@ describe("typed schedule notification builders", () => {
       messageKind: "SCHEDULE",
       sourceType: "SCHEDULE_IMPORT",
       sourceId: "import-9",
-      scheduleFingerprint: "a02bfddd7a99792dcf7f27dee660aba28fe1c4529feae2af38777d8ef8b89382",
+      scheduleFingerprint: "fd13b94a7f23689f836e5c616d7346e74be98e22b4b87f1b88bc0fbbe7aa3cd4",
     });
     expect(current).toMatchObject({
-      eventKey: "schedule:current:24-0001:a02bfddd7a99792dcf7f27dee660aba28fe1c4529feae2af38777d8ef8b89382",
+      eventKey: "schedule:current:24-0001:fd13b94a7f23689f836e5c616d7346e74be98e22b4b87f1b88bc0fbbe7aa3cd4",
       notificationType: "SCHEDULE_CURRENT_STATE",
       emailSubject: "Your current MedClinic schedule",
       messageKind: "SCHEDULE",
       sourceType: "CURRENT_SCHEDULE_STATE",
-      sourceId: "a02bfddd7a99792dcf7f27dee660aba28fe1c4529feae2af38777d8ef8b89382",
+      sourceId: "fd13b94a7f23689f836e5c616d7346e74be98e22b4b87f1b88bc0fbbe7aa3cd4",
     });
     expect(initial.emailTextBody).toContain("Laboratory: 2026-09-10 at CPU Medical Center (Pending).");
     expect(initial.emailTextBody).toContain("Physical Examination: 2026-09-17 at CPU Clinic (Pending).");
@@ -169,7 +185,7 @@ describe("typed schedule notification builders", () => {
       messageKind: "SCHEDULE",
       sourceType,
       sourceId: "event-77",
-      scheduleFingerprint: "a02bfddd7a99792dcf7f27dee660aba28fe1c4529feae2af38777d8ef8b89382",
+      scheduleFingerprint: "fd13b94a7f23689f836e5c616d7346e74be98e22b4b87f1b88bc0fbbe7aa3cd4",
     });
     expect(notification.emailTextBody).toContain("Previous Laboratory: 2026-09-03 at CPU Medical Center.");
     expect(notification.emailTextBody).toContain("Authorized scheduling change");
@@ -186,7 +202,7 @@ describe("typed schedule notification builders", () => {
           date: null,
           affectedDate: "2026-09-10",
         },
-        openManualResolutionId: "manual-case-1",
+        openManualResolutionIds: ["manual-case-1"],
       },
       eventId: "event-awaiting",
       reason: "Emergency closure",

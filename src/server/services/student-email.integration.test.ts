@@ -9,6 +9,7 @@ import {
 } from "@/test/integration-fixtures";
 import {
   createStudentNotification,
+  createStudentNotificationIsolated,
   createStudentNotifications,
   listStudentNotifications,
   markStudentNotificationRead,
@@ -268,6 +269,190 @@ describe("student notifications and optional email", () => {
     expect(auditText).not.toContain("new@example.test");
     expect(auditText).not.toContain("old@example.test");
     expect(auditText).not.toContain(request.token);
+  });
+
+  it("keeps distinct typed outbox fields correlated to identical batch portal inputs", async () => {
+    const studentNumber = "99-9526-26";
+    await insertTestStudent({
+      studentNumber,
+      firstName: "Batch",
+      lastName: "Correlation",
+      yearLevel: 3,
+    });
+    await pool.query(
+      `UPDATE students SET email='batch-correlation@example.test',email_verified_at=NOW()
+        WHERE student_number=$1`,
+      [studentNumber],
+    );
+
+    await transaction((client) => createStudentNotifications(client, [
+      {
+        studentNumber,
+        notificationType: "SCHEDULE_CURRENT_STATE",
+        title: "Identical portal title",
+        message: "Identical portal message.",
+        emailSubject: "First typed subject",
+        emailTextBody: "First typed body.",
+        messageKind: "SCHEDULE",
+        sourceType: "FIRST_TYPED_SOURCE",
+        sourceId: "first-source-id",
+        scheduleFingerprint: "c".repeat(64),
+      },
+      {
+        studentNumber,
+        notificationType: "SCHEDULE_CURRENT_STATE",
+        title: "Identical portal title",
+        message: "Identical portal message.",
+        emailSubject: "Second typed subject",
+        emailTextBody: "Second typed body.",
+        messageKind: "SCHEDULE",
+        sourceType: "SECOND_TYPED_SOURCE",
+        sourceId: "second-source-id",
+        scheduleFingerprint: "d".repeat(64),
+      },
+    ]));
+
+    const portal = await pool.query(
+      `SELECT id FROM student_portal_notifications
+        WHERE student_number=$1 AND title='Identical portal title'`,
+      [studentNumber],
+    );
+    const outbox = await pool.query(
+      `SELECT subject,text_body,source_type,source_id,schedule_fingerprint
+         FROM email_outbox WHERE student_number=$1 ORDER BY source_id`,
+      [studentNumber],
+    );
+    expect(portal.rows).toHaveLength(2);
+    expect(outbox.rows).toEqual([
+      {
+        subject: "First typed subject",
+        text_body: "First typed body.",
+        source_type: "FIRST_TYPED_SOURCE",
+        source_id: "first-source-id",
+        schedule_fingerprint: "c".repeat(64),
+      },
+      {
+        subject: "Second typed subject",
+        text_body: "Second typed body.",
+        source_type: "SECOND_TYPED_SOURCE",
+        source_id: "second-source-id",
+        schedule_fingerprint: "d".repeat(64),
+      },
+    ]);
+  });
+
+  it("reuses a deterministic portal row to retry one failed email without duplicates", async () => {
+    const studentNumber = "99-9527-27";
+    await insertTestStudent({
+      studentNumber,
+      firstName: "Catchup",
+      lastName: "Retry",
+      yearLevel: 3,
+    });
+    await pool.query(
+      `UPDATE students SET email='catchup-retry@example.test',email_verified_at=NOW()
+        WHERE student_number=$1`,
+      [studentNumber],
+    );
+    const eventKey = `schedule:current:${studentNumber}:${"e".repeat(64)}`;
+    const baseInput = {
+      studentNumber,
+      notificationType: "SCHEDULE_CURRENT_STATE",
+      title: "Current schedule",
+      message: "Your current schedule is available.",
+      emailSubject: "Your current schedule",
+      emailTextBody: "Current authoritative schedule body.",
+      messageKind: "SCHEDULE" as const,
+      sourceType: "CURRENT_SCHEDULE_STATE",
+      sourceId: "e".repeat(64),
+      eventKey,
+    };
+
+    const failed = await transaction((client) => createStudentNotificationIsolated(client, {
+      ...baseInput,
+      scheduleFingerprint: "invalid-fingerprint",
+    }));
+    expect(failed).toEqual({
+      id: expect.any(String),
+      warnings: [{ channel: "EMAIL_OUTBOX" }],
+    });
+    const portalId = failed.id;
+    await expect(pool.query(
+      "SELECT id FROM student_portal_notifications WHERE event_key=$1",
+      [eventKey],
+    )).resolves.toMatchObject({ rows: [{ id: portalId }] });
+    await expect(pool.query(
+      "SELECT id FROM email_outbox WHERE event_key=$1",
+      [eventKey],
+    )).resolves.toMatchObject({ rows: [] });
+
+    const retryInput = { ...baseInput, scheduleFingerprint: "e".repeat(64) };
+    const retry = await transaction((client) => createStudentNotificationIsolated(client, retryInput));
+    expect(retry).toEqual({ id: portalId, warnings: [] });
+    await transaction((client) => createStudentNotificationIsolated(client, retryInput));
+    await Promise.all([
+      transaction((client) => createStudentNotificationIsolated(client, retryInput)),
+      transaction((client) => createStudentNotificationIsolated(client, retryInput)),
+    ]);
+
+    const persisted = await pool.query<{
+      portal_count: number;
+      outbox_count: number;
+      linked_portal_id: string;
+    }>(
+      `SELECT
+         (SELECT COUNT(*)::int FROM student_portal_notifications WHERE event_key=$1) AS portal_count,
+         (SELECT COUNT(*)::int FROM email_outbox WHERE event_key=$1) AS outbox_count,
+         (SELECT portal_notification_id::text FROM email_outbox WHERE event_key=$1) AS linked_portal_id`,
+      [eventKey],
+    );
+    expect(persisted.rows).toEqual([{
+      portal_count: 1,
+      outbox_count: 1,
+      linked_portal_id: portalId,
+    }]);
+  });
+
+  it("deduplicates concurrent first success for one deterministic notification", async () => {
+    const studentNumber = "99-9528-28";
+    await insertTestStudent({
+      studentNumber,
+      firstName: "Concurrent",
+      lastName: "Notification",
+      yearLevel: 3,
+    });
+    await pool.query(
+      `UPDATE students SET email='concurrent-notification@example.test',email_verified_at=NOW()
+        WHERE student_number=$1`,
+      [studentNumber],
+    );
+    const fingerprint = "f".repeat(64);
+    const input = {
+      studentNumber,
+      notificationType: "SCHEDULE_CURRENT_STATE",
+      title: "Concurrent current schedule",
+      message: "Concurrent authoritative schedule.",
+      emailSubject: "Concurrent current schedule",
+      emailTextBody: "Concurrent authoritative schedule body.",
+      messageKind: "SCHEDULE" as const,
+      sourceType: "CURRENT_SCHEDULE_STATE",
+      sourceId: fingerprint,
+      scheduleFingerprint: fingerprint,
+      eventKey: `schedule:current:${studentNumber}:${fingerprint}`,
+    };
+
+    const results = await Promise.all([
+      transaction((client) => createStudentNotificationIsolated(client, input)),
+      transaction((client) => createStudentNotificationIsolated(client, input)),
+    ]);
+    expect(results[0]).toEqual({ id: expect.any(String), warnings: [] });
+    expect(results[1]).toEqual({ id: results[0].id, warnings: [] });
+    await expect(pool.query(
+      `SELECT
+         (SELECT COUNT(*)::int FROM student_portal_notifications WHERE event_key=$1) AS portal_count,
+         (SELECT COUNT(*)::int FROM email_outbox WHERE event_key=$1) AS outbox_count`,
+      [input.eventKey],
+    )).resolves.toMatchObject({ rows: [{ portal_count: 1, outbox_count: 1 }] });
   });
 
   it("enforces cooldown, invalidates older requests, and reports retry timing", async () => {

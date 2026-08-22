@@ -3,6 +3,10 @@ import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { pool } from "@/server/db/pool";
 import { TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
+import {
+  buildCurrentStateNotification,
+  fingerprintScheduleState,
+} from "@/server/schedule/schedule-notifications";
 import { loadAuthoritativeScheduleState } from "./schedule-state.repository";
 
 describe("authoritative schedule-state repository", () => {
@@ -86,13 +90,24 @@ describe("authoritative schedule-state repository", () => {
                    $1,$2) RETURNING id::text`,
         [TEST_REFERENCE_IDS.adminUser, randomUUID()],
       );
-      const manualCase = await client.query<{ id: string }>(
+      const manualCaseIds = [
+        "00000000-0000-4000-8000-000000000101",
+        "00000000-0000-4000-8000-000000000102",
+      ];
+      await client.query(
         `INSERT INTO clinic_closure_manual_cases (
-           student_number,closure_group_id,schedule_pair_id,schedule_cycle_start,
+           id,student_number,closure_group_id,schedule_pair_id,schedule_cycle_start,
            affected_laboratory_appointment_id,reason_code,reason_message
-         ) VALUES ($1,$2,$3,2092,$4,'NO_REPLACEMENT_CAPACITY',
-                   'No authorized replacement exists.') RETURNING id::text`,
-        [studentNumber, closure.rows[0].id, pairId, appointmentByType.get("LABORATORY")],
+         ) VALUES
+           ($1,$3,$4,$5,2092,$6,'NO_REPLACEMENT_CAPACITY','No authorized replacement exists.'),
+           ($2,$3,$4,$5,2092,$6,'NO_REPLACEMENT_CAPACITY','A second open case exists.')`,
+        [
+          ...manualCaseIds,
+          studentNumber,
+          closure.rows[0].id,
+          pairId,
+          appointmentByType.get("LABORATORY"),
+        ],
       );
 
       await expect(loadAuthoritativeScheduleState(client, studentNumber)).resolves.toEqual({
@@ -114,8 +129,72 @@ describe("authoritative schedule-state repository", () => {
           affectedDate: null,
           location: "CPU Clinic",
         },
-        openManualResolutionId: manualCase.rows[0].id,
+        openManualResolutionIds: manualCaseIds,
       });
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
+  });
+
+  it("keeps a lone service in only its own slot, email lines, and fingerprint input", async () => {
+    const client = await pool.connect();
+    await client.query("BEGIN");
+    try {
+      const laboratoryStudent = "SCH-STATE-LAB";
+      const physicalStudent = "SCH-STATE-PE";
+      await client.query(
+        `INSERT INTO students (
+           student_number,first_name,last_name,college_id,program_id,year_level
+         ) VALUES
+           ($1,'Laboratory','Only',$3,$4,2),
+           ($2,'Physical','Only',$3,$4,2)`,
+        [
+          laboratoryStudent,
+          physicalStudent,
+          TEST_REFERENCE_IDS.college,
+          TEST_REFERENCE_IDS.program,
+        ],
+      );
+      await client.query(
+        `INSERT INTO appointments (
+           id,clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+           schedule_cycle_start
+         ) VALUES
+           ('10000000-0000-4000-8000-000000000101',$1,$3,'LABORATORY','2092-10-01','PENDING',TRUE,2092),
+           ('10000000-0000-4000-8000-000000000102',$2,$4,'PHYSICAL_EXAM','2092-10-08','PENDING',TRUE,2092)`,
+        [
+          TEST_REFERENCE_IDS.laboratoryClinic,
+          TEST_REFERENCE_IDS.physicalExamClinic,
+          laboratoryStudent,
+          physicalStudent,
+        ],
+      );
+
+      const laboratory = await loadAuthoritativeScheduleState(client, laboratoryStudent);
+      const physical = await loadAuthoritativeScheduleState(client, physicalStudent);
+      expect(laboratory).toMatchObject({
+        laboratory: { id: "10000000-0000-4000-8000-000000000101" },
+        physicalExam: null,
+        openManualResolutionIds: [],
+      });
+      expect(physical).toMatchObject({
+        laboratory: null,
+        physicalExam: { id: "10000000-0000-4000-8000-000000000102" },
+        openManualResolutionIds: [],
+      });
+      expect(fingerprintScheduleState(laboratory!)).toBe(
+        "4d6d6a211d79178c9439b5785ba5f0880614ca7a2102e76fb8a722de11259ed3",
+      );
+      expect(fingerprintScheduleState(physical!)).toBe(
+        "2d5dbc31e0f0264608a13553c2e06cb06baa9dfcee603ad4d091fb2e92c1e9db",
+      );
+      const laboratoryBody = buildCurrentStateNotification(laboratory!).emailTextBody;
+      const physicalBody = buildCurrentStateNotification(physical!).emailTextBody;
+      expect(laboratoryBody).toContain("Laboratory: 2092-10-01 at KABALAKA Clinic (Pending).");
+      expect(laboratoryBody).not.toContain("Physical Examination:");
+      expect(physicalBody).toContain("Physical Examination: 2092-10-08 at CPU Clinic (Pending).");
+      expect(physicalBody).not.toContain("Laboratory:");
     } finally {
       await client.query("ROLLBACK");
       client.release();

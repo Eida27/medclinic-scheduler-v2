@@ -20,7 +20,7 @@ type ScheduleStateRow = {
   date: string | null;
   affectedDate: string | null;
   location: string | null;
-  openManualResolutionId: string | null;
+  openManualResolutionIds: string[];
 };
 
 export async function loadAuthoritativeScheduleState(
@@ -55,17 +55,16 @@ export async function loadAuthoritativeScheduleState(
             CASE WHEN appointment.status='AWAITING_RESCHEDULE'
                  THEN appointment.appointment_date::text ELSE NULL END AS "affectedDate",
             appointment.location,
-            manual_case.id::text AS "openManualResolutionId"
+            ARRAY(
+              SELECT candidate.id::text
+                FROM clinic_closure_manual_cases candidate
+               WHERE candidate.student_number=student.student_number
+                 AND candidate.status='OPEN'
+               ORDER BY candidate.id::text
+            ) AS "openManualResolutionIds"
        FROM students student
        LEFT JOIN ranked_current appointment
          ON appointment.student_number=student.student_number AND appointment.schedule_rank=1
-       LEFT JOIN LATERAL (
-         SELECT candidate.id
-           FROM clinic_closure_manual_cases candidate
-          WHERE candidate.student_number=student.student_number AND candidate.status='OPEN'
-          ORDER BY candidate.created_at DESC,candidate.id DESC
-          LIMIT 1
-       ) manual_case ON TRUE
       WHERE student.student_number=$1 AND student.is_active=TRUE
       ORDER BY appointment.schedule_type`,
     [studentNumber],
@@ -84,15 +83,13 @@ export async function loadAuthoritativeScheduleState(
       : null
   );
   const first = result.rows[0];
+  const laboratoryRow = result.rows.find((row) => row.scheduleType === "LABORATORY");
+  const physicalExamRow = result.rows.find((row) => row.scheduleType === "PHYSICAL_EXAM");
   return {
     studentNumber: first.studentNumber,
     studentName: first.studentName,
-    laboratory: appointment(
-      result.rows.find((row) => row.scheduleType === "LABORATORY") ?? first,
-    ),
-    physicalExam: appointment(
-      result.rows.find((row) => row.scheduleType === "PHYSICAL_EXAM") ?? first,
-    ),
-    openManualResolutionId: first.openManualResolutionId,
+    laboratory: laboratoryRow ? appointment(laboratoryRow) : null,
+    physicalExam: physicalExamRow ? appointment(physicalExamRow) : null,
+    openManualResolutionIds: first.openManualResolutionIds,
   };
 }

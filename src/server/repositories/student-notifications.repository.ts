@@ -1,4 +1,5 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { query } from "@/server/db/pool";
 
@@ -27,19 +28,20 @@ export async function insertStudentNotifications(
        SELECT row.student_number,row.notification_type,row.title,row.message,
               row.metadata,row.event_key,row.email_subject,row.email_text_body,
               row.message_kind,row.source_type,row.source_id,row.schedule_fingerprint,
-              row.input_order
+              row.portal_notification_id
          FROM jsonb_to_recordset($1::jsonb) AS row(
            student_number text,notification_type text,title text,message text,
            metadata jsonb,event_key text,email_subject text,email_text_body text,
            message_kind text,source_type text,source_id text,schedule_fingerprint text,
-           input_order integer
+           portal_notification_id uuid
          )
      ),
      inserted AS (
        INSERT INTO student_portal_notifications (
-         student_number,notification_type,title,message,metadata,event_key
+         id,student_number,notification_type,title,message,metadata,event_key
        )
-       SELECT student_number,notification_type,title,message,metadata,event_key
+       SELECT portal_notification_id,student_number,notification_type,title,message,
+              metadata,event_key
          FROM source
        ON CONFLICT (event_key) WHERE event_key IS NOT NULL DO NOTHING
        RETURNING id,student_number,notification_type,title,message,event_key
@@ -49,17 +51,7 @@ export async function insertStudentNotifications(
               detail.email_subject,detail.email_text_body,detail.message_kind,
               detail.source_type,detail.source_id,detail.schedule_fingerprint
          FROM inserted
-         CROSS JOIN LATERAL (
-           SELECT source.email_subject,source.email_text_body,source.message_kind,
-                  source.source_type,source.source_id,source.schedule_fingerprint
-             FROM source
-            WHERE source.student_number=inserted.student_number
-              AND source.notification_type=inserted.notification_type
-              AND source.title=inserted.title AND source.message=inserted.message
-              AND source.event_key IS NOT DISTINCT FROM inserted.event_key
-            ORDER BY source.input_order
-            LIMIT 1
-         ) detail
+         JOIN source detail ON detail.portal_notification_id=inserted.id
      ),
      enqueued AS (
        INSERT INTO email_outbox (
@@ -94,7 +86,7 @@ export async function insertStudentNotifications(
          FROM enqueued
      )
      SELECT id::text FROM inserted`,
-    [JSON.stringify(inputs.map((input, index) => ({
+    [JSON.stringify(inputs.map((input) => ({
       student_number: input.studentNumber,
       notification_type: input.notificationType,
       title: input.title,
@@ -107,7 +99,7 @@ export async function insertStudentNotifications(
       source_type: input.sourceType ?? null,
       source_id: input.sourceId ?? null,
       schedule_fingerprint: input.scheduleFingerprint ?? null,
-      input_order: index,
+      portal_notification_id: randomUUID(),
     })))],
   );
   return result.rows.map((row) => row.id);
@@ -117,6 +109,14 @@ export async function insertStudentNotification(
   client: PoolClient,
   input: StudentNotificationInput,
 ) {
+  const values = [
+    input.studentNumber,
+    input.notificationType,
+    input.title,
+    input.message,
+    JSON.stringify(input.metadata ?? {}),
+    input.eventKey ?? null,
+  ];
   const result = await client.query<{ id: string; email: string | null }>(
     `WITH inserted AS (
        INSERT INTO student_portal_notifications (
@@ -129,16 +129,23 @@ export async function insertStudentNotification(
             CASE WHEN student.email_verified_at IS NOT NULL THEN student.email ELSE NULL END AS email
        FROM inserted
        JOIN students student ON student.student_number=inserted.student_number`,
-    [
-      input.studentNumber,
-      input.notificationType,
-      input.title,
-      input.message,
-      JSON.stringify(input.metadata ?? {}),
-      input.eventKey ?? null,
-    ],
+    values,
   );
-  return result.rows[0];
+  if (result.rows[0] || !input.eventKey) return result.rows[0];
+  const existing = await client.query<{ id: string; email: string | null }>(
+    `SELECT notification.id,
+            CASE WHEN student.email_verified_at IS NOT NULL THEN student.email ELSE NULL END AS email
+       FROM student_portal_notifications notification
+       JOIN students student ON student.student_number=notification.student_number
+      WHERE notification.student_number=$1
+        AND notification.notification_type=$2
+        AND notification.title=$3
+        AND notification.message=$4
+        AND notification.metadata=$5::jsonb
+        AND notification.event_key=$6`,
+    values,
+  );
+  return existing.rows[0];
 }
 
 export async function enqueueStudentEmail(
