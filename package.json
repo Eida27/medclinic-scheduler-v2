@@ -30,7 +30,10 @@
     "acceptance:first-year-ovpsa:cleanup": "tsx --env-file=.env.local scripts/browser-first-year-ovpsa-fixture.ts cleanup",
     "acceptance:schedule-import-validation:setup": "tsx --env-file=.env.local scripts/browser-schedule-import-year-category-fixture.ts setup",
     "acceptance:schedule-import-validation:status": "tsx --env-file=.env.local scripts/browser-schedule-import-year-category-fixture.ts status",
-    "acceptance:schedule-import-validation:cleanup": "tsx --env-file=.env.local scripts/browser-schedule-import-year-category-fixture.ts cleanup"
+    "acceptance:schedule-import-validation:cleanup": "tsx --env-file=.env.local scripts/browser-schedule-import-year-category-fixture.ts cleanup",
+    "acceptance:student-email-notifications:setup": "tsx --env-file=.env.local scripts/browser-student-email-notifications-fixture.ts setup",
+    "acceptance:student-email-notifications:status": "tsx --env-file=.env.local scripts/browser-student-email-notifications-fixture.ts status",
+    "acceptance:student-email-notifications:cleanup": "tsx --env-file=.env.local scripts/browser-student-email-notifications-fixture.ts cleanup"
   },
   "dependencies": {
     "archiver": "^8.0.0",
