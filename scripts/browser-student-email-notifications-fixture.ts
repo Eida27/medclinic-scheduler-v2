@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool, type PoolClient } from "pg";
 import { SCHEDULE_NOTICE } from "../src/lib/schedule-notice";
@@ -10,6 +10,8 @@ const LOOPBACK_DATABASE_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 const EXCLUSIVE_FLAG = "STUDENT_EMAIL_NOTIFICATIONS_ACCEPTANCE_EXCLUSIVE_DATABASE";
 const FIXTURE_DIRECTORY = resolve(".data/browser-student-email-notifications");
 const STATE_FILE = resolve(FIXTURE_DIRECTORY, "state.json");
+const STORAGE_ROOT = resolve(process.env.RESULT_UPLOAD_ROOT ?? ".data/private-result-uploads");
+const STATE_VERSION = 1;
 const MARKER = "BROWSER-STUDENT-EMAIL-NOTIFICATIONS-20260823";
 const FAILURE_FUNCTION = "browser_student_email_notifications_force_failure";
 const FAILURE_TRIGGER = "browser_student_email_notifications_force_failure_trigger";
@@ -85,21 +87,51 @@ export type StudentEmailNotificationsResidue = {
   users: number; colleges: number; programs: number; students: number; loginAttempts: number;
   emailVerifications: number; appointments: number; closureGroups: number; unavailableDates: number;
   manualCases: number; rescheduleEvents: number; eventUnavailableDates: number; notifications: number;
-  outbox: number; audits: number; triggers: number; triggerFunctions: number; stateFiles: number;
+  outbox: number; audits: number; triggers: number; triggerFunctions: number;
+  appointmentStatusLogs: number; resultSubmissions: number; resultFiles: number;
+  laboratoryResults: number; examResults: number; storageCleanupIntents: number;
+  storageObjects: number; stateFiles: number;
+};
+type EffectiveDatabaseIdentity = StudentEmailNotificationsDatabaseIdentity & {
+  currentDatabase: string;
+  currentUser: string;
+  currentSchema: string | null;
+  searchPath: string;
 };
 type FixtureState = {
-  databaseIdentity: StudentEmailNotificationsDatabaseIdentity;
+  version: number;
+  marker: typeof MARKER;
+  databaseIdentity: EffectiveDatabaseIdentity;
   phase: "PREPARING" | "PREPARED";
   createdAt: string;
   rawVerificationToken: string;
+  storageKeys: string[];
 };
+type StateReadResult =
+  | { kind: "absent" }
+  | { kind: "invalid"; reason: string }
+  | { kind: "valid"; value: FixtureState };
+type FixtureDependencies = {
+  afterSeed?: () => Promise<void>;
+  beforeRemoveOwnedRows?: () => Promise<void>;
+  renameStateFile?: (source: string, destination: string) => Promise<void>;
+};
+type PrepareOptions = FixtureDependencies & { encryptionKey?: string };
 
 export function normalizeStudentEmailNotificationsDatabaseIdentity(databaseUrl: string): StudentEmailNotificationsDatabaseIdentity {
   let parsed: URL;
   try { parsed = new URL(databaseUrl); } catch { throw new Error("DATABASE_URL must be a valid PostgreSQL URL."); }
   if (parsed.protocol !== "postgres:" && parsed.protocol !== "postgresql:") throw new Error("DATABASE_URL must use the PostgreSQL scheme.");
-  if ([...parsed.searchParams.keys()].some((parameter) => ["host", "port"].includes(parameter.toLowerCase()))) {
-    throw new Error("DATABASE_URL must not use host or port query parameters.");
+  const forbiddenParameters = new Set([
+    "host", "port", "options", "service", "database", "dbname", "user", "username",
+  ]);
+  const forbidden = [...parsed.searchParams.keys()].find((parameter) => (
+    forbiddenParameters.has(parameter.toLowerCase())
+  ));
+  if (forbidden) {
+    throw new Error(
+      `DATABASE_URL must not use host or port query parameters or namespace-changing options (received ${forbidden}).`,
+    );
   }
   const host = parsed.hostname.replace(/^\[(.*)\]$/, "$1").toLowerCase();
   let database: string;
@@ -116,18 +148,101 @@ export function assertSafeStudentEmailNotificationsAcceptanceDatabase(databaseUr
   return identity;
 }
 
-function assertMatchingDatabaseIdentity(current: StudentEmailNotificationsDatabaseIdentity, persisted: StudentEmailNotificationsDatabaseIdentity) {
-  if (JSON.stringify(current) !== JSON.stringify(persisted)) throw new Error("The current acceptance database does not match the prepared fixture database.");
+async function resolveEffectiveDatabaseIdentity(
+  client: PoolClient,
+  urlIdentity: StudentEmailNotificationsDatabaseIdentity,
+): Promise<EffectiveDatabaseIdentity> {
+  const result = await client.query<{
+    currentDatabase: string;
+    currentUser: string;
+    currentSchema: string | null;
+    searchPath: string;
+  }>(
+    `SELECT current_database() AS "currentDatabase",current_user AS "currentUser",
+            current_schema() AS "currentSchema",current_setting('search_path') AS "searchPath"`,
+  );
+  const connected = result.rows[0];
+  if (connected.currentDatabase !== urlIdentity.database) {
+    throw new Error("The connected PostgreSQL database does not match the guarded DATABASE_URL identity.");
+  }
+  return { ...urlIdentity, ...connected };
+}
+
+function assertMatchingDatabaseIdentity(current: EffectiveDatabaseIdentity, persisted: EffectiveDatabaseIdentity) {
+  if (JSON.stringify(current) !== JSON.stringify(persisted)) {
+    throw new Error("The connected effective database identity or namespace does not match the prepared fixture.");
+  }
 }
 async function stateFileCount() {
-  try { await readFile(STATE_FILE, "utf8"); return 1; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0; throw error; }
+  try { return (await readdir(FIXTURE_DIRECTORY)).length; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0; throw error; }
 }
-async function readState(): Promise<FixtureState | null> {
-  try { return JSON.parse(await readFile(STATE_FILE, "utf8")) as FixtureState; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-async function writeState(state: FixtureState) {
+function parseState(value: unknown): FixtureState {
+  if (!isRecord(value)
+    || value.version !== STATE_VERSION
+    || value.marker !== MARKER
+    || !isRecord(value.databaseIdentity)
+    || !["PREPARING", "PREPARED"].includes(String(value.phase))
+    || typeof value.createdAt !== "string"
+    || !Number.isFinite(Date.parse(value.createdAt))
+    || typeof value.rawVerificationToken !== "string"
+    || !/^[A-Za-z0-9_-]{43}$/.test(value.rawVerificationToken)
+    || !Array.isArray(value.storageKeys)
+    || value.storageKeys.some((entry) => typeof entry !== "string")) {
+    throw new Error("Student email notifications fixture recovery state is malformed.");
+  }
+  const identity = value.databaseIdentity;
+  if (identity.scheme !== "postgresql"
+    || typeof identity.host !== "string"
+    || !LOOPBACK_DATABASE_HOSTS.has(identity.host)
+    || typeof identity.port !== "string"
+    || typeof identity.database !== "string"
+    || typeof identity.currentDatabase !== "string"
+    || typeof identity.currentUser !== "string"
+    || (identity.currentSchema !== null && typeof identity.currentSchema !== "string")
+    || typeof identity.searchPath !== "string") {
+    throw new Error("Student email notifications fixture effective database identity is malformed.");
+  }
+  const state = value as unknown as FixtureState;
+  for (const key of state.storageKeys) assertStorageTarget(key);
+  if (JSON.stringify(state.storageKeys) !== JSON.stringify([...new Set(state.storageKeys)].sort())) {
+    throw new Error("Student email notifications fixture storage ownership is non-canonical.");
+  }
+  return state;
+}
+async function readState(): Promise<StateReadResult> {
+  let contents: string;
+  try { contents = await readFile(STATE_FILE, "utf8"); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "absent" };
+    throw error;
+  }
+  try { return { kind: "valid", value: parseState(JSON.parse(contents)) }; }
+  catch { return { kind: "invalid", reason: "Student email notifications fixture recovery state is invalid or truncated; refusing automatic deletion." }; }
+}
+async function writeState(state: FixtureState, dependencies: FixtureDependencies = {}) {
   await mkdir(dirname(STATE_FILE), { recursive: true });
-  await writeFile(STATE_FILE, `${JSON.stringify(state, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  const temporary = resolve(FIXTURE_DIRECTORY, `.state-${process.pid}-${randomBytes(8).toString("hex")}.tmp`);
+  try {
+    await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    const validated = parseState(JSON.parse(await readFile(temporary, "utf8")));
+    if (JSON.stringify(validated) !== JSON.stringify(state)) throw new Error("Atomic fixture state validation changed content.");
+    await (dependencies.renameStateFile ?? rename)(temporary, STATE_FILE);
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+function assertStorageTarget(storageKey: string) {
+  if (isAbsolute(storageKey) || storageKey.includes("..") || storageKey.includes("\\")) {
+    throw new Error("Invalid fixture-owned result storage key.");
+  }
+  const target = resolve(STORAGE_ROOT, storageKey);
+  if (!target.startsWith(`${STORAGE_ROOT}${sep}`)) throw new Error("Invalid fixture-owned result storage key.");
+  return target;
 }
 function fingerprint(appointments: Array<[string, string, string, string | null, string | null, string]>, manualIds: string[] = []) {
   return createHash("sha256").update(JSON.stringify({ appointments, openManualResolutionIds: [...manualIds].sort() })).digest("hex");
@@ -138,8 +253,33 @@ function maskEmail(value: string | null) {
   return separator > 0 ? `${value.slice(0, 1)}***${value.slice(separator)}` : "***";
 }
 
-async function databaseResidue(client: PoolClient): Promise<Omit<StudentEmailNotificationsResidue, "stateFiles">> {
-  const result = await client.query<Omit<StudentEmailNotificationsResidue, "stateFiles">>(
+async function discoverOwnedStorageKeys(client: PoolClient) {
+  const result = await client.query<{ storageKey: string }>(
+    `WITH owned_submissions AS (
+       SELECT submission.id
+         FROM student_result_submissions submission
+        WHERE submission.student_number=ANY($1::varchar[])
+           OR submission.appointment_id IN (
+             SELECT id FROM appointments WHERE student_number=ANY($1::varchar[])
+           )
+     )
+     SELECT file.storage_key AS "storageKey"
+       FROM student_result_files file WHERE file.submission_id IN (SELECT id FROM owned_submissions)
+     UNION
+     SELECT intent.storage_key
+       FROM student_result_storage_cleanup_intents intent
+      WHERE split_part(intent.storage_key,'/',1) IN (SELECT id::text FROM owned_submissions)
+     ORDER BY 1`,
+    [STUDENT_NUMBERS],
+  );
+  return result.rows.map((row) => row.storageKey);
+}
+
+async function databaseResidue(
+  client: PoolClient,
+  stateStorageKeys: string[] = [],
+): Promise<Omit<StudentEmailNotificationsResidue, "storageObjects" | "stateFiles">> {
+  const result = await client.query<Omit<StudentEmailNotificationsResidue, "storageObjects" | "stateFiles">>(
     `SELECT
        (SELECT COUNT(*)::int FROM users WHERE id=ANY($1::uuid[])) AS users,
        (SELECT COUNT(*)::int FROM colleges WHERE id=$2) AS colleges,
@@ -157,21 +297,73 @@ async function databaseResidue(client: PoolClient): Promise<Omit<StudentEmailNot
        (SELECT COUNT(*)::int FROM email_outbox WHERE student_number=ANY($4::varchar[])) AS outbox,
        (SELECT COUNT(*)::int FROM audit_logs WHERE id=ANY($7::uuid[]) OR metadata->>'studentNumber'=ANY($4::text[]) OR (entity_type='student_email_verification' AND entity_id=ANY($4::text[]))) AS audits,
        (SELECT COUNT(*)::int FROM pg_trigger WHERE tgname=$8 AND NOT tgisinternal) AS triggers,
-       (SELECT COUNT(*)::int FROM pg_proc WHERE proname=$9) AS "triggerFunctions"`,
-    [STAFF_IDS, COLLEGE_ID, PROGRAM_ID, STUDENT_NUMBERS, CLOSURE_GROUP_ID, `${MARKER}%`, AUDIT_IDS, FAILURE_TRIGGER, FAILURE_FUNCTION],
+       (SELECT COUNT(*)::int FROM pg_proc WHERE proname=$9) AS "triggerFunctions",
+       (SELECT COUNT(*)::int FROM appointment_status_logs log
+         WHERE log.appointment_id IN (SELECT id FROM appointments WHERE student_number=ANY($4::varchar[]))) AS "appointmentStatusLogs",
+       (SELECT COUNT(*)::int FROM student_result_submissions submission
+         WHERE submission.student_number=ANY($4::varchar[])
+            OR submission.appointment_id IN (SELECT id FROM appointments WHERE student_number=ANY($4::varchar[]))) AS "resultSubmissions",
+       (SELECT COUNT(*)::int FROM student_result_files file
+         WHERE file.submission_id IN (
+           SELECT submission.id FROM student_result_submissions submission
+            WHERE submission.student_number=ANY($4::varchar[])
+               OR submission.appointment_id IN (SELECT id FROM appointments WHERE student_number=ANY($4::varchar[]))
+         )) AS "resultFiles",
+       (SELECT COUNT(*)::int FROM laboratory_results result
+         WHERE result.student_number=ANY($4::varchar[])
+            OR result.appointment_id IN (SELECT id FROM appointments WHERE student_number=ANY($4::varchar[]))) AS "laboratoryResults",
+       (SELECT COUNT(*)::int FROM exam_results result
+         WHERE result.student_number=ANY($4::varchar[])
+            OR result.appointment_id IN (SELECT id FROM appointments WHERE student_number=ANY($4::varchar[]))) AS "examResults",
+       (SELECT COUNT(*)::int FROM student_result_storage_cleanup_intents intent
+         WHERE intent.storage_key=ANY($10::text[])
+            OR split_part(intent.storage_key,'/',1) IN (
+              SELECT submission.id::text FROM student_result_submissions submission
+               WHERE submission.student_number=ANY($4::varchar[])
+                  OR submission.appointment_id IN (SELECT id FROM appointments WHERE student_number=ANY($4::varchar[]))
+            )) AS "storageCleanupIntents"`,
+    [STAFF_IDS, COLLEGE_ID, PROGRAM_ID, STUDENT_NUMBERS, CLOSURE_GROUP_ID, `${MARKER}%`, AUDIT_IDS, FAILURE_TRIGGER, FAILURE_FUNCTION, stateStorageKeys],
   );
   return result.rows[0];
 }
-async function residue(client: PoolClient): Promise<StudentEmailNotificationsResidue> { return { ...await databaseResidue(client), stateFiles: await stateFileCount() }; }
+async function fileExists(path: string) {
+  try { await readFile(path); return true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+}
+async function residue(client: PoolClient, state?: FixtureState): Promise<StudentEmailNotificationsResidue> {
+  const storageKeys = [...new Set([
+    ...(state?.storageKeys ?? []),
+    ...await discoverOwnedStorageKeys(client),
+  ])].sort();
+  const storageTargets = storageKeys.flatMap((key) => {
+    const target = assertStorageTarget(key);
+    return [target, `${target}.uploading`];
+  });
+  return {
+    ...await databaseResidue(client, storageKeys),
+    storageObjects: (await Promise.all(storageTargets.map(fileExists))).filter(Boolean).length,
+    stateFiles: await stateFileCount(),
+  };
+}
 export function assertZeroStudentEmailNotificationsResidue(value: StudentEmailNotificationsResidue) {
   if (Object.values(value).some((count) => count !== 0)) throw new Error(`Student email notifications acceptance cleanup residue remains: ${JSON.stringify(value)}.`);
   return value;
 }
-function assertZeroDatabaseResidue(value: Omit<StudentEmailNotificationsResidue, "stateFiles">) {
-  if (Object.values(value).some((count) => count !== 0)) throw new Error(`Student email notifications acceptance database residue remains: ${JSON.stringify(value)}.`);
+async function removeOwnedStorage(storageKeys: string[]) {
+  for (const storageKey of storageKeys) {
+    const target = assertStorageTarget(storageKey);
+    await rm(target, { force: true });
+    await rm(`${target}.uploading`, { force: true });
+  }
 }
 
-async function removeOwnedRows(client: PoolClient) {
+async function removeOwnedRows(
+  client: PoolClient,
+  storageKeys: string[],
+  dependencies: FixtureDependencies = {},
+) {
+  await dependencies.beforeRemoveOwnedRows?.();
+  await removeOwnedStorage(storageKeys);
   await client.query("BEGIN");
   try {
     await client.query(`DROP TRIGGER IF EXISTS ${FAILURE_TRIGGER} ON email_outbox`);
@@ -181,9 +373,27 @@ async function removeOwnedRows(client: PoolClient) {
     await client.query("DELETE FROM student_portal_notifications WHERE student_number=ANY($1::varchar[])", [STUDENT_NUMBERS]);
     await client.query("DELETE FROM student_email_verifications WHERE student_number=ANY($1::varchar[])", [STUDENT_NUMBERS]);
     await client.query("DELETE FROM student_login_attempts WHERE student_number=ANY($1::varchar[])", [STUDENT_NUMBERS]);
+    await client.query(
+      `DELETE FROM student_result_storage_cleanup_intents
+        WHERE storage_key=ANY($1::text[])
+           OR split_part(storage_key,'/',1) IN (
+             SELECT id::text FROM student_result_submissions
+              WHERE student_number=ANY($2::varchar[])
+                 OR appointment_id IN (SELECT id FROM appointments WHERE student_number=ANY($2::varchar[]))
+           )`,
+      [storageKeys, STUDENT_NUMBERS],
+    );
     await client.query(`DELETE FROM appointment_reschedule_event_unavailable_dates WHERE event_id IN (SELECT id FROM appointment_reschedule_events WHERE student_number=ANY($1::varchar[]))`, [STUDENT_NUMBERS]);
     await client.query("DELETE FROM appointment_reschedule_events WHERE student_number=ANY($1::varchar[])", [STUDENT_NUMBERS]);
     await client.query("DELETE FROM clinic_closure_manual_cases WHERE student_number=ANY($1::varchar[])", [STUDENT_NUMBERS]);
+    await client.query(
+      `DELETE FROM student_result_files WHERE submission_id IN (
+         SELECT id FROM student_result_submissions
+          WHERE student_number=ANY($1::varchar[])
+             OR appointment_id IN (SELECT id FROM appointments WHERE student_number=ANY($1::varchar[]))
+       )`,
+      [STUDENT_NUMBERS],
+    );
     await client.query(`DELETE FROM student_result_submissions WHERE student_number=ANY($1::varchar[]) OR appointment_id IN (SELECT id FROM appointments WHERE student_number=ANY($1::varchar[]))`, [STUDENT_NUMBERS]);
     await client.query("DELETE FROM appointment_status_logs WHERE appointment_id IN (SELECT id FROM appointments WHERE student_number=ANY($1::varchar[]))", [STUDENT_NUMBERS]);
     await client.query("DELETE FROM exam_results WHERE student_number=ANY($1::varchar[]) OR appointment_id IN (SELECT id FROM appointments WHERE student_number=ANY($1::varchar[]))", [STUDENT_NUMBERS]);
@@ -280,7 +490,11 @@ async function seedDatabase(client: PoolClient, rawToken: string, encryptionKey:
   } catch (error) { await client.query("ROLLBACK"); throw error; }
 }
 
-async function statusWithClient(client: PoolClient, phase: "PREPARED" | "ABSENT") {
+async function statusWithClient(
+  client: PoolClient,
+  phase: "PREPARING" | "PREPARED" | "ABSENT",
+  state?: FixtureState,
+) {
   const students = await client.query<{ studentNumber: string; email: string | null; verified: boolean }>(`SELECT student_number AS "studentNumber",email,email_verified_at IS NOT NULL AS verified FROM students WHERE student_number=ANY($1::varchar[]) ORDER BY student_number`, [STUDENT_NUMBERS]);
   const appointments = await client.query(`SELECT id::text,student_number,schedule_type,appointment_date::text,status,rescheduled_from::text,is_published FROM appointments WHERE student_number=ANY($1::varchar[]) ORDER BY student_number,appointment_date,id`, [STUDENT_NUMBERS]);
   const manualCases = await client.query(`SELECT id::text,student_number,status,reason_code,optimistic_token::text FROM clinic_closure_manual_cases WHERE student_number=ANY($1::varchar[]) ORDER BY id`, [STUDENT_NUMBERS]);
@@ -303,62 +517,140 @@ async function statusWithClient(client: PoolClient, phase: "PREPARED" | "ABSENT"
       notifications: notifications.rows,
       deliveries: deliveries.rows.map((delivery) => ({ id: delivery.id, studentNumber: delivery.studentNumber, destination: maskEmail(delivery.toEmail), messageKind: delivery.messageKind, notificationType: delivery.notificationType, status: delivery.status, attempts: delivery.attempts })),
     },
-    residue: await residue(client),
+    residue: await residue(client, state),
   };
 }
 
-export async function prepareStudentEmailNotificationsFixture(pool: Pool, databaseIdentity: StudentEmailNotificationsDatabaseIdentity, options: { encryptionKey?: string } = {}) {
+async function stateWithDiscoveredStorage(
+  client: PoolClient,
+  state: FixtureState,
+  dependencies: FixtureDependencies,
+) {
+  const storageKeys = [...new Set([
+    ...state.storageKeys,
+    ...await discoverOwnedStorageKeys(client),
+  ])].sort();
+  if (JSON.stringify(storageKeys) === JSON.stringify(state.storageKeys)) return state;
+  const updated = { ...state, storageKeys };
+  await writeState(updated, dependencies);
+  return updated;
+}
+
+function assertZeroBeforeStateRemoval(value: StudentEmailNotificationsResidue) {
+  const { stateFiles, ...owned } = value;
+  if (stateFiles !== 1 || Object.values(owned).some((count) => count !== 0)) {
+    throw new Error(`Fixture cleanup proof failed before recovery-state removal: ${JSON.stringify(value)}.`);
+  }
+}
+
+async function cleanupPreparedState(
+  client: PoolClient,
+  state: FixtureState,
+  dependencies: FixtureDependencies = {},
+) {
+  const ownedState = await stateWithDiscoveredStorage(client, state, dependencies);
+  await removeOwnedRows(client, ownedState.storageKeys, dependencies);
+  assertZeroBeforeStateRemoval(await residue(client, ownedState));
+  await rm(FIXTURE_DIRECTORY, { recursive: true, force: true });
+  return assertZeroStudentEmailNotificationsResidue(await residue(client));
+}
+
+export async function prepareStudentEmailNotificationsFixture(
+  pool: Pool,
+  databaseIdentity: StudentEmailNotificationsDatabaseIdentity,
+  options: PrepareOptions = {},
+) {
   const encryptionKey = options.encryptionKey ?? process.env.EMAIL_OUTBOX_ENCRYPTION_KEY;
   if (!encryptionKey) throw new Error("EMAIL_OUTBOX_ENCRYPTION_KEY is required for fixture verification mail.");
   const client = await pool.connect();
   try {
+    const effectiveIdentity = await resolveEffectiveDatabaseIdentity(client, databaseIdentity);
     const previous = await readState();
-    if (previous) {
-      assertMatchingDatabaseIdentity(databaseIdentity, previous.databaseIdentity);
-      await removeOwnedRows(client);
-      await rm(FIXTURE_DIRECTORY, { recursive: true, force: true });
-      assertZeroStudentEmailNotificationsResidue(await residue(client));
+    if (previous.kind === "invalid") throw new Error(previous.reason);
+    if (previous.kind === "valid") {
+      assertMatchingDatabaseIdentity(effectiveIdentity, previous.value.databaseIdentity);
+      await cleanupPreparedState(client, previous.value, options);
     } else {
       const existing = await residue(client);
       if (Object.values(existing).some((count) => count !== 0)) throw new Error(`Refusing to overwrite untracked student email notifications fixture data: ${JSON.stringify(existing)}.`);
     }
     const rawVerificationToken = randomBytes(32).toString("base64url");
-    const state: FixtureState = { databaseIdentity, phase: "PREPARING", createdAt: new Date().toISOString(), rawVerificationToken };
-    await writeState(state);
+    const state: FixtureState = {
+      version: STATE_VERSION,
+      marker: MARKER,
+      databaseIdentity: effectiveIdentity,
+      phase: "PREPARING",
+      createdAt: new Date().toISOString(),
+      rawVerificationToken,
+      storageKeys: [],
+    };
+    await writeState(state, options);
     try {
       await seedDatabase(client, rawVerificationToken, encryptionKey);
-      await writeState({ ...state, phase: "PREPARED" });
-    } catch (error) {
-      await removeOwnedRows(client).catch(() => undefined);
-      await rm(FIXTURE_DIRECTORY, { recursive: true, force: true });
-      throw error;
+      await options.afterSeed?.();
+      const preparedState = { ...state, phase: "PREPARED" as const };
+      await writeState(preparedState, options);
+      return {
+        ...await statusWithClient(client, "PREPARED", preparedState),
+        mode: "setup" as const,
+        databaseIdentity: effectiveIdentity,
+      };
+    } catch (setupError) {
+      try {
+        const recovery = await readState();
+        if (recovery.kind !== "valid") {
+          throw new Error("Fixture recovery state became invalid during setup failure handling.");
+        }
+        assertMatchingDatabaseIdentity(effectiveIdentity, recovery.value.databaseIdentity);
+        await cleanupPreparedState(client, recovery.value, options);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [setupError, cleanupError],
+          "Fixture setup failed and recovery cleanup failed; recovery state retained.",
+        );
+      }
+      throw setupError;
     }
-    return { ...await statusWithClient(client, "PREPARED"), mode: "setup" as const, databaseIdentity };
   } finally { client.release(); }
 }
 
 export async function getStudentEmailNotificationsFixtureStatus(pool: Pool, databaseIdentity: StudentEmailNotificationsDatabaseIdentity) {
   const state = await readState();
-  if (state) assertMatchingDatabaseIdentity(databaseIdentity, state.databaseIdentity);
+  if (state.kind === "invalid") throw new Error(state.reason);
   const client = await pool.connect();
-  try { return { ...await statusWithClient(client, state?.phase === "PREPARED" ? "PREPARED" : "ABSENT"), mode: "status" as const, databaseIdentity }; }
+  try {
+    const effectiveIdentity = await resolveEffectiveDatabaseIdentity(client, databaseIdentity);
+    if (state.kind === "valid") assertMatchingDatabaseIdentity(effectiveIdentity, state.value.databaseIdentity);
+    return {
+      ...await statusWithClient(
+        client,
+        state.kind === "valid" ? state.value.phase : "ABSENT",
+        state.kind === "valid" ? state.value : undefined,
+      ),
+      mode: "status" as const,
+      databaseIdentity: effectiveIdentity,
+    };
+  }
   finally { client.release(); }
 }
 
-export async function cleanupStudentEmailNotificationsFixture(pool: Pool, databaseIdentity: StudentEmailNotificationsDatabaseIdentity) {
+export async function cleanupStudentEmailNotificationsFixture(
+  pool: Pool,
+  databaseIdentity: StudentEmailNotificationsDatabaseIdentity,
+  dependencies: FixtureDependencies = {},
+) {
   const state = await readState();
+  if (state.kind === "invalid") throw new Error(state.reason);
   const client = await pool.connect();
   try {
-    if (!state) {
+    const effectiveIdentity = await resolveEffectiveDatabaseIdentity(client, databaseIdentity);
+    if (state.kind === "absent") {
       const proof = assertZeroStudentEmailNotificationsResidue(await residue(client));
-      return { mode: "cleanup" as const, phase: "ABSENT" as const, databaseIdentity, residue: proof };
+      return { mode: "cleanup" as const, phase: "ABSENT" as const, databaseIdentity: effectiveIdentity, residue: proof };
     }
-    assertMatchingDatabaseIdentity(databaseIdentity, state.databaseIdentity);
-    await removeOwnedRows(client);
-    assertZeroDatabaseResidue(await databaseResidue(client));
-    await rm(FIXTURE_DIRECTORY, { recursive: true, force: true });
-    const proof = assertZeroStudentEmailNotificationsResidue(await residue(client));
-    return { mode: "cleanup" as const, phase: "ABSENT" as const, databaseIdentity, residue: proof };
+    assertMatchingDatabaseIdentity(effectiveIdentity, state.value.databaseIdentity);
+    const proof = await cleanupPreparedState(client, state.value, dependencies);
+    return { mode: "cleanup" as const, phase: "ABSENT" as const, databaseIdentity: effectiveIdentity, residue: proof };
   } finally { client.release(); }
 }
 
