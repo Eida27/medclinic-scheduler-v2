@@ -7,6 +7,7 @@ import {
   lockAdminEmailDeliveryStudent,
   lockAdminEmailVerificationRequest,
   lockAdminEmailDeliveryRow,
+  lockAdminScheduleMutationQueue,
   lockAdminScheduleStateRows,
   mapAdminEmailDeliveryRow,
   obsoleteAdminEmailDeliveryFailure,
@@ -77,6 +78,7 @@ async function lockDeliveryMutationContext(client: PoolClient, id: string) {
   let verifiedEmail: string | null = null;
   let verificationRetryEligible = false;
   if (identity.messageKind === "SCHEDULE" && identity.studentNumber) {
+    await lockAdminScheduleMutationQueue(client);
     await lockEffectiveAppointmentScopes(client, [
       { studentNumber: identity.studentNumber, scheduleType: "LABORATORY" },
       { studentNumber: identity.studentNumber, scheduleType: "PHYSICAL_EXAM" },

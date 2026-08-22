@@ -1,13 +1,16 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { pool } from "@/server/db/pool";
+import { loadAuthoritativeScheduleState } from "@/server/repositories/schedule-state.repository";
+import { fingerprintScheduleState } from "@/server/schedule/schedule-notifications";
+import { retryAdminEmailDelivery } from "@/server/services/admin-email-deliveries.service";
 import {
   claimEmailOutboxMessages,
   deliverClaimedEmail,
   obsoleteEmailOutboxMessage,
 } from "@/server/services/email-outbox.service";
 import { encryptVerificationEmailBody } from "@/server/email/verification-body-encryption";
-import { cleanupTestFixtures, insertTestStudent } from "@/test/integration-fixtures";
+import { cleanupTestFixtures, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import {
   EMAIL_OUTBOX_INTERVAL_MS,
   startEmailOutboxWorker,
@@ -22,6 +25,10 @@ async function cleanup() {
 }
 
 async function outbox(studentNumber: string, attempts = 0) {
+  await pool.query(
+    "UPDATE students SET email=$2,email_verified_at=clock_timestamp() WHERE student_number=$1",
+    [studentNumber, `${studentNumber}@example.test`],
+  );
   const result = await pool.query<{ id: string }>(
     `INSERT INTO email_outbox (
        student_number, to_email, subject, text_body, attempts, next_attempt_at
@@ -29,6 +36,32 @@ async function outbox(studentNumber: string, attempts = 0) {
     [studentNumber, `${studentNumber}@example.test`, attempts],
   );
   return result.rows[0].id;
+}
+
+async function currentScheduleFingerprint(studentNumber: string) {
+  const client = await pool.connect();
+  try {
+    const state = await loadAuthoritativeScheduleState(client, studentNumber);
+    if (!state) throw new Error("Missing schedule state fixture");
+    return fingerprintScheduleState(state);
+  } finally {
+    client.release();
+  }
+}
+
+async function waitForStudentDeliveryLock() {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const waiting = await pool.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count
+         FROM pg_stat_activity
+        WHERE datname=current_database() AND pid<>pg_backend_pid()
+          AND state='active' AND wait_event_type='Lock'
+          AND query ILIKE '%FROM students%FOR NO KEY UPDATE%'`,
+    );
+    if (waiting.rows[0].count > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("Expected schedule delivery to wait for the student address lock.");
 }
 
 async function verificationOutbox(studentNumber: string, body: string) {
@@ -107,6 +140,72 @@ describe("email outbox delivery", () => {
       action: "EMAIL_OUTBOX_DELIVERED",
       metadata: expect.objectContaining({ messageKind: "SCHEDULE", attempts: 1 }),
     }]);
+  });
+
+  it("obsoletes an admin-retried schedule message when address replacement commits before delivery", async () => {
+    const studentNumber = "99-9209-09";
+    const oldAddress = "former-address@example.test";
+    await insertTestStudent({ studentNumber, firstName: "Former", lastName: "Address", yearLevel: 3 });
+    await pool.query(
+      "UPDATE students SET email=$2,email_verified_at=clock_timestamp() WHERE student_number=$1",
+      [studentNumber, oldAddress],
+    );
+    const fingerprint = await currentScheduleFingerprint(studentNumber);
+    const inserted = await pool.query<{ id: string }>(
+      `INSERT INTO email_outbox (
+         student_number,to_email,subject,text_body,status,attempts,last_error,next_attempt_at,
+         message_kind,notification_type,source_type,source_id,schedule_fingerprint,last_attempt_status
+       ) VALUES (
+         $1,$2,'Current schedule','Safe schedule body','PERMANENT_FAILURE',10,
+         'Prior delivery failure.','2027-08-01T00:00:00Z','SCHEDULE',
+         'SCHEDULE_CURRENT_STATE','CURRENT_SCHEDULE_STATE',$3::text,$3::char(64),'PERMANENT_FAILURE'
+       ) RETURNING id::text`,
+      [studentNumber, oldAddress, fingerprint],
+    );
+    await retryAdminEmailDelivery(inserted.rows[0].id, TEST_REFERENCE_IDS.adminUser);
+    const [message] = await claimEmailOutboxMessages(1, new Date("2027-08-02T00:00:00.000Z"));
+    const transport = { sendMail: vi.fn().mockResolvedValue({ messageId: "must-not-send" }) };
+    const replacement = await pool.connect();
+    let committed = false;
+    try {
+      await replacement.query("BEGIN");
+      await replacement.query(
+        "SELECT student_number FROM students WHERE student_number=$1 FOR UPDATE",
+        [studentNumber],
+      );
+      await replacement.query(
+        "UPDATE students SET email='current-address@example.test',email_verified_at=clock_timestamp() WHERE student_number=$1",
+        [studentNumber],
+      );
+      const delivery = deliverClaimedEmail(
+        message,
+        transport,
+        new Date("2027-08-02T00:00:00.000Z"),
+        "clinic@example.test",
+      );
+      await waitForStudentDeliveryLock();
+      await replacement.query("COMMIT");
+      committed = true;
+
+      await expect(delivery).resolves.toEqual({ status: "OBSOLETE" });
+      expect(transport.sendMail).not.toHaveBeenCalled();
+      const stored = await pool.query<{ status: string; attempts: number }>(
+        "SELECT status,attempts FROM email_outbox WHERE id=$1",
+        [inserted.rows[0].id],
+      );
+      expect(stored.rows[0]).toEqual({ status: "OBSOLETE", attempts: 0 });
+      const audit = await pool.query<{ action: string; metadata: Record<string, unknown> }>(
+        "SELECT action,metadata FROM audit_logs WHERE entity_type='email_outbox' AND entity_id=$1 ORDER BY created_at DESC LIMIT 1",
+        [inserted.rows[0].id],
+      );
+      expect(audit.rows[0]).toEqual({
+        action: "EMAIL_OUTBOX_OBSOLETE",
+        metadata: expect.objectContaining({ reason: "VERIFIED_ADDRESS_CHANGED" }),
+      });
+    } finally {
+      if (!committed) await replacement.query("ROLLBACK");
+      replacement.release();
+    }
   });
 
   it("decrypts verification content only for delivery and clears ciphertext after success", async () => {

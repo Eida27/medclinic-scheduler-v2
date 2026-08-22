@@ -17,6 +17,8 @@ import {
 const studentPattern = "ADM-DEL-%";
 
 async function cleanup() {
+  await pool.query("DELETE FROM clinic_closure_manual_cases WHERE student_number LIKE $1", [studentPattern]);
+  await pool.query("DELETE FROM clinic_closure_groups WHERE reason LIKE 'ADM-DEL-MANUAL-%'");
   await cleanupTestFixtures(studentPattern, "ADM-DEL-%", "ADM-DEL-%");
 }
 
@@ -34,6 +36,21 @@ async function waitForRowLockWaiter(tableName: "students" | "appointments") {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   throw new Error(`Expected ${tableName} row-lock waiter.`);
+}
+
+async function waitForManualResolutionQueueWaiter() {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const waiting = await pool.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count
+         FROM pg_stat_activity
+        WHERE datname=current_database() AND pid<>pg_backend_pid()
+          AND state='active' AND wait_event_type='Lock'
+          AND query ILIKE '%pg_advisory_xact_lock%medclinic:schedule-import-queue%'`,
+    );
+    if (waiting.rows[0].count > 0) return true;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return false;
 }
 
 async function verifiedStudent(studentNumber: string) {
@@ -75,6 +92,31 @@ async function failedSchedule(studentNumber: string, fingerprint: string, error 
     [studentNumber, `${studentNumber.toLowerCase()}@example.test`, error, fingerprint],
   );
   return result.rows[0].id;
+}
+
+async function openManualResolutionFixture(studentNumber: string, appointmentDate: string) {
+  const appointment = await pool.query<{ id: string }>(
+    `INSERT INTO appointments (
+       clinic_id,student_number,schedule_type,appointment_date,status,is_published,schedule_cycle_start
+     ) VALUES ($1,$2,'LABORATORY',$3,'PENDING',TRUE,2096) RETURNING id::text`,
+    [TEST_REFERENCE_IDS.laboratoryClinic, studentNumber, appointmentDate],
+  );
+  const closure = await pool.query<{ id: string }>(
+    `INSERT INTO clinic_closure_groups (
+       start_date,end_date,category,reason,created_by,creation_batch_id,recovery_mode
+     ) VALUES ('2096-05-05','2096-05-05','CLOSURE',$1,$2,gen_random_uuid(),'MANUAL_ALL')
+     RETURNING id::text`,
+    [`ADM-DEL-MANUAL-${studentNumber}`, TEST_REFERENCE_IDS.adminUser],
+  );
+  const manualCase = await pool.query<{ id: string }>(
+    `INSERT INTO clinic_closure_manual_cases (
+       student_number,closure_group_id,schedule_cycle_start,
+       affected_laboratory_appointment_id,reason_code,reason_message
+     ) VALUES ($1,$2,2096,$3,'NO_REPLACEMENT_CAPACITY','Manual Resolution lock fixture.')
+     RETURNING id::text`,
+    [studentNumber, closure.rows[0].id, appointment.rows[0].id],
+  );
+  return { appointmentId: appointment.rows[0].id, manualCaseId: manualCase.rows[0].id };
 }
 
 beforeAll(cleanup);
@@ -458,6 +500,88 @@ describe("administrator email-delivery service", () => {
     } finally {
       if (!committed) await blocker.query("ROLLBACK");
       blocker.release();
+    }
+  });
+
+  it("serializes admin retry behind Manual Resolution and revalidates instead of deadlocking", async () => {
+    const studentNumber = "ADM-DEL-MRETRY";
+    await verifiedStudent(studentNumber);
+    const fixture = await openManualResolutionFixture(studentNumber, "2096-05-06");
+    const fingerprint = await currentScheduleFingerprint(studentNumber);
+    const outboxId = await failedSchedule(studentNumber, fingerprint);
+    const manualResolution = await pool.connect();
+    let committed = false;
+    try {
+      await manualResolution.query("BEGIN");
+      await manualResolution.query("SELECT pg_advisory_xact_lock(hashtext('medclinic:schedule-import-queue'))");
+      await manualResolution.query(
+        "SELECT id FROM clinic_closure_manual_cases WHERE id=$1 FOR UPDATE",
+        [fixture.manualCaseId],
+      );
+      await manualResolution.query(
+        "UPDATE appointments SET status='CANCELLED' WHERE id=$1",
+        [fixture.appointmentId],
+      );
+      const retry = retryAdminEmailDelivery(outboxId, TEST_REFERENCE_IDS.adminUser).then(
+        (value) => ({ outcome: "resolved" as const, value }),
+        (error: unknown) => ({ outcome: "rejected" as const, error }),
+      );
+      const waitedForManualResolution = await waitForManualResolutionQueueWaiter();
+      await manualResolution.query("COMMIT");
+      committed = true;
+
+      expect(waitedForManualResolution).toBe(true);
+      await expect(retry).resolves.toEqual({
+        outcome: "rejected",
+        error: expect.objectContaining({ code: "STALE_SCHEDULE_EMAIL", status: 409 }),
+      });
+      const stored = await pool.query<{ status: string; attempts: number }>(
+        "SELECT status,attempts FROM email_outbox WHERE id=$1",
+        [outboxId],
+      );
+      expect(stored.rows[0]).toEqual({ status: "PERMANENT_FAILURE", attempts: 10 });
+    } finally {
+      if (!committed) await manualResolution.query("ROLLBACK");
+      manualResolution.release();
+    }
+  });
+
+  it("serializes queue-current behind Manual Resolution and queues the revalidated state", async () => {
+    const studentNumber = "ADM-DEL-MQUEUE";
+    await verifiedStudent(studentNumber);
+    const fixture = await openManualResolutionFixture(studentNumber, "2096-05-07");
+    const fingerprint = await currentScheduleFingerprint(studentNumber);
+    const outboxId = await failedSchedule(studentNumber, fingerprint);
+    const manualResolution = await pool.connect();
+    let committed = false;
+    try {
+      await manualResolution.query("BEGIN");
+      await manualResolution.query("SELECT pg_advisory_xact_lock(hashtext('medclinic:schedule-import-queue'))");
+      await manualResolution.query(
+        "SELECT id FROM clinic_closure_manual_cases WHERE id=$1 FOR UPDATE",
+        [fixture.manualCaseId],
+      );
+      await manualResolution.query(
+        "UPDATE appointments SET appointment_date='2096-05-08' WHERE id=$1",
+        [fixture.appointmentId],
+      );
+      const queue = queueCurrentAdminEmailDelivery(outboxId, TEST_REFERENCE_IDS.adminUser);
+      const waitedForManualResolution = await waitForManualResolutionQueueWaiter();
+      await manualResolution.query("COMMIT");
+      committed = true;
+
+      expect(waitedForManualResolution).toBe(true);
+      await expect(queue).resolves.toMatchObject({
+        queued: true,
+        currentState: {
+          studentNumber,
+          laboratory: { date: "2096-05-08" },
+          manualResolutionOpen: true,
+        },
+      });
+    } finally {
+      if (!committed) await manualResolution.query("ROLLBACK");
+      manualResolution.release();
     }
   });
 });

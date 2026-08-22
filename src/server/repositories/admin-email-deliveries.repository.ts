@@ -164,19 +164,23 @@ export async function lockAdminEmailVerificationRequest(client: PoolClient, sour
 
 export async function lockAdminScheduleStateRows(client: PoolClient, studentNumber: string) {
   await client.query(
-    `SELECT id FROM appointments
-      WHERE student_number=$1
-      ORDER BY id
-      FOR UPDATE`,
-    [studentNumber],
-  );
-  await client.query(
     `SELECT id FROM clinic_closure_manual_cases
       WHERE student_number=$1
       ORDER BY id
       FOR UPDATE`,
     [studentNumber],
   );
+  await client.query(
+    `SELECT id FROM appointments
+      WHERE student_number=$1
+      ORDER BY id
+      FOR UPDATE`,
+    [studentNumber],
+  );
+}
+
+export async function lockAdminScheduleMutationQueue(client: PoolClient) {
+  await client.query("SELECT pg_advisory_xact_lock(hashtext('medclinic:schedule-import-queue'))");
 }
 
 export async function lockAdminEmailDeliveryRow(client: PoolClient, id: string) {
