@@ -31,7 +31,7 @@ const safeDelivery = {
     messageKind: "SCHEDULE",
     notificationType: "SCHEDULE_CURRENT_STATE",
     sourceType: "CURRENT_SCHEDULE_STATE",
-    sourceId: "safe-source",
+    sourceId: null,
   },
   failureReason: "Email service authentication failed.",
   actionable: true,
@@ -55,6 +55,8 @@ describe("administrator email-delivery APIs", () => {
     expect(await defaultResponse.json()).toEqual({ data: { scope: "actionable", items: [safeDelivery] } });
     expect(JSON.stringify(await (await GET(new Request("http://localhost/api/admin/email-deliveries"))).json()))
       .not.toContain("student@example.test");
+    expect(JSON.stringify(await (await GET(new Request("http://localhost/api/admin/email-deliveries"))).json()))
+      .not.toMatch(/[0-9a-f]{64}/i);
 
     await GET(new Request("http://localhost/api/admin/email-deliveries?scope=history&state=Retrying"));
     expect(mocks.listAdminEmailDeliveries).toHaveBeenLastCalledWith({ scope: "history", state: "Retrying" });

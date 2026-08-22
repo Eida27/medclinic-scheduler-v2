@@ -1,15 +1,15 @@
-import { notFound } from "next/navigation";
+import { forbidden } from "next/navigation";
 import { EmailDeliveryMonitor } from "@/components/settings/EmailDeliveryMonitor";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { AppError } from "@/lib/errors";
-import { requireUser } from "@/server/auth/current-user";
+import { requireAdministrator } from "@/server/auth/admin-authorization";
 import { listAdminEmailDeliveries } from "@/server/services/admin-email-deliveries.service";
 
 export default async function EmailDeliveryPage() {
   try {
-    await requireUser(["ADMIN"]);
+    await requireAdministrator();
   } catch (error) {
-    if (error instanceof AppError && error.status === 403) notFound();
+    if (error instanceof AppError && error.status === 403) forbidden();
     throw error;
   }
   const deliveries = await listAdminEmailDeliveries({});

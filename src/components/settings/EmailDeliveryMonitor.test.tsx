@@ -87,4 +87,48 @@ describe("EmailDeliveryMonitor", () => {
       { cache: "no-store" },
     ));
   });
+
+  it("shows an accessible filter error for a non-OK response", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: { message: "Delivery history is temporarily unavailable." },
+    }), { status: 503, headers: { "Content-Type": "application/json" } })));
+    const user = userEvent.setup();
+    render(<EmailDeliveryMonitor initialItems={[failure]} />);
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "View" }), "history");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Delivery history is temporarily unavailable.");
+    expect(screen.getByText("s***@example.test")).toBeVisible();
+  });
+
+  it("handles a non-JSON filter failure without an unhandled rejection", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("Bad gateway", { status: 502 })));
+    const user = userEvent.setup();
+    render(<EmailDeliveryMonitor initialItems={[failure]} />);
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "View" }), "history");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Unable to load email deliveries. Try again.");
+  });
+
+  it("handles a rejected mutation request without an unhandled rejection", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("Network disconnected")));
+    const user = userEvent.setup();
+    render(<EmailDeliveryMonitor initialItems={[failure]} />);
+
+    await user.click(screen.getByRole("button", { name: "Retry delivery" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Unable to update email delivery. Try again.");
+    expect(screen.getByRole("button", { name: "Retry delivery" })).toBeEnabled();
+  });
+
+  it("handles a non-JSON mutation failure without exposing its response body", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      "upstream smtp password=secret",
+      { status: 500 },
+    )));
+    const user = userEvent.setup();
+    render(<EmailDeliveryMonitor initialItems={[failure]} />);
+
+    await user.click(screen.getByRole("button", { name: "Retry delivery" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Unable to update email delivery. Try again.");
+    expect(document.body.textContent).not.toContain("password=secret");
+  });
 });

@@ -1,17 +1,23 @@
 import "server-only";
+import type { PoolClient } from "pg";
 import { AppError } from "@/lib/errors";
 import { transaction } from "@/server/db/pool";
 import {
   listAdminEmailDeliveryRows,
+  lockAdminEmailDeliveryStudent,
+  lockAdminEmailVerificationRequest,
   lockAdminEmailDeliveryRow,
+  lockAdminScheduleStateRows,
   mapAdminEmailDeliveryRow,
   obsoleteAdminEmailDeliveryFailure,
+  readAdminEmailDeliveryIdentity,
   resetAdminEmailDeliveryFailure,
   type EmailDeliveryState,
 } from "@/server/repositories/admin-email-deliveries.repository";
 import { writeAudit } from "@/server/repositories/audit.repository";
 import { loadAuthoritativeScheduleState } from "@/server/repositories/schedule-state.repository";
 import { insertStudentNotifications } from "@/server/repositories/student-notifications.repository";
+import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import {
   buildCurrentStateNotification,
   fingerprintScheduleState,
@@ -60,10 +66,38 @@ function retryRejectedForVerification() {
   );
 }
 
+function normalizeDestination(value: string) {
+  return value.trim().toLowerCase();
+}
+
+async function lockDeliveryMutationContext(client: PoolClient, id: string) {
+  const identity = await readAdminEmailDeliveryIdentity(client, id);
+  if (!identity) throw new AppError("EMAIL_DELIVERY_NOT_FOUND", "Email delivery not found.", 404);
+
+  let verifiedEmail: string | null = null;
+  let verificationRetryEligible = false;
+  if (identity.messageKind === "SCHEDULE" && identity.studentNumber) {
+    await lockEffectiveAppointmentScopes(client, [
+      { studentNumber: identity.studentNumber, scheduleType: "LABORATORY" },
+      { studentNumber: identity.studentNumber, scheduleType: "PHYSICAL_EXAM" },
+    ]);
+    const student = await lockAdminEmailDeliveryStudent(client, identity.studentNumber, "NO KEY UPDATE");
+    verifiedEmail = student?.verifiedEmail ?? null;
+    await lockAdminScheduleStateRows(client, identity.studentNumber);
+  } else if (identity.messageKind === "VERIFICATION" && identity.studentNumber) {
+    const student = await lockAdminEmailDeliveryStudent(client, identity.studentNumber, "UPDATE");
+    const verification = await lockAdminEmailVerificationRequest(client, identity.sourceId);
+    verificationRetryEligible = Boolean(student?.isActive && verification?.retryEligible);
+  }
+
+  const row = await lockAdminEmailDeliveryRow(client, id);
+  if (!row) throw new AppError("EMAIL_DELIVERY_NOT_FOUND", "Email delivery not found.", 404);
+  return { row, verifiedEmail, verificationRetryEligible };
+}
+
 export async function retryAdminEmailDelivery(id: string, actorUserId: string) {
   return transaction(async (client) => {
-    const row = await lockAdminEmailDeliveryRow(client, id);
-    if (!row) throw new AppError("EMAIL_DELIVERY_NOT_FOUND", "Email delivery not found.", 404);
+    const { row, verifiedEmail, verificationRetryEligible } = await lockDeliveryMutationContext(client, id);
     if (row.status !== "PERMANENT_FAILURE") {
       if (row.messageKind === "VERIFICATION") throw retryRejectedForVerification();
       throw new AppError(
@@ -74,7 +108,7 @@ export async function retryAdminEmailDelivery(id: string, actorUserId: string) {
     }
 
     if (row.messageKind === "VERIFICATION") {
-      if (!row.verificationRetryEligible) throw retryRejectedForVerification();
+      if (!verificationRetryEligible) throw retryRejectedForVerification();
     } else {
       if (!row.studentNumber) {
         throw new AppError("STALE_SCHEDULE_EMAIL", "This schedule email is no longer current.", 409, undefined, {
@@ -83,6 +117,13 @@ export async function retryAdminEmailDelivery(id: string, actorUserId: string) {
         });
       }
       const state = await loadAuthoritativeScheduleState(client, row.studentNumber);
+      if (verifiedEmail !== normalizeDestination(row.toEmail)) {
+        throw new AppError("STALE_SCHEDULE_EMAIL", "This schedule email targets a former address.", 409, undefined, {
+          reason: "VERIFIED_ADDRESS_CHANGED",
+          guidance: "Queue the student's current schedule to the verified address instead.",
+          currentState: safeCurrentState(state),
+        });
+      }
       if (!state || row.scheduleFingerprint !== fingerprintScheduleState(state)) {
         throw new AppError("STALE_SCHEDULE_EMAIL", "This schedule email is no longer current.", 409, undefined, {
           guidance: "Queue the student's current schedule instead.",
@@ -118,11 +159,11 @@ export async function retryAdminEmailDelivery(id: string, actorUserId: string) {
 
 export async function queueCurrentAdminEmailDelivery(id: string, actorUserId: string) {
   return transaction(async (client) => {
-    const row = await lockAdminEmailDeliveryRow(client, id);
-    if (!row) throw new AppError("EMAIL_DELIVERY_NOT_FOUND", "Email delivery not found.", 404);
+    const { row, verifiedEmail } = await lockDeliveryMutationContext(client, id);
     if (
       row.messageKind !== "SCHEDULE"
       || !row.studentNumber
+      || !verifiedEmail
       || (row.status !== "PERMANENT_FAILURE" && row.status !== "OBSOLETE")
     ) {
       throw new AppError(

@@ -25,6 +25,14 @@ type ApiError = {
   details?: { guidance?: string; currentState?: SafeCurrentState | null };
 };
 
+async function readJsonResponse(response: Response) {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
 export function EmailDeliveryMonitor({ initialItems }: { initialItems: AdminEmailDelivery[] }) {
   const [items, setItems] = useState(initialItems);
   const [scope, setScope] = useState<"actionable" | "history">("actionable");
@@ -32,13 +40,27 @@ export function EmailDeliveryMonitor({ initialItems }: { initialItems: AdminEmai
   const [busyId, setBusyId] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, ApiError>>({});
   const [messages, setMessages] = useState<Record<string, string>>({});
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   async function load(nextScope: "actionable" | "history", nextState = state) {
-    const params = new URLSearchParams({ scope: nextScope });
-    if (nextState) params.set("state", nextState);
-    const response = await fetch(`/api/admin/email-deliveries?${params}`, { cache: "no-store" });
-    const payload = await response.json();
-    if (response.ok) setItems(payload.data.items);
+    setLoadError(null);
+    try {
+      const params = new URLSearchParams({ scope: nextScope });
+      if (nextState) params.set("state", nextState);
+      const response = await fetch(`/api/admin/email-deliveries?${params}`, { cache: "no-store" });
+      const payload = await readJsonResponse(response);
+      if (!response.ok) {
+        setLoadError(payload?.error?.message ?? "Unable to load email deliveries. Try again.");
+        return;
+      }
+      if (!Array.isArray(payload?.data?.items)) {
+        setLoadError("Unable to load email deliveries. Try again.");
+        return;
+      }
+      setItems(payload.data.items);
+    } catch {
+      setLoadError("Unable to load email deliveries. Try again.");
+    }
   }
 
   async function mutate(item: AdminEmailDelivery, action: "retry" | "queue-current") {
@@ -47,9 +69,19 @@ export function EmailDeliveryMonitor({ initialItems }: { initialItems: AdminEmai
     setMessages((current) => ({ ...current, [item.id]: "" }));
     try {
       const response = await fetch(`/api/admin/email-deliveries/${item.id}/${action}`, { method: "POST" });
-      const payload = await response.json();
+      const payload = await readJsonResponse(response);
       if (!response.ok) {
-        setErrors((current) => ({ ...current, [item.id]: payload.error ?? {} }));
+        setErrors((current) => ({
+          ...current,
+          [item.id]: payload?.error ?? { message: "Unable to update email delivery. Try again." },
+        }));
+        return;
+      }
+      if (!payload?.data) {
+        setErrors((current) => ({
+          ...current,
+          [item.id]: { message: "Unable to update email delivery. Try again." },
+        }));
         return;
       }
       if (action === "retry") {
@@ -58,6 +90,11 @@ export function EmailDeliveryMonitor({ initialItems }: { initialItems: AdminEmai
       } else {
         setMessages((current) => ({ ...current, [item.id]: "Current schedule queued." }));
       }
+    } catch {
+      setErrors((current) => ({
+        ...current,
+        [item.id]: { message: "Unable to update email delivery. Try again." },
+      }));
     } finally {
       setBusyId(null);
     }
@@ -110,6 +147,7 @@ export function EmailDeliveryMonitor({ initialItems }: { initialItems: AdminEmai
           </select>
         </label>
       </Card>
+      {loadError ? <p role="alert" className="text-sm font-semibold text-red-800">{loadError}</p> : null}
 
       {!items.length ? (
         <Card><p className="text-sm text-muted">{scope === "actionable" ? "No actionable delivery failures." : "No delivery history matches these filters."}</p></Card>

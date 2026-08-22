@@ -20,6 +20,22 @@ async function cleanup() {
   await cleanupTestFixtures(studentPattern, "ADM-DEL-%", "ADM-DEL-%");
 }
 
+async function waitForRowLockWaiter(tableName: "students" | "appointments") {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const waiting = await pool.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count
+         FROM pg_stat_activity
+        WHERE datname=current_database() AND pid<>pg_backend_pid()
+          AND state='active' AND wait_event_type='Lock'
+          AND query ILIKE $1 AND query ILIKE '%FOR UPDATE%'`,
+      [`%FROM ${tableName}%`],
+    );
+    if (waiting.rows[0].count > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Expected ${tableName} row-lock waiter.`);
+}
+
 async function verifiedStudent(studentNumber: string) {
   await insertTestStudent({
     studentNumber,
@@ -97,7 +113,7 @@ describe("administrator email-delivery service", () => {
           messageKind: "SCHEDULE",
           notificationType: "SCHEDULE_CURRENT_STATE",
           sourceType: "CURRENT_SCHEDULE_STATE",
-          sourceId: "a".repeat(64),
+          sourceId: null,
         },
         failureReason: "Email service authentication failed.",
         actionable: true,
@@ -105,6 +121,7 @@ describe("administrator email-delivery service", () => {
     });
     expect(JSON.stringify(actionable)).not.toContain("raw-secret");
     expect(JSON.stringify(actionable)).not.toContain("adm-del-list@example.test");
+    expect(JSON.stringify(actionable)).not.toMatch(/[0-9a-f]{64}/i);
 
     const history = await listAdminEmailDeliveries({ scope: "history", state: "Sent" });
     expect(history.scope).toBe("history");
@@ -149,6 +166,36 @@ describe("administrator email-delivery service", () => {
     await expect(retryAdminEmailDelivery(id, TEST_REFERENCE_IDS.adminUser)).rejects.toMatchObject({
       code: "EMAIL_DELIVERY_NOT_RETRYABLE",
       status: 409,
+    });
+  });
+
+  it("rejects retry to a former address after verified-email replacement and leaves the old row failed", async () => {
+    await verifiedStudent("ADM-DEL-ADDRESS");
+    const fingerprint = await currentScheduleFingerprint("ADM-DEL-ADDRESS");
+    const id = await failedSchedule("ADM-DEL-ADDRESS", fingerprint);
+    await pool.query(
+      `UPDATE students
+          SET email='new-address@example.test',email_verified_at=clock_timestamp()
+        WHERE student_number='ADM-DEL-ADDRESS'`,
+    );
+
+    await expect(retryAdminEmailDelivery(id, TEST_REFERENCE_IDS.adminUser)).rejects.toMatchObject({
+      code: "STALE_SCHEDULE_EMAIL",
+      status: 409,
+      details: {
+        reason: "VERIFIED_ADDRESS_CHANGED",
+        guidance: "Queue the student's current schedule to the verified address instead.",
+        currentState: expect.objectContaining({ studentNumber: "ADM-DEL-ADDRESS" }),
+      },
+    });
+    const stored = await pool.query<{ status: string; attempts: number; to_email: string }>(
+      "SELECT status,attempts,to_email FROM email_outbox WHERE id=$1",
+      [id],
+    );
+    expect(stored.rows[0]).toEqual({
+      status: "PERMANENT_FAILURE",
+      attempts: 10,
+      to_email: "adm-del-address@example.test",
     });
   });
 
@@ -284,5 +331,133 @@ describe("administrator email-delivery service", () => {
       context: { messageKind: "VERIFICATION" },
     });
     expect(JSON.stringify(result)).not.toContain("raw-encrypted-envelope");
+  });
+
+  it("waits for verification consumption and rechecks eligibility before resetting", async () => {
+    const studentNumber = "ADM-DEL-VRACE";
+    await verifiedStudent(studentNumber);
+    const verification = await pool.query<{ id: string }>(
+      `INSERT INTO student_email_verifications (
+         student_number,pending_email,token_hash,expires_at
+       ) VALUES ($1,'vrace@example.test',$2,NOW()+INTERVAL '30 minutes') RETURNING id::text`,
+      [studentNumber, "vrace".padEnd(64, "0")],
+    );
+    const outbox = await pool.query<{ id: string }>(
+      `INSERT INTO email_outbox (
+         student_number,to_email,subject,text_body,status,attempts,last_error,message_kind,
+         notification_type,source_type,source_id,verification_body_encrypted,last_attempt_status
+       ) VALUES (
+         $1,'vrace@example.test','Verify your MedClinic notification email',
+         'Verification email content is encrypted.','PERMANENT_FAILURE',10,
+         'Verification email delivery failed.','VERIFICATION','EMAIL_VERIFICATION',
+         'STUDENT_EMAIL_VERIFICATION',$2,'v1.concurrent-envelope','PERMANENT_FAILURE'
+       ) RETURNING id::text`,
+      [studentNumber, verification.rows[0].id],
+    );
+    const blocker = await pool.connect();
+    let committed = false;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT student_number FROM students WHERE student_number=$1 FOR UPDATE", [studentNumber]);
+      const retry = retryAdminEmailDelivery(outbox.rows[0].id, TEST_REFERENCE_IDS.adminUser).then(
+        (value) => ({ outcome: "resolved" as const, value }),
+        (error: unknown) => ({ outcome: "rejected" as const, error }),
+      );
+      await waitForRowLockWaiter("students");
+      await blocker.query(
+        "UPDATE student_email_verifications SET consumed_at=clock_timestamp() WHERE id=$1",
+        [verification.rows[0].id],
+      );
+      await blocker.query("COMMIT");
+      committed = true;
+
+      await expect(retry).resolves.toEqual({
+        outcome: "rejected",
+        error: expect.objectContaining({ code: "EMAIL_VERIFICATION_RETRY_REJECTED", status: 409 }),
+      });
+      const stored = await pool.query<{ status: string; attempts: number }>(
+        "SELECT status,attempts FROM email_outbox WHERE id=$1",
+        [outbox.rows[0].id],
+      );
+      expect(stored.rows[0]).toEqual({ status: "PERMANENT_FAILURE", attempts: 10 });
+    } finally {
+      if (!committed) await blocker.query("ROLLBACK");
+      blocker.release();
+    }
+  });
+
+  it("waits for a schedule mutation and rechecks the fingerprint before resetting", async () => {
+    const studentNumber = "ADM-DEL-SRACE";
+    await verifiedStudent(studentNumber);
+    const appointment = await pool.query<{ id: string }>(
+      `INSERT INTO appointments (
+         clinic_id,student_number,schedule_type,appointment_date,status,is_published,schedule_cycle_start
+       ) VALUES ($1,$2,'LABORATORY','2095-03-03','PENDING',TRUE,2095) RETURNING id::text`,
+      [TEST_REFERENCE_IDS.laboratoryClinic, studentNumber],
+    );
+    const fingerprint = await currentScheduleFingerprint(studentNumber);
+    const outboxId = await failedSchedule(studentNumber, fingerprint);
+    const blocker = await pool.connect();
+    let committed = false;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("UPDATE appointments SET status='CANCELLED' WHERE id=$1", [appointment.rows[0].id]);
+      const retry = retryAdminEmailDelivery(outboxId, TEST_REFERENCE_IDS.adminUser).then(
+        (value) => ({ outcome: "resolved" as const, value }),
+        (error: unknown) => ({ outcome: "rejected" as const, error }),
+      );
+      await waitForRowLockWaiter("appointments");
+      await blocker.query("COMMIT");
+      committed = true;
+
+      await expect(retry).resolves.toEqual({
+        outcome: "rejected",
+        error: expect.objectContaining({ code: "STALE_SCHEDULE_EMAIL", status: 409 }),
+      });
+      const stored = await pool.query<{ status: string; attempts: number }>(
+        "SELECT status,attempts FROM email_outbox WHERE id=$1",
+        [outboxId],
+      );
+      expect(stored.rows[0]).toEqual({ status: "PERMANENT_FAILURE", attempts: 10 });
+    } finally {
+      if (!committed) await blocker.query("ROLLBACK");
+      blocker.release();
+    }
+  });
+
+  it("waits for a schedule mutation before queueing the authoritative current state", async () => {
+    const studentNumber = "ADM-DEL-QRACE";
+    await verifiedStudent(studentNumber);
+    const appointment = await pool.query<{ id: string }>(
+      `INSERT INTO appointments (
+         clinic_id,student_number,schedule_type,appointment_date,status,is_published,schedule_cycle_start
+       ) VALUES ($1,$2,'LABORATORY','2095-04-04','PENDING',TRUE,2095) RETURNING id::text`,
+      [TEST_REFERENCE_IDS.laboratoryClinic, studentNumber],
+    );
+    const fingerprint = await currentScheduleFingerprint(studentNumber);
+    const outboxId = await failedSchedule(studentNumber, fingerprint);
+    const blocker = await pool.connect();
+    let committed = false;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("UPDATE appointments SET appointment_date='2095-04-05' WHERE id=$1", [appointment.rows[0].id]);
+      const queue = queueCurrentAdminEmailDelivery(outboxId, TEST_REFERENCE_IDS.adminUser);
+      await waitForRowLockWaiter("appointments");
+      await blocker.query("COMMIT");
+      committed = true;
+
+      await expect(queue).resolves.toMatchObject({
+        queued: true,
+        currentState: {
+          studentNumber,
+          laboratory: { date: "2095-04-05" },
+        },
+      });
+      const stored = await pool.query<{ status: string }>("SELECT status FROM email_outbox WHERE id=$1", [outboxId]);
+      expect(stored.rows[0].status).toBe("OBSOLETE");
+    } finally {
+      if (!committed) await blocker.query("ROLLBACK");
+      blocker.release();
+    }
   });
 });

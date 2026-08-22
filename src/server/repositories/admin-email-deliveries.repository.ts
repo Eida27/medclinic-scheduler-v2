@@ -26,9 +26,12 @@ export type AdminEmailDeliveryRow = {
   scheduleFingerprint: string | null;
 };
 
-export type LockedAdminEmailDeliveryRow = AdminEmailDeliveryRow & {
-  verificationRetryEligible: boolean;
-};
+export type LockedAdminEmailDeliveryRow = AdminEmailDeliveryRow;
+
+export type AdminEmailDeliveryIdentity = Pick<
+  AdminEmailDeliveryRow,
+  "id" | "studentNumber" | "messageKind" | "sourceType" | "sourceId"
+>;
 
 export type AdminEmailDelivery = ReturnType<typeof mapAdminEmailDeliveryRow>;
 
@@ -54,6 +57,12 @@ function mapState(status: EmailDeliveryDatabaseStatus, attempts: number): EmailD
   return "Pending";
 }
 
+function safeSourceId(row: AdminEmailDeliveryRow) {
+  if (row.sourceType === "CURRENT_SCHEDULE_STATE") return null;
+  if (row.sourceId && /^[0-9a-f]{64}$/i.test(row.sourceId)) return null;
+  return row.sourceId;
+}
+
 export function mapAdminEmailDeliveryRow(row: AdminEmailDeliveryRow) {
   const state = mapState(row.status, row.attempts);
   return {
@@ -72,7 +81,7 @@ export function mapAdminEmailDeliveryRow(row: AdminEmailDeliveryRow) {
       messageKind: row.messageKind,
       notificationType: row.notificationType,
       sourceType: row.sourceType,
-      sourceId: row.sourceId,
+      sourceId: safeSourceId(row),
     },
     failureReason: state === "Failed" ? sanitizeEmailDeliveryFailure(row.lastError) : null,
     actionable: row.status === "PERMANENT_FAILURE",
@@ -113,20 +122,67 @@ export async function listAdminEmailDeliveryRows(filters: {
   return result.rows;
 }
 
+export async function readAdminEmailDeliveryIdentity(client: PoolClient, id: string) {
+  const result = await client.query<AdminEmailDeliveryIdentity>(
+    `SELECT id::text,student_number AS "studentNumber",message_kind AS "messageKind",
+            source_type AS "sourceType",source_id AS "sourceId"
+       FROM email_outbox WHERE id=$1`,
+    [id],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function lockAdminEmailDeliveryStudent(
+  client: PoolClient,
+  studentNumber: string,
+  mode: "UPDATE" | "NO KEY UPDATE",
+) {
+  const result = await client.query<{
+    isActive: boolean;
+    verifiedEmail: string | null;
+  }>(
+    `SELECT is_active AS "isActive",
+            CASE WHEN is_active=TRUE AND email_verified_at IS NOT NULL
+                 THEN LOWER(BTRIM(email)) ELSE NULL END AS "verifiedEmail"
+       FROM students WHERE student_number=$1
+       FOR ${mode}`,
+    [studentNumber],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function lockAdminEmailVerificationRequest(client: PoolClient, sourceId: string | null) {
+  if (!sourceId) return null;
+  const result = await client.query<{ retryEligible: boolean }>(
+    `SELECT consumed_at IS NULL AND expires_at>clock_timestamp() AS "retryEligible"
+       FROM student_email_verifications WHERE id::text=$1
+       FOR UPDATE`,
+    [sourceId],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function lockAdminScheduleStateRows(client: PoolClient, studentNumber: string) {
+  await client.query(
+    `SELECT id FROM appointments
+      WHERE student_number=$1
+      ORDER BY id
+      FOR UPDATE`,
+    [studentNumber],
+  );
+  await client.query(
+    `SELECT id FROM clinic_closure_manual_cases
+      WHERE student_number=$1
+      ORDER BY id
+      FOR UPDATE`,
+    [studentNumber],
+  );
+}
+
 export async function lockAdminEmailDeliveryRow(client: PoolClient, id: string) {
   const result = await client.query<LockedAdminEmailDeliveryRow>(
-    `SELECT ${deliveryColumns},
-            COALESCE(
-              verification.consumed_at IS NULL
-              AND verification.expires_at>clock_timestamp()
-              AND outbox.verification_body_encrypted IS NOT NULL,
-              FALSE
-            ) AS "verificationRetryEligible"
+    `SELECT ${deliveryColumns}
        FROM email_outbox outbox
-       LEFT JOIN student_email_verifications verification
-         ON outbox.message_kind='VERIFICATION'
-        AND outbox.source_type='STUDENT_EMAIL_VERIFICATION'
-        AND verification.id::text=outbox.source_id
       WHERE outbox.id=$1
       FOR UPDATE OF outbox`,
     [id],

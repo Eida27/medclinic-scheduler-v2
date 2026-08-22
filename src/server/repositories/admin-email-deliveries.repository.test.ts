@@ -45,7 +45,7 @@ describe("administrator email-delivery response mapping", () => {
       messageKind: "SCHEDULE",
       notificationType: "SCHEDULE_CURRENT_STATE",
       sourceType: "CURRENT_SCHEDULE_STATE",
-      sourceId: "safe-source",
+      sourceId: "f".repeat(64),
       scheduleFingerprint: "f".repeat(64),
     });
 
@@ -63,7 +63,7 @@ describe("administrator email-delivery response mapping", () => {
         messageKind: "SCHEDULE",
         notificationType: "SCHEDULE_CURRENT_STATE",
         sourceType: "CURRENT_SCHEDULE_STATE",
-        sourceId: "safe-source",
+        sourceId: null,
       },
       failureReason: expected === "Failed" ? "Email service authentication failed." : null,
       actionable: status === "PERMANENT_FAILURE",
@@ -73,5 +73,6 @@ describe("administrator email-delivery response mapping", () => {
     expect(mapped).not.toHaveProperty("scheduleFingerprint");
     expect(JSON.stringify(mapped)).not.toContain("password=secret");
     expect(JSON.stringify(mapped)).not.toContain("https://private.test/token");
+    expect(JSON.stringify(mapped)).not.toMatch(/[0-9a-f]{64}/i);
   });
 });
