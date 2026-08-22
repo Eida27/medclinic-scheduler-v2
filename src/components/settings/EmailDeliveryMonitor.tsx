@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import type { AdminEmailDelivery, EmailDeliveryState } from "@/server/repositories/admin-email-deliveries.repository";
@@ -39,16 +39,21 @@ export function EmailDeliveryMonitor({ initialItems }: { initialItems: AdminEmai
   const [state, setState] = useState<"" | EmailDeliveryState>("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, ApiError>>({});
-  const [messages, setMessages] = useState<Record<string, string>>({});
+  const [operationMessage, setOperationMessage] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const loadRequestId = useRef(0);
 
   async function load(nextScope: "actionable" | "history", nextState = state) {
+    const requestId = ++loadRequestId.current;
     setLoadError(null);
+    setLoading(true);
     try {
       const params = new URLSearchParams({ scope: nextScope });
       if (nextState) params.set("state", nextState);
       const response = await fetch(`/api/admin/email-deliveries?${params}`, { cache: "no-store" });
       const payload = await readJsonResponse(response);
+      if (requestId !== loadRequestId.current) return;
       if (!response.ok) {
         setLoadError(payload?.error?.message ?? "Unable to load email deliveries. Try again.");
         return;
@@ -59,14 +64,18 @@ export function EmailDeliveryMonitor({ initialItems }: { initialItems: AdminEmai
       }
       setItems(payload.data.items);
     } catch {
-      setLoadError("Unable to load email deliveries. Try again.");
+      if (requestId === loadRequestId.current) {
+        setLoadError("Unable to load email deliveries. Try again.");
+      }
+    } finally {
+      if (requestId === loadRequestId.current) setLoading(false);
     }
   }
 
   async function mutate(item: AdminEmailDelivery, action: "retry" | "queue-current") {
     setBusyId(item.id);
     setErrors((current) => ({ ...current, [item.id]: {} }));
-    setMessages((current) => ({ ...current, [item.id]: "" }));
+    setOperationMessage(null);
     try {
       const response = await fetch(`/api/admin/email-deliveries/${item.id}/${action}`, { method: "POST" });
       const payload = await readJsonResponse(response);
@@ -85,11 +94,13 @@ export function EmailDeliveryMonitor({ initialItems }: { initialItems: AdminEmai
         return;
       }
       if (action === "retry") {
-        setItems((current) => current.map((candidate) => candidate.id === item.id ? payload.data : candidate));
-        setMessages((current) => ({ ...current, [item.id]: "Delivery queued for retry." }));
+        setOperationMessage("Delivery queued for retry.");
       } else {
-        setMessages((current) => ({ ...current, [item.id]: "Current schedule queued." }));
+        setOperationMessage(payload.data.queued === false
+          ? "Current schedule was already queued."
+          : "Current schedule queued.");
       }
+      await load(scope, state);
     } catch {
       setErrors((current) => ({
         ...current,
@@ -147,6 +158,8 @@ export function EmailDeliveryMonitor({ initialItems }: { initialItems: AdminEmai
           </select>
         </label>
       </Card>
+      {loading ? <p role="status" className="text-sm font-semibold text-muted-strong">Loading email deliveries...</p> : null}
+      {operationMessage ? <p role="status" className="text-sm font-semibold text-green-800">{operationMessage}</p> : null}
       {loadError ? <p role="alert" className="text-sm font-semibold text-red-800">{loadError}</p> : null}
 
       {!items.length ? (
@@ -185,7 +198,6 @@ export function EmailDeliveryMonitor({ initialItems }: { initialItems: AdminEmai
                 <Button className="mt-3" size="sm" variant="accent" disabled={busyId === item.id} onClick={() => void mutate(item, "queue-current")}>Queue current schedule</Button>
               </div>
             ) : null}
-            {messages[item.id] ? <p role="status" className="text-sm font-semibold text-green-800">{messages[item.id]}</p> : null}
           </Card>
         );
       })}

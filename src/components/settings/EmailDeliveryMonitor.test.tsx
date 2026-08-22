@@ -58,6 +58,9 @@ describe("EmailDeliveryMonitor", () => {
       }), { status: 409, headers: { "Content-Type": "application/json" } }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
         data: { queued: true, currentState: { studentNumber: "24-0001" } },
+      }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: { scope: "actionable", items: [] },
       }), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetch);
     const user = userEvent.setup();
@@ -70,6 +73,58 @@ describe("EmailDeliveryMonitor", () => {
     await waitFor(() => expect(screen.getByText("Current schedule queued.")).toBeVisible());
     expect(fetch).toHaveBeenNthCalledWith(1, "/api/admin/email-deliveries/delivery-1/retry", { method: "POST" });
     expect(fetch).toHaveBeenNthCalledWith(2, "/api/admin/email-deliveries/delivery-1/queue-current", { method: "POST" });
+    expect(fetch).toHaveBeenNthCalledWith(3, "/api/admin/email-deliveries?scope=actionable", { cache: "no-store" });
+  });
+
+  it("refreshes actionable failures after a successful retry", async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: { ...failure, state: "Pending", actionable: false },
+      }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: { scope: "actionable", items: [] },
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetch);
+    const user = userEvent.setup();
+    render(<EmailDeliveryMonitor initialItems={[failure]} />);
+
+    await user.click(screen.getByRole("button", { name: "Retry delivery" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Delivery queued for retry.");
+    expect(await screen.findByText("No actionable delivery failures.")).toBeVisible();
+    expect(fetch).toHaveBeenNthCalledWith(2, "/api/admin/email-deliveries?scope=actionable", { cache: "no-store" });
+  });
+
+  it("reports an idempotent queue-current result without claiming a new row", async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        error: {
+          code: "STALE_SCHEDULE_EMAIL",
+          message: "This schedule email is no longer current.",
+          details: {
+            currentState: {
+              studentNumber: "24-0001",
+              laboratory: null,
+              physicalExam: null,
+              manualResolutionOpen: true,
+            },
+          },
+        },
+      }), { status: 409, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: { queued: false, currentState: { studentNumber: "24-0001" } },
+      }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: { scope: "actionable", items: [] },
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetch);
+    const user = userEvent.setup();
+    render(<EmailDeliveryMonitor initialItems={[failure]} />);
+
+    await user.click(screen.getByRole("button", { name: "Retry delivery" }));
+    await user.click(await screen.findByRole("button", { name: "Queue current schedule" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Current schedule was already queued.");
   });
 
   it("loads explicit history filters without making history the default", async () => {
@@ -107,6 +162,37 @@ describe("EmailDeliveryMonitor", () => {
 
     await user.selectOptions(screen.getByRole("combobox", { name: "View" }), "history");
     expect(await screen.findByRole("alert")).toHaveTextContent("Unable to load email deliveries. Try again.");
+  });
+
+  it("shows loading state and ignores an older filter response", async () => {
+    let resolveHistory!: (response: Response) => void;
+    let resolveActionable!: (response: Response) => void;
+    const historyResponse = new Promise<Response>((resolve) => { resolveHistory = resolve; });
+    const actionableResponse = new Promise<Response>((resolve) => { resolveActionable = resolve; });
+    const fetch = vi.fn()
+      .mockImplementationOnce(() => historyResponse)
+      .mockImplementationOnce(() => actionableResponse);
+    vi.stubGlobal("fetch", fetch);
+    const user = userEvent.setup();
+    const latest = { ...failure, id: "delivery-2", destination: "l***@example.test" };
+    render(<EmailDeliveryMonitor initialItems={[failure]} />);
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "View" }), "history");
+    expect(screen.getByRole("status")).toHaveTextContent("Loading email deliveries...");
+    await user.selectOptions(screen.getByRole("combobox", { name: "View" }), "actionable");
+    resolveActionable(new Response(JSON.stringify({ data: { items: [latest] } }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    expect(await screen.findByText("l***@example.test")).toBeVisible();
+
+    resolveHistory(new Response(JSON.stringify({ data: { items: [failure] } }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    await waitFor(() => expect(screen.queryByText("Loading email deliveries...")).not.toBeInTheDocument());
+    expect(screen.getByText("l***@example.test")).toBeVisible();
+    expect(screen.queryByText("s***@example.test")).not.toBeInTheDocument();
   });
 
   it("handles a rejected mutation request without an unhandled rejection", async () => {
