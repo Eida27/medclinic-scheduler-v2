@@ -1,9 +1,10 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EmailVerificationConfirmation } from "./EmailVerificationConfirmation";
 
 describe("EmailVerificationConfirmation", () => {
   beforeEach(() => vi.resetAllMocks());
+  afterEach(() => vi.unstubAllGlobals());
 
   it("does not consume the token until the explicit Verify button is pressed", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
@@ -20,5 +21,23 @@ describe("EmailVerificationConfirmation", () => {
       method: "POST",
       body: JSON.stringify({ token: "preview-safe-token" }),
     }));
-  });
+  }, 15_000);
+
+  it.each([
+    ["network failure", () => Promise.reject(new TypeError("offline"))],
+    ["non-JSON failure", () => Promise.resolve({
+      ok: false,
+      json: async () => Promise.reject(new SyntaxError("not json")),
+    })],
+  ])("surfaces a verification %s and restores the button", async (_, request) => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(request));
+    render(<EmailVerificationConfirmation token="retryable-token" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Verify email" }));
+
+    expect(await screen.findByText(
+      "Unable to verify email. Check your connection and try again.",
+    )).toBeVisible();
+    expect(screen.getByRole("button", { name: "Verify email" })).toBeEnabled();
+  }, 15_000);
 });

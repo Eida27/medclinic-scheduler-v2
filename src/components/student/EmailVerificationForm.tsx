@@ -62,6 +62,8 @@ export function EmailVerificationForm({ verifiedEmail }: { verifiedEmail: string
           : "one minute";
         setMessage(`Check that email for a verification link. It expires in 30 minutes. Resend available at ${resend}.`);
       }
+    } catch {
+      setError("Unable to request verification. Check your connection and try again.");
     } finally {
       setSubmitting(false);
     }

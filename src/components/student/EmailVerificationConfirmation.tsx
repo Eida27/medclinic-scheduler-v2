@@ -22,6 +22,8 @@ export function EmailVerificationConfirmation({ token }: { token: string | null 
       const payload = await response.json();
       if (!response.ok) setError(payload.error?.message ?? "Unable to verify email.");
       else setSuccess(true);
+    } catch {
+      setError("Unable to verify email. Check your connection and try again.");
     } finally {
       setPending(false);
     }

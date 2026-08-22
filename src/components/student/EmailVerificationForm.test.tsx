@@ -11,7 +11,10 @@ describe("EmailVerificationForm", () => {
     vi.useFakeTimers();
     vi.resetAllMocks();
   });
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
 
   it("polls status every five seconds and continues the original onboarding session", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
@@ -31,11 +34,11 @@ describe("EmailVerificationForm", () => {
   it("shows server-provided cooldown timing after a request", async () => {
     vi.useRealTimers();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
-      ok: true,
+      ok: false,
       json: async () => ({
-        data: {
-          expiresAt: "2026-08-22T01:30:00.000Z",
-          resendAvailableAt: "2026-08-22T01:01:00.000Z",
+        error: {
+          message: "Please wait before requesting another verification email.",
+          details: { retryAfterSeconds: 54 },
         },
       }),
     }));
@@ -43,6 +46,41 @@ describe("EmailVerificationForm", () => {
     fireEvent.change(screen.getByLabelText("Email address"), { target: { value: "student@example.test" } });
     fireEvent.submit(screen.getByRole("button", { name: "Send verification link" }).closest("form")!);
 
-    expect(await screen.findByRole("status")).toHaveTextContent(/resend available/i);
+    expect(await screen.findByText(/try again in 54 seconds/i)).toBeVisible();
+  }, 15_000);
+
+  it.each([
+    ["network failure", () => Promise.reject(new TypeError("offline"))],
+    ["non-JSON failure", () => Promise.resolve({
+      ok: false,
+      json: async () => Promise.reject(new SyntaxError("not json")),
+    })],
+  ])("surfaces a request %s and restores the form", async (_, request) => {
+    vi.useRealTimers();
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(request));
+    render(<EmailVerificationForm verifiedEmail="verified@example.test" />);
+    fireEvent.change(screen.getByLabelText("Replacement email"), {
+      target: { value: "replacement@example.test" },
+    });
+    fireEvent.submit(screen.getByRole("button", { name: "Send verification link" }).closest("form")!);
+
+    expect(await screen.findByText(
+      "Unable to request verification. Check your connection and try again.",
+    )).toBeVisible();
+    expect(screen.getByRole("button", { name: "Send verification link" })).toBeEnabled();
+  }, 15_000);
+
+  it("clears the status polling interval when onboarding unmounts", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { verified: false } }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { unmount } = render(<EmailVerificationForm verifiedEmail={null} />);
+
+    unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
