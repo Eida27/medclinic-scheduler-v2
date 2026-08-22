@@ -21,7 +21,27 @@ const encryptionKey = Buffer.alloc(32, 11).toString("base64");
 const originalEncryptionKey = process.env.EMAIL_OUTBOX_ENCRYPTION_KEY;
 
 async function cleanup() {
+  await pool.query(
+    `DELETE FROM audit_logs
+      WHERE entity_type='student_email_verification' AND entity_id LIKE $1`,
+    [studentPattern],
+  );
   await cleanupTestFixtures(studentPattern, "TEST-STUDENT-EMAIL%", "TEST-STUDENT-EMAIL%");
+}
+
+async function waitForStudentLockWaiters(expected: number) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const result = await pool.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count
+         FROM pg_stat_activity
+        WHERE datname=current_database() AND pid<>pg_backend_pid()
+          AND state='active' AND wait_event_type='Lock'
+          AND query ILIKE '%FROM students%' AND query ILIKE '%FOR UPDATE%'`,
+    );
+    if (result.rows[0].count >= expected) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Expected ${expected} student-row lock waiter(s).`);
 }
 
 beforeAll(async () => {
@@ -340,6 +360,175 @@ describe("student notifications and optional email", () => {
       verified: true,
       verifiedEmail: "replacement@example.test",
     });
+  });
+
+  it("uses the database clock for cooldown retry timing despite application clock skew", async () => {
+    await insertTestStudent({
+      studentNumber: "99-9516-16", firstName: "Clock", lastName: "Cooldown", yearLevel: 2,
+    });
+    await requestStudentEmailVerification("99-9516-16", "clock-cooldown@example.test");
+    const actualNow = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(actualNow - 24 * 60 * 60 * 1_000);
+    try {
+      const error = await requestStudentEmailVerification(
+        "99-9516-16",
+        "clock-cooldown-2@example.test",
+      ).catch((caught) => caught);
+      expect(error).toMatchObject({
+        code: "EMAIL_VERIFICATION_COOLDOWN",
+        status: 429,
+        details: {
+          retryAfterSeconds: expect.any(Number),
+          retryAt: expect.any(String),
+        },
+      });
+      expect(error.details.retryAfterSeconds).toBeGreaterThan(0);
+      expect(error.details.retryAfterSeconds).toBeLessThanOrEqual(60);
+      const status = await getStudentEmailVerificationStatus("99-9516-16");
+      expect(status.retryAfterSeconds).toBeGreaterThan(0);
+      expect(status.retryAfterSeconds).toBeLessThanOrEqual(60);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("uses the database clock for token expiry despite application clock skew", async () => {
+    for (const studentNumber of ["99-9517-17", "99-9518-18"]) {
+      await insertTestStudent({ studentNumber, firstName: "Clock", lastName: "Expiry", yearLevel: 2 });
+    }
+    const valid = await requestStudentEmailVerification("99-9517-17", "clock-valid@example.test");
+    const actualNow = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(actualNow + 24 * 60 * 60 * 1_000);
+    try {
+      await expect(verifyStudentEmail(valid.token)).resolves.toMatchObject({
+        email: "clock-valid@example.test",
+      });
+    } finally {
+      vi.restoreAllMocks();
+    }
+
+    const expired = await requestStudentEmailVerification("99-9518-18", "clock-expired@example.test");
+    await pool.query(
+      "UPDATE student_email_verifications SET expires_at=NOW()-INTERVAL '1 second' WHERE token_hash=$1",
+      [createHash("sha256").update(expired.token).digest("hex")],
+    );
+    vi.spyOn(Date, "now").mockReturnValue(actualNow - 24 * 60 * 60 * 1_000);
+    try {
+      await expect(verifyStudentEmail(expired.token)).rejects.toMatchObject({
+        code: "EMAIL_VERIFICATION_INVALID",
+      });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("counts ownership conflicts toward cooldown and the rolling attempt limit", async () => {
+    await insertTestStudent({
+      studentNumber: "99-9519-19", firstName: "Conflict", lastName: "Owner", yearLevel: 2,
+    });
+    await insertTestStudent({
+      studentNumber: "99-9520-20", firstName: "Conflict", lastName: "Probe", yearLevel: 2,
+    });
+    await pool.query(
+      "UPDATE students SET email='claimed@example.test',email_verified_at=NOW() WHERE student_number='99-9519-19'",
+    );
+
+    for (let index = 1; index <= 5; index += 1) {
+      await expect(requestStudentEmailVerification("99-9520-20", "claimed@example.test"))
+        .rejects.toMatchObject({ code: "EMAIL_ALREADY_IN_USE", status: 409 });
+      await pool.query(
+        `UPDATE student_email_verifications
+            SET created_at=NOW()-($2::int*INTERVAL '61 seconds')
+          WHERE student_number=$1`,
+        ["99-9520-20", index],
+      );
+    }
+
+    await expect(requestStudentEmailVerification("99-9520-20", "claimed@example.test"))
+      .rejects.toMatchObject({ code: "EMAIL_VERIFICATION_THROTTLED", status: 429 });
+    await expect(pool.query(
+      "SELECT id FROM student_email_verifications WHERE student_number='99-9520-20'",
+    )).resolves.toMatchObject({ rowCount: 5 });
+    const audits = await pool.query<{ metadata: Record<string, unknown> }>(
+      `SELECT metadata FROM audit_logs
+        WHERE entity_type='student_email_verification' AND entity_id='99-9520-20'
+          AND action='STUDENT_EMAIL_OWNERSHIP_CONFLICT'`,
+    );
+    expect(audits.rowCount).toBe(5);
+    expect(JSON.stringify(audits.rows)).not.toContain("claimed@example.test");
+  });
+
+  it("audits a repeated pending replacement as a resend", async () => {
+    await insertTestStudent({
+      studentNumber: "99-9521-21", firstName: "Replace", lastName: "Resend", yearLevel: 2,
+    });
+    await pool.query(
+      "UPDATE students SET email='existing@example.test',email_verified_at=NOW() WHERE student_number='99-9521-21'",
+    );
+    await requestStudentEmailVerification("99-9521-21", "candidate@example.test");
+    await pool.query(
+      "UPDATE student_email_verifications SET created_at=NOW()-INTERVAL '61 seconds' WHERE student_number='99-9521-21'",
+    );
+    await requestStudentEmailVerification("99-9521-21", "candidate@example.test");
+
+    const audits = await pool.query<{ action: string }>(
+      `SELECT action FROM audit_logs
+        WHERE entity_type='student_email_verification' AND entity_id='99-9521-21'
+        ORDER BY created_at,action`,
+    );
+    expect(audits.rows.map((row) => row.action)).toEqual(expect.arrayContaining([
+      "STUDENT_EMAIL_REPLACEMENT_REQUESTED",
+      "STUDENT_EMAIL_VERIFICATION_RESENT",
+    ]));
+    expect(audits.rows.filter((row) => row.action === "STUDENT_EMAIL_REPLACEMENT_REQUESTED")).toHaveLength(1);
+    expect(audits.rows.filter((row) => row.action === "STUDENT_EMAIL_VERIFICATION_RESENT")).toHaveLength(1);
+  });
+
+  it("does not deadlock a resend racing token confirmation", async () => {
+    await insertTestStudent({
+      studentNumber: "99-9522-22", firstName: "Concurrent", lastName: "Resend", yearLevel: 2,
+    });
+    const original = await requestStudentEmailVerification("99-9522-22", "race@example.test");
+    await pool.query(
+      "UPDATE student_email_verifications SET created_at=NOW()-INTERVAL '61 seconds' WHERE student_number='99-9522-22'",
+    );
+
+    const blocker = await pool.connect();
+    let released = false;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query(
+        "SELECT student_number FROM students WHERE student_number='99-9522-22' FOR UPDATE",
+      );
+      const resend = requestStudentEmailVerification("99-9522-22", "race@example.test");
+      await waitForStudentLockWaiters(1);
+      const confirmation = verifyStudentEmail(original.token);
+      await waitForStudentLockWaiters(2);
+      await blocker.query("COMMIT");
+      released = true;
+
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const outcomes = await Promise.race([
+        Promise.allSettled([resend, confirmation]),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error("Concurrent verification operations timed out.")),
+            5_000,
+          );
+        }),
+      ]);
+      if (timeout) clearTimeout(timeout);
+      for (const outcome of outcomes) {
+        if (outcome.status === "rejected") {
+          expect(outcome.reason).toMatchObject({ code: "EMAIL_VERIFICATION_INVALID" });
+          expect(String(outcome.reason)).not.toMatch(/deadlock/i);
+        }
+      }
+      expect(outcomes.filter((outcome) => outcome.status === "fulfilled").length).toBeGreaterThanOrEqual(1);
+    } finally {
+      if (!released) await blocker.query("ROLLBACK");
+      blocker.release();
+    }
   });
 
   it("keeps portal changes transactional when SMTP is not configured and scopes read actions to the owner", async () => {

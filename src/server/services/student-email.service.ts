@@ -42,9 +42,9 @@ async function writeVerificationAudit(
   );
 }
 
-function retryDetails(retryAt: Date) {
+function retryDetails(retryAt: Date, databaseNow: Date) {
   return {
-    retryAfterSeconds: Math.max(1, Math.ceil((retryAt.getTime() - Date.now()) / 1000)),
+    retryAfterSeconds: Math.max(1, Math.ceil((retryAt.getTime() - databaseNow.getTime()) / 1000)),
     retryAt: retryAt.toISOString(),
   };
 }
@@ -58,34 +58,18 @@ export async function requestStudentEmailVerification(studentNumber: string, ema
   const token = randomBytes(32).toString("base64url");
   const hash = tokenHash(token);
   const outcome = await transaction<RequestOutcome>(async (client) => {
-    const studentResult = await client.query<{ email: string | null; emailVerifiedAt: Date | null }>(
-      `SELECT email,email_verified_at AS "emailVerifiedAt"
+    const studentResult = await client.query<{
+      email: string | null;
+      emailVerifiedAt: Date | null;
+      databaseNow: Date;
+    }>(
+      `SELECT email,email_verified_at AS "emailVerifiedAt",NOW() AS "databaseNow"
          FROM students WHERE student_number=$1 AND is_active=TRUE FOR UPDATE`,
       [studentNumber],
     );
     const student = studentResult.rows[0];
     if (!student) {
       return { type: "error", error: new AppError("STUDENT_NOT_FOUND", "Student not found.", 404) };
-    }
-
-    const owner = await client.query(
-      `SELECT student_number FROM students
-        WHERE is_active=TRUE AND email_verified_at IS NOT NULL
-          AND LOWER(BTRIM(email))=$1 AND student_number<>$2 LIMIT 1`,
-      [normalizedEmail, studentNumber],
-    );
-    if (owner.rowCount) {
-      await writeVerificationAudit(client, studentNumber, "STUDENT_EMAIL_OWNERSHIP_CONFLICT", normalizedEmail, {
-        stage: "request",
-      });
-      return {
-        type: "error",
-        error: new AppError(
-          "EMAIL_ALREADY_IN_USE",
-          "That email address is already verified for another active student. Use another address.",
-          409,
-        ),
-      };
     }
 
     const recent = await client.query<{ createdAt: Date }>(
@@ -103,14 +87,14 @@ export async function requestStudentEmailVerification(studentNumber: string, ema
           "Too many verification emails were requested. Try again shortly.",
           429,
           undefined,
-          retryDetails(retryAt),
+          retryDetails(retryAt, student.databaseNow),
         ),
       };
     }
     const latest = recent.rows.at(-1);
     if (latest) {
       const resendAvailableAt = new Date(latest.createdAt.getTime() + RESEND_COOLDOWN_SECONDS * 1_000);
-      if (resendAvailableAt.getTime() > Date.now()) {
+      if (resendAvailableAt.getTime() > student.databaseNow.getTime()) {
         return {
           type: "error",
           error: new AppError(
@@ -118,10 +102,36 @@ export async function requestStudentEmailVerification(studentNumber: string, ema
             "Please wait before requesting another verification email.",
             429,
             undefined,
-            retryDetails(resendAvailableAt),
+            retryDetails(resendAvailableAt, student.databaseNow),
           ),
         };
       }
+    }
+
+    const owner = await client.query(
+      `SELECT student_number FROM students
+        WHERE is_active=TRUE AND email_verified_at IS NOT NULL
+          AND LOWER(BTRIM(email))=$1 AND student_number<>$2 LIMIT 1`,
+      [normalizedEmail, studentNumber],
+    );
+    if (owner.rowCount) {
+      await client.query(
+        `INSERT INTO student_email_verifications (
+           student_number,pending_email,token_hash,expires_at,consumed_at
+         ) VALUES ($1,$2,$3,NOW()+INTERVAL '30 minutes',NOW())`,
+        [studentNumber, normalizedEmail, hash],
+      );
+      await writeVerificationAudit(client, studentNumber, "STUDENT_EMAIL_OWNERSHIP_CONFLICT", normalizedEmail, {
+        stage: "request",
+      });
+      return {
+        type: "error",
+        error: new AppError(
+          "EMAIL_ALREADY_IN_USE",
+          "That email address is already verified for another active student. Use another address.",
+          409,
+        ),
+      };
     }
 
     const previous = await client.query<{ id: string; pendingEmail: string }>(
@@ -178,10 +188,10 @@ export async function requestStudentEmailVerification(studentNumber: string, ema
       ),
     });
     const previousPending = previous.rows[0]?.pendingEmail;
-    const action = student.emailVerifiedAt
-      ? "STUDENT_EMAIL_REPLACEMENT_REQUESTED"
-      : previousPending === normalizedEmail
-        ? "STUDENT_EMAIL_VERIFICATION_RESENT"
+    const action = previousPending === normalizedEmail
+      ? "STUDENT_EMAIL_VERIFICATION_RESENT"
+      : student.emailVerifiedAt
+        ? "STUDENT_EMAIL_REPLACEMENT_REQUESTED"
         : previousPending
           ? "STUDENT_EMAIL_VERIFICATION_REPLACEMENT_REQUESTED"
           : "STUDENT_EMAIL_VERIFICATION_REQUESTED";
@@ -203,10 +213,12 @@ export async function getStudentEmailVerificationStatus(studentNumber: string) {
       pendingEmail: string | null;
       expiresAt: Date | null;
       resendAvailableAt: Date | null;
+      databaseNow: Date;
     }>(
       `SELECT student.email,student.email_verified_at AS "emailVerifiedAt",
               pending.pending_email AS "pendingEmail",pending.expires_at AS "expiresAt",
-              pending.created_at+INTERVAL '60 seconds' AS "resendAvailableAt"
+              pending.created_at+INTERVAL '60 seconds' AS "resendAvailableAt",
+              NOW() AS "databaseNow"
          FROM students student
          LEFT JOIN LATERAL (
            SELECT pending_email,expires_at,created_at FROM student_email_verifications
@@ -224,8 +236,9 @@ export async function getStudentEmailVerificationStatus(studentNumber: string) {
       pendingEmailMasked: row.pendingEmail ? addressMetadata(row.pendingEmail).addressMasked : null,
       expiresAt: row.expiresAt,
       resendAvailableAt: row.resendAvailableAt,
-      retryAfterSeconds: row.resendAvailableAt && row.resendAvailableAt.getTime() > Date.now()
-        ? retryDetails(row.resendAvailableAt).retryAfterSeconds
+      retryAfterSeconds: row.resendAvailableAt
+        && row.resendAvailableAt.getTime() > row.databaseNow.getTime()
+        ? retryDetails(row.resendAvailableAt, row.databaseNow).retryAfterSeconds
         : 0,
     };
   });
@@ -243,24 +256,35 @@ export async function verifyStudentEmail(token: string, dependencies: VerifyDepe
   const hash = tokenHash(tokenSchema.parse(token));
   const catchUp = dependencies.queueCurrentStateCatchUp ?? queueFirstVerificationCurrentStateCatchUp;
   const outcome = await transaction<VerifyOutcome>(async (client) => {
-    const verification = await client.query<{
-      id: string; studentNumber: string; pendingEmail: string; expiresAt: Date; consumedAt: Date | null;
-    }>(
-      `SELECT id::text,student_number AS "studentNumber",pending_email AS "pendingEmail",
-              expires_at AS "expiresAt",consumed_at AS "consumedAt"
-         FROM student_email_verifications WHERE token_hash=$1 FOR UPDATE`,
+    const candidate = await client.query<{ studentNumber: string }>(
+      `SELECT student_number AS "studentNumber"
+         FROM student_email_verifications WHERE token_hash=$1`,
       [hash],
     );
-    const request = verification.rows[0];
-    if (!request || request.consumedAt || request.expiresAt.getTime() <= Date.now()) return { type: "invalid" };
+    if (!candidate.rows[0]) return { type: "invalid" };
 
     const studentResult = await client.query<{ email: string | null; emailVerifiedAt: Date | null }>(
       `SELECT email,email_verified_at AS "emailVerifiedAt" FROM students
         WHERE student_number=$1 AND is_active=TRUE FOR UPDATE`,
-      [request.studentNumber],
+      [candidate.rows[0].studentNumber],
     );
     const student = studentResult.rows[0];
     if (!student) return { type: "invalid" };
+
+    const verification = await client.query<{
+      id: string;
+      studentNumber: string;
+      pendingEmail: string;
+      consumedAt: Date | null;
+      isValid: boolean;
+    }>(
+      `SELECT id::text,student_number AS "studentNumber",pending_email AS "pendingEmail",
+              consumed_at AS "consumedAt",expires_at>NOW() AS "isValid"
+         FROM student_email_verifications WHERE token_hash=$1 FOR UPDATE`,
+      [hash],
+    );
+    const request = verification.rows[0];
+    if (!request || request.consumedAt || !request.isValid) return { type: "invalid" };
     const normalizedEmail = emailSchema.parse(request.pendingEmail);
     const owner = await client.query(
       `SELECT student_number FROM students
