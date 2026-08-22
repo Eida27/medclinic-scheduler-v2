@@ -4,9 +4,12 @@ import { serverEnv } from "./env";
 
 const validKey = Buffer.alloc(32, 7).toString("base64");
 
-function stubRequiredEnvironment(encryptionKey: string | undefined) {
+function stubRequiredEnvironment(
+  encryptionKey: string | undefined,
+  jwtSecret = "test-secret-with-at-least-thirty-two-characters",
+) {
   vi.stubEnv("DATABASE_URL", "postgresql://postgres:password@localhost:5432/medclinic_scheduler");
-  vi.stubEnv("JWT_SECRET", "test-secret-with-at-least-thirty-two-characters");
+  vi.stubEnv("JWT_SECRET", jwtSecret);
   if (encryptionKey === undefined) vi.stubEnv("EMAIL_OUTBOX_ENCRYPTION_KEY", "");
   else vi.stubEnv("EMAIL_OUTBOX_ENCRYPTION_KEY", encryptionKey);
 }
@@ -24,5 +27,12 @@ describe("EMAIL_OUTBOX_ENCRYPTION_KEY environment validation", () => {
     expect(() => serverEnv()).toThrow();
     stubRequiredEnvironment(Buffer.alloc(16, 7).toString("base64"));
     expect(() => serverEnv()).toThrow();
+  });
+
+  it("rejects reusing JWT_SECRET as the email outbox encryption key", () => {
+    stubRequiredEnvironment(validKey, validKey);
+    expect(() => serverEnv()).toThrow(
+      "EMAIL_OUTBOX_ENCRYPTION_KEY must be different from JWT_SECRET.",
+    );
   });
 });

@@ -24,6 +24,14 @@ const serverEnvSchema = z.object({
   SMTP_FROM: z.string().email().optional(),
   EMAIL_OUTBOX_ENCRYPTION_KEY: emailOutboxEncryptionKeySchema,
   RESULT_UPLOAD_ROOT: z.string().min(1).default(".data/private-result-uploads"),
+}).superRefine((environment, context) => {
+  if (environment.EMAIL_OUTBOX_ENCRYPTION_KEY === environment.JWT_SECRET) {
+    context.addIssue({
+      code: "custom",
+      path: ["EMAIL_OUTBOX_ENCRYPTION_KEY"],
+      message: "EMAIL_OUTBOX_ENCRYPTION_KEY must be different from JWT_SECRET.",
+    });
+  }
 });
 
 export function serverEnv() {
