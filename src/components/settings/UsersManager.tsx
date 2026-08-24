@@ -21,6 +21,30 @@ type User = {
   isActive: boolean;
 };
 
+type UserCreationErrorField = "clinicCode" | "fullName" | "email" | "password" | "role";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function firstErrorMessage(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) return value;
+  if (!Array.isArray(value)) return undefined;
+  return value.find((message): message is string => typeof message === "string" && message.trim().length > 0);
+}
+
+function userCreationErrorMessage(payload: unknown) {
+  if (!isRecord(payload) || !isRecord(payload.error)) return "Unable to add user.";
+
+  const fields = isRecord(payload.error.fields) ? payload.error.fields : {};
+  for (const field of ["clinicCode", "fullName", "email", "password", "role"] as const satisfies readonly UserCreationErrorField[]) {
+    const message = firstErrorMessage(fields[field]);
+    if (message) return message;
+  }
+
+  return firstErrorMessage(payload.error.message) ?? "Unable to add user.";
+}
+
 function roleLabel(role: UserRole) {
   if (role === "ADMIN") return "Administrator";
   if (role === "COORDINATOR") return "Coordinator";
@@ -46,7 +70,7 @@ export function UsersManager({ users }: { users: User[] }) {
     });
     const payload = await response.json();
     if (!response.ok) {
-      setError(payload.error?.message);
+      setError(userCreationErrorMessage(payload));
       return;
     }
     formElement.reset();
@@ -106,9 +130,14 @@ export function UsersManager({ users }: { users: User[] }) {
               disabled={isGlobalRole}
               onChange={(event) => setClinicCode(event.target.value)}
             >
-              <option value="KABALAKA_CLINIC">KABALAKA Clinic</option>
-              <option value="CPU_CLINIC">CPU Clinic</option>
-              <option value="">Global</option>
+              {isGlobalRole ? (
+                <option value="">Global</option>
+              ) : (
+                <>
+                  <option value="KABALAKA_CLINIC">KABALAKA Clinic</option>
+                  <option value="CPU_CLINIC">CPU Clinic</option>
+                </>
+              )}
             </Select>
           </Field>
           {isGlobalRole ? <input type="hidden" name="clinicCode" value="" /> : null}
