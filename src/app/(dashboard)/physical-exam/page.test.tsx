@@ -24,9 +24,25 @@ const physicalExamStaff = {
   clinicCode: "CPU_CLINIC" as const,
 };
 
+const kabalakaStaff = {
+  userId: "staff-1",
+  fullName: "Laboratory Staff",
+  email: "laboratory@example.com",
+  role: "CLINIC_STAFF" as const,
+  clinicCode: "KABALAKA_CLINIC" as const,
+};
+
+const administrator = {
+  userId: "admin-1",
+  fullName: "MedClinic Administrator",
+  email: "admin@example.com",
+  role: "ADMIN" as const,
+  clinicCode: null,
+};
+
 describe("PhysicalExamPage", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     requireUser.mockResolvedValue(physicalExamStaff);
     listAppointments.mockResolvedValue({ items: [], total: 0 });
     dashboardMetrics.mockResolvedValue({
@@ -67,6 +83,63 @@ describe("PhysicalExamPage", () => {
     expect(screen.getByText("No published physical examination appointments match these filters.")).toBeVisible();
     expect(screen.queryByRole("link", { name: /coordinator schedules/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /new batch|import/i })).not.toBeInTheDocument();
+  });
+
+  it("shows KABALAKA staff a restricted state without loading CPU Clinic schedule data", async () => {
+    requireUser.mockResolvedValue(kabalakaStaff);
+    listAppointments.mockResolvedValue({
+      items: [{
+        id: "cpu-appointment-1",
+        studentNumber: "23-8000-01",
+        studentName: "CPU Student",
+        scheduleType: "PHYSICAL_EXAM",
+        appointmentDate: "2026-08-19",
+        status: "PENDING",
+        completedFromStatus: null,
+        laboratoryStatus: "PENDING",
+      }],
+      total: 1,
+    });
+
+    render(await PhysicalExamPage({
+      searchParams: Promise.resolve({ studentNumber: "CPU Student" }),
+    }));
+
+    expect(screen.getByRole("heading", { level: 1, name: "Physical Exam access restricted" })).toBeVisible();
+    expect(screen.getByText("This account is assigned to KABALAKA Clinic. You can only access the Laboratory tab.")).toBeVisible();
+    expect(screen.getAllByTestId("clinic-access-lock")).toHaveLength(1);
+    expect(screen.queryByRole("heading", { level: 1, name: "Published physical examination schedule" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Sort" })).not.toBeInTheDocument();
+    expect(screen.queryByText("CPU Student")).not.toBeInTheDocument();
+    expect(assertClinicAccess).not.toHaveBeenCalled();
+    expect(listAppointments).not.toHaveBeenCalled();
+  });
+
+  it("allows an administrator to load the CPU Clinic physical examination schedule", async () => {
+    requireUser.mockResolvedValue(administrator);
+
+    render(await PhysicalExamPage({ searchParams: Promise.resolve({}) }));
+
+    expect(assertClinicAccess).toHaveBeenCalledWith(administrator, "CPU_CLINIC");
+    expect(listAppointments).toHaveBeenCalledWith(expect.objectContaining({
+      clinicCode: "CPU_CLINIC",
+      scheduleType: "PHYSICAL_EXAM",
+    }));
+    expect(screen.getByRole("heading", { level: 1, name: "Published physical examination schedule" })).toBeVisible();
+  });
+
+  it.each([
+    ["missing", { ...physicalExamStaff, clinicCode: null }],
+    ["invalid", { ...physicalExamStaff, clinicCode: "UNKNOWN_CLINIC" }],
+  ])("keeps the %s clinic assignment on the existing authorization path", async (_kind, unauthorizedUser) => {
+    const accessError = new Error("CLINIC_ACCESS_DENIED");
+    requireUser.mockResolvedValue(unauthorizedUser);
+    assertClinicAccess.mockImplementation(() => { throw accessError; });
+
+    await expect(PhysicalExamPage({ searchParams: Promise.resolve({}) })).rejects.toThrow("CLINIC_ACCESS_DENIED");
+
+    expect(assertClinicAccess).toHaveBeenCalledWith(unauthorizedUser, "CPU_CLINIC");
+    expect(listAppointments).not.toHaveBeenCalled();
   });
 
   it("loads and renders the second physical examination page", async () => {

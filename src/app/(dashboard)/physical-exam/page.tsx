@@ -1,4 +1,5 @@
 import { ClinicPublishedSchedule } from "@/components/appointments/ClinicPublishedSchedule";
+import { ClinicAccessRestricted } from "@/components/clinic/ClinicAccessRestricted";
 import {
   APPOINTMENT_PAGE_SIZE,
   parseAppointmentPage,
@@ -17,6 +18,14 @@ export default async function PhysicalExamPage({
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
   const user = await requireUser();
+  if (user.role === "CLINIC_STAFF" && user.clinicCode === "KABALAKA_CLINIC") {
+    return (
+      <ClinicAccessRestricted
+        title="Physical Exam access restricted"
+        message="This account is assigned to KABALAKA Clinic. You can only access the Laboratory tab."
+      />
+    );
+  }
   assertClinicAccess(user, clinic.code);
   const params = await searchParams;
   const page = parseAppointmentPage(params.page);
