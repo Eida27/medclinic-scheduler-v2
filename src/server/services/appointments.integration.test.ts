@@ -312,9 +312,10 @@ describe("appointment lifecycle", () => {
         }),
       ]));
     }
+    const privateRescheduleNote = "Student conflict: private medical/internal case 4401";
     const replacement = await updateAppointment(current.rows[0].id, {
       status: "COMPLETED",
-      appointmentDate: "2026-08-06", notes: "Student conflict",
+      appointmentDate: "2026-08-06", notes: privateRescheduleNote,
     }, admin);
     expect(replacement?.status).toBe("PENDING");
     expect(replacement?.rescheduledFrom).toBe(current.rows[0].id);
@@ -336,26 +337,43 @@ describe("appointment lifecycle", () => {
       message: expect.stringContaining("2026-08-06 at CPU Clinic (Pending)"),
       source_type: "APPOINTMENT_RESCHEDULE_EVENT",
       source_id: expect.any(String),
-      text_body: expect.stringMatching(/Previous Physical Examination: 2026-08-05 at CPU Clinic[\s\S]*Reason: Student conflict/),
+      text_body: expect.stringMatching(/Previous Physical Examination: 2026-08-05 at CPU Clinic[\s\S]*Reason: Administrator-authorized reschedule/),
     }]);
+    expect(JSON.stringify(rescheduled.rows)).not.toContain(privateRescheduleNote);
 
+    const privateCancellationNote = "Administrator internal medical note: private case 4402";
     await updateAppointment(replacement!.id, {
       status: "CANCELLED",
-      notes: "Administrator cancelled the appointment",
+      notes: privateCancellationNote,
     }, admin);
-    await expect(pool.query(
+    const cancelled = await pool.query(
       `SELECT notification.notification_type,notification.metadata->>'sourceType' AS source_type,
-              outbox.text_body
+               notification.message,outbox.text_body
          FROM student_portal_notifications notification
          JOIN email_outbox outbox ON outbox.portal_notification_id=notification.id
         WHERE notification.student_number=$1
           AND notification.notification_type='SCHEDULE_CANCELLED'`,
       [studentNumber],
-    )).resolves.toMatchObject({ rows: [{
+    );
+    expect(cancelled).toMatchObject({ rows: [{
       notification_type: "SCHEDULE_CANCELLED",
       source_type: "APPOINTMENT_RESCHEDULE_EVENT",
-      text_body: expect.stringContaining("Reason: Administrator cancelled the appointment"),
+      message: expect.stringContaining("authorized scheduling action cancelled your schedule"),
+      text_body: expect.stringContaining("Reason: Administrator-authorized cancellation"),
     }] });
+    expect(JSON.stringify(cancelled.rows)).not.toContain(privateCancellationNote);
+
+    const internalHistory = await pool.query<{ notes: string }>(
+      `SELECT notes
+         FROM appointment_status_logs
+        WHERE appointment_id IN ($1,$2) AND notes IS NOT NULL
+        ORDER BY created_at,id`,
+      [current.rows[0].id, replacement!.id],
+    );
+    expect(internalHistory.rows.map((row) => row.notes)).toEqual(expect.arrayContaining([
+      privateRescheduleNote,
+      privateCancellationNote,
+    ]));
   });
 
   it("commits a legacy publication conflict without publishing draft appointments", async () => {

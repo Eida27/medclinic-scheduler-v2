@@ -38,6 +38,11 @@ const transitions: Record<AppointmentStatus, AppointmentStatus[]> = {
   AWAITING_RESCHEDULE: [],
 };
 
+const ADMINISTRATOR_SCHEDULE_NOTIFICATION_REASON = {
+  RESCHEDULE: "Administrator-authorized reschedule",
+  CANCELLATION: "Administrator-authorized cancellation",
+} as const;
+
 export function assertStatusTransition(from: AppointmentStatus, to: AppointmentStatus) {
   if (from === to) return;
   if (!transitions[from].includes(to)) throw new AppError("INVALID_STATUS_TRANSITION", `Cannot change ${from} to ${to}.`, 422);
@@ -581,7 +586,7 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
           (state) => buildAdministratorRescheduledNotification({
             state,
             eventId,
-            reason: input.notes?.trim() || "Administrator-authorized reschedule",
+            reason: ADMINISTRATOR_SCHEDULE_NOTIFICATION_REASON.RESCHEDULE,
             previous: previousStateForAppointment(appointment),
           }),
         );
@@ -634,6 +639,9 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
   if (input.status) {
     const requestedStatus = input.status;
     await transaction(async (client) => {
+      if (requestedStatus === "CANCELLED") {
+        await lockEffectiveAppointmentScopes(client, [current]);
+      }
       const appointment = await getAppointmentMutationContext(id, client);
       if (!appointment) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
       assertAppointmentMutationAuthorized(actor, appointment);
@@ -675,7 +683,7 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
           (state) => buildCancellationNotification({
             state,
             eventId,
-            reason: input.notes?.trim() || "Administrator-authorized cancellation",
+            reason: ADMINISTRATOR_SCHEDULE_NOTIFICATION_REASON.CANCELLATION,
             previous: previousStateForAppointment(appointment),
             sourceType: "APPOINTMENT_RESCHEDULE_EVENT",
           }),

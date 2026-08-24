@@ -6,7 +6,9 @@ import { AppError, isPostgresUniqueViolation } from "@/lib/errors";
 import { serverEnv } from "@/lib/env";
 import { encryptVerificationEmailBody } from "@/server/email/verification-body-encryption";
 import { transaction } from "@/server/db/pool";
+import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import { enqueueStudentEmail } from "@/server/repositories/student-notifications.repository";
+import { obsoleteVerificationEmailOutboxForRequest } from "@/server/repositories/email-outbox.repository";
 import { queueFirstVerificationCurrentStateCatchUp } from "./student-verification-catch-up.service";
 
 const emailSchema = z.string().trim().toLowerCase().email().max(254);
@@ -275,6 +277,12 @@ export async function verifyStudentEmail(token: string, dependencies: VerifyDepe
     );
     if (!candidate.rows[0]) return { type: "invalid" };
 
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('medclinic:schedule-import-queue'))");
+    await lockEffectiveAppointmentScopes(client, [
+      { studentNumber: candidate.rows[0].studentNumber, scheduleType: "LABORATORY" },
+      { studentNumber: candidate.rows[0].studentNumber, scheduleType: "PHYSICAL_EXAM" },
+    ]);
+
     const studentResult = await client.query<{ email: string | null; emailVerifiedAt: Date | null }>(
       `SELECT email,email_verified_at AS "emailVerifiedAt" FROM students
         WHERE student_number=$1 AND is_active=TRUE FOR UPDATE`,
@@ -311,6 +319,12 @@ export async function verifyStudentEmail(token: string, dependencies: VerifyDepe
         "UPDATE student_email_verifications SET consumed_at=clock_timestamp() WHERE id=$1",
         [request.id],
       );
+      await obsoleteVerificationEmailOutboxForRequest(
+        client,
+        request.id,
+        "SUPERSEDED",
+        databaseNow,
+      );
       await writeVerificationAudit(client, request.studentNumber, "STUDENT_EMAIL_OWNERSHIP_CONFLICT", normalizedEmail, {
         stage: "completion",
       });
@@ -332,6 +346,12 @@ export async function verifyStudentEmail(token: string, dependencies: VerifyDepe
         "UPDATE student_email_verifications SET consumed_at=clock_timestamp() WHERE id=$1",
         [request.id],
       );
+      await obsoleteVerificationEmailOutboxForRequest(
+        client,
+        request.id,
+        "SUPERSEDED",
+        databaseNow,
+      );
       await writeVerificationAudit(client, request.studentNumber, "STUDENT_EMAIL_OWNERSHIP_CONFLICT", normalizedEmail, {
         stage: "completion-race",
       });
@@ -341,6 +361,12 @@ export async function verifyStudentEmail(token: string, dependencies: VerifyDepe
     await client.query(
       "UPDATE student_email_verifications SET consumed_at=clock_timestamp() WHERE id=$1",
       [request.id],
+    );
+    await obsoleteVerificationEmailOutboxForRequest(
+      client,
+      request.id,
+      "CONSUMED",
+      databaseNow,
     );
     const firstVerification = !student.emailVerifiedAt;
     await writeVerificationAudit(client, request.studentNumber, "STUDENT_EMAIL_VERIFICATION_COMPLETED", normalizedEmail, {

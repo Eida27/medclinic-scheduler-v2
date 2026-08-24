@@ -18,9 +18,10 @@ async function cleanup() {
 
 beforeAll(async () => {
   await cleanup();
-  if (existsSync(migrationPath)) {
-    await pool.query(await readFile(migrationPath, "utf8"));
+  if (!existsSync(migrationPath)) {
+    throw new Error(`Required migration 023 is missing or misnamed: ${migrationPath}`);
   }
+  await pool.query(await readFile(migrationPath, "utf8"));
 });
 afterEach(cleanup);
 afterAll(async () => {
@@ -152,5 +153,14 @@ describe("mandatory student email verification notifications migration", () => {
          '99-2305-05','body@example.test','Verify','Raw token URL','VERIFICATION','ciphertext'
        )`,
     )).rejects.toMatchObject({ code: "23514" });
+
+    const general = await pool.query<{ message_kind: string }>(
+      `INSERT INTO email_outbox (
+         student_number,to_email,subject,text_body
+       ) VALUES (
+         '99-2305-05','body@example.test','General','Plain general body'
+       ) RETURNING message_kind`,
+    );
+    expect(general.rows).toEqual([{ message_kind: "GENERAL" }]);
   });
 });

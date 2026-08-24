@@ -1,6 +1,7 @@
 import "server-only";
 import type { PoolClient } from "pg";
 import { query } from "@/server/db/pool";
+import type { EmailOutboxMessageKind } from "./email-outbox.repository";
 
 export type EmailDeliveryDatabaseStatus =
   | "PENDING"
@@ -19,7 +20,7 @@ export type AdminEmailDeliveryRow = {
   lastAttemptAt: Date | null;
   lastAttemptStatus: EmailDeliveryDatabaseStatus | null;
   lastError: string | null;
-  messageKind: "SCHEDULE" | "VERIFICATION";
+  messageKind: EmailOutboxMessageKind;
   notificationType: string | null;
   sourceType: string | null;
   sourceId: string | null;
@@ -153,10 +154,25 @@ export async function lockAdminEmailDeliveryStudent(
 
 export async function lockAdminEmailVerificationRequest(client: PoolClient, sourceId: string | null) {
   if (!sourceId) return null;
-  const result = await client.query<{ retryEligible: boolean }>(
-    `SELECT consumed_at IS NULL AND expires_at>clock_timestamp() AS "retryEligible"
-       FROM student_email_verifications WHERE id::text=$1
-       FOR UPDATE`,
+  const result = await client.query<{
+    retryEligible: boolean;
+    obsoleteReason: "CONSUMED" | "EXPIRED" | "SUPERSEDED" | null;
+  }>(
+    `SELECT verification.consumed_at IS NULL
+              AND verification.expires_at>clock_timestamp() AS "retryEligible",
+            CASE
+              WHEN verification.consumed_at IS NULL
+                AND verification.expires_at>clock_timestamp() THEN NULL
+              WHEN verification.expires_at<=clock_timestamp() THEN 'EXPIRED'
+              WHEN student.is_active=TRUE AND student.email_verified_at IS NOT NULL
+                AND LOWER(BTRIM(student.email))=LOWER(BTRIM(verification.pending_email))
+                THEN 'CONSUMED'
+              ELSE 'SUPERSEDED'
+            END AS "obsoleteReason"
+       FROM student_email_verifications verification
+       JOIN students student ON student.student_number=verification.student_number
+      WHERE verification.id::text=$1
+      FOR UPDATE OF verification`,
     [sourceId],
   );
   return result.rows[0] ?? null;

@@ -12,7 +12,7 @@ export type StudentNotificationInput = {
   eventKey?: string;
   emailSubject?: string;
   emailTextBody?: string;
-  messageKind?: "SCHEDULE" | "VERIFICATION";
+  messageKind?: "GENERAL" | "SCHEDULE" | "VERIFICATION";
   sourceType?: string;
   sourceId?: string;
   scheduleFingerprint?: string;
@@ -65,7 +65,7 @@ export async function insertStudentNotifications(
                 prepared.email_text_body,
                 prepared.message || E'\\n\\nOpen the student portal to review the details.'
               ),
-              NULL,prepared.event_key,COALESCE(prepared.message_kind,'SCHEDULE'),
+              NULL,prepared.event_key,COALESCE(prepared.message_kind,'GENERAL'),
               prepared.notification_type,prepared.source_type,prepared.source_id,
               prepared.id,prepared.schedule_fingerprint
          FROM prepared
@@ -157,7 +157,7 @@ export async function enqueueStudentEmail(
     textBody: string;
     htmlBody?: string | null;
     eventKey?: string;
-    messageKind?: "SCHEDULE" | "VERIFICATION";
+    messageKind?: "GENERAL" | "SCHEDULE" | "VERIFICATION";
     notificationType?: string | null;
     sourceType?: string | null;
     sourceId?: string | null;
@@ -197,7 +197,7 @@ export async function enqueueStudentEmail(
       input.textBody,
       input.htmlBody ?? null,
       input.eventKey ?? null,
-      input.messageKind ?? "SCHEDULE",
+      input.messageKind ?? "GENERAL",
       input.notificationType ?? null,
       input.sourceType ?? null,
       input.sourceId ?? null,

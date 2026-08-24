@@ -769,6 +769,26 @@ describe("appointment mutation authorization and automatic no-show correction", 
     expect(writeAudit).not.toHaveBeenCalled();
   });
 
+  it("locks the effective appointment scope before an administrator cancellation", async () => {
+    getPublishedAppointment.mockResolvedValue(publishedAppointment("PENDING"));
+    getAppointmentMutationContext.mockResolvedValue(mutationContext("PENDING"));
+
+    await updateAppointment(appointmentId, {
+      status: "CANCELLED",
+      notes: "Internal cancellation note",
+    }, admin);
+
+    expect(query).toHaveBeenCalledWith(
+      "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+      ["medclinic:effective-appointment:v1:LABORATORY:2026-0001"],
+    );
+    const scopeLockIndex = query.mock.calls.findIndex(([, values]) => (
+      Array.isArray(values) && values[0] === "medclinic:effective-appointment:v1:LABORATORY:2026-0001"
+    ));
+    const cancellationIndex = changeAppointmentStatusWithClient.mock.invocationCallOrder[0];
+    expect(query.mock.invocationCallOrder[scopeLockIndex]).toBeLessThan(cancellationIndex);
+  });
+
   it("rejects a mixed dated request when the locked appointment completed after preflight", async () => {
     getPublishedAppointment.mockResolvedValue(publishedAppointment("PENDING"));
     getAppointmentMutationContext.mockResolvedValue(mutationContext("COMPLETED"));

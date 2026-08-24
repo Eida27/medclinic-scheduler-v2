@@ -339,7 +339,7 @@ describe("administrator email-delivery service", () => {
       details: { guidance: "Ask the student to request a new verification link." },
     });
     const stored = await pool.query<{ status: string }>("SELECT status FROM email_outbox WHERE id=$1", [outbox.rows[0].id]);
-    expect(stored.rows[0].status).toBe("PERMANENT_FAILURE");
+    expect(stored.rows[0].status).toBe("OBSOLETE");
   });
 
   it("retries a current unexpired verification failure without exposing its encrypted body", async () => {
@@ -421,11 +421,39 @@ describe("administrator email-delivery service", () => {
         "SELECT status,attempts FROM email_outbox WHERE id=$1",
         [outbox.rows[0].id],
       );
-      expect(stored.rows[0]).toEqual({ status: "PERMANENT_FAILURE", attempts: 10 });
+      expect(stored.rows[0]).toEqual({ status: "OBSOLETE", attempts: 10 });
     } finally {
       if (!committed) await blocker.query("ROLLBACK");
       blocker.release();
     }
+  });
+
+  it("retries a permanent GENERAL notification without schedule staleness checks", async () => {
+    const studentNumber = "ADM-DEL-GENERAL";
+    await verifiedStudent(studentNumber);
+    const outbox = await pool.query<{ id: string }>(
+      `INSERT INTO email_outbox (
+         student_number,to_email,subject,text_body,status,attempts,last_error,message_kind,
+         notification_type,source_type,source_id,last_attempt_status
+       ) VALUES (
+         $1,'general-admin@example.test','General notice','Ordinary body',
+         'PERMANENT_FAILURE',10,'SMTP unavailable','GENERAL',
+         'PORTAL_GENERAL','PORTAL_NOTIFICATION','general-source','PERMANENT_FAILURE'
+       ) RETURNING id::text`,
+      [studentNumber],
+    );
+
+    await expect(retryAdminEmailDelivery(outbox.rows[0].id, TEST_REFERENCE_IDS.adminUser))
+      .resolves.toMatchObject({
+        id: outbox.rows[0].id,
+        state: "Pending",
+        attempts: 0,
+        context: { messageKind: "GENERAL" },
+      });
+    await expect(pool.query(
+      "SELECT status,attempts FROM email_outbox WHERE id=$1",
+      [outbox.rows[0].id],
+    )).resolves.toMatchObject({ rows: [{ status: "PENDING", attempts: 0 }] });
   });
 
   it("waits for a schedule mutation and rechecks the fingerprint before resetting", async () => {

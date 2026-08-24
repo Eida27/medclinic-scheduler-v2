@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { PoolClient } from "pg";
 import { transaction } from "@/server/db/pool";
 
-export type EmailOutboxMessageKind = "SCHEDULE" | "VERIFICATION";
+export type EmailOutboxMessageKind = "GENERAL" | "SCHEDULE" | "VERIFICATION";
 
 export type ClaimedEmailOutboxMessage = {
   id: string;
@@ -14,6 +14,8 @@ export type ClaimedEmailOutboxMessage = {
   htmlBody: string | null;
   messageKind: EmailOutboxMessageKind;
   verificationBodyEncrypted: string | null;
+  sourceType: string | null;
+  sourceId: string | null;
   attempts: number;
 };
 
@@ -80,6 +82,7 @@ export async function claimEmailOutboxRows(limit: number, now: Date) {
                  outbox.text_body AS "textBody", outbox.html_body AS "htmlBody",
                  outbox.message_kind AS "messageKind",
                  outbox.verification_body_encrypted AS "verificationBodyEncrypted",
+                 outbox.source_type AS "sourceType",outbox.source_id AS "sourceId",
                  outbox.attempts`,
       [limit, now],
     );
@@ -159,7 +162,11 @@ export async function markEmailOutboxFailed(
   });
 }
 
-export type EmailOutboxObsoleteReason = "EXPIRED" | "SUPERSEDED" | "VERIFIED_ADDRESS_CHANGED";
+export type EmailOutboxObsoleteReason =
+  | "CONSUMED"
+  | "EXPIRED"
+  | "SUPERSEDED"
+  | "VERIFIED_ADDRESS_CHANGED";
 
 export async function markEmailOutboxObsoleteWithClient(
   client: PoolClient,
@@ -192,6 +199,102 @@ export async function markEmailOutboxObsolete(
   return transaction(async (client) => {
     return markEmailOutboxObsoleteWithClient(client, id, reason, now);
   });
+}
+
+export async function obsoleteVerificationEmailOutboxForRequest(
+  client: PoolClient,
+  requestId: string,
+  reason: Extract<EmailOutboxObsoleteReason, "CONSUMED" | "SUPERSEDED">,
+  now: Date,
+) {
+  const result = await client.query<EmailOutboxAuditRow>(
+    `UPDATE email_outbox
+        SET status='OBSOLETE',locked_at=NULL,last_error=NULL,
+            verification_body_encrypted=NULL,last_attempt_at=$2,
+            last_attempt_status='OBSOLETE'
+      WHERE message_kind='VERIFICATION'
+        AND source_type='STUDENT_EMAIL_VERIFICATION' AND source_id=$1
+        AND status NOT IN ('SENT','OBSOLETE')
+      RETURNING id,student_number AS "studentNumber",to_email AS "toEmail",
+                message_kind AS "messageKind",notification_type AS "notificationType",
+                source_type AS "sourceType",source_id AS "sourceId"`,
+    [requestId, now],
+  );
+  for (const row of result.rows) {
+    await writeLifecycleAudit(client, row, "EMAIL_OUTBOX_OBSOLETE", { reason });
+  }
+  return result.rowCount ?? 0;
+}
+
+export async function authorizeVerificationEmailOutboxDelivery(
+  client: PoolClient,
+  message: Pick<
+    ClaimedEmailOutboxMessage,
+    "id" | "studentNumber" | "sourceType" | "sourceId"
+  >,
+  now: Date,
+) {
+  const request = message.sourceId
+    ? await client.query<{
+        studentNumber: string;
+        pendingEmail: string;
+        consumedAt: Date | null;
+        expired: boolean;
+        verifiedDestination: boolean;
+      }>(
+        `SELECT verification.student_number AS "studentNumber",
+                verification.pending_email AS "pendingEmail",
+                verification.consumed_at AS "consumedAt",
+                verification.expires_at<=clock_timestamp() AS expired,
+                student.is_active=TRUE AND student.email_verified_at IS NOT NULL
+                  AND LOWER(BTRIM(student.email))=LOWER(BTRIM(verification.pending_email))
+                  AS "verifiedDestination"
+           FROM student_email_verifications verification
+           JOIN students student ON student.student_number=verification.student_number
+          WHERE verification.id::text=$1
+          FOR UPDATE OF verification`,
+        [message.sourceId],
+      )
+    : null;
+  const outbox = await client.query<{
+    status: string;
+    messageKind: EmailOutboxMessageKind;
+    studentNumber: string | null;
+    toEmail: string;
+    sourceType: string | null;
+    sourceId: string | null;
+  }>(
+    `SELECT status,message_kind AS "messageKind",student_number AS "studentNumber",
+            to_email AS "toEmail",source_type AS "sourceType",source_id AS "sourceId"
+       FROM email_outbox WHERE id=$1
+       FOR UPDATE`,
+    [message.id],
+  );
+  const row = outbox.rows[0];
+  if (!row || row.status !== "PROCESSING" || row.messageKind !== "VERIFICATION") {
+    return "SKIPPED" as const;
+  }
+  const verification = request?.rows[0];
+  const linked = Boolean(
+    verification
+    && message.studentNumber
+    && message.sourceType === "STUDENT_EMAIL_VERIFICATION"
+    && row.studentNumber === message.studentNumber
+    && row.sourceType === message.sourceType
+    && row.sourceId === message.sourceId
+    && verification.studentNumber === message.studentNumber
+    && row.toEmail.trim().toLowerCase() === verification.pendingEmail.trim().toLowerCase(),
+  );
+  if (!linked || verification?.consumedAt || verification?.expired) {
+    const reason: EmailOutboxObsoleteReason = verification?.expired
+      ? "EXPIRED"
+      : verification?.consumedAt && verification.verifiedDestination
+        ? "CONSUMED"
+        : "SUPERSEDED";
+    await markEmailOutboxObsoleteWithClient(client, message.id, reason, now);
+    return "OBSOLETE" as const;
+  }
+  return "AUTHORIZED" as const;
 }
 
 export async function authorizeScheduleEmailOutboxDelivery(

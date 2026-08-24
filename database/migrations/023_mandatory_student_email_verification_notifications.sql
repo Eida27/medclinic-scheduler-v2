@@ -3,7 +3,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS students_active_verified_email_unique_idx
   WHERE email_verified_at IS NOT NULL AND is_active = TRUE;
 
 ALTER TABLE email_outbox
-  ADD COLUMN IF NOT EXISTS message_kind VARCHAR(30) NOT NULL DEFAULT 'SCHEDULE',
+  ADD COLUMN IF NOT EXISTS message_kind VARCHAR(30) NOT NULL DEFAULT 'GENERAL',
   ADD COLUMN IF NOT EXISTS notification_type VARCHAR(50),
   ADD COLUMN IF NOT EXISTS source_type VARCHAR(50),
   ADD COLUMN IF NOT EXISTS source_id TEXT,
@@ -13,6 +13,9 @@ ALTER TABLE email_outbox
   ADD COLUMN IF NOT EXISTS verification_body_encrypted TEXT,
   ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS last_attempt_status VARCHAR(30);
+
+ALTER TABLE email_outbox
+  ALTER COLUMN message_kind SET DEFAULT 'GENERAL';
 
 ALTER TABLE email_outbox
   DROP CONSTRAINT IF EXISTS email_outbox_status_check,
@@ -25,7 +28,7 @@ ALTER TABLE email_outbox
   ADD CONSTRAINT email_outbox_status_check
     CHECK (status IN ('PENDING','PROCESSING','SENT','PERMANENT_FAILURE','OBSOLETE')),
   ADD CONSTRAINT email_outbox_message_kind_check
-    CHECK (message_kind IN ('SCHEDULE','VERIFICATION')),
+    CHECK (message_kind IN ('GENERAL','SCHEDULE','VERIFICATION')),
   ADD CONSTRAINT email_outbox_schedule_fingerprint_check
     CHECK (schedule_fingerprint IS NULL OR schedule_fingerprint ~ '^[0-9a-f]{64}$'),
   ADD CONSTRAINT email_outbox_last_attempt_status_check
@@ -35,7 +38,7 @@ ALTER TABLE email_outbox
     ),
   ADD CONSTRAINT email_outbox_verification_body_check
     CHECK (
-      (message_kind='SCHEDULE' AND verification_body_encrypted IS NULL)
+      (message_kind IN ('GENERAL','SCHEDULE') AND verification_body_encrypted IS NULL)
       OR (
         message_kind='VERIFICATION'
         AND subject='Verify your MedClinic notification email'

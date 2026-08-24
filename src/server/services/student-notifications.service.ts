@@ -1,4 +1,5 @@
 import "server-only";
+import { createHash } from "node:crypto";
 import type { PoolClient } from "pg";
 import {
   enqueueStudentEmail,
@@ -44,6 +45,32 @@ export type StudentNotificationWriteWarning = {
   channel: "PORTAL" | "EMAIL_OUTBOX";
 };
 
+function auditHash(value: string) {
+  return createHash("sha256").update(value.trim().toLowerCase()).digest("hex");
+}
+
+async function writeNotificationWarningAudit(
+  client: PoolClient,
+  input: StudentNotificationInput,
+  channel: StudentNotificationWriteWarning["channel"],
+  portalNotificationId: string | null,
+) {
+  const metadata = {
+    channel,
+    studentHash: auditHash(input.studentNumber),
+    notificationType: input.notificationType,
+    messageKind: input.messageKind ?? "GENERAL",
+    ...(input.sourceType ? { sourceType: input.sourceType } : {}),
+    ...(input.sourceId ? { sourceIdHash: auditHash(input.sourceId) } : {}),
+    ...(input.eventKey ? { eventKeyHash: auditHash(input.eventKey) } : {}),
+  };
+  await client.query(
+    `INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,metadata)
+     VALUES (NULL,'STUDENT_NOTIFICATION_ENQUEUE_WARNING','student_notification',$1,$2::jsonb)`,
+    [portalNotificationId, JSON.stringify(metadata)],
+  );
+}
+
 export async function createStudentNotificationIsolated(
   client: PoolClient,
   input: StudentNotificationInput,
@@ -58,6 +85,7 @@ export async function createStudentNotificationIsolated(
     await client.query("ROLLBACK TO SAVEPOINT student_notification_portal");
     await client.query("RELEASE SAVEPOINT student_notification_portal");
     warnings.push({ channel: "PORTAL" });
+    await writeNotificationWarningAudit(client, input, "PORTAL", null);
     return { id: null, warnings };
   }
 
@@ -82,6 +110,7 @@ export async function createStudentNotificationIsolated(
       await client.query("ROLLBACK TO SAVEPOINT student_notification_email");
       await client.query("RELEASE SAVEPOINT student_notification_email");
       warnings.push({ channel: "EMAIL_OUTBOX" });
+      await writeNotificationWarningAudit(client, input, "EMAIL_OUTBOX", inserted.id);
     }
   }
 

@@ -5,6 +5,7 @@ import { serverEnv } from "@/lib/env";
 import { decryptVerificationEmailBody } from "@/server/email/verification-body-encryption";
 import {
   authorizeScheduleEmailOutboxDelivery,
+  authorizeVerificationEmailOutboxDelivery,
   claimEmailOutboxRows,
   markEmailOutboxFailed,
   markEmailOutboxFailedWithClient,
@@ -66,24 +67,56 @@ export async function deliverClaimedEmail(
       }
     });
   }
+  if (message.messageKind === "VERIFICATION") {
+    return transaction(async (client) => {
+      const authorization = await authorizeVerificationEmailOutboxDelivery(client, message, now);
+      if (authorization !== "AUTHORIZED") return { status: authorization };
+      try {
+        const textBody = decryptVerificationEmailBody(
+          message.verificationBodyEncrypted ?? "",
+          encryptionKey,
+        );
+        await transport.sendMail({
+          from,
+          to: message.toEmail,
+          subject: message.subject,
+          text: textBody,
+        });
+        await markEmailOutboxSentWithClient(client, message.id, attempts, now);
+        return { status: "SENT" as const };
+      } catch {
+        const delayMinutes = attempts >= 10 ? 0 : Math.min(2 ** (attempts - 1), 60);
+        const nextAttemptAt = new Date(now.getTime() + delayMinutes * 60 * 1000);
+        await markEmailOutboxFailedWithClient(
+          client,
+          message.id,
+          attempts,
+          nextAttemptAt,
+          "Verification email delivery failed.",
+          now,
+        );
+        return { status: attempts >= 10 ? "PERMANENT_FAILURE" as const : "PENDING" as const };
+      }
+    });
+  }
   try {
-    const textBody = decryptVerificationEmailBody(message.verificationBodyEncrypted ?? "", encryptionKey);
     await transport.sendMail({
       from,
       to: message.toEmail,
       subject: message.subject,
-      text: textBody,
+      text: message.textBody,
+      ...(message.htmlBody ? { html: message.htmlBody } : {}),
     });
     await markEmailOutboxSent(message.id, attempts, now);
     return { status: "SENT" as const };
-  } catch {
+  } catch (error) {
     const delayMinutes = attempts >= 10 ? 0 : Math.min(2 ** (attempts - 1), 60);
     const nextAttemptAt = new Date(now.getTime() + delayMinutes * 60 * 1000);
     await markEmailOutboxFailed(
       message.id,
       attempts,
       nextAttemptAt,
-      "Verification email delivery failed.",
+      error instanceof Error ? error.message : "Unknown SMTP error",
       now,
     );
     return { status: attempts >= 10 ? "PERMANENT_FAILURE" as const : "PENDING" as const };

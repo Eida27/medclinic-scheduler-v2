@@ -20,6 +20,10 @@ import { loadAuthoritativeScheduleState } from "@/server/repositories/schedule-s
 import { insertStudentNotifications } from "@/server/repositories/student-notifications.repository";
 import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import {
+  markEmailOutboxObsoleteWithClient,
+  type EmailOutboxObsoleteReason,
+} from "@/server/repositories/email-outbox.repository";
+import {
   buildCurrentStateNotification,
   fingerprintScheduleState,
   type AuthoritativeScheduleState,
@@ -77,6 +81,7 @@ async function lockDeliveryMutationContext(client: PoolClient, id: string) {
 
   let verifiedEmail: string | null = null;
   let verificationRetryEligible = false;
+  let verificationObsoleteReason: EmailOutboxObsoleteReason = "SUPERSEDED";
   if (identity.messageKind === "SCHEDULE" && identity.studentNumber) {
     await lockAdminScheduleMutationQueue(client);
     await lockEffectiveAppointmentScopes(client, [
@@ -90,18 +95,26 @@ async function lockDeliveryMutationContext(client: PoolClient, id: string) {
     const student = await lockAdminEmailDeliveryStudent(client, identity.studentNumber, "UPDATE");
     const verification = await lockAdminEmailVerificationRequest(client, identity.sourceId);
     verificationRetryEligible = Boolean(student?.isActive && verification?.retryEligible);
+    verificationObsoleteReason = verification?.obsoleteReason ?? "SUPERSEDED";
   }
 
   const row = await lockAdminEmailDeliveryRow(client, id);
   if (!row) throw new AppError("EMAIL_DELIVERY_NOT_FOUND", "Email delivery not found.", 404);
-  return { row, verifiedEmail, verificationRetryEligible };
+  return { row, verifiedEmail, verificationRetryEligible, verificationObsoleteReason };
 }
 
 export async function retryAdminEmailDelivery(id: string, actorUserId: string) {
-  return transaction(async (client) => {
-    const { row, verifiedEmail, verificationRetryEligible } = await lockDeliveryMutationContext(client, id);
+  const outcome = await transaction(async (client) => {
+    const {
+      row,
+      verifiedEmail,
+      verificationRetryEligible,
+      verificationObsoleteReason,
+    } = await lockDeliveryMutationContext(client, id);
     if (row.status !== "PERMANENT_FAILURE") {
-      if (row.messageKind === "VERIFICATION") throw retryRejectedForVerification();
+      if (row.messageKind === "VERIFICATION") {
+        return { type: "verification-rejected" as const };
+      }
       throw new AppError(
         "EMAIL_DELIVERY_NOT_RETRYABLE",
         "Only current permanent delivery failures can be retried.",
@@ -110,8 +123,16 @@ export async function retryAdminEmailDelivery(id: string, actorUserId: string) {
     }
 
     if (row.messageKind === "VERIFICATION") {
-      if (!verificationRetryEligible) throw retryRejectedForVerification();
-    } else {
+      if (!verificationRetryEligible) {
+        await markEmailOutboxObsoleteWithClient(
+          client,
+          row.id,
+          verificationObsoleteReason,
+          new Date(),
+        );
+        return { type: "verification-rejected" as const };
+      }
+    } else if (row.messageKind === "SCHEDULE") {
       if (!row.studentNumber) {
         throw new AppError("STALE_SCHEDULE_EMAIL", "This schedule email is no longer current.", 409, undefined, {
           guidance: "Queue the student's current schedule instead.",
@@ -155,8 +176,10 @@ export async function retryAdminEmailDelivery(id: string, actorUserId: string) {
       },
       client,
     );
-    return mapAdminEmailDeliveryRow(reset);
+    return { type: "retried" as const, delivery: mapAdminEmailDeliveryRow(reset) };
   });
+  if (outcome.type === "verification-rejected") throw retryRejectedForVerification();
+  return outcome.delivery;
 }
 
 export async function queueCurrentAdminEmailDelivery(id: string, actorUserId: string) {

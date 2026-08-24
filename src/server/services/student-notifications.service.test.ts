@@ -22,6 +22,13 @@ const input = {
   eventKey: "closure-warning-test",
 };
 
+const studentHash = "cc489581e86dff1348dd5618df2fd8686c2803df0c954b11baa6da1ed7f68441";
+const eventKeyHash = "c8e9e793a5a9c5fc4eee5d6a62261bea011b48eb18c72da181b1a0e801c29ec6";
+
+function warningAuditCall(query: ReturnType<typeof vi.fn>) {
+  return query.mock.calls.find(([sql]) => String(sql).includes("STUDENT_NOTIFICATION_ENQUEUE_WARNING"));
+}
+
 describe("isolated student notification writes", () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -37,6 +44,17 @@ describe("isolated student notification writes", () => {
       "SAVEPOINT student_notification_portal",
       "ROLLBACK TO SAVEPOINT student_notification_portal",
       "RELEASE SAVEPOINT student_notification_portal",
+      expect.stringContaining("STUDENT_NOTIFICATION_ENQUEUE_WARNING"),
+    ]);
+    expect(warningAuditCall(query)?.[1]).toEqual([
+      null,
+      JSON.stringify({
+        channel: "PORTAL",
+        studentHash,
+        notificationType: "CLINIC_CLOSURE_RESCHEDULED",
+        messageKind: "GENERAL",
+        eventKeyHash,
+      }),
     ]);
   });
 
@@ -58,7 +76,52 @@ describe("isolated student notification writes", () => {
       "SAVEPOINT student_notification_email",
       "ROLLBACK TO SAVEPOINT student_notification_email",
       "RELEASE SAVEPOINT student_notification_email",
+      expect.stringContaining("STUDENT_NOTIFICATION_ENQUEUE_WARNING"),
     ]);
+    expect(warningAuditCall(query)?.[1]).toEqual([
+      "notification-1",
+      JSON.stringify({
+        channel: "EMAIL_OUTBOX",
+        studentHash,
+        notificationType: "CLINIC_CLOSURE_RESCHEDULED",
+        messageKind: "GENERAL",
+        eventKeyHash,
+      }),
+    ]);
+  });
+
+  it("keeps verification tokens, destinations, bodies, and failure details out of warning audits", async () => {
+    const query = vi.fn().mockResolvedValue({});
+    insertStudentNotification.mockResolvedValueOnce({
+      id: "notification-private",
+      email: "private.student@example.test",
+    });
+    enqueueStudentEmail.mockRejectedValueOnce(
+      new Error("SMTP rejected token=verification-secret-token for private.student@example.test"),
+    );
+
+    await createStudentNotificationIsolated({ query } as never, {
+      ...input,
+      message: "Internal portal message with verification-secret-token",
+      emailSubject: "Private email subject",
+      emailTextBody: "Private email body with verification-secret-token",
+    });
+
+    const auditCall = warningAuditCall(query);
+    expect(auditCall?.[1]).toEqual([
+      "notification-private",
+      JSON.stringify({
+        channel: "EMAIL_OUTBOX",
+        studentHash,
+        notificationType: "CLINIC_CLOSURE_RESCHEDULED",
+        messageKind: "GENERAL",
+        eventKeyHash,
+      }),
+    ]);
+    expect(JSON.stringify(auditCall)).not.toContain("verification-secret-token");
+    expect(JSON.stringify(auditCall)).not.toContain("private.student@example.test");
+    expect(JSON.stringify(auditCall)).not.toContain("Private email");
+    expect(JSON.stringify(auditCall)).not.toContain("SMTP rejected");
   });
 
   it("forwards optional typed schedule email content and keeps legacy defaults", async () => {

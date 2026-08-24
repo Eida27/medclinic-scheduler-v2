@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { createHash } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { pool } from "@/server/db/pool";
 import { loadAuthoritativeScheduleState } from "@/server/repositories/schedule-state.repository";
@@ -31,8 +32,8 @@ async function outbox(studentNumber: string, attempts = 0) {
   );
   const result = await pool.query<{ id: string }>(
     `INSERT INTO email_outbox (
-       student_number, to_email, subject, text_body, attempts, next_attempt_at
-     ) VALUES ($1,$2,'Test subject','Test body',$3,'2027-08-01T00:00:00Z') RETURNING id`,
+       student_number, to_email, subject, text_body, attempts, next_attempt_at, message_kind
+     ) VALUES ($1,$2,'Test subject','Test body',$3,'2027-08-01T00:00:00Z','SCHEDULE') RETURNING id`,
     [studentNumber, `${studentNumber}@example.test`, attempts],
   );
   return result.rows[0].id;
@@ -68,16 +69,28 @@ async function verificationOutbox(studentNumber: string, body: string) {
   const encryptedBody = encryptVerificationEmailBody(body, encryptionKey, {
     iv: Buffer.from("000102030405060708090a0b", "hex"),
   });
+  const verification = await pool.query<{ id: string }>(
+    `INSERT INTO student_email_verifications (
+       student_number,pending_email,token_hash,expires_at
+     ) VALUES ($1,$2,$3,clock_timestamp()+INTERVAL '30 minutes')
+     RETURNING id::text`,
+    [
+      studentNumber,
+      `${studentNumber}@example.test`,
+      createHash("sha256").update(`${studentNumber}@example.test`).digest("hex"),
+    ],
+  );
   const result = await pool.query<{ id: string }>(
     `INSERT INTO email_outbox (
        student_number,to_email,subject,text_body,message_kind,
-       verification_body_encrypted,next_attempt_at
+       verification_body_encrypted,next_attempt_at,notification_type,source_type,source_id
      ) VALUES ($1,$2,'Verify your MedClinic notification email',
                'Verification email content is encrypted.','VERIFICATION',$3,
-               '2027-08-01T00:00:00Z') RETURNING id`,
-    [studentNumber, `${studentNumber}@example.test`, encryptedBody],
+               '2027-08-01T00:00:00Z','EMAIL_VERIFICATION',
+               'STUDENT_EMAIL_VERIFICATION',$4) RETURNING id`,
+    [studentNumber, `${studentNumber}@example.test`, encryptedBody, verification.rows[0].id],
   );
-  return result.rows[0].id;
+  return { outboxId: result.rows[0].id, verificationId: verification.rows[0].id };
 }
 
 beforeAll(cleanup);
@@ -211,7 +224,7 @@ describe("email outbox delivery", () => {
   it("decrypts verification content only for delivery and clears ciphertext after success", async () => {
     await insertTestStudent({ studentNumber: "99-9206-06", firstName: "Encrypted", lastName: "Student", yearLevel: 3 });
     const body = "Verify at https://example.test/student/email-verification/confirm?token=raw-secret";
-    const id = await verificationOutbox("99-9206-06", body);
+    const { outboxId: id } = await verificationOutbox("99-9206-06", body);
     const [message] = await claimEmailOutboxMessages(1, new Date("2027-08-02T00:00:00.000Z"));
     expect(message.textBody).toBe("Verification email content is encrypted.");
     expect(message.verificationBodyEncrypted).not.toContain("raw-secret");
@@ -233,7 +246,7 @@ describe("email outbox delivery", () => {
   it("does not persist or audit a verification token echoed by SMTP failure", async () => {
     await insertTestStudent({ studentNumber: "99-9208-08", firstName: "Failure", lastName: "Student", yearLevel: 3 });
     const body = "Verify at https://example.test/student/email-verification/confirm?token=failure-secret";
-    const id = await verificationOutbox("99-9208-08", body);
+    const { outboxId: id } = await verificationOutbox("99-9208-08", body);
     const [message] = await claimEmailOutboxMessages(1, new Date("2027-08-02T00:00:00.000Z"));
     const transport = {
       sendMail: vi.fn().mockRejectedValue(new Error(`SMTP echoed ${body}`)),
@@ -303,7 +316,7 @@ describe("email outbox delivery", () => {
 
   it("obsoletes verification mail, clears ciphertext, and writes a token-safe audit", async () => {
     await insertTestStudent({ studentNumber: "99-9207-07", firstName: "Obsolete", lastName: "Student", yearLevel: 3 });
-    const id = await verificationOutbox(
+    const { outboxId: id } = await verificationOutbox(
       "99-9207-07",
       "https://example.test/student/email-verification/confirm?token=obsolete-secret",
     );
@@ -332,6 +345,83 @@ describe("email outbox delivery", () => {
       metadata: expect.objectContaining({ reason: "SUPERSEDED", messageKind: "VERIFICATION" }),
     }]);
     expect(JSON.stringify(audit.rows)).not.toContain("obsolete-secret");
+  });
+
+  it.each([
+    ["expired", "EXPIRED", "expires_at=clock_timestamp()-INTERVAL '1 second'"],
+    ["superseded", "SUPERSEDED", "consumed_at=clock_timestamp()"],
+  ])("does not send %s verification mail and atomically obsoletes its ciphertext", async (_label, reason, mutation) => {
+    const studentNumber = _label === "expired" ? "99-9210-10" : "99-9211-11";
+    await insertTestStudent({ studentNumber, firstName: "Invalid", lastName: "Verification", yearLevel: 3 });
+    const body = `https://example.test/student/email-verification/confirm?token=${_label}-secret`;
+    const fixture = await verificationOutbox(studentNumber, body);
+    await pool.query(
+      `UPDATE student_email_verifications SET ${mutation} WHERE id=$1`,
+      [fixture.verificationId],
+    );
+    const [message] = await claimEmailOutboxMessages(1, new Date("2027-08-02T00:00:00.000Z"));
+    const transport = { sendMail: vi.fn().mockResolvedValue({ messageId: "must-not-send" }) };
+
+    await expect(deliverClaimedEmail(
+      message,
+      transport,
+      new Date("2027-08-02T00:00:00.000Z"),
+      "clinic@example.test",
+      encryptionKey,
+    )).resolves.toEqual({ status: "OBSOLETE" });
+
+    expect(transport.sendMail).not.toHaveBeenCalled();
+    await expect(pool.query(
+      `SELECT status,verification_body_encrypted,locked_at,last_attempt_status
+         FROM email_outbox WHERE id=$1`,
+      [fixture.outboxId],
+    )).resolves.toMatchObject({ rows: [{
+      status: "OBSOLETE",
+      verification_body_encrypted: null,
+      locked_at: null,
+      last_attempt_status: "OBSOLETE",
+    }] });
+    const audits = await pool.query<{ action: string; metadata: Record<string, unknown> }>(
+      "SELECT action,metadata FROM audit_logs WHERE entity_type='email_outbox' AND entity_id=$1",
+      [fixture.outboxId],
+    );
+    expect(audits.rows).toEqual([{
+      action: "EMAIL_OUTBOX_OBSOLETE",
+      metadata: expect.objectContaining({ reason, messageKind: "VERIFICATION" }),
+    }]);
+    expect(JSON.stringify(audits.rows)).not.toContain(`${_label}-secret`);
+    expect(JSON.stringify(audits.rows)).not.toContain("token=");
+  });
+
+  it("delivers an untyped legacy notification as ordinary GENERAL plaintext mail", async () => {
+    const studentNumber = "99-9212-12";
+    await insertTestStudent({ studentNumber, firstName: "General", lastName: "Notification", yearLevel: 3 });
+    const inserted = await pool.query<{ id: string }>(
+      `INSERT INTO email_outbox (
+         student_number,to_email,subject,text_body,next_attempt_at
+       ) VALUES ($1,'general@example.test','General notice','Ordinary notification body',
+                 '2027-08-01T00:00:00Z') RETURNING id::text`,
+      [studentNumber],
+    );
+    const [message] = await claimEmailOutboxMessages(1, new Date("2027-08-02T00:00:00.000Z"));
+    expect(message.messageKind).toBe("GENERAL");
+    const transport = { sendMail: vi.fn().mockResolvedValue({ messageId: "general-1" }) };
+
+    await expect(deliverClaimedEmail(
+      message,
+      transport,
+      new Date("2027-08-02T00:00:00.000Z"),
+      "clinic@example.test",
+    )).resolves.toEqual({ status: "SENT" });
+
+    expect(transport.sendMail).toHaveBeenCalledWith(expect.objectContaining({
+      to: "general@example.test",
+      text: "Ordinary notification body",
+    }));
+    await expect(pool.query(
+      "SELECT status,message_kind FROM email_outbox WHERE id=$1",
+      [inserted.rows[0].id],
+    )).resolves.toMatchObject({ rows: [{ status: "SENT", message_kind: "GENERAL" }] });
   });
 });
 
