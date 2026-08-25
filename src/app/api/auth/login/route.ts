@@ -25,7 +25,10 @@ export async function POST(request: Request) {
       maxAge: SESSION_MAX_AGE_SECONDS,
       path: "/",
     });
-    return dataResponse(user);
+    return dataResponse({
+      ...user,
+      nextPath: user.onboardingRequired ? "/account/onboarding" : "/dashboard",
+    });
   } catch (error) {
     return errorResponse(error);
   }

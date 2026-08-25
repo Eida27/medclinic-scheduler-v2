@@ -9,11 +9,13 @@ describe("session tokens", () => {
       email: "admin@medclinic.local",
       fullName: "System Admin",
       role: "ADMIN",
+      credentialVersion: 7,
     });
 
     await expect(verifySessionToken(token)).resolves.toMatchObject({
       userId: "00000000-0000-4000-8000-000000000001",
       role: "ADMIN",
+      credentialVersion: 7,
     });
   });
 
@@ -26,6 +28,7 @@ describe("session tokens", () => {
       clinicId: null,
       clinicCode: null,
       clinicName: null,
+      credentialVersion: 3,
     });
 
     await expect(verifySessionToken(token)).resolves.toMatchObject({
@@ -34,6 +37,7 @@ describe("session tokens", () => {
       clinicId: null,
       clinicCode: null,
       clinicName: null,
+      credentialVersion: 3,
     });
   });
 
@@ -43,10 +47,29 @@ describe("session tokens", () => {
       email: "staff@medclinic.local",
       fullName: "Clinic Staff",
       role: "CLINIC_STAFF",
+      credentialVersion: 1,
     });
 
     const parts = token.split(".");
     parts[1] = `${parts[1].slice(0, 4)}x${parts[1].slice(5)}`;
     await expect(verifySessionToken(parts.join("."))).rejects.toThrow();
+  });
+
+  it("rejects a signed legacy token without a credential version claim", async () => {
+    const { SignJWT } = await import("jose");
+    const secret = new TextEncoder().encode(process.env.JWT_SECRET!);
+    const token = await new SignJWT({
+      fullName: "Legacy Staff",
+      email: "legacy@example.test",
+      role: "ADMIN",
+      clinicId: null,
+      clinicCode: null,
+      clinicName: null,
+    })
+      .setProtectedHeader({ alg: "HS256" })
+      .setSubject("00000000-0000-4000-8000-000000000099")
+      .setExpirationTime("1h")
+      .sign(secret);
+    await expect(verifySessionToken(token)).rejects.toThrow("Invalid session payload");
   });
 });

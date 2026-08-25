@@ -15,6 +15,7 @@ export async function createSessionToken(user: SessionUser): Promise<string> {
     fullName: user.fullName,
     email: user.email,
     role: user.role,
+    credentialVersion: user.credentialVersion,
     clinicId: user.clinicId ?? null,
     clinicCode: user.clinicCode ?? null,
     clinicName: user.clinicName ?? null,
@@ -33,6 +34,8 @@ export async function verifySessionToken(token: string): Promise<SessionUser> {
     typeof payload.fullName !== "string" ||
     typeof payload.email !== "string" ||
     (payload.role !== "ADMIN" && payload.role !== "COORDINATOR" && payload.role !== "CLINIC_STAFF") ||
+    !Number.isInteger(payload.credentialVersion) ||
+    (payload.credentialVersion as number) < 1 ||
     (payload.clinicId !== null && payload.clinicId !== undefined && typeof payload.clinicId !== "string") ||
     (payload.clinicCode !== null && payload.clinicCode !== undefined && typeof payload.clinicCode !== "string") ||
     (payload.clinicName !== null && payload.clinicName !== undefined && typeof payload.clinicName !== "string")
@@ -44,6 +47,7 @@ export async function verifySessionToken(token: string): Promise<SessionUser> {
     fullName: payload.fullName,
     email: payload.email,
     role: payload.role as UserRole,
+    credentialVersion: payload.credentialVersion as number,
     clinicId: typeof payload.clinicId === "string" ? payload.clinicId : null,
     clinicCode: typeof payload.clinicCode === "string" ? payload.clinicCode : null,
     clinicName: typeof payload.clinicName === "string" ? payload.clinicName : null,

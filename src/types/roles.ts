@@ -9,6 +9,7 @@ export type SessionUser = {
   fullName: string;
   email: string;
   role: UserRole;
+  credentialVersion: number;
   clinicId?: string | null;
   clinicCode?: string | null;
   clinicName?: string | null;

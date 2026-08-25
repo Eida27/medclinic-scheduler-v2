@@ -28,7 +28,7 @@ export function LoginForm() {
       setPending(false);
       return;
     }
-    router.replace("/dashboard");
+    router.replace(payload.data?.nextPath ?? "/dashboard");
     router.refresh();
   }
 

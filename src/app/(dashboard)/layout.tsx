@@ -14,6 +14,9 @@ async function authenticatedUser() {
   try {
     return await requireUser();
   } catch (error) {
+    if (error instanceof AppError && error.code === "ONBOARDING_REQUIRED") {
+      redirect("/account/onboarding");
+    }
     if (error instanceof AppError && error.status === 401 && await optionalStudent()) {
       forbidden();
     }

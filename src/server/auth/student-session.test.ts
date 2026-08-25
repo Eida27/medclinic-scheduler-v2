@@ -29,6 +29,7 @@ describe("student session tokens", () => {
       fullName: "System Admin",
       email: "admin@medclinic.local",
       role: "ADMIN",
+      credentialVersion: 1,
     });
     await expect(verifyStudentSessionToken(staffToken)).rejects.toThrow();
   });
