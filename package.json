@@ -14,7 +14,7 @@
     "db:seed": "tsx --env-file=.env.local scripts/db-seed.ts",
     "db:reset": "tsx --env-file=.env.local scripts/db-reset.ts",
     "db:reference-catalog-cleanup": "tsx --env-file=.env.local scripts/db-reference-catalog-cleanup.ts",
-    "admin:bootstrap": "tsx --env-file=.env.local scripts/admin-bootstrap.ts",
+    "admin:bootstrap": "node --conditions=react-server --import tsx --env-file=.env.local scripts/admin-bootstrap.ts",
     "acceptance:clinic-ux": "tsx --env-file=.env.local scripts/browser-clinic-scheduler-ux-fixture.ts",
     "acceptance:appointment-protection": "tsx --env-file=.env.local scripts/browser-appointment-protection-fixture.ts",
     "acceptance:student-result-editing": "tsx --env-file=.env.local scripts/browser-student-result-editing-fixture.ts",
@@ -34,7 +34,10 @@
     "acceptance:schedule-import-validation:cleanup": "tsx --env-file=.env.local scripts/browser-schedule-import-year-category-fixture.ts cleanup",
     "acceptance:student-email-notifications:setup": "tsx --env-file=.env.local scripts/browser-student-email-notifications-fixture.ts setup",
     "acceptance:student-email-notifications:status": "tsx --env-file=.env.local scripts/browser-student-email-notifications-fixture.ts status",
-    "acceptance:student-email-notifications:cleanup": "tsx --env-file=.env.local scripts/browser-student-email-notifications-fixture.ts cleanup"
+    "acceptance:student-email-notifications:cleanup": "tsx --env-file=.env.local scripts/browser-student-email-notifications-fixture.ts cleanup",
+    "acceptance:staff-account-security:setup": "node --conditions=react-server --import tsx --env-file=.env.local scripts/browser-staff-account-security-fixture.ts setup",
+    "acceptance:staff-account-security:status": "node --conditions=react-server --import tsx --env-file=.env.local scripts/browser-staff-account-security-fixture.ts status",
+    "acceptance:staff-account-security:cleanup": "node --conditions=react-server --import tsx --env-file=.env.local scripts/browser-staff-account-security-fixture.ts cleanup"
   },
   "dependencies": {
     "archiver": "^8.0.0",

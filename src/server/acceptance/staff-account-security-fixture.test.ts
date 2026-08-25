@@ -1,0 +1,48 @@
+// @vitest-environment node
+import { describe, expect, it } from "vitest";
+import {
+  assertSafeStaffAccountSecurityAcceptanceDatabase,
+  assertZeroStaffAccountSecurityResidue,
+  type StaffAccountSecurityResidue,
+} from "../../../scripts/browser-staff-account-security-fixture";
+
+const zero: StaffAccountSecurityResidue = {
+  users: 0,
+  emailVerifications: 0,
+  passwordResets: 0,
+  outbox: 0,
+  audits: 0,
+  historicalAppointments: 0,
+  historicalStatusLogs: 0,
+  historicalStudents: 0,
+  stateFiles: 0,
+};
+
+describe("staff account security Browser acceptance fixture safety", () => {
+  it("requires an explicit exclusive disposable database opt-in", () => {
+    expect(() => assertSafeStaffAccountSecurityAcceptanceDatabase(
+      "postgres://postgres:postgres@127.0.0.1:5432/medclinic_test",
+      undefined,
+    )).toThrow(/STAFF_ACCOUNT_SECURITY_ACCEPTANCE_EXCLUSIVE_DATABASE=1/);
+  });
+
+  it("rejects non-loopback databases even with the opt-in", () => {
+    expect(() => assertSafeStaffAccountSecurityAcceptanceDatabase(
+      "postgres://postgres:postgres@db.example.com:5432/medclinic_test",
+      "1",
+    )).toThrow(/loopback PostgreSQL/);
+  });
+
+  it("accepts an explicitly exclusive loopback database", () => {
+    expect(assertSafeStaffAccountSecurityAcceptanceDatabase(
+      "postgres://postgres:postgres@localhost:5432/medclinic_test",
+      "1",
+    )).toMatchObject({ database: "medclinic_test", hostname: "localhost" });
+  });
+
+  it("proves complete cleanup across every fixture-owned surface", () => {
+    expect(assertZeroStaffAccountSecurityResidue(zero)).toEqual(zero);
+    expect(() => assertZeroStaffAccountSecurityResidue({ ...zero, outbox: 1 }))
+      .toThrow(/cleanup residue/i);
+  });
+});

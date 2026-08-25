@@ -605,7 +605,9 @@ async function assertRequiredSchemaAndReferences(client: PoolClient) {
     throw new Error("Migration 016 must be applied to the local acceptance database before setup.");
   }
   const admin = await client.query<{ role: string; active: boolean }>(
-    `SELECT role,is_active AS active FROM users WHERE id=$1`, [ADMIN_USER_ID],
+    `SELECT role,
+            (deleted_at IS NULL AND email_verified_at IS NOT NULL AND must_change_password=FALSE) AS active
+       FROM users WHERE id=$1`, [ADMIN_USER_ID],
   );
   const clinics = await client.query<{ id: string; code: string; name: string; active: boolean }>(
     `SELECT id::text AS id,code,name,is_active AS active FROM clinics
