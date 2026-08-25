@@ -6,6 +6,7 @@ import {
   listAdminEmailDeliveryRows,
   lockAdminEmailDeliveryStudent,
   lockAdminEmailVerificationRequest,
+  lockAdminStaffSecurityRequest,
   lockAdminEmailDeliveryRow,
   lockAdminScheduleMutationQueue,
   lockAdminScheduleStateRows,
@@ -71,6 +72,16 @@ function retryRejectedForVerification() {
   );
 }
 
+function retryRejectedForStaffSecurity() {
+  return new AppError(
+    "STAFF_SECURITY_RETRY_REJECTED",
+    "This staff security email is expired, consumed, or superseded.",
+    409,
+    undefined,
+    { guidance: "Ask the staff user to request a new security email." },
+  );
+}
+
 function normalizeDestination(value: string) {
   return value.trim().toLowerCase();
 }
@@ -82,6 +93,8 @@ async function lockDeliveryMutationContext(client: PoolClient, id: string) {
   let verifiedEmail: string | null = null;
   let verificationRetryEligible = false;
   let verificationObsoleteReason: EmailOutboxObsoleteReason = "SUPERSEDED";
+  let staffSecurityRetryEligible = false;
+  let staffSecurityObsoleteReason: EmailOutboxObsoleteReason = "ACCOUNT_STATE_CHANGED";
   if (identity.messageKind === "SCHEDULE" && identity.studentNumber) {
     await lockAdminScheduleMutationQueue(client);
     await lockEffectiveAppointmentScopes(client, [
@@ -100,7 +113,23 @@ async function lockDeliveryMutationContext(client: PoolClient, id: string) {
 
   const row = await lockAdminEmailDeliveryRow(client, id);
   if (!row) throw new AppError("EMAIL_DELIVERY_NOT_FOUND", "Email delivery not found.", 404);
-  return { row, verifiedEmail, verificationRetryEligible, verificationObsoleteReason };
+  if (row.messageKind === "STAFF_SECURITY") {
+    const request = await lockAdminStaffSecurityRequest(client, {
+      sourceType: row.sourceType,
+      sourceId: row.sourceId,
+      toEmail: row.toEmail,
+    });
+    staffSecurityRetryEligible = request?.retryEligible ?? false;
+    staffSecurityObsoleteReason = request?.obsoleteReason ?? "ACCOUNT_STATE_CHANGED";
+  }
+  return {
+    row,
+    verifiedEmail,
+    verificationRetryEligible,
+    verificationObsoleteReason,
+    staffSecurityRetryEligible,
+    staffSecurityObsoleteReason,
+  };
 }
 
 export async function retryAdminEmailDelivery(id: string, actorUserId: string) {
@@ -110,10 +139,15 @@ export async function retryAdminEmailDelivery(id: string, actorUserId: string) {
       verifiedEmail,
       verificationRetryEligible,
       verificationObsoleteReason,
+      staffSecurityRetryEligible,
+      staffSecurityObsoleteReason,
     } = await lockDeliveryMutationContext(client, id);
     if (row.status !== "PERMANENT_FAILURE") {
       if (row.messageKind === "VERIFICATION") {
         return { type: "verification-rejected" as const };
+      }
+      if (row.messageKind === "STAFF_SECURITY") {
+        return { type: "staff-security-rejected" as const };
       }
       throw new AppError(
         "EMAIL_DELIVERY_NOT_RETRYABLE",
@@ -131,6 +165,16 @@ export async function retryAdminEmailDelivery(id: string, actorUserId: string) {
           new Date(),
         );
         return { type: "verification-rejected" as const };
+      }
+    } else if (row.messageKind === "STAFF_SECURITY") {
+      if (!staffSecurityRetryEligible) {
+        await markEmailOutboxObsoleteWithClient(
+          client,
+          row.id,
+          staffSecurityObsoleteReason,
+          new Date(),
+        );
+        return { type: "staff-security-rejected" as const };
       }
     } else if (row.messageKind === "SCHEDULE") {
       if (!row.studentNumber) {
@@ -179,6 +223,7 @@ export async function retryAdminEmailDelivery(id: string, actorUserId: string) {
     return { type: "retried" as const, delivery: mapAdminEmailDeliveryRow(reset) };
   });
   if (outcome.type === "verification-rejected") throw retryRejectedForVerification();
+  if (outcome.type === "staff-security-rejected") throw retryRejectedForStaffSecurity();
   return outcome.delivery;
 }
 

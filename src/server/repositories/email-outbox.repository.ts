@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { PoolClient } from "pg";
 import { transaction } from "@/server/db/pool";
 
-export type EmailOutboxMessageKind = "GENERAL" | "SCHEDULE" | "VERIFICATION";
+export type EmailOutboxMessageKind = "GENERAL" | "SCHEDULE" | "VERIFICATION" | "STAFF_SECURITY";
 
 export type ClaimedEmailOutboxMessage = {
   id: string;
@@ -166,7 +166,8 @@ export type EmailOutboxObsoleteReason =
   | "CONSUMED"
   | "EXPIRED"
   | "SUPERSEDED"
-  | "VERIFIED_ADDRESS_CHANGED";
+  | "VERIFIED_ADDRESS_CHANGED"
+  | "ACCOUNT_STATE_CHANGED";
 
 export async function markEmailOutboxObsoleteWithClient(
   client: PoolClient,
@@ -333,6 +334,113 @@ export async function authorizeScheduleEmailOutboxDelivery(
     || row.toEmail.trim().toLowerCase() !== verifiedEmail
   ) {
     await markEmailOutboxObsoleteWithClient(client, message.id, "VERIFIED_ADDRESS_CHANGED", now);
+    return "OBSOLETE" as const;
+  }
+  return "AUTHORIZED" as const;
+}
+
+export async function authorizeStaffSecurityEmailOutboxDelivery(
+  client: PoolClient,
+  message: Pick<ClaimedEmailOutboxMessage, "id" | "sourceType" | "sourceId">,
+  now: Date,
+) {
+  const outbox = await client.query<{
+    status: string;
+    messageKind: EmailOutboxMessageKind;
+    toEmail: string;
+    sourceType: string | null;
+    sourceId: string | null;
+  }>(
+    `SELECT status,message_kind AS "messageKind",to_email AS "toEmail",
+            source_type AS "sourceType",source_id AS "sourceId"
+       FROM email_outbox WHERE id=$1 FOR UPDATE`,
+    [message.id],
+  );
+  const row = outbox.rows[0];
+  if (!row || row.status !== "PROCESSING" || row.messageKind !== "STAFF_SECURITY") {
+    return "SKIPPED" as const;
+  }
+
+  let eligible = false;
+  let expired = false;
+  let consumed = false;
+  if (message.sourceType === "STAFF_EMAIL_VERIFICATION" && message.sourceId) {
+    const request = await client.query<{
+      pendingEmail: string;
+      accountEmail: string | null;
+      deletedAt: Date | null;
+      consumedAt: Date | null;
+      invalidatedAt: Date | null;
+      expired: boolean;
+    }>(
+      `SELECT verification.pending_email AS "pendingEmail",account.email AS "accountEmail",
+              account.deleted_at AS "deletedAt",verification.consumed_at AS "consumedAt",
+              verification.invalidated_at AS "invalidatedAt",
+              verification.expires_at<=clock_timestamp() AS expired
+         FROM staff_email_verifications verification
+         JOIN users account ON account.id=verification.user_id
+        WHERE verification.id::text=$1
+        FOR UPDATE OF verification,account`,
+      [message.sourceId],
+    );
+    const requestRow = request.rows[0];
+    expired = requestRow?.expired ?? false;
+    consumed = Boolean(requestRow?.consumedAt);
+    eligible = Boolean(
+      requestRow
+      && !requestRow.deletedAt
+      && !requestRow.consumedAt
+      && !requestRow.invalidatedAt
+      && !requestRow.expired
+      && requestRow.accountEmail
+      && row.toEmail.trim().toLowerCase() === requestRow.pendingEmail.trim().toLowerCase()
+      && requestRow.accountEmail.trim().toLowerCase() === requestRow.pendingEmail.trim().toLowerCase(),
+    );
+  } else if (message.sourceType === "STAFF_PASSWORD_RESET" && message.sourceId) {
+    const request = await client.query<{
+      email: string | null;
+      deletedAt: Date | null;
+      emailVerifiedAt: Date | null;
+      mustChangePassword: boolean;
+      consumedAt: Date | null;
+      invalidatedAt: Date | null;
+      expired: boolean;
+    }>(
+      `SELECT account.email,account.deleted_at AS "deletedAt",
+              account.email_verified_at AS "emailVerifiedAt",
+              account.must_change_password AS "mustChangePassword",
+              reset.consumed_at AS "consumedAt",reset.invalidated_at AS "invalidatedAt",
+              reset.expires_at<=clock_timestamp() AS expired
+         FROM staff_password_resets reset
+         JOIN users account ON account.id=reset.user_id
+        WHERE reset.id::text=$1
+        FOR UPDATE OF reset,account`,
+      [message.sourceId],
+    );
+    const requestRow = request.rows[0];
+    expired = requestRow?.expired ?? false;
+    consumed = Boolean(requestRow?.consumedAt);
+    eligible = Boolean(
+      requestRow
+      && !requestRow.deletedAt
+      && requestRow.emailVerifiedAt
+      && !requestRow.mustChangePassword
+      && !requestRow.consumedAt
+      && !requestRow.invalidatedAt
+      && !requestRow.expired
+      && requestRow.email
+      && row.toEmail.trim().toLowerCase() === requestRow.email.trim().toLowerCase(),
+    );
+  }
+
+  const linked = row.sourceType === message.sourceType && row.sourceId === message.sourceId;
+  if (!linked || !eligible) {
+    await markEmailOutboxObsoleteWithClient(
+      client,
+      message.id,
+      expired ? "EXPIRED" : consumed ? "CONSUMED" : "ACCOUNT_STATE_CHANGED",
+      now,
+    );
     return "OBSOLETE" as const;
   }
   return "AUTHORIZED" as const;

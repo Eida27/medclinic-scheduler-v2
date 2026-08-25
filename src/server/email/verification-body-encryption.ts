@@ -24,7 +24,7 @@ export function parseEmailOutboxEncryptionKey(value: string) {
   return key;
 }
 
-export function encryptVerificationEmailBody(
+export function encryptEmailOutboxSensitiveBody(
   plaintext: string,
   encodedKey: string,
   dependencies: { iv?: Uint8Array } = {},
@@ -45,7 +45,7 @@ export function encryptVerificationEmailBody(
   ].join(".");
 }
 
-export function decryptVerificationEmailBody(envelope: string, encodedKey: string) {
+export function decryptEmailOutboxSensitiveBody(envelope: string, encodedKey: string) {
   try {
     const key = parseEmailOutboxEncryptionKey(encodedKey);
     const parts = envelope.split(".");
@@ -67,3 +67,7 @@ export function decryptVerificationEmailBody(envelope: string, encodedKey: strin
     throw new Error(DECRYPTION_ERROR_MESSAGE);
   }
 }
+
+// Compatibility aliases: student verification messages retain the same v1 envelope and AAD.
+export const encryptVerificationEmailBody = encryptEmailOutboxSensitiveBody;
+export const decryptVerificationEmailBody = decryptEmailOutboxSensitiveBody;

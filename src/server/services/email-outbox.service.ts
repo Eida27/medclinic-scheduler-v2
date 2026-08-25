@@ -2,8 +2,12 @@ import "server-only";
 import nodemailer from "nodemailer";
 import { transaction } from "@/server/db/pool";
 import { serverEnv } from "@/lib/env";
-import { decryptVerificationEmailBody } from "@/server/email/verification-body-encryption";
 import {
+  decryptEmailOutboxSensitiveBody,
+  decryptVerificationEmailBody,
+} from "@/server/email/verification-body-encryption";
+import {
+  authorizeStaffSecurityEmailOutboxDelivery,
   authorizeScheduleEmailOutboxDelivery,
   authorizeVerificationEmailOutboxDelivery,
   claimEmailOutboxRows,
@@ -93,6 +97,38 @@ export async function deliverClaimedEmail(
           attempts,
           nextAttemptAt,
           "Verification email delivery failed.",
+          now,
+        );
+        return { status: attempts >= 10 ? "PERMANENT_FAILURE" as const : "PENDING" as const };
+      }
+    });
+  }
+  if (message.messageKind === "STAFF_SECURITY") {
+    return transaction(async (client) => {
+      const authorization = await authorizeStaffSecurityEmailOutboxDelivery(client, message, now);
+      if (authorization !== "AUTHORIZED") return { status: authorization };
+      try {
+        const textBody = decryptEmailOutboxSensitiveBody(
+          message.verificationBodyEncrypted ?? "",
+          encryptionKey,
+        );
+        await transport.sendMail({
+          from,
+          to: message.toEmail,
+          subject: message.subject,
+          text: textBody,
+        });
+        await markEmailOutboxSentWithClient(client, message.id, attempts, now);
+        return { status: "SENT" as const };
+      } catch {
+        const delayMinutes = attempts >= 10 ? 0 : Math.min(2 ** (attempts - 1), 60);
+        const nextAttemptAt = new Date(now.getTime() + delayMinutes * 60 * 1000);
+        await markEmailOutboxFailedWithClient(
+          client,
+          message.id,
+          attempts,
+          nextAttemptAt,
+          "Staff security email delivery failed.",
           now,
         );
         return { status: attempts >= 10 ? "PERMANENT_FAILURE" as const : "PENDING" as const };

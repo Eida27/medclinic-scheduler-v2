@@ -178,6 +178,77 @@ export async function lockAdminEmailVerificationRequest(client: PoolClient, sour
   return result.rows[0] ?? null;
 }
 
+export async function lockAdminStaffSecurityRequest(
+  client: PoolClient,
+  input: {
+    sourceType: string | null;
+    sourceId: string | null;
+    toEmail: string;
+  },
+) {
+  if (!input.sourceId) return null;
+  if (input.sourceType === "STAFF_EMAIL_VERIFICATION") {
+    const result = await client.query<{
+      retryEligible: boolean;
+      obsoleteReason: "CONSUMED" | "EXPIRED" | "ACCOUNT_STATE_CHANGED" | null;
+    }>(
+      `SELECT verification.consumed_at IS NULL
+                AND verification.invalidated_at IS NULL
+                AND verification.expires_at>clock_timestamp()
+                AND account.deleted_at IS NULL
+                AND LOWER(BTRIM(account.email))=LOWER(BTRIM(verification.pending_email))
+                AND LOWER(BTRIM(verification.pending_email))=LOWER(BTRIM($2))
+                AS "retryEligible",
+              CASE
+                WHEN verification.expires_at<=clock_timestamp() THEN 'EXPIRED'
+                WHEN verification.consumed_at IS NOT NULL THEN 'CONSUMED'
+                WHEN verification.invalidated_at IS NOT NULL OR account.deleted_at IS NOT NULL
+                  OR LOWER(BTRIM(account.email))<>LOWER(BTRIM(verification.pending_email))
+                  OR LOWER(BTRIM(verification.pending_email))<>LOWER(BTRIM($2))
+                  THEN 'ACCOUNT_STATE_CHANGED'
+                ELSE NULL
+              END AS "obsoleteReason"
+         FROM staff_email_verifications verification
+         JOIN users account ON account.id=verification.user_id
+        WHERE verification.id::text=$1
+        FOR UPDATE OF verification,account`,
+      [input.sourceId, input.toEmail],
+    );
+    return result.rows[0] ?? null;
+  }
+  if (input.sourceType === "STAFF_PASSWORD_RESET") {
+    const result = await client.query<{
+      retryEligible: boolean;
+      obsoleteReason: "CONSUMED" | "EXPIRED" | "ACCOUNT_STATE_CHANGED" | null;
+    }>(
+      `SELECT reset.consumed_at IS NULL
+                AND reset.invalidated_at IS NULL
+                AND reset.expires_at>clock_timestamp()
+                AND account.deleted_at IS NULL
+                AND account.email_verified_at IS NOT NULL
+                AND account.must_change_password=FALSE
+                AND LOWER(BTRIM(account.email))=LOWER(BTRIM($2))
+                AS "retryEligible",
+              CASE
+                WHEN reset.expires_at<=clock_timestamp() THEN 'EXPIRED'
+                WHEN reset.consumed_at IS NOT NULL THEN 'CONSUMED'
+                WHEN reset.invalidated_at IS NOT NULL OR account.deleted_at IS NOT NULL
+                  OR account.email_verified_at IS NULL OR account.must_change_password=TRUE
+                  OR LOWER(BTRIM(account.email))<>LOWER(BTRIM($2))
+                  THEN 'ACCOUNT_STATE_CHANGED'
+                ELSE NULL
+              END AS "obsoleteReason"
+         FROM staff_password_resets reset
+         JOIN users account ON account.id=reset.user_id
+        WHERE reset.id::text=$1
+        FOR UPDATE OF reset,account`,
+      [input.sourceId, input.toEmail],
+    );
+    return result.rows[0] ?? null;
+  }
+  return null;
+}
+
 export async function lockAdminScheduleStateRows(client: PoolClient, studentNumber: string) {
   await client.query(
     `SELECT id FROM clinic_closure_manual_cases
