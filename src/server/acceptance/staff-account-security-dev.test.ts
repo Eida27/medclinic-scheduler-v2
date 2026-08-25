@@ -1,6 +1,9 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { assertPreparedStaffAccountSecurityAcceptanceState } from "../../../scripts/browser-staff-account-security-dev";
+import {
+  assertNoStaffAccountSecurityAcceptanceAddressOverrides,
+  assertPreparedStaffAccountSecurityAcceptanceState,
+} from "../../../scripts/browser-staff-account-security-dev";
 
 describe("staff account security acceptance dev launcher", () => {
   it("requires the prepared isolated schema state", () => {
@@ -50,5 +53,16 @@ describe("staff account security acceptance dev launcher", () => {
       databaseIdentity: { hostname: "localhost", port: "5432", database: "medclinic_test" },
       appUrl: "http://localhost:3012",
     })).toThrow(/APP_URL/);
+  });
+
+  it("rejects every Next.js host or port override form", () => {
+    expect(() => assertNoStaffAccountSecurityAcceptanceAddressOverrides(["--port", "3013"]))
+      .toThrow(/APP_URL/);
+    expect(() => assertNoStaffAccountSecurityAcceptanceAddressOverrides(["--port=3013"]))
+      .toThrow(/APP_URL/);
+    expect(() => assertNoStaffAccountSecurityAcceptanceAddressOverrides(["--hostname=127.0.0.1"]))
+      .toThrow(/APP_URL/);
+    expect(assertNoStaffAccountSecurityAcceptanceAddressOverrides(["--turbo"]))
+      .toEqual(["--turbo"]);
   });
 });

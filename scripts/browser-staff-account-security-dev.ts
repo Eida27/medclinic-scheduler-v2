@@ -48,6 +48,17 @@ export function assertPreparedStaffAccountSecurityAcceptanceState(
   };
 }
 
+export function assertNoStaffAccountSecurityAcceptanceAddressOverrides(arguments_: string[]) {
+  if (arguments_.some((argument) => (
+    ["--port", "-p", "--hostname", "-H"].includes(argument)
+    || argument.startsWith("--port=")
+    || argument.startsWith("--hostname=")
+  ))) {
+    throw new Error("The acceptance application host and port come from the APP_URL saved during setup.");
+  }
+  return arguments_;
+}
+
 async function main() {
   const baseDatabaseUrl = process.env.DATABASE_URL;
   assertSafeStaffAccountSecurityAcceptanceDatabase(
@@ -67,10 +78,7 @@ async function main() {
   if (applicationUrl.protocol !== "http:" || !["localhost", "127.0.0.1", "::1"].includes(applicationUrl.hostname)) {
     throw new Error("Staff account security Browser acceptance APP_URL must use HTTP on a loopback host.");
   }
-  const additionalArguments = process.argv.slice(2);
-  if (additionalArguments.some((argument) => ["--port", "-p", "--hostname", "-H"].includes(argument))) {
-    throw new Error("The acceptance application host and port come from the APP_URL saved during setup.");
-  }
+  const additionalArguments = assertNoStaffAccountSecurityAcceptanceAddressOverrides(process.argv.slice(2));
   const schemaDatabaseUrl = staffAccountSecurityAcceptanceSchemaUrl(baseDatabaseUrl);
   const probePool = new Pool({ connectionString: schemaDatabaseUrl });
   try {
