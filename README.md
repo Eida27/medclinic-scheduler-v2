@@ -215,6 +215,22 @@ npm run build
 
 Tests cover schema/backfills, the exact nine-column CSV, 3,000-row atomic imports, scheduling windows/capacity/concurrency, displacement, closure rollback, manual locks, date-only no-shows, separate sessions/throttling, strict ownership, file signatures/limits, finalization, ZIP access, invalidation, cleanup, outbox retry, and the full cross-feature scenario.
 
+### Staff account security Browser acceptance fixture
+
+This fixture creates a dedicated schema in an explicitly disposable loopback database, applies all migrations and reference seeds, proves the seed contains zero staff users, and performs the real one-time Administrator bootstrap. Start the application with the dedicated acceptance command so it uses that schema rather than the ordinary development schema:
+
+```powershell
+$env:STAFF_ACCOUNT_SECURITY_ACCEPTANCE_EXCLUSIVE_DATABASE = "1"
+npm run acceptance:staff-account-security:setup
+npm run acceptance:staff-account-security:dev -- --port 3012
+# Complete the Browser flow in another terminal, then stop the acceptance application.
+npm run acceptance:staff-account-security:status
+npm run acceptance:staff-account-security:cleanup
+Remove-Item Env:STAFF_ACCOUNT_SECURITY_ACCEPTANCE_EXCLUSIVE_DATABASE
+```
+
+Cleanup proves zero fixture users, tokens, staff outbox rows, related audits, historical fixture records, and state files before dropping the isolated schema.
+
 ### Appointment protection Browser acceptance fixture
 
 The focused appointment-protection fixture creates two synthetic students with exact owned appointment and pair IDs for the locking/inheritance and active-draft-file closure journeys. Every command requires a PostgreSQL `DATABASE_URL` on `localhost`, `127.0.0.1`, or `::1` plus an explicit `APPOINTMENT_PROTECTION_ACCEPTANCE_EXCLUSIVE_DATABASE=1` opt-in. Set that flag only while the configured local database is dedicated exclusively to this acceptance run.

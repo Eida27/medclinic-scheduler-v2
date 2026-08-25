@@ -34,6 +34,15 @@ describe("staff security screens", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("shows an actionable error when email verification cannot reach the server", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+
+    render(<StaffEmailVerificationConfirm token="unreachable-token" />);
+
+    expect(await screen.findByText(/Unable to verify your email right now/)).toBeVisible();
+    expect(screen.getByRole("link", { name: "Continue to Login" })).toBeVisible();
+  });
+
   it("shows an onboarding-only warning with ordered verification and password steps", () => {
     render(<OnboardingPanel initialState={{
       emailMasked: "pe*****@example.test",
