@@ -3,6 +3,7 @@ import { pool, transaction } from "@/server/db/pool";
 export const TEST_REFERENCE_IDS = {
   adminUser: "00000000-0000-4000-8000-000000000001",
   clinicStaffUser: "00000000-0000-4000-8000-000000000002",
+  coordinatorUser: "00000000-0000-4000-8000-000000000003",
   college: "10000000-0000-4000-8000-000000000003",
   program: "20000000-0000-4000-8000-000000000003",
   regularPriority: "30000000-0000-4000-8000-000000000004",

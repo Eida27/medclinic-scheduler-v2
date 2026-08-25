@@ -14,6 +14,7 @@
     "db:seed": "tsx --env-file=.env.local scripts/db-seed.ts",
     "db:reset": "tsx --env-file=.env.local scripts/db-reset.ts",
     "db:reference-catalog-cleanup": "tsx --env-file=.env.local scripts/db-reference-catalog-cleanup.ts",
+    "admin:bootstrap": "tsx --env-file=.env.local scripts/admin-bootstrap.ts",
     "acceptance:clinic-ux": "tsx --env-file=.env.local scripts/browser-clinic-scheduler-ux-fixture.ts",
     "acceptance:appointment-protection": "tsx --env-file=.env.local scripts/browser-appointment-protection-fixture.ts",
     "acceptance:student-result-editing": "tsx --env-file=.env.local scripts/browser-student-result-editing-fixture.ts",
