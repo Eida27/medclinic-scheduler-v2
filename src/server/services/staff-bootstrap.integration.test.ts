@@ -6,6 +6,7 @@ import { ensureTestStaffFixtures } from "@/test/staff-fixtures";
 import { bootstrapFirstAdministrator } from "./staff-bootstrap.service";
 
 const fixtureDomain = "@staff-bootstrap.test";
+let priorAdministratorIds: string[] = [];
 
 async function cleanup() {
   const users = await pool.query<{ id: string }>("SELECT id FROM users WHERE email LIKE $1 OR full_name LIKE 'TEST Bootstrap%'", [`%${fixtureDomain}`]);
@@ -16,11 +17,22 @@ async function cleanup() {
     await pool.query("DELETE FROM audit_logs WHERE entity_type='user' AND entity_id=ANY($1::text[])", [ids]);
     await pool.query("DELETE FROM users WHERE id=ANY($1::uuid[])", [ids]);
   }
+  if (priorAdministratorIds.length) {
+    await pool.query(
+      "UPDATE users SET role='ADMIN',clinic_id=NULL WHERE id=ANY($1::uuid[]) AND deleted_at IS NULL",
+      [priorAdministratorIds],
+    );
+    priorAdministratorIds = [];
+  }
   await ensureTestStaffFixtures();
 }
 
 beforeEach(async () => {
   await cleanup();
+  const administrators = await pool.query<{ id: string }>(
+    "SELECT id::text FROM users WHERE role='ADMIN' AND deleted_at IS NULL ORDER BY id",
+  );
+  priorAdministratorIds = administrators.rows.map((row) => row.id);
   await pool.query("UPDATE users SET role='COORDINATOR',clinic_id=NULL WHERE role='ADMIN' AND deleted_at IS NULL");
 });
 afterEach(cleanup);

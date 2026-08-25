@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { UsersManager } from "./UsersManager";
@@ -38,8 +38,11 @@ describe("UsersManager staff security lifecycle", () => {
     const user = userEvent.setup();
     render(<UsersManager users={[users[0]]} currentUserId="active" />);
     await user.click(screen.getAllByRole("button", { name: "Delete" })[0]);
-    expect(screen.getByRole("dialog", { name: "Delete Pending User?" })).toBeVisible();
-    expect(screen.getByText(/historical records remain/i)).toBeVisible();
+    const dialog = screen.getByRole("dialog", { name: "Delete Pending User?" });
+    expect(dialog).toBeVisible();
+    expect(within(dialog).getByText(/historical records remain/i)).toBeVisible();
+    expect(within(dialog).getByText(/pending@example\.test/)).toBeVisible();
+    expect(within(dialog).getByText(/Coordinator/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Delete account" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       "/api/users/pending",

@@ -56,21 +56,25 @@ Doctor scheduling, QR check-in, student self-rescheduling, and cloud document st
    npm run db:seed
    ```
 
+   The reference seed contains no human staff credentials. Bootstrap the first Administrator once by setting the values only for that process:
+
+   ```powershell
+   $env:BOOTSTRAP_ADMIN_FULL_NAME = "First Administrator"
+   $env:BOOTSTRAP_ADMIN_EMAIL = "administrator@example.edu"
+   $env:BOOTSTRAP_ADMIN_TEMPORARY_PASSWORD = "replace-with-a-unique-temporary-password"
+   npm run admin:bootstrap
+   Remove-Item Env:BOOTSTRAP_ADMIN_FULL_NAME, Env:BOOTSTRAP_ADMIN_EMAIL, Env:BOOTSTRAP_ADMIN_TEMPORARY_PASSWORD
+   ```
+
+   Bootstrap is serialized, refuses to run after a non-deleted Administrator exists, and queues the new Administrator's verification message. Keep the existing `EMAIL_OUTBOX_ENCRYPTION_KEY` unchanged while pending encrypted messages exist.
+
 5. Start the application and open `http://localhost:3000`:
 
    ```powershell
    npm run dev
    ```
 
-## Demo Staff Accounts
-
-| Role | Email | Password |
-| --- | --- | --- |
-| Administrator | `admin@medclinic.local` | `Admin123!` |
-| Coordinator | `coordinator@medclinic.local` | `Coordinator123!` |
-| KABALAKA clinic staff | `staff@medclinic.local` | `Staff123!` |
-
-Change seeded passwords before real deployment. Students sign in separately with Student Number, Date of Birth, and their complete Middle Name; imported students receive the DOB and Middle Name from the CSV. Middle Name matching ignores capitalization only, so spacing and punctuation must exactly match the stored value. Existing students whose DOB or Middle Name is null remain readable but cannot sign in until updated.
+Administrators create Coordinator and Clinic Staff accounts from Users. Every new staff member must verify their email and replace the temporary password before operational access is granted. Students sign in separately with Student Number, Date of Birth, and their complete Middle Name; imported students receive the DOB and Middle Name from the CSV. Middle Name matching ignores capitalization only, so spacing and punctuation must exactly match the stored value. Existing students whose DOB or Middle Name is null remain readable but cannot sign in until updated.
 
 ## Academic-Year Student CSV
 

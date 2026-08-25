@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -5,6 +6,7 @@ import { OnboardingPanel } from "./OnboardingPanel";
 import { ForgotPasswordForm } from "./ForgotPasswordForm";
 import { ResetPasswordForm } from "./ResetPasswordForm";
 import { AccountSecurityPanel } from "./AccountSecurityPanel";
+import { StaffEmailVerificationConfirm } from "./StaffEmailVerificationConfirm";
 
 const replace = vi.fn();
 const refresh = vi.fn();
@@ -19,6 +21,19 @@ beforeEach(() => {
 });
 
 describe("staff security screens", () => {
+  it("consumes an email verification token only once in React Strict Mode", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { mustChangePassword: true } }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<StrictMode><StaffEmailVerificationConfirm token="verification-token" /></StrictMode>);
+
+    expect(await screen.findByText(/Email verified/)).toBeVisible();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("shows an onboarding-only warning with ordered verification and password steps", () => {
     render(<OnboardingPanel initialState={{
       emailMasked: "pe*****@example.test",

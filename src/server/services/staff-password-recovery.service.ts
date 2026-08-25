@@ -93,7 +93,6 @@ export async function resetStaffPassword(raw: unknown) {
     confirmPassword: z.string(),
   }).parse(raw);
   const newPassword = validatedPasswordPair(input.newPassword, input.confirmPassword);
-  const passwordHash = await bcrypt.hash(newPassword, 12);
   return transaction(async (client) => {
     const request = await client.query<{
       id: string;
@@ -122,6 +121,7 @@ export async function resetStaffPassword(raw: unknown) {
       throw new AppError("STAFF_PASSWORD_RESET_INVALID", "This password reset link is invalid or expired.", 422);
     }
     await requireDifferentPassword(newPassword, row.storedPasswordHash);
+    const passwordHash = await bcrypt.hash(newPassword, 12);
     const updated = await client.query<{ credentialVersion: number }>(
       `UPDATE users SET password_hash=$2,credential_version=credential_version+1
         WHERE id=$1 RETURNING credential_version AS "credentialVersion"`,

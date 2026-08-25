@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertSafeStaffAccountSecurityAcceptanceDatabase,
   assertZeroStaffAccountSecurityResidue,
+  staffAccountSecurityAcceptanceSchemaUrl,
   type StaffAccountSecurityResidue,
 } from "../../../scripts/browser-staff-account-security-fixture";
 
@@ -38,6 +39,16 @@ describe("staff account security Browser acceptance fixture safety", () => {
       "postgres://postgres:postgres@localhost:5432/medclinic_test",
       "1",
     )).toMatchObject({ database: "medclinic_test", hostname: "localhost" });
+  });
+
+  it("targets a dedicated schema while preserving the configured database", () => {
+    const value = new URL(staffAccountSecurityAcceptanceSchemaUrl(
+      "postgres://postgres:postgres@localhost:5432/medclinic_test",
+    ));
+    expect(value.pathname).toBe("/medclinic_test");
+    expect(value.searchParams.get("options")).toBe(
+      "-csearch_path=staff_account_security_acceptance_20260825,public",
+    );
   });
 
   it("proves complete cleanup across every fixture-owned surface", () => {

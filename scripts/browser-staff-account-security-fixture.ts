@@ -1,12 +1,12 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { PoolClient } from "pg";
-import { pool } from "../src/server/db/pool";
+import { Pool, type PoolClient } from "pg";
 import { decryptEmailOutboxSensitiveBody } from "../src/server/email/verification-body-encryption";
-import { bootstrapFirstAdministrator } from "../src/server/services/staff-bootstrap.service";
+import { projectPath, sqlFiles } from "./db-common";
 
 const EXCLUSIVE_FLAG = "STAFF_ACCOUNT_SECURITY_ACCEPTANCE_EXCLUSIVE_DATABASE";
+const ACCEPTANCE_SCHEMA = "staff_account_security_acceptance_20260825";
 const STATE_FILE = resolve(process.cwd(), ".data", "browser-staff-account-security.json");
 const FIXTURE_DOMAIN = "staff-security-acceptance.test";
 const FULL_NAME_PREFIX = "Browser Security ";
@@ -52,11 +52,19 @@ const browserAccounts = {
 type FixtureState = {
   phase: "PREPARING" | "PREPARED";
   startedAt: string;
-  priorAdministratorIds: string[];
+  schemaName: typeof ACCEPTANCE_SCHEMA;
+  migrationCount: number;
+  referenceSeedVerified: boolean;
   bootstrapAdministratorId?: string;
   bootstrapVerificationToken?: string;
   duplicateBootstrapRejected?: boolean;
 };
+
+export function staffAccountSecurityAcceptanceSchemaUrl(databaseUrl: string) {
+  const parsed = new URL(databaseUrl);
+  parsed.searchParams.set("options", `-csearch_path=${ACCEPTANCE_SCHEMA},public`);
+  return parsed.toString();
+}
 
 export type StaffAccountSecurityResidue = {
   users: number;
@@ -119,6 +127,67 @@ async function writeState(state: FixtureState) {
   await writeFile(STATE_FILE, `${JSON.stringify(state, null, 2)}\n`, "utf8");
 }
 
+async function schemaExists(client: PoolClient) {
+  const result = await client.query<{ exists: boolean }>(
+    "SELECT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name=$1) AS exists",
+    [ACCEPTANCE_SCHEMA],
+  );
+  return result.rows[0].exists;
+}
+
+async function prepareFreshInstallation(client: PoolClient) {
+  await client.query(`
+    CREATE TABLE schema_migrations (
+      name TEXT PRIMARY KEY,
+      applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  const migrations = await sqlFiles(projectPath("database", "migrations"));
+  for (const migration of migrations) {
+    await client.query("BEGIN");
+    try {
+      await client.query(migration.sql);
+      await client.query("INSERT INTO schema_migrations (name) VALUES ($1)", [migration.name]);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    }
+  }
+  const seeds = await sqlFiles(projectPath("database", "seeds"));
+  await client.query("BEGIN");
+  try {
+    for (const seed of seeds) await client.query(seed.sql);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  }
+  const proof = await client.query<{
+    migrationCount: number;
+    users: number;
+    clinics: number;
+    colleges: number;
+    programs: number;
+  }>(
+    `SELECT
+       (SELECT COUNT(*)::int FROM schema_migrations) AS "migrationCount",
+       (SELECT COUNT(*)::int FROM users) AS users,
+       (SELECT COUNT(*)::int FROM clinics) AS clinics,
+       (SELECT COUNT(*)::int FROM colleges) AS colleges,
+       (SELECT COUNT(*)::int FROM programs) AS programs`,
+  );
+  const row = proof.rows[0];
+  if (row.migrationCount !== migrations.length) {
+    throw new Error(`Fresh-install migration proof failed: expected ${migrations.length}, found ${row.migrationCount}.`);
+  }
+  if (row.users !== 0) throw new Error(`Reference seed created ${row.users} staff user(s); expected zero.`);
+  if (row.clinics === 0 || row.colleges === 0 || row.programs === 0) {
+    throw new Error("Reference seed did not create the required clinic and academic catalog data.");
+  }
+  return { migrationCount: row.migrationCount, referenceSeedVerified: true as const };
+}
+
 async function fixtureUserIds(client: PoolClient) {
   const result = await client.query<{ id: string }>(
     `SELECT id::text FROM users
@@ -129,8 +198,26 @@ async function fixtureUserIds(client: PoolClient) {
   return result.rows.map((row) => row.id);
 }
 
-async function residue(client: PoolClient): Promise<StaffAccountSecurityResidue> {
+async function fixtureOutboxIds(client: PoolClient, userIds: string[]) {
+  const result = await client.query<{ id: string }>(
+    `SELECT outbox.id::text FROM email_outbox outbox
+      WHERE outbox.message_kind='STAFF_SECURITY'
+        AND (
+          outbox.to_email LIKE $1
+          OR outbox.source_id IN (
+            SELECT id::text FROM staff_email_verifications WHERE user_id=ANY($2::uuid[])
+            UNION ALL
+            SELECT id::text FROM staff_password_resets WHERE user_id=ANY($2::uuid[])
+          )
+        )`,
+    [`%@${FIXTURE_DOMAIN}`, userIds],
+  );
+  return result.rows.map((row) => row.id);
+}
+
+async function residue(client: PoolClient, knownOutboxIds: string[] = []): Promise<StaffAccountSecurityResidue> {
   const userIds = await fixtureUserIds(client);
+  const outboxIds = [...new Set([...knownOutboxIds, ...await fixtureOutboxIds(client, userIds)])];
   const result = await client.query<Omit<StaffAccountSecurityResidue, "stateFiles">>(
     `SELECT
        (SELECT COUNT(*)::int FROM users
@@ -152,6 +239,7 @@ async function residue(client: PoolClient): Promise<StaffAccountSecurityResidue>
        (SELECT COUNT(*)::int FROM audit_logs audit
          WHERE audit.actor_user_id=ANY($4::uuid[])
             OR (audit.entity_type='user' AND audit.entity_id=ANY($5::text[]))
+            OR (audit.entity_type='email_outbox' AND audit.entity_id=ANY($10::text[]))
             OR audit.metadata->>'userId'=ANY($5::text[])
             OR audit.metadata->>'marker'=$6) AS audits,
        (SELECT COUNT(*)::int FROM appointments WHERE id=$7) AS "historicalAppointments",
@@ -167,6 +255,7 @@ async function residue(client: PoolClient): Promise<StaffAccountSecurityResidue>
       HISTORICAL_APPOINTMENT_ID,
       HISTORICAL_STATUS_LOG_ID,
       HISTORICAL_STUDENT_NUMBER,
+      outboxIds,
     ],
   );
   return { ...result.rows[0], stateFiles: await fileExists(STATE_FILE) ? 1 : 0 };
@@ -209,19 +298,11 @@ async function latestSecurityLinks(client: PoolClient) {
   return links;
 }
 
-async function restoreAdministrators(client: PoolClient, administratorIds: string[]) {
-  if (!administratorIds.length) return;
-  await client.query(
-    `UPDATE users SET role='ADMIN',clinic_id=NULL
-      WHERE id=ANY($1::uuid[]) AND deleted_at IS NULL`,
-    [administratorIds],
-  );
-}
-
 async function removeFixtureRows(client: PoolClient) {
   const userIds = await fixtureUserIds(client);
   await client.query("BEGIN");
   try {
+    const outboxIds = await fixtureOutboxIds(client, userIds);
     await client.query(
       "DELETE FROM appointment_status_logs WHERE id=$1 OR appointment_id=$2 OR changed_by=ANY($3::uuid[])",
       [HISTORICAL_STATUS_LOG_ID, HISTORICAL_APPOINTMENT_ID, userIds],
@@ -229,34 +310,24 @@ async function removeFixtureRows(client: PoolClient) {
     await client.query("DELETE FROM appointments WHERE id=$1", [HISTORICAL_APPOINTMENT_ID]);
     await client.query("DELETE FROM students WHERE student_number=$1", [HISTORICAL_STUDENT_NUMBER]);
     await client.query(
-      `DELETE FROM email_outbox outbox
-        WHERE outbox.message_kind='STAFF_SECURITY'
-          AND (
-            outbox.to_email LIKE $1
-            OR outbox.source_id IN (
-              SELECT id::text FROM staff_email_verifications WHERE user_id=ANY($2::uuid[])
-              UNION ALL
-              SELECT id::text FROM staff_password_resets WHERE user_id=ANY($2::uuid[])
-            )
-          )`,
-      [`%@${FIXTURE_DOMAIN}`, userIds],
-    );
-    await client.query("DELETE FROM staff_email_verifications WHERE user_id=ANY($1::uuid[])", [userIds]);
-    await client.query("DELETE FROM staff_password_resets WHERE user_id=ANY($1::uuid[])", [userIds]);
-    await client.query(
       `DELETE FROM audit_logs audit
         WHERE audit.actor_user_id=ANY($1::uuid[])
            OR (audit.entity_type='user' AND audit.entity_id=ANY($2::text[]))
+           OR (audit.entity_type='email_outbox' AND audit.entity_id=ANY($4::text[]))
            OR audit.metadata->>'userId'=ANY($2::text[])
            OR audit.metadata->>'marker'=$3`,
-      [userIds, userIds, MARKER],
+      [userIds, userIds, MARKER, outboxIds],
     );
+    await client.query("DELETE FROM email_outbox WHERE id=ANY($1::uuid[])", [outboxIds]);
+    await client.query("DELETE FROM staff_email_verifications WHERE user_id=ANY($1::uuid[])", [userIds]);
+    await client.query("DELETE FROM staff_password_resets WHERE user_id=ANY($1::uuid[])", [userIds]);
     await client.query(
       "DELETE FROM users WHERE id=ANY($1::uuid[]) AND deleted_at IS NOT NULL",
       [userIds],
     );
     await client.query("DELETE FROM users WHERE id=ANY($1::uuid[])", [userIds]);
     await client.query("COMMIT");
+    return outboxIds;
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -334,25 +405,25 @@ async function seedHistoricalAttribution(client: PoolClient, bootstrapAdministra
   }
 }
 
-async function setup(client: PoolClient) {
+async function setup(
+  client: PoolClient,
+  bootstrapFirstAdministrator: typeof import("../src/server/services/staff-bootstrap.service").bootstrapFirstAdministrator,
+  installation: { migrationCount: number; referenceSeedVerified: true },
+) {
   if (await readState()) throw new Error("A staff account security Browser fixture state already exists. Run cleanup first.");
   const currentResidue = await residue(client);
   if (Object.entries(currentResidue).some(([key, count]) => key !== "stateFiles" && count !== 0)) {
     throw new Error(`Untracked staff account security fixture residue exists: ${JSON.stringify(currentResidue)}.`);
   }
-  const priorAdministrators = await client.query<{ id: string }>(
-    "SELECT id::text FROM users WHERE role='ADMIN' AND deleted_at IS NULL ORDER BY id",
-  );
   const state: FixtureState = {
     phase: "PREPARING",
     startedAt: new Date().toISOString(),
-    priorAdministratorIds: priorAdministrators.rows.map((row) => row.id),
+    schemaName: ACCEPTANCE_SCHEMA,
+    migrationCount: installation.migrationCount,
+    referenceSeedVerified: installation.referenceSeedVerified,
   };
   await writeState(state);
   try {
-    await client.query(
-      "UPDATE users SET role='COORDINATOR',clinic_id=NULL WHERE role='ADMIN' AND deleted_at IS NULL",
-    );
     const administrator = await bootstrapFirstAdministrator({
       fullName: browserAccounts.bootstrapAdministrator.fullName,
       email: browserAccounts.bootstrapAdministrator.email,
@@ -391,7 +462,6 @@ async function setup(client: PoolClient) {
     return status(client, prepared);
   } catch (error) {
     await removeFixtureRows(client);
-    await restoreAdministrators(client, state.priorAdministratorIds);
     await rm(STATE_FILE, { force: true });
     throw error;
   }
@@ -422,6 +492,12 @@ async function status(client: PoolClient, suppliedState?: FixtureState) {
   );
   return {
     phase: state?.phase ?? "ABSENT",
+    schemaName: state?.schemaName ?? ACCEPTANCE_SCHEMA,
+    freshInstallation: {
+      migrationCount: state?.migrationCount ?? 0,
+      referenceSeedVerified: state?.referenceSeedVerified ?? false,
+      seededStaffUsers: state ? 0 : null,
+    },
     database: assertSafeStaffAccountSecurityAcceptanceDatabase(
       process.env.DATABASE_URL,
       process.env[EXCLUSIVE_FLAG],
@@ -440,37 +516,124 @@ async function status(client: PoolClient, suppliedState?: FixtureState) {
 
 async function cleanup(client: PoolClient) {
   const state = await readState();
-  await removeFixtureRows(client);
-  if (state) await restoreAdministrators(client, state.priorAdministratorIds);
+  const outboxIds = await removeFixtureRows(client);
   await rm(STATE_FILE, { force: true });
-  const clean = await residue(client);
+  const clean = await residue(client, outboxIds);
   return {
     phase: "ABSENT",
     residue: assertZeroStaffAccountSecurityResidue(clean),
-    restoredAdministratorIds: state?.priorAdministratorIds ?? [],
+    schemaName: state?.schemaName ?? ACCEPTANCE_SCHEMA,
   };
 }
 
 async function main() {
+  const baseDatabaseUrl = process.env.DATABASE_URL;
   assertSafeStaffAccountSecurityAcceptanceDatabase(
-    process.env.DATABASE_URL,
+    baseDatabaseUrl,
     process.env[EXCLUSIVE_FLAG],
   );
   const command = process.argv[2];
   if (!(["setup", "status", "cleanup"] as const).includes(command as "setup" | "status" | "cleanup")) {
     throw new Error("Use setup, status, or cleanup.");
   }
-  const client = await pool.connect();
+  if (!baseDatabaseUrl) throw new Error("DATABASE_URL is required.");
+  const basePool = new Pool({ connectionString: baseDatabaseUrl });
+  const baseClient = await basePool.connect();
   try {
-    const result = command === "setup"
-      ? await setup(client)
-      : command === "status"
-        ? await status(client)
-        : await cleanup(client);
+    const exists = await schemaExists(baseClient);
+    if (command === "setup") {
+      if (exists || await readState()) {
+        throw new Error("The isolated staff account security acceptance schema or state already exists. Run cleanup first.");
+      }
+      await baseClient.query(`CREATE SCHEMA ${ACCEPTANCE_SCHEMA}`);
+    }
+
+    const state = await readState();
+    if (command === "status" && (!exists || !state)) {
+      const result = {
+        phase: "ABSENT",
+        schemaName: ACCEPTANCE_SCHEMA,
+        schemaExists: exists,
+        residue: {
+          users: 0,
+          emailVerifications: 0,
+          passwordResets: 0,
+          outbox: 0,
+          audits: 0,
+          historicalAppointments: 0,
+          historicalStatusLogs: 0,
+          historicalStudents: 0,
+          stateFiles: await fileExists(STATE_FILE) ? 1 : 0,
+        } satisfies StaffAccountSecurityResidue,
+      };
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+
+    const schemaUrl = staffAccountSecurityAcceptanceSchemaUrl(baseDatabaseUrl);
+    let result: unknown;
+    if (command === "setup") {
+      const migrationPool = new Pool({ connectionString: schemaUrl });
+      const migrationClient = await migrationPool.connect();
+      let installation: Awaited<ReturnType<typeof prepareFreshInstallation>>;
+      try {
+        installation = await prepareFreshInstallation(migrationClient);
+      } finally {
+        migrationClient.release();
+        await migrationPool.end();
+      }
+      process.env.DATABASE_URL = schemaUrl;
+      const { bootstrapFirstAdministrator } = await import("../src/server/services/staff-bootstrap.service");
+      const { pool: servicePool } = await import("../src/server/db/pool");
+      const serviceClient = await servicePool.connect();
+      try {
+        result = await setup(serviceClient, bootstrapFirstAdministrator, installation);
+      } finally {
+        serviceClient.release();
+        await servicePool.end();
+      }
+    } else if (command === "cleanup" && !exists) {
+      await rm(STATE_FILE, { force: true });
+      result = {
+        phase: "ABSENT",
+        schemaName: ACCEPTANCE_SCHEMA,
+        schemaRemoved: true,
+        residue: assertZeroStaffAccountSecurityResidue({
+          users: 0,
+          emailVerifications: 0,
+          passwordResets: 0,
+          outbox: 0,
+          audits: 0,
+          historicalAppointments: 0,
+          historicalStatusLogs: 0,
+          historicalStudents: 0,
+          stateFiles: 0,
+        }),
+      };
+    } else {
+      const schemaPool = new Pool({ connectionString: schemaUrl });
+      const schemaClient = await schemaPool.connect();
+      try {
+        result = command === "status" ? await status(schemaClient, state) : await cleanup(schemaClient);
+      } finally {
+        schemaClient.release();
+        await schemaPool.end();
+      }
+      if (command === "cleanup") {
+        await baseClient.query(`DROP SCHEMA ${ACCEPTANCE_SCHEMA} CASCADE`);
+        result = { ...(result as object), schemaRemoved: !(await schemaExists(baseClient)) };
+      }
+    }
     console.log(JSON.stringify(result, null, 2));
+  } catch (error) {
+    if (command === "setup" && await schemaExists(baseClient)) {
+      await baseClient.query(`DROP SCHEMA ${ACCEPTANCE_SCHEMA} CASCADE`);
+      await rm(STATE_FILE, { force: true });
+    }
+    throw error;
   } finally {
-    client.release();
-    await pool.end();
+    baseClient.release();
+    await basePool.end();
   }
 }
 

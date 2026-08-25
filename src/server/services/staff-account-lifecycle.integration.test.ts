@@ -230,6 +230,33 @@ describe("staff account security lifecycle", () => {
     await expect(authorizeAuthenticatedStaff(verifiedSession)).rejects.toMatchObject({ code: "SESSION_EXPIRED" });
   });
 
+  it("preserves pending email verification when an Administrator replaces a temporary password", async () => {
+    const user = await newCoordinator("PendingAdminReset");
+    const verificationToken = await securityToken(user.id, "STAFF_EMAIL_VERIFICATION");
+
+    await resetStaffTemporaryPassword(adminId, user.id, {
+      temporaryPassword: "FallbackPassword123!",
+      confirmTemporaryPassword: "FallbackPassword123!",
+    });
+
+    const verificationMail = await pool.query<{
+      status: string;
+      encrypted: boolean;
+    }>(
+      `SELECT status,verification_body_encrypted IS NOT NULL AS encrypted
+         FROM email_outbox
+        WHERE source_type='STAFF_EMAIL_VERIFICATION'
+          AND source_id IN (SELECT id::text FROM staff_email_verifications WHERE user_id=$1)`,
+      [user.id],
+    );
+    expect(verificationMail.rows).toEqual([{ status: "PENDING", encrypted: true }]);
+    await expect(confirmStaffEmail(verificationToken)).resolves.toMatchObject({
+      status: "PASSWORD_CHANGE_REQUIRED",
+      emailVerified: true,
+      mustChangePassword: true,
+    });
+  });
+
   it("permanently tombstones a user, releases email, and preserves historical identity", async () => {
     const { user } = await onboard("Delete");
     const oldSession = await authenticate(user.email, "Operational123!");

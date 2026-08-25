@@ -113,16 +113,24 @@ export async function resendStaffVerification(userId: string, actorUserId: strin
   });
 }
 
-async function obsoleteStaffSecurityMail(client: import("pg").PoolClient, userId: string) {
+async function obsoleteStaffSecurityMail(
+  client: import("pg").PoolClient,
+  userId: string,
+  sourceTypes: Array<"STAFF_EMAIL_VERIFICATION" | "STAFF_PASSWORD_RESET"> = [
+    "STAFF_EMAIL_VERIFICATION",
+    "STAFF_PASSWORD_RESET",
+  ],
+) {
   await client.query(
     `UPDATE email_outbox SET status='OBSOLETE',verification_body_encrypted=NULL,
             locked_at=NULL,last_attempt_at=clock_timestamp(),last_attempt_status='OBSOLETE'
       WHERE message_kind='STAFF_SECURITY' AND status NOT IN ('SENT','OBSOLETE')
+        AND source_type=ANY($2::text[])
         AND source_id IN (
           SELECT id::text FROM staff_email_verifications WHERE user_id=$1
           UNION ALL SELECT id::text FROM staff_password_resets WHERE user_id=$1
         )`,
-    [userId],
+    [userId, sourceTypes],
   );
 }
 
@@ -208,7 +216,7 @@ export async function resetStaffTemporaryPassword(
       "UPDATE staff_password_resets SET invalidated_at=COALESCE(invalidated_at,clock_timestamp()) WHERE user_id=$1 AND consumed_at IS NULL",
       [userId],
     );
-    await obsoleteStaffSecurityMail(client, userId);
+    await obsoleteStaffSecurityMail(client, userId, ["STAFF_PASSWORD_RESET"]);
     await client.query(
       `INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,metadata)
        VALUES ($1,'STAFF_TEMP_PASSWORD_RESET_BY_ADMIN','user',$2,$3::jsonb)`,

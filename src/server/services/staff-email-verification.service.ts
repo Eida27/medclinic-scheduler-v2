@@ -6,10 +6,11 @@ import {
   addressMetadata,
   createSecurityToken,
   securityTokenHash,
+  staffAccountStatus,
   staffEmailSchema,
 } from "@/server/security/staff-security";
 import { transaction } from "@/server/db/pool";
-import { mapStaffAccount, staffAccountColumns, type StaffAccountRow } from "./staff-service-helpers";
+import { staffAccountColumns, type StaffAccountRow } from "./staff-service-helpers";
 
 const VERIFICATION_LIFETIME_MINUTES = 30;
 const RESEND_COOLDOWN_SECONDS = 60;
@@ -197,7 +198,9 @@ export async function confirmStaffEmail(token: string) {
       [row.id, JSON.stringify(addressMetadata(row.email))],
     );
     return {
-      ...mapStaffAccount({ ...row, emailVerifiedAt: new Date() }),
+      status: staffAccountStatus({ emailVerifiedAt: new Date(), mustChangePassword: row.mustChangePassword }),
+      emailVerified: true,
+      mustChangePassword: row.mustChangePassword,
       onboardingRequired: row.mustChangePassword,
     };
   });
