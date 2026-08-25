@@ -91,6 +91,21 @@ describe("AppointmentProtectionPanel", () => {
     expect(screen.queryByRole("button", { name: /protection/i })).not.toBeInTheDocument();
   });
 
+  it("marks a tombstoned staff member in historical protection attribution", () => {
+    render(<AppointmentProtectionPanel
+      {...baseProps}
+      canManage={false}
+      isManuallyLocked
+      lockReason="Administrator review in progress"
+      lockedByName="Former Administrator"
+      lockedBy={{ fullName: "Former Administrator", role: "ADMIN", deleted: true }}
+      lockedAt="2026-08-01T02:30:00.000Z"
+    />);
+
+    expect(screen.getByText("Former Administrator")).toBeVisible();
+    expect(screen.getByText("Deleted")).toBeVisible();
+  });
+
   it("allows an administrator to remove an inherited lock from a historical status", () => {
     render(<AppointmentProtectionPanel
       {...baseProps}

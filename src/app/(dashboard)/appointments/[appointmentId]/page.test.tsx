@@ -106,6 +106,22 @@ describe("AppointmentDetail", () => {
     }, undefined);
   });
 
+  it("marks a tombstoned staff member in the appointment status history", async () => {
+    getPublishedAppointment.mockResolvedValue({
+      ...publishedAppointment,
+      statusLogs: [{
+        ...publishedAppointment.statusLogs[0],
+        changedBy: { fullName: "Former Administrator", role: "ADMIN", deleted: true },
+      }],
+    });
+    const AppointmentDetail = await getActualAppointmentDetail();
+
+    render(await AppointmentDetail({ appointmentId: "appointment-1", source: "LABORATORY" }));
+
+    expect(screen.getByText(/Former Administrator/)).toBeVisible();
+    expect(screen.getByText("Deleted")).toBeVisible();
+  });
+
   it("returns not found when the published-only loader cannot find the appointment", async () => {
     getPublishedAppointment.mockResolvedValue(null);
     const AppointmentDetail = await getActualAppointmentDetail();

@@ -1,11 +1,13 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { LoginForm } from "@/components/auth/LoginForm";
 import { BrandMark } from "@/components/branding/BrandMark";
 import { Card } from "@/components/ui/Card";
-import { optionalUser } from "@/server/auth/current-user";
+import { optionalAuthenticatedStaff } from "@/server/auth/current-user";
 
 export default async function LoginPage() {
-  if (await optionalUser()) redirect("/dashboard");
+  const user = await optionalAuthenticatedStaff();
+  if (user) redirect(user.onboardingRequired ? "/account/onboarding" : "/dashboard");
 
   return (
     <main className="relative grid min-h-screen place-items-center overflow-hidden bg-canvas p-4">
@@ -18,7 +20,7 @@ export default async function LoginPage() {
           <p className="mt-2 text-sm leading-6 text-muted">Manage student schedules, appointments, and compliance records.</p>
         </div>
         <LoginForm />
-        <p className="mt-6 rounded-xl bg-cpu-navy-soft px-3 py-2 text-xs text-muted-strong">Demo admin: admin@medclinic.local / Admin123!</p>
+        <Link href="/forgot-password" className="mt-5 block text-center text-sm font-semibold text-cpu-navy hover:underline">Forgot password?</Link>
       </Card>
     </main>
   );

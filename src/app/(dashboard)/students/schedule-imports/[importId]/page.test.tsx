@@ -206,4 +206,36 @@ describe("ScheduleImportDetailPage", () => {
     expect(screen.getByText(/ovpsa-batch \/ ovpsa-revision/)).toBeVisible();
     expect(screen.getAllByText("PUBLISHED").length).toBeGreaterThan(0);
   });
+
+  it("marks a tombstoned importer on the grouped detail", async () => {
+    requireUser.mockResolvedValue(admin);
+    getScheduleImport.mockResolvedValue({
+      importId: "import-deleted-actor",
+      importName: "Historical import",
+      sourceFilename: "historical.csv",
+      totalRows: 1,
+      createdStudentCount: 1,
+      matchedStudentCount: 0,
+      createdByName: "Former Administrator",
+      createdBy: { fullName: "Former Administrator", role: "ADMIN", deleted: true },
+      laboratoryItemCount: 1,
+      physicalExaminationItemCount: 1,
+      status: "PUBLISHED",
+      studentCategory: "REGULAR",
+      academicYearStart: 2026,
+      acceptedAt: "2026-08-13T06:30:00.000Z",
+      skippedStudentCount: 0,
+      generatedRange: null,
+      overflow: { pairCountBeyondPreferredWindow: 0, unscheduledStudentCount: 0 },
+      displacementTotal: 0,
+      childBatches: [],
+    });
+
+    render(await ScheduleImportDetailPage({
+      params: Promise.resolve({ importId: "import-deleted-actor" }),
+    }));
+
+    expect(screen.getByText("Former Administrator")).toBeVisible();
+    expect(screen.getByText("Deleted")).toBeVisible();
+  });
 });

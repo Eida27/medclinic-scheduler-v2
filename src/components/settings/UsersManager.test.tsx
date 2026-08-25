@@ -25,7 +25,7 @@ describe("UsersManager", () => {
   it("labels existing coordinator accounts as global", () => {
     render(<UsersManager users={[coordinator]} />);
 
-    expect(screen.getByText("Schedule Coordinator")).toBeVisible();
+    expect(screen.getAllByText("Schedule Coordinator")[0]).toBeVisible();
     expect(screen.getByText("Coordinator", { selector: "td" })).toBeVisible();
     expect(screen.getByText("Global", { selector: "td" })).toBeVisible();
   });
@@ -34,6 +34,7 @@ describe("UsersManager", () => {
     await user.type(screen.getByLabelText("Full name"), "New User");
     await user.type(screen.getByLabelText("Email"), "new.user@example.com");
     await user.type(screen.getByLabelText("Temporary password"), "Secure123!");
+    await user.type(screen.getByLabelText("Confirm temporary password"), "Secure123!");
   }
 
   async function submitValidUser(user: ReturnType<typeof userEvent.setup>) {

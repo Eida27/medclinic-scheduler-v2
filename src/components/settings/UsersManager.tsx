@@ -1,186 +1,43 @@
 "use client";
-
 import { useRouter } from "next/navigation";
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Field } from "@/components/ui/Field";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import type { UserRole } from "@/types/roles";
 
-type User = {
-  id: string;
-  fullName: string;
-  email: string;
-  role: UserRole;
-  clinicCode?: string | null;
-  clinicName?: string | null;
-  isActive: boolean;
-};
+type StaffStatus = "PENDING_VERIFICATION" | "PASSWORD_CHANGE_REQUIRED" | "ACTIVE";
+type User = { id: string; fullName: string; email: string; role: UserRole; clinicCode?: string | null; clinicName?: string | null; status?: StaffStatus; isActive?: boolean };
+function apiError(payload: unknown, fallback: string) { if (typeof payload === "object" && payload && "error" in payload) { const error = (payload as { error?: { message?: string; fields?: Record<string, string[]> } }).error; for (const key of ["clinicCode", "fullName", "email", "temporaryPassword", "password", "role"]) if (error?.fields?.[key]?.[0]) return error.fields[key][0]; if (error?.message) return error.message; } return fallback; }
+function roleLabel(role: UserRole) { return role === "ADMIN" ? "Administrator" : role === "COORDINATOR" ? "Coordinator" : "Clinic staff"; }
+function statusView(status: StaffStatus) { return status === "PENDING_VERIFICATION" ? { label: "Pending verification", tone: "warning" as const } : status === "PASSWORD_CHANGE_REQUIRED" ? { label: "Password change required", tone: "info" as const } : { label: "Active", tone: "success" as const }; }
+function ActionDialog({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) { return <div className="fixed inset-0 z-50 grid place-items-center bg-cpu-navy-dark/70 p-4 backdrop-blur-sm"><div role="dialog" aria-modal="true" aria-label={title} className="w-full max-w-md rounded-3xl border border-line bg-surface p-6 shadow-2xl"><h2 className="text-xl font-bold text-ink">{title}</h2><div className="mt-5">{children}</div><Button className="mt-4" variant="ghost" onClick={onClose}>Cancel</Button></div></div>; }
 
-type UserCreationErrorField = "clinicCode" | "fullName" | "email" | "password" | "role";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function firstErrorMessage(value: unknown): string | undefined {
-  if (typeof value === "string" && value.trim()) return value;
-  if (!Array.isArray(value)) return undefined;
-  return value.find((message): message is string => typeof message === "string" && message.trim().length > 0);
-}
-
-function userCreationErrorMessage(payload: unknown) {
-  if (!isRecord(payload) || !isRecord(payload.error)) return "Unable to add user.";
-
-  const fields = isRecord(payload.error.fields) ? payload.error.fields : {};
-  for (const field of ["clinicCode", "fullName", "email", "password", "role"] as const satisfies readonly UserCreationErrorField[]) {
-    const message = firstErrorMessage(fields[field]);
-    if (message) return message;
+export function UsersManager({ users, currentUserId = "" }: { users: User[]; currentUserId?: string }) {
+  const router = useRouter(); const [error, setError] = useState<string>(); const [role, setRole] = useState<UserRole>("CLINIC_STAFF"); const [clinicCode, setClinicCode] = useState("KABALAKA_CLINIC"); const [dialog, setDialog] = useState<{ type: "email" | "password" | "delete"; user: User }>(); const [pending, setPending] = useState(false); const isGlobalRole = role !== "CLINIC_STAFF";
+  async function mutation(url: string, init: RequestInit, fallback: string) {
+    setPending(true); setError(undefined);
+    try {
+      const response = await fetch(url, init); const payload = await response.json();
+      if (!response.ok) { setError(apiError(payload, fallback)); return false; }
+      setDialog(undefined); if (payload.data?.nextPath) router.replace(payload.data.nextPath); router.refresh(); return true;
+    } catch { setError(fallback); return false; }
+    finally { setPending(false); }
   }
-
-  return firstErrorMessage(payload.error.message) ?? "Unable to add user.";
-}
-
-function roleLabel(role: UserRole) {
-  if (role === "ADMIN") return "Administrator";
-  if (role === "COORDINATOR") return "Coordinator";
-  return "Clinic staff";
-}
-
-export function UsersManager({ users }: { users: User[] }) {
-  const router = useRouter();
-  const [error, setError] = useState<string>();
-  const [role, setRole] = useState<UserRole>("CLINIC_STAFF");
-  const [clinicCode, setClinicCode] = useState("KABALAKA_CLINIC");
-  const isGlobalRole = role === "ADMIN" || role === "COORDINATOR";
-
-  async function create(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setError(undefined);
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
-    const response = await fetch("/api/users", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(Object.fromEntries(form.entries())),
-    });
-    const payload = await response.json();
-    if (!response.ok) {
-      setError(userCreationErrorMessage(payload));
-      return;
-    }
-    formElement.reset();
-    setRole("CLINIC_STAFF");
-    setClinicCode("KABALAKA_CLINIC");
-    router.refresh();
-  }
-
-  async function toggle(user: User) {
-    const response = await fetch("/api/users", {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...user, isActive: !user.isActive, password: "" }),
-    });
-    const payload = await response.json();
-    if (!response.ok) {
-      setError(payload.error?.message);
-      return;
-    }
-    router.refresh();
-  }
-
-  function selectRole(nextRole: UserRole) {
-    setRole(nextRole);
-    setClinicCode(nextRole === "CLINIC_STAFF" ? "KABALAKA_CLINIC" : "");
-  }
-
-  return (
-    <div className="grid gap-6">
-      {error ? <Alert tone="danger">{error}</Alert> : null}
-      <Card>
-        <form onSubmit={create} className="grid gap-3 md:grid-cols-5">
-          <Field label="Full name">
-            <Input name="fullName" required />
-          </Field>
-          <Field label="Email">
-            <Input name="email" type="email" required />
-          </Field>
-          <Field label="Temporary password">
-            <Input name="password" type="password" minLength={8} required />
-          </Field>
-          <Field label="Role">
-            <Select
-              name="role"
-              value={role}
-              onChange={(event) => selectRole(event.target.value as UserRole)}
-            >
-              <option value="CLINIC_STAFF">Clinic staff</option>
-              <option value="COORDINATOR">Coordinator</option>
-              <option value="ADMIN">Administrator</option>
-            </Select>
-          </Field>
-          <Field label="Clinic">
-            <Select
-              name="clinicCode"
-              value={clinicCode}
-              disabled={isGlobalRole}
-              onChange={(event) => setClinicCode(event.target.value)}
-            >
-              {isGlobalRole ? (
-                <option value="">Global</option>
-              ) : (
-                <>
-                  <option value="KABALAKA_CLINIC">KABALAKA Clinic</option>
-                  <option value="CPU_CLINIC">CPU Clinic</option>
-                </>
-              )}
-            </Select>
-          </Field>
-          {isGlobalRole ? <input type="hidden" name="clinicCode" value="" /> : null}
-          <Button type="submit" className="md:col-span-5 md:justify-self-start">Add user</Button>
-        </form>
-      </Card>
-      <Card className="overflow-hidden p-0">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-cpu-navy-soft/70">
-              <tr>
-                <th className="px-5 py-3">User</th>
-                <th className="px-5 py-3">Role</th>
-                <th className="px-5 py-3">Clinic</th>
-                <th className="px-5 py-3">Status</th>
-                <th className="px-5 py-3" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-line">
-              {users.map((user) => (
-                <tr key={user.id} className="transition hover:bg-cpu-navy-soft/35">
-                  <td className="px-5 py-4">
-                    <p className="font-bold text-ink">{user.fullName}</p>
-                    <p className="text-xs text-muted">{user.email}</p>
-                  </td>
-                  <td className="px-5 py-4">{roleLabel(user.role)}</td>
-                  <td className="px-5 py-4">{user.clinicName ?? "Global"}</td>
-                  <td className="px-5 py-4">
-                    <Badge tone={user.isActive ? "success" : "neutral"}>
-                      {user.isActive ? "Active" : "Inactive"}
-                    </Badge>
-                  </td>
-                  <td className="px-5 py-4 text-right">
-                    <Button size="sm" variant="secondary" onClick={() => toggle(user)}>
-                      {user.isActive ? "Deactivate" : "Activate"}
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
-    </div>
-  );
+  async function create(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const formElement = event.currentTarget; const form = new FormData(formElement); if (await mutation("/api/users", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(Object.fromEntries(form.entries())) }, "Unable to add user.")) { formElement.reset(); setRole("CLINIC_STAFF"); setClinicCode("KABALAKA_CLINIC"); } }
+  async function submitEmail(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!dialog) return; const form = new FormData(event.currentTarget); await mutation(`/api/users/${dialog.user.id}/email`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: form.get("email") }) }, "Unable to change the email."); }
+  async function submitPassword(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!dialog) return; const form = new FormData(event.currentTarget); await mutation(`/api/users/${dialog.user.id}/temporary-password-reset`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(Object.fromEntries(form.entries())) }, "Unable to reset the temporary password."); }
+  function actions(user: User) { const status = user.status ?? "ACTIVE"; return <div className="flex flex-wrap justify-end gap-2"><Button size="sm" variant="secondary" onClick={() => setDialog({ type: "email", user })}>Edit email</Button>{status === "PENDING_VERIFICATION" ? <Button size="sm" variant="secondary" onClick={() => void mutation(`/api/users/${user.id}/resend-verification`, { method: "POST" }, "Unable to resend verification.")}>Resend verification</Button> : null}<Button size="sm" variant="secondary" onClick={() => setDialog({ type: "password", user })}>Reset temporary password</Button><Button size="sm" variant="danger" disabled={user.id === currentUserId} onClick={() => setDialog({ type: "delete", user })}>Delete</Button></div>; }
+  return <div className="grid gap-6">{error ? <Alert tone="danger">{error}</Alert> : null}<Card><form onSubmit={create} className="grid gap-3 md:grid-cols-2 xl:grid-cols-6"><Field label="Full name"><Input name="fullName" required /></Field><Field label="Email"><Input name="email" type="email" required /></Field><Field label="Temporary password"><Input name="temporaryPassword" type="password" minLength={8} maxLength={100} required /></Field><Field label="Confirm temporary password"><Input name="confirmTemporaryPassword" type="password" minLength={8} maxLength={100} required /></Field><Field label="Role"><Select name="role" value={role} onChange={(event) => { const next = event.target.value as UserRole; setRole(next); setClinicCode(next === "CLINIC_STAFF" ? "KABALAKA_CLINIC" : ""); }}><option value="CLINIC_STAFF">Clinic staff</option><option value="COORDINATOR">Coordinator</option><option value="ADMIN">Administrator</option></Select></Field><Field label="Clinic"><Select name="clinicCode" value={clinicCode} disabled={isGlobalRole} onChange={(event) => setClinicCode(event.target.value)}>{isGlobalRole ? <option value="">Global</option> : <><option value="KABALAKA_CLINIC">KABALAKA Clinic</option><option value="CPU_CLINIC">CPU Clinic</option></>}</Select></Field>{isGlobalRole ? <input type="hidden" name="clinicCode" value="" /> : null}<Button type="submit" className="xl:col-span-6 xl:justify-self-start" disabled={pending}>Add user</Button></form></Card>
+    <div className="grid gap-3 md:hidden">{users.map((user) => { const status = statusView(user.status ?? "ACTIVE"); return <Card key={user.id}><div className="flex items-start justify-between gap-3"><div><p className="font-bold text-ink">{user.fullName}</p><p className="text-xs text-muted">{user.email}</p></div><Badge tone={status.tone}>{status.label}</Badge></div><p className="mt-3 text-sm text-muted-strong">{roleLabel(user.role)} · {user.clinicName ?? "Global"}</p><div className="mt-4">{actions(user)}</div></Card>; })}</div>
+    <Card className="hidden overflow-hidden p-0 md:block"><div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="bg-cpu-navy-soft/70"><tr><th className="px-5 py-3">User</th><th className="px-5 py-3">Role</th><th className="px-5 py-3">Clinic</th><th className="px-5 py-3">Status</th><th className="px-5 py-3">Actions</th></tr></thead><tbody className="divide-y divide-line">{users.map((user) => { const status = statusView(user.status ?? "ACTIVE"); return <tr key={user.id}><td className="px-5 py-4"><p className="font-bold text-ink">{user.fullName}</p><p className="text-xs text-muted">{user.email}</p></td><td className="px-5 py-4">{roleLabel(user.role)}</td><td className="px-5 py-4">{user.clinicName ?? "Global"}</td><td className="px-5 py-4"><Badge tone={status.tone}>{status.label}</Badge></td><td className="px-5 py-4">{actions(user)}</td></tr>; })}</tbody></table></div></Card>
+    {dialog?.type === "email" ? <ActionDialog title={`Edit ${dialog.user.fullName} email`} onClose={() => setDialog(undefined)}><form onSubmit={submitEmail} className="grid gap-4"><Field label="Email"><Input name="email" type="email" defaultValue={dialog.user.email} required /></Field><Button type="submit" disabled={pending}>Save and send verification</Button></form></ActionDialog> : null}
+    {dialog?.type === "password" ? <ActionDialog title={`Reset ${dialog.user.fullName} temporary password`} onClose={() => setDialog(undefined)}><form onSubmit={submitPassword} className="grid gap-4"><Field label="Temporary password"><Input name="temporaryPassword" type="password" minLength={8} maxLength={100} required /></Field><Field label="Confirm temporary password"><Input name="confirmTemporaryPassword" type="password" minLength={8} maxLength={100} required /></Field><Button type="submit" disabled={pending}>Reset temporary password</Button></form></ActionDialog> : null}
+    <ConfirmDialog open={dialog?.type === "delete"} title={dialog?.type === "delete" ? `Delete ${dialog.user.fullName}?` : "Delete account?"} description="MedClinic access will be permanently removed and this account cannot be reactivated. Historical records remain for audit and attribution, and the email address becomes reusable." confirmLabel="Delete account" pending={pending} pendingLabel="Deleting..." danger onCancel={() => setDialog(undefined)} onConfirm={() => { if (dialog?.type === "delete") void mutation(`/api/users/${dialog.user.id}`, { method: "DELETE" }, "Unable to delete the account."); }} />
+  </div>;
 }

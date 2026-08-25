@@ -11,6 +11,7 @@ const primaryLinks = [
   ["Laboratory", "/laboratory"],
   ["Physical exam", "/physical-exam"],
   ["Students & Schedules", "/students"],
+  ["Account", "/account"],
 ] as const;
 
 const adminLinks = [
@@ -28,7 +29,7 @@ const adminLinks = [
 export function Sidebar({ user }: { user: SessionUser }) {
   const pathname = usePathname();
   const visiblePrimaryLinks = user.role === "COORDINATOR"
-    ? primaryLinks.filter(([, href]) => href === "/dashboard" || href === "/students")
+    ? primaryLinks.filter(([, href]) => href === "/dashboard" || href === "/students" || href === "/account")
     : primaryLinks;
 
   function isActive(href: string) {

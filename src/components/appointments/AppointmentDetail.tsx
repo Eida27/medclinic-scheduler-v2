@@ -11,6 +11,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { isAutomaticNoShowLog } from "@/server/appointments/automatic-no-show";
 import { requireUser } from "@/server/auth/current-user";
 import { getPublishedAppointment } from "@/server/repositories/appointments.repository";
+import type { HistoricalStaffActor } from "@/types/roles";
 
 type Log = {
   id: string;
@@ -19,6 +20,7 @@ type Log = {
   notes: string | null;
   changedById: string | null;
   changedByName: string | null;
+  changedBy?: HistoricalStaffActor | null;
   createdAt: Date;
 };
 
@@ -98,6 +100,7 @@ export async function AppointmentDetail({
         isManuallyLocked={Boolean(appointment.isManuallyLocked)}
         lockReason={appointment.lockReason ?? null}
         lockedByName={appointment.lockedByName ?? null}
+        {...(appointment.lockedBy ? { lockedBy: appointment.lockedBy } : {})}
         lockedAt={appointment.lockedAt?.toISOString() ?? null}
         updatedAt={appointment.updatedAt.toISOString()}
         canManage={user.role === "ADMIN"}
@@ -136,8 +139,9 @@ export async function AppointmentDetail({
                 {log.oldStatus ? operationalStatusLabel(log.oldStatus) : "Created"} → {operationalStatusLabel(log.newStatus)}
               </p>
               <p className="text-muted">
-                {log.changedByName ?? "System"} · {statusLogTimestamp(log.createdAt)}
+                {log.changedBy?.fullName ?? log.changedByName ?? "System"} · {statusLogTimestamp(log.createdAt)}
               </p>
+              {log.changedBy?.deleted ? <Badge tone="neutral">Deleted</Badge> : null}
               {log.notes ? <p className="mt-2">{log.notes}</p> : null}
             </div>
           ))}

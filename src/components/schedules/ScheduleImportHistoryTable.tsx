@@ -58,7 +58,10 @@ export function ScheduleImportHistoryTable({ imports }: { imports: ScheduleImpor
                 </td>
                 <td className="px-5 py-4">
                   <p>{acceptedAtLabel(item.acceptedAt)}</p>
-                  <p className="text-xs text-muted">{item.createdByName}</p>
+                  <p className="flex flex-wrap items-center gap-1 text-xs text-muted">
+                    <span>{item.createdBy?.fullName ?? item.createdByName}</span>
+                    {item.createdBy?.deleted ? <Badge tone="neutral">Deleted</Badge> : null}
+                  </p>
                 </td>
                 <td className="px-5 py-4">
                   <p className="font-bold text-ink">{item.totalRows}</p>

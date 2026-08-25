@@ -202,3 +202,22 @@ export async function confirmStaffEmail(token: string) {
     };
   });
 }
+
+export async function resendOwnStaffVerification(userId: string) {
+  return transaction(async (client) => {
+    const target = await client.query<{ email: string; emailVerifiedAt: Date | null }>(
+      `SELECT email,email_verified_at AS "emailVerifiedAt" FROM users
+        WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`,
+      [userId],
+    );
+    const row = target.rows[0];
+    if (!row) throw new AppError("SESSION_EXPIRED", "Your session is no longer active.", 401);
+    if (row.emailVerifiedAt) {
+      throw new AppError("STAFF_EMAIL_ALREADY_VERIFIED", "Your staff email is already verified.", 409);
+    }
+    return queueStaffEmailVerification(client, userId, row.email, {
+      auditAction: "STAFF_EMAIL_VERIFICATION_RESENT",
+      actorUserId: userId,
+    });
+  });
+}

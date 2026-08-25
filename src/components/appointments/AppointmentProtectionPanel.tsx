@@ -4,10 +4,12 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { Alert } from "@/components/ui/Alert";
+import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Textarea } from "@/components/ui/Textarea";
+import type { HistoricalStaffActor } from "@/types/roles";
 
 type AppointmentProtectionPanelProps = {
   appointmentId: string;
@@ -15,6 +17,7 @@ type AppointmentProtectionPanelProps = {
   isManuallyLocked: boolean;
   lockReason: string | null;
   lockedByName: string | null;
+  lockedBy?: HistoricalStaffActor | null;
   lockedAt: string | null;
   updatedAt: string;
   canManage: boolean;
@@ -34,6 +37,7 @@ export function AppointmentProtectionPanel({
   isManuallyLocked,
   lockReason,
   lockedByName,
+  lockedBy,
   lockedAt,
   updatedAt,
   canManage,
@@ -113,7 +117,10 @@ export function AppointmentProtectionPanel({
           </div>
           <div>
             <dt className="font-bold text-muted">Protected by</dt>
-            <dd className="mt-1 text-ink">{lockedByName ?? "Unknown administrator"}</dd>
+            <dd className="mt-1 flex flex-wrap items-center gap-2 text-ink">
+              <span>{lockedBy?.fullName ?? lockedByName ?? "Unknown administrator"}</span>
+              {lockedBy?.deleted ? <Badge tone="neutral">Deleted</Badge> : null}
+            </dd>
           </div>
           <div>
             <dt className="font-bold text-muted">Protected at</dt>

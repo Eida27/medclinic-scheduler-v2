@@ -60,4 +60,19 @@ describe("ScheduleImportHistoryTable", () => {
     expect(within(row).getByText("First Year")).toBeVisible();
     expect(within(row).queryByText("REGULAR")).not.toBeInTheDocument();
   });
+
+  it("marks a tombstoned importer as deleted while preserving the historical name", () => {
+    render(<ScheduleImportHistoryTable imports={[{
+      ...scheduleImport,
+      createdBy: {
+        fullName: "Former Administrator",
+        role: "ADMIN",
+        deleted: true,
+      },
+    }]} />);
+
+    const row = screen.getByRole("row", { name: /First Semester Schedules/ });
+    expect(within(row).getByText("Former Administrator")).toBeVisible();
+    expect(within(row).getByText("Deleted")).toBeVisible();
+  });
 });

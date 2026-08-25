@@ -10,6 +10,7 @@ import {
   studentDisplayNameSql,
   studentLegacyDisplayNameSql,
 } from "@/server/students/student-display-name";
+import type { HistoricalStaffActor } from "@/types/roles";
 
 export type AppointmentStatus = "DRAFT" | "PENDING" | "COMPLETED" | "NO_SHOW" | "RESCHEDULED" | "CANCELLED" | "AWAITING_RESCHEDULE";
 type AppointmentDetail = {
@@ -19,6 +20,7 @@ type AppointmentDetail = {
   notes: string | null; rescheduledFrom: string | null; collegeName: string; programName: string;
   isManuallyLocked: boolean; lockReason: string | null; lockedById: string | null;
   lockedByName: string | null; lockedAt: Date | null; updatedAt: Date;
+  lockedBy: HistoricalStaffActor | null;
   completedFromStatus: CompletionSourceStatus | null;
   laboratoryStatus?: "PENDING" | "COMPLETED" | "NO_SHOW" | null;
   locationName: string;
@@ -27,7 +29,7 @@ type AppointmentDetail = {
   linkedOvpsaLaboratoryAppointmentId?: string | null;
   linkedOvpsaLaboratoryVerified?: boolean | null;
 };
-type StatusLog = { id: string; oldStatus: string | null; newStatus: string; notes: string | null; createdAt: Date; changedById: string | null; changedByName: string | null };
+type StatusLog = { id: string; oldStatus: string | null; newStatus: string; notes: string | null; createdAt: Date; changedById: string | null; changedByName: string | null; changedBy: HistoricalStaffActor | null };
 
 export type CompletionSourceStatus = "PENDING" | "NO_SHOW";
 
@@ -199,6 +201,11 @@ export async function getPublishedAppointment(id: string) {
             linked_laboratory.is_verified AS "linkedOvpsaLaboratoryVerified",
             a.is_manually_locked AS "isManuallyLocked", a.lock_reason AS "lockReason",
             a.locked_by::text AS "lockedById", locked_user.full_name AS "lockedByName",
+            CASE WHEN locked_user.id IS NULL THEN NULL ELSE json_build_object(
+              'fullName', locked_user.full_name,
+              'role', locked_user.role,
+              'deleted', locked_user.deleted_at IS NOT NULL
+            ) END AS "lockedBy",
             a.locked_at AS "lockedAt", a.updated_at AS "updatedAt"
      FROM appointments a JOIN students s ON s.student_number=a.student_number
      JOIN clinics cl ON cl.id=a.clinic_id
@@ -229,7 +236,12 @@ export async function getPublishedAppointment(id: string) {
   const logs = await query<StatusLog>(
     `SELECT l.id, l.old_status AS "oldStatus", l.new_status AS "newStatus", l.notes,
             l.created_at AS "createdAt", l.changed_by AS "changedById",
-            u.full_name AS "changedByName"
+            u.full_name AS "changedByName",
+            CASE WHEN u.id IS NULL THEN NULL ELSE json_build_object(
+              'fullName', u.full_name,
+              'role', u.role,
+              'deleted', u.deleted_at IS NOT NULL
+            ) END AS "changedBy"
      FROM appointment_status_logs l LEFT JOIN users u ON u.id=l.changed_by
      WHERE l.appointment_id=$1 ORDER BY l.created_at DESC, l.id DESC`, [id]);
   return { ...result.rows[0], statusLogs: logs.rows };

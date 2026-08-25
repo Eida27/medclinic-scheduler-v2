@@ -34,3 +34,11 @@ export async function optionalUser() {
     return null;
   }
 }
+
+export async function optionalAuthenticatedStaff() {
+  try {
+    return await requireAuthenticatedStaff();
+  } catch {
+    return null;
+  }
+}

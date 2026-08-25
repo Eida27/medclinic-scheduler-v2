@@ -23,6 +23,7 @@ import { queueAuthoritativeScheduleNotification } from "@/server/schedule/schedu
 import { buildInitialPublicationNotification } from "@/server/schedule/schedule-notifications";
 import { ensureStudentAcademicSnapshotsWithClient } from "./student-academic-snapshots.repository";
 import { loadSchedulingBlockedDates } from "./scheduling-blocked-dates.repository";
+import type { HistoricalStaffActor, UserRole } from "@/types/roles";
 
 export type ScheduleImportStatus =
   | "DRAFT"
@@ -93,6 +94,7 @@ export type ScheduleImportListItem = {
   submittedByName: string | null;
   description: string | null;
   createdByName: string;
+  createdBy?: HistoricalStaffActor;
   laboratoryItemCount: number;
   physicalExaminationItemCount: number;
   status: ScheduleImportStatus;
@@ -817,6 +819,8 @@ type ScheduleImportSummaryRow = {
   submitted_by_name: string | null;
   description: string | null;
   created_by_name: string;
+  created_by_role: UserRole;
+  created_by_deleted: boolean;
   laboratory_item_count: number;
   physical_examination_item_count: number;
   child_statuses: string[];
@@ -851,6 +855,8 @@ async function loadScheduleImportGroups(importId?: string) {
             import_group.accepted_at,
             published_audit.metadata AS published_metadata,
             creator.full_name AS created_by_name,
+            creator.role AS created_by_role,
+            (creator.deleted_at IS NOT NULL) AS created_by_deleted,
             COUNT(item.id) FILTER (WHERE item.schedule_type='LABORATORY')::int
               AS laboratory_item_count,
             COUNT(item.id) FILTER (WHERE item.schedule_type='PHYSICAL_EXAM')::int
@@ -875,7 +881,7 @@ async function loadScheduleImportGroups(importId?: string) {
           LIMIT 1
        ) published_audit ON TRUE
        ${where}
-       GROUP BY import_group.id, creator.full_name, published_audit.metadata
+       GROUP BY import_group.id, creator.full_name, creator.role, creator.deleted_at, published_audit.metadata
        ORDER BY import_group.created_at DESC`,
     values,
   );
@@ -904,6 +910,11 @@ async function loadScheduleImportGroups(importId?: string) {
     submittedByName: row.submitted_by_name,
     description: row.description,
     createdByName: row.created_by_name,
+    createdBy: {
+      fullName: row.created_by_name,
+      role: row.created_by_role,
+      deleted: row.created_by_deleted,
+    },
     laboratoryItemCount: row.laboratory_item_count,
     physicalExaminationItemCount: row.physical_examination_item_count,
     status: deriveScheduleImportStatus(row.child_statuses),

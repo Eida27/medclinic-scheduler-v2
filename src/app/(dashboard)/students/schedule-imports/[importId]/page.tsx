@@ -51,7 +51,13 @@ export default async function ScheduleImportDetailPage({
               <div><dt className="font-semibold text-muted">Category</dt><dd className="mt-1 text-ink">{detail.importMode === "FIRST_YEAR_OVPSA" ? "First Year" : detail.studentCategory ?? "Legacy"}</dd></div>
               <div><dt className="font-semibold text-muted">Academic year</dt><dd className="mt-1 text-ink">{academicYear}</dd></div>
               <div><dt className="font-semibold text-muted">Generated range</dt><dd className="mt-1 text-ink">{detail.generatedRange ? `${detail.generatedRange.startDate} – ${detail.generatedRange.endDate}` : "No new pair generated"}</dd></div>
-              <div><dt className="font-semibold text-muted">Imported by</dt><dd className="mt-1 text-ink">{detail.createdByName}</dd></div>
+              <div>
+                <dt className="font-semibold text-muted">Imported by</dt>
+                <dd className="mt-1 flex flex-wrap items-center gap-2 text-ink">
+                  <span>{detail.createdBy?.fullName ?? detail.createdByName}</span>
+                  {detail.createdBy?.deleted ? <Badge tone="neutral">Deleted</Badge> : null}
+                </dd>
+              </div>
             </dl>
           </div>
           <dl className="grid grid-cols-2 gap-3">

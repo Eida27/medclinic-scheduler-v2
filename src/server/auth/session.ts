@@ -11,6 +11,9 @@ function secret(): Uint8Array {
 }
 
 export async function createSessionToken(user: SessionUser): Promise<string> {
+  if (!Number.isInteger(user.credentialVersion) || (user.credentialVersion ?? 0) < 1) {
+    throw new Error("A positive credential version is required to create a staff session.");
+  }
   return new SignJWT({
     fullName: user.fullName,
     email: user.email,
