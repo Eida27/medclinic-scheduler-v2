@@ -9,7 +9,7 @@ const { query, transaction } = vi.hoisted(() => {
   };
 });
 
-vi.mock("@/server/db/pool", () => ({ transaction }));
+vi.mock("@/server/db/pool", () => ({ query: vi.fn(), transaction }));
 vi.mock("bcryptjs", () => ({
   default: {
     compare: vi.fn(),

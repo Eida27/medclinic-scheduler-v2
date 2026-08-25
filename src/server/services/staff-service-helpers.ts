@@ -5,19 +5,16 @@ import {
   staffAccountStatus,
   staffPasswordSchema,
 } from "@/server/security/staff-security";
+import { findOperationalAdministratorForUpdate } from "@/server/repositories/staff-security.repository";
+
+export { staffAccountColumns, type StaffAccountRow } from "@/server/repositories/staff-security.repository";
 
 export async function lockOperationalAdministrator(client: PoolClient, actorUserId: string) {
-  const actor = await client.query<{ id: string }>(
-    `SELECT id::text FROM users
-      WHERE id=$1 AND role='ADMIN' AND deleted_at IS NULL
-        AND email_verified_at IS NOT NULL AND must_change_password=FALSE
-      FOR UPDATE`,
-    [actorUserId],
-  );
-  if (!actor.rows[0]) {
+  const actor = await findOperationalAdministratorForUpdate(client, actorUserId);
+  if (!actor) {
     throw new AppError("ADMIN_REQUIRED", "An active, onboarded Administrator is required.", 403);
   }
-  return actor.rows[0];
+  return actor;
 }
 
 export function validatedPasswordPair(password: string, confirmation: string) {
@@ -67,23 +64,3 @@ export function mapStaffAccount(row: {
     status: staffAccountStatus(row),
   };
 }
-
-export const staffAccountColumns = `
-  account.id::text AS id,account.full_name AS "fullName",account.email,
-  account.role,account.clinic_id AS "clinicId",clinic.code AS "clinicCode",
-  clinic.name AS "clinicName",account.email_verified_at AS "emailVerifiedAt",
-  account.must_change_password AS "mustChangePassword",
-  account.credential_version AS "credentialVersion"`;
-
-export type StaffAccountRow = {
-  id: string;
-  fullName: string;
-  email: string;
-  role: "ADMIN" | "COORDINATOR" | "CLINIC_STAFF";
-  clinicId: string | null;
-  clinicCode: string | null;
-  clinicName: string | null;
-  emailVerifiedAt: Date | null;
-  mustChangePassword: boolean;
-  credentialVersion: number;
-};
