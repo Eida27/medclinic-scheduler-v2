@@ -8,6 +8,8 @@ import {
   securityTokenHash,
   staffEmailSchema,
 } from "@/server/security/staff-security";
+import { transaction } from "@/server/db/pool";
+import { mapStaffAccount, staffAccountColumns, type StaffAccountRow } from "./staff-service-helpers";
 
 const VERIFICATION_LIFETIME_MINUTES = 30;
 const RESEND_COOLDOWN_SECONDS = 60;
@@ -16,6 +18,7 @@ const THROTTLE_LIMIT = 5;
 type QueueVerificationOptions = {
   auditAction?: "STAFF_EMAIL_VERIFICATION_REQUESTED" | "STAFF_EMAIL_VERIFICATION_RESENT";
   enforceRateLimit?: boolean;
+  actorUserId?: string | null;
 };
 
 export async function queueStaffEmailVerification(
@@ -115,11 +118,12 @@ export async function queueStaffEmailVerification(
   );
   await client.query(
     `INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,metadata)
-     VALUES (NULL,$1,'staff_email_verification',$2,$3::jsonb)`,
+     VALUES ($4,$1,'staff_email_verification',$2,$3::jsonb)`,
     [
       options.auditAction ?? "STAFF_EMAIL_VERIFICATION_REQUESTED",
       row.id,
       JSON.stringify({ userId, ...addressMetadata(email) }),
+      options.actorUserId ?? null,
     ],
   );
   return {
@@ -127,4 +131,74 @@ export async function queueStaffEmailVerification(
     expiresAt: row.expiresAt,
     resendAvailableAt: row.resendAvailableAt,
   };
+}
+
+export async function confirmStaffEmail(token: string) {
+  const hash = securityTokenHash(token);
+  return transaction(async (client) => {
+    const result = await client.query<StaffAccountRow & {
+      requestId: string;
+      pendingEmail: string;
+      consumedAt: Date | null;
+      invalidatedAt: Date | null;
+      expired: boolean;
+    }>(
+      `SELECT ${staffAccountColumns},verification.id::text AS "requestId",
+              verification.pending_email AS "pendingEmail",
+              verification.consumed_at AS "consumedAt",
+              verification.invalidated_at AS "invalidatedAt",
+              verification.expires_at<=clock_timestamp() AS expired
+         FROM staff_email_verifications verification
+         JOIN users account ON account.id=verification.user_id
+         LEFT JOIN clinics clinic ON clinic.id=account.clinic_id
+        WHERE verification.token_hash=$1 AND account.deleted_at IS NULL
+        FOR UPDATE OF verification,account`,
+      [hash],
+    );
+    const row = result.rows[0];
+    if (
+      !row
+      || row.consumedAt
+      || row.invalidatedAt
+      || row.expired
+      || row.email.trim().toLowerCase() !== row.pendingEmail.trim().toLowerCase()
+    ) {
+      throw new AppError(
+        "STAFF_EMAIL_VERIFICATION_INVALID",
+        "This staff email verification link is invalid or expired.",
+        422,
+      );
+    }
+    await client.query(
+      "UPDATE users SET email_verified_at=clock_timestamp() WHERE id=$1",
+      [row.id],
+    );
+    await client.query(
+      "UPDATE staff_email_verifications SET consumed_at=clock_timestamp() WHERE id=$1",
+      [row.requestId],
+    );
+    const invalidated = await client.query<{ id: string }>(
+      `UPDATE staff_email_verifications SET invalidated_at=clock_timestamp()
+        WHERE user_id=$1 AND id<>$2 AND consumed_at IS NULL AND invalidated_at IS NULL
+        RETURNING id::text`,
+      [row.id, row.requestId],
+    );
+    const obsoleteRequestIds = [row.requestId, ...invalidated.rows.map((item) => item.id)];
+    await client.query(
+      `UPDATE email_outbox SET status='OBSOLETE',verification_body_encrypted=NULL,
+              locked_at=NULL,last_attempt_at=clock_timestamp(),last_attempt_status='OBSOLETE'
+        WHERE message_kind='STAFF_SECURITY' AND source_type='STAFF_EMAIL_VERIFICATION'
+          AND source_id=ANY($1::text[]) AND status NOT IN ('SENT','OBSOLETE')`,
+      [obsoleteRequestIds],
+    );
+    await client.query(
+      `INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,metadata)
+       VALUES (NULL,'STAFF_EMAIL_VERIFIED','user',$1,$2::jsonb)`,
+      [row.id, JSON.stringify(addressMetadata(row.email))],
+    );
+    return {
+      ...mapStaffAccount({ ...row, emailVerifiedAt: new Date() }),
+      onboardingRequired: row.mustChangePassword,
+    };
+  });
 }
