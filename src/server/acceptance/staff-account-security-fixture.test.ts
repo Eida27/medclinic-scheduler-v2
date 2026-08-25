@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertSafeStaffAccountSecurityAcceptanceDatabase,
   assertZeroStaffAccountSecurityResidue,
+  staffAccountSecurityAcceptanceDatabaseIdentity,
   staffAccountSecurityAcceptanceSchemaUrl,
   type StaffAccountSecurityResidue,
 } from "../../../scripts/browser-staff-account-security-fixture";
@@ -49,6 +50,12 @@ describe("staff account security Browser acceptance fixture safety", () => {
     expect(value.searchParams.get("options")).toBe(
       "-csearch_path=staff_account_security_acceptance_20260825,public",
     );
+  });
+
+  it("derives a credential-free database identity for acceptance state binding", () => {
+    expect(staffAccountSecurityAcceptanceDatabaseIdentity(
+      "postgres://staff_user:secret@localhost:5433/medclinic_test",
+    )).toEqual({ hostname: "localhost", port: "5433", database: "medclinic_test" });
   });
 
   it("proves complete cleanup across every fixture-owned surface", () => {

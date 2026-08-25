@@ -221,15 +221,17 @@ This fixture creates a dedicated schema in an explicitly disposable loopback dat
 
 ```powershell
 $env:STAFF_ACCOUNT_SECURITY_ACCEPTANCE_EXCLUSIVE_DATABASE = "1"
+$env:APP_URL = "http://localhost:3012"
 npm run acceptance:staff-account-security:setup
-npm run acceptance:staff-account-security:dev -- --port 3012
+npm run acceptance:staff-account-security:dev
 # Complete the Browser flow in another terminal, then stop the acceptance application.
 npm run acceptance:staff-account-security:status
 npm run acceptance:staff-account-security:cleanup
 Remove-Item Env:STAFF_ACCOUNT_SECURITY_ACCEPTANCE_EXCLUSIVE_DATABASE
+Remove-Item Env:APP_URL
 ```
 
-Cleanup proves zero fixture users, tokens, staff outbox rows, related audits, historical fixture records, and state files before dropping the isolated schema.
+Setup saves a credential-free database identity and the exact `APP_URL`; the dev launcher refuses a mismatch and probes the isolated schema before starting on that URL's host and port. Cleanup proves zero fixture users, tokens, staff outbox rows, related audits, historical fixture records, and state files before dropping the isolated schema.
 
 ### Appointment protection Browser acceptance fixture
 

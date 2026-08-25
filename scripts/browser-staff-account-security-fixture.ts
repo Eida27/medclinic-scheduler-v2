@@ -55,10 +55,29 @@ type FixtureState = {
   schemaName: typeof ACCEPTANCE_SCHEMA;
   migrationCount: number;
   referenceSeedVerified: boolean;
+  databaseIdentity: StaffAccountSecurityAcceptanceDatabaseIdentity;
+  appUrl: string;
   bootstrapAdministratorId?: string;
   bootstrapVerificationToken?: string;
   duplicateBootstrapRejected?: boolean;
 };
+
+export type StaffAccountSecurityAcceptanceDatabaseIdentity = {
+  hostname: string;
+  port: string;
+  database: string;
+};
+
+export function staffAccountSecurityAcceptanceDatabaseIdentity(
+  databaseUrl: string,
+): StaffAccountSecurityAcceptanceDatabaseIdentity {
+  const parsed = new URL(databaseUrl);
+  return {
+    hostname: parsed.hostname.toLowerCase(),
+    port: parsed.port || "5432",
+    database: decodeURIComponent(parsed.pathname.replace(/^\//, "")),
+  };
+}
 
 export function staffAccountSecurityAcceptanceSchemaUrl(databaseUrl: string) {
   const parsed = new URL(databaseUrl);
@@ -421,6 +440,10 @@ async function setup(
     schemaName: ACCEPTANCE_SCHEMA,
     migrationCount: installation.migrationCount,
     referenceSeedVerified: installation.referenceSeedVerified,
+    databaseIdentity: staffAccountSecurityAcceptanceDatabaseIdentity(
+      process.env.DATABASE_URL ?? "",
+    ),
+    appUrl: new URL(process.env.APP_URL ?? "http://localhost:3000").origin,
   };
   await writeState(state);
   try {
