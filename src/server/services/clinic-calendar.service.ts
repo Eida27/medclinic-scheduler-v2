@@ -20,6 +20,8 @@ import type {
   ClinicCalendarOperationResult,
   ClinicCalendarPreviewResult,
   ClinicClosureRecoveryMode,
+  ClinicManualCaseDto,
+  ClinicManualCasePageDto,
   ClinicManualCaseReason,
   ClinicManualCaseResolutionRequest,
   OvpsaClosureBatchRecoveryConfirmation,
@@ -1508,7 +1510,7 @@ export async function listClinicClosureManualCases(
     service?: string;
   },
   actor: SessionUser,
-) {
+): Promise<ClinicManualCasePageDto> {
   assertAdmin(actor);
   const page = Math.max(1, Number(raw.page) || 1);
   const pageSize = Math.min(100, Math.max(1, Number(raw.pageSize) || 20));
@@ -1523,20 +1525,21 @@ export async function listClinicClosureManualCases(
     id: string;
     student_number: string;
     student_name: string;
-    closure_group_id: string;
-    group_start_date: string;
-    group_end_date: string;
+    case_source: ClinicManualCaseDto["caseSource"];
+    closure_group_id: string | null;
+    group_start_date: string | null;
+    group_end_date: string | null;
     reason_code: ClinicManualCaseReason;
     reason_message: string;
-    status: string;
+    status: ClinicManualCaseDto["status"];
     optimistic_token: string;
     created_at: Date;
     resolved_at: Date | null;
-    resolution_action: string | null;
+    resolution_action: ClinicManualCaseDto["resolutionAction"];
     resolution_details: unknown;
     policy_metadata: Record<string, unknown>;
-    category: string;
-    closure_reason: string;
+    category: ClinicManualCaseDto["category"];
+    closure_reason: string | null;
     laboratory_id: string | null;
     laboratory_date: string | null;
     laboratory_status: string | null;
@@ -1554,6 +1557,7 @@ export async function listClinicClosureManualCases(
   }>(
     `SELECT manual_case.id::text,manual_case.student_number,
             ${studentDisplayNameSql("student")} AS student_name,
+            manual_case.case_source,
             manual_case.closure_group_id::text,closure.start_date::text AS group_start_date,
             closure.end_date::text AS group_end_date,manual_case.reason_code,
             manual_case.reason_message,manual_case.status,
@@ -1575,7 +1579,7 @@ export async function listClinicClosureManualCases(
             COUNT(*) OVER()::int AS total
        FROM clinic_closure_manual_cases manual_case
        JOIN students student ON student.student_number=manual_case.student_number
-       JOIN clinic_closure_groups closure ON closure.id=manual_case.closure_group_id
+       LEFT JOIN clinic_closure_groups closure ON closure.id=manual_case.closure_group_id
        LEFT JOIN appointments laboratory ON laboratory.id=manual_case.affected_laboratory_appointment_id
        LEFT JOIN appointments physical ON physical.id=manual_case.affected_physical_exam_appointment_id
        LEFT JOIN appointment_reschedule_events event ON event.manual_case_id=manual_case.id
@@ -1624,6 +1628,7 @@ export async function listClinicClosureManualCases(
       id: row.id,
       studentNumber: row.student_number,
       studentName: row.student_name,
+      caseSource: row.case_source,
       closureGroupId: row.closure_group_id,
       groupStartDate: row.group_start_date,
       groupEndDate: row.group_end_date,
@@ -1772,7 +1777,7 @@ export async function resolveClinicClosureManualCase(
     const caseResult = await client.query<{
       id: string;
       student_number: string;
-      closure_group_id: string;
+      closure_group_id: string | null;
       schedule_pair_id: string | null;
       schedule_cycle_start: number;
       affected_laboratory_appointment_id: string | null;

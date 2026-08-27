@@ -242,6 +242,7 @@ describe("unified clinic calendar lifecycle", () => {
     const manualCase = (await listClinicClosureManualCases({
       search: "UCAL-MANUAL-ALL",
     }, admin)).items[0];
+    expect(manualCase.caseSource).toBe("CLINIC_CLOSURE");
     await expect(resolveClinicClosureManualCase(manualCase.id, {
       action: "ASSIGN_REPLACEMENT",
       expectedOptimisticToken: manualCase.optimisticToken,
@@ -264,6 +265,54 @@ describe("unified clinic calendar lifecycle", () => {
       { schedule_type: "LABORATORY", appointment_date: "2049-08-16" },
       { schedule_type: "PHYSICAL_EXAM", appointment_date: "2049-08-20" },
     ]);
+  });
+
+  it("lists automatic-displacement Manual Resolution cases without closure context", async () => {
+    await createPair({
+      studentNumber: "UCAL-AUTO-DISPLACE",
+      laboratoryDate: "2049-08-12",
+      physicalExamDate: "2049-08-20",
+    });
+    const appointments = await pool.query<{
+      id: string;
+      schedule_pair_id: string;
+      schedule_type: string;
+    }>(
+      `UPDATE appointments
+          SET status='AWAITING_RESCHEDULE'
+        WHERE student_number='UCAL-AUTO-DISPLACE'
+      RETURNING id::text,schedule_pair_id::text,schedule_type`,
+    );
+    const laboratory = appointments.rows.find((row) => row.schedule_type === "LABORATORY")!;
+    const physicalExam = appointments.rows.find((row) => row.schedule_type === "PHYSICAL_EXAM")!;
+    await pool.query(
+      `INSERT INTO clinic_closure_manual_cases (
+         student_number,case_source,closure_group_id,schedule_pair_id,schedule_cycle_start,
+         affected_laboratory_appointment_id,affected_physical_exam_appointment_id,
+         reason_code,reason_message,policy_metadata
+       ) VALUES ('UCAL-AUTO-DISPLACE','AUTOMATIC_DISPLACEMENT',NULL,$1,2048,$2,$3,
+                 'NO_VALID_REPLACEMENT_WITHIN_CYCLE','No valid replacement through cycle close.',
+                 '{"sourceImportGroupId":"90000000-0000-4000-8000-000000000099"}'::jsonb)`,
+      [laboratory.schedule_pair_id, laboratory.id, physicalExam.id],
+    );
+
+    const page = await listClinicClosureManualCases({
+      search: "UCAL-AUTO-DISPLACE",
+    }, admin);
+
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]).toMatchObject({
+      caseSource: "AUTOMATIC_DISPLACEMENT",
+      closureGroupId: null,
+      groupStartDate: null,
+      groupEndDate: null,
+      category: null,
+      closureReason: null,
+      reasonCode: "NO_VALID_REPLACEMENT_WITHIN_CYCLE",
+      policyMetadata: {
+        sourceImportGroupId: "90000000-0000-4000-8000-000000000099",
+      },
+    });
   });
 
   it("keeps emergency cases manual in a mixed-category automatic batch", async () => {

@@ -116,8 +116,57 @@ export type ClinicManualCaseReason =
   | "PROTECTED_RESULTS_EXIST"
   | "PAIR_MISSING_OR_INCONSISTENT"
   | "NO_REPLACEMENT_CAPACITY"
+  | "NO_VALID_REPLACEMENT_WITHIN_CYCLE"
   | "CONCURRENT_APPOINTMENT_CHANGE"
   | "UNSAFE_RESTORATION";
+
+export type ClinicManualCaseSource = "CLINIC_CLOSURE" | "AUTOMATIC_DISPLACEMENT";
+
+export type ClinicManualCaseDto = {
+  id: string;
+  studentNumber: string;
+  studentName: string;
+  caseSource: ClinicManualCaseSource;
+  closureGroupId: string | null;
+  groupStartDate: string | null;
+  groupEndDate: string | null;
+  reasonCode: ClinicManualCaseReason;
+  reasonMessage: string;
+  status: "OPEN" | "RESOLVED";
+  optimisticToken: string;
+  createdAt: string;
+  resolvedAt: string | null;
+  resolutionAction: "ASSIGN_REPLACEMENT" | "KEEP_CURRENT_REPLACEMENT" | null;
+  resolutionDetails: unknown;
+  policyMetadata: Record<string, unknown>;
+  ovpsaBatchId: string | null;
+  ovpsaBatchOptimisticToken: string | null;
+  category: ClinicCalendarCategory | null;
+  closureReason: string | null;
+  laboratory: {
+    id: string;
+    date: string;
+    status: string;
+    affected: boolean;
+  } | null;
+  physicalExam: {
+    id: string;
+    date: string;
+    status: string;
+    affected: boolean;
+  } | null;
+  currentAssignmentBlock: {
+    code: "DRAFT_RESULT_FILES_EXIST" | "PROTECTED_RESULTS_EXIST" | "APPOINTMENT_MANUALLY_LOCKED";
+    message: string;
+  } | null;
+};
+
+export type ClinicManualCasePageDto = {
+  page: number;
+  pageSize: number;
+  total: number;
+  items: ClinicManualCaseDto[];
+};
 
 export type ClinicManualCaseResolutionRequest =
   | {
