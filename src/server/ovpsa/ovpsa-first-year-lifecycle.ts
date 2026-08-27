@@ -23,6 +23,9 @@ type RestorationEvent = {
   id: string;
   batchId: string;
   studentNumber: string;
+  strategy: string | null;
+  manualCaseId: string | null;
+  policyMetadata: Record<string, unknown>;
   oldLaboratoryId: string | null;
   newLaboratoryId: string | null;
   oldPhysicalExamId: string | null;
@@ -40,6 +43,25 @@ type RestorationAppointment = {
   rescheduledFrom: string | null;
 };
 
+function fallbackOriginalIds(event: RestorationEvent) {
+  if (
+    event.strategy !== "MANUAL_RESOLUTION_REQUIRED"
+    || !event.manualCaseId
+    || event.newLaboratoryId
+    || event.newPhysicalExamId
+  ) return [];
+  const affectedIds = new Set(
+    Array.isArray(event.policyMetadata.affectedAppointmentIds)
+      ? event.policyMetadata.affectedAppointmentIds.filter(
+          (id): id is string => typeof id === "string",
+        )
+      : [],
+  );
+  return [event.oldLaboratoryId, event.oldPhysicalExamId].filter(
+    (id): id is string => Boolean(id && affectedIds.has(id)),
+  );
+}
+
 export async function restoreAppointmentsDisplacedByReservationsWithClient(
   client: PoolClient,
   input: { reservationIds: string[]; actorUserId: string; reason: string },
@@ -47,6 +69,8 @@ export async function restoreAppointmentsDisplacedByReservationsWithClient(
   if (!input.reservationIds.length) return { restored: 0, skipped: 0 };
   const events = await client.query<RestorationEvent>(
     `SELECT id::text,ovpsa_batch_id::text AS "batchId",student_number AS "studentNumber",
+            strategy,manual_case_id::text AS "manualCaseId",
+            policy_metadata AS "policyMetadata",
             old_laboratory_appointment_id::text AS "oldLaboratoryId",
             new_laboratory_appointment_id::text AS "newLaboratoryId",
             old_physical_exam_appointment_id::text AS "oldPhysicalExamId",
@@ -62,6 +86,16 @@ export async function restoreAppointmentsDisplacedByReservationsWithClient(
   if (!events.rowCount) return { restored: 0, skipped: 0 };
   await lockEffectiveAppointmentScopes(client, events.rows.flatMap((event) => {
     const scopes: Array<{ studentNumber: string; scheduleType: "LABORATORY" | "PHYSICAL_EXAM" }> = [];
+    const fallbackIds = new Set(fallbackOriginalIds(event));
+    if (fallbackIds.size) {
+      if (event.oldLaboratoryId && fallbackIds.has(event.oldLaboratoryId)) {
+        scopes.push({ studentNumber: event.studentNumber, scheduleType: "LABORATORY" });
+      }
+      if (event.oldPhysicalExamId && fallbackIds.has(event.oldPhysicalExamId)) {
+        scopes.push({ studentNumber: event.studentNumber, scheduleType: "PHYSICAL_EXAM" });
+      }
+      return scopes;
+    }
     if (event.oldLaboratoryId !== event.newLaboratoryId) {
       scopes.push({ studentNumber: event.studentNumber, scheduleType: "LABORATORY" });
     }
@@ -74,13 +108,20 @@ export async function restoreAppointmentsDisplacedByReservationsWithClient(
   let skipped = 0;
   const audits: AuditInput[] = [];
   for (const event of events.rows) {
+    const isAwaitingFallback = event.strategy === "MANUAL_RESOLUTION_REQUIRED"
+      && Boolean(event.manualCaseId)
+      && !event.newLaboratoryId
+      && !event.newPhysicalExamId;
+    const awaitingFallbackOriginalIds = fallbackOriginalIds(event).sort();
     const pairs = [
       { oldId: event.oldLaboratoryId, newId: event.newLaboratoryId },
       { oldId: event.oldPhysicalExamId, newId: event.newPhysicalExamId },
     ].filter((pair): pair is { oldId: string; newId: string } => (
       Boolean(pair.oldId && pair.newId && pair.oldId !== pair.newId)
     ));
-    const ids = pairs.flatMap((pair) => [pair.oldId, pair.newId]).sort();
+    const ids = isAwaitingFallback
+      ? awaitingFallbackOriginalIds
+      : pairs.flatMap((pair) => [pair.oldId, pair.newId]).sort();
     const appointmentRows = await client.query<RestorationAppointment>(
       `SELECT id::text,student_number AS "studentNumber",schedule_type AS "scheduleType",
               appointment_date::text AS "appointmentDate",status,
@@ -93,33 +134,73 @@ export async function restoreAppointmentsDisplacedByReservationsWithClient(
     const replacements = pairs.map((pair) => byId.get(pair.newId)).filter(
       (appointment): appointment is RestorationAppointment => Boolean(appointment),
     );
+    const originals = isAwaitingFallback
+      ? awaitingFallbackOriginalIds.map((id) => byId.get(id)).filter(
+          (appointment): appointment is RestorationAppointment => Boolean(appointment),
+        )
+      : pairs.map((pair) => byId.get(pair.oldId)).filter(
+          (appointment): appointment is RestorationAppointment => Boolean(appointment),
+        );
     const protection = await loadAppointmentResultProtectionStates(
       client,
-      replacements.map((appointment) => appointment.id),
+      (isAwaitingFallback ? originals : replacements).map(
+        (appointment) => appointment.id,
+      ),
     );
+    const manualCase = isAwaitingFallback
+      ? await client.query<{ status: string }>(
+          `SELECT status FROM clinic_closure_manual_cases
+            WHERE id=$1 FOR UPDATE`,
+          [event.manualCaseId],
+        )
+      : null;
+    const activeFallbackReplacement = isAwaitingFallback && awaitingFallbackOriginalIds.length
+      ? await client.query(
+          `SELECT 1 FROM appointments
+            WHERE rescheduled_from=ANY($1::uuid[])
+              AND is_published=TRUE
+              AND status NOT IN ('RESCHEDULED','CANCELLED','AWAITING_RESCHEDULE')
+            LIMIT 1`,
+          [awaitingFallbackOriginalIds],
+        )
+      : null;
     let decision: "RESTORED" | "SKIPPED_APPOINTMENT_CHANGED" | "SKIPPED_PROTECTED" | "SKIPPED_DATE_BLOCKED" | "SKIPPED_CAPACITY" = "RESTORED";
-    const details: Record<string, unknown> = { reason: input.reason };
-    if (
-      !pairs.length
-      || appointmentRows.rowCount !== ids.length
-      || pairs.some(({ oldId, newId }) => {
-        const original = byId.get(oldId);
-        const replacement = byId.get(newId);
-        return !original || !replacement
-          || original.status !== "RESCHEDULED" || original.isPublished
-          || replacement.status !== "PENDING" || !replacement.isPublished
-          || replacement.rescheduledFrom !== original.id;
-      })
-    ) {
+    const details: Record<string, unknown> = {
+      reason: input.reason,
+      ...(isAwaitingFallback ? {
+        restorationAction: "RESTORE_ORIGINAL",
+        affectedAppointmentIds: awaitingFallbackOriginalIds,
+        manualCaseId: event.manualCaseId,
+      } : {}),
+    };
+    const appointmentChanged = isAwaitingFallback
+      ? !awaitingFallbackOriginalIds.length
+        || appointmentRows.rowCount !== awaitingFallbackOriginalIds.length
+        || manualCase?.rows[0]?.status !== "OPEN"
+        || Boolean(activeFallbackReplacement?.rowCount)
+        || originals.some((original) =>
+          original.studentNumber !== event.studentNumber
+          || original.status !== "AWAITING_RESCHEDULE"
+          || !original.isPublished)
+      : !pairs.length
+        || appointmentRows.rowCount !== ids.length
+        || pairs.some(({ oldId, newId }) => {
+          const original = byId.get(oldId);
+          const replacement = byId.get(newId);
+          return !original || !replacement
+            || original.status !== "RESCHEDULED" || original.isPublished
+            || replacement.status !== "PENDING" || !replacement.isPublished
+            || replacement.rescheduledFrom !== original.id;
+        });
+    if (appointmentChanged) {
       decision = "SKIPPED_APPOINTMENT_CHANGED";
-    } else if (replacements.some((appointment) => (
+    } else if ((isAwaitingFallback ? originals : replacements).some((appointment) => (
       appointment.isManuallyLocked
       || (protection.get(appointment.id)?.type ?? "CLEAR") !== "CLEAR"
     ))) {
       decision = "SKIPPED_PROTECTED";
     } else {
-      for (const { oldId } of pairs) {
-        const original = byId.get(oldId)!;
+      for (const original of originals) {
         if (await isSchedulingDateBlocked(client, {
           scheduleType: original.scheduleType,
           date: original.appointmentDate,
@@ -154,27 +235,61 @@ export async function restoreAppointmentsDisplacedByReservationsWithClient(
       }
     }
     if (decision === "RESTORED") {
-      const originalIds = pairs.map((pair) => pair.oldId);
-      const replacementIds = pairs.map((pair) => pair.newId);
-      await client.query(
-        `UPDATE appointments SET status='RESCHEDULED',is_published=FALSE,
-                updated_by=$2,updated_at=clock_timestamp()
-          WHERE id=ANY($1::uuid[])`,
-        [replacementIds, input.actorUserId],
-      );
-      await client.query(
-        `UPDATE appointments SET status='PENDING',is_published=TRUE,
-                updated_by=$2,updated_at=clock_timestamp()
-          WHERE id=ANY($1::uuid[])`,
-        [originalIds, input.actorUserId],
-      );
-      await client.query(
-        `INSERT INTO appointment_status_logs (appointment_id,old_status,new_status,notes,changed_by)
-         SELECT id,'PENDING','RESCHEDULED',$2,$3::uuid FROM UNNEST($1::uuid[]) row(id)
-         UNION ALL
-         SELECT id,'RESCHEDULED','PENDING',$2,$3::uuid FROM UNNEST($4::uuid[]) row(id)`,
-        [replacementIds, `OVPSA displacement restoration: ${input.reason}`, input.actorUserId, originalIds],
-      );
+      const originalIds = originals.map((appointment) => appointment.id);
+      if (isAwaitingFallback) {
+        details.restoredAppointmentIds = originalIds;
+        await client.query(
+          `UPDATE appointments SET status='PENDING',is_published=TRUE,
+                  updated_by=$2,updated_at=clock_timestamp()
+            WHERE id=ANY($1::uuid[])`,
+          [originalIds, input.actorUserId],
+        );
+        await client.query(
+          `INSERT INTO appointment_status_logs (
+             appointment_id,old_status,new_status,notes,changed_by
+           ) SELECT id,'AWAITING_RESCHEDULE','PENDING',$2,$3::uuid
+               FROM UNNEST($1::uuid[]) row(id)`,
+          [
+            originalIds,
+            `OVPSA displacement restoration: ${input.reason}`,
+            input.actorUserId,
+          ],
+        );
+        await client.query(
+          `UPDATE clinic_closure_manual_cases
+              SET status='RESOLVED',resolved_at=clock_timestamp(),resolved_by=$2,
+                  resolution_action='KEEP_CURRENT_REPLACEMENT',
+                  resolution_details=$3::jsonb,optimistic_token=gen_random_uuid(),
+                  updated_at=clock_timestamp()
+            WHERE id=$1 AND status='OPEN'`,
+          [event.manualCaseId, input.actorUserId, JSON.stringify(details)],
+        );
+        await client.query(
+          `UPDATE appointment_reschedule_events SET outcome='RESTORED' WHERE id=$1`,
+          [event.id],
+        );
+      } else {
+        const replacementIds = pairs.map((pair) => pair.newId);
+        await client.query(
+          `UPDATE appointments SET status='RESCHEDULED',is_published=FALSE,
+                  updated_by=$2,updated_at=clock_timestamp()
+            WHERE id=ANY($1::uuid[])`,
+          [replacementIds, input.actorUserId],
+        );
+        await client.query(
+          `UPDATE appointments SET status='PENDING',is_published=TRUE,
+                  updated_by=$2,updated_at=clock_timestamp()
+            WHERE id=ANY($1::uuid[])`,
+          [originalIds, input.actorUserId],
+        );
+        await client.query(
+          `INSERT INTO appointment_status_logs (appointment_id,old_status,new_status,notes,changed_by)
+           SELECT id,'PENDING','RESCHEDULED',$2,$3::uuid FROM UNNEST($1::uuid[]) row(id)
+           UNION ALL
+           SELECT id,'RESCHEDULED','PENDING',$2,$3::uuid FROM UNNEST($4::uuid[]) row(id)`,
+          [replacementIds, `OVPSA displacement restoration: ${input.reason}`, input.actorUserId, originalIds],
+        );
+      }
       restored += 1;
     } else {
       skipped += 1;
@@ -187,10 +302,11 @@ export async function restoreAppointmentsDisplacedByReservationsWithClient(
       [event.id, decision, details, input.actorUserId, event.batchId],
     );
     if (decision === "RESTORED") {
-      const previousLaboratory = replacements.find(
+      const previousAppointments = isAwaitingFallback ? originals : replacements;
+      const previousLaboratory = previousAppointments.find(
         (appointment) => appointment.scheduleType === "LABORATORY",
       );
-      const previousPhysicalExam = replacements.find(
+      const previousPhysicalExam = previousAppointments.find(
         (appointment) => appointment.scheduleType === "PHYSICAL_EXAM",
       );
       const previous = {

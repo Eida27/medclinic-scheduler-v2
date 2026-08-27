@@ -528,6 +528,83 @@ describe("unified clinic calendar lifecycle", () => {
     }]);
   });
 
+  it("assigns only the awaiting PE when its preserved completed Laboratory has protected results", async () => {
+    const studentNumber = "UCAL-AUTO-PE-LAB";
+    const manualCase = await createAutomaticManualCase({
+      studentNumber,
+      awaitingType: "PHYSICAL_EXAM",
+    });
+    const appointments = await pool.query<{
+      id: string;
+      schedule_type: "LABORATORY" | "PHYSICAL_EXAM";
+    }>(
+      `UPDATE appointments
+          SET status=CASE WHEN schedule_type='LABORATORY' THEN 'COMPLETED' ELSE status END
+        WHERE student_number=$1
+      RETURNING id::text,schedule_type`,
+      [studentNumber],
+    );
+    const laboratory = appointments.rows.find((row) => row.schedule_type === "LABORATORY")!;
+    const physicalExam = appointments.rows.find((row) => row.schedule_type === "PHYSICAL_EXAM")!;
+    await pool.query(
+      `INSERT INTO laboratory_results (
+         student_number,appointment_id,result_status,completed_at,encoded_by
+       ) VALUES ($1,$2,'COMPLETED',clock_timestamp(),$3)`,
+      [studentNumber, laboratory.id, TEST_REFERENCE_IDS.clinicStaffUser],
+    );
+    await pool.query(
+      `UPDATE clinic_closure_manual_cases
+          SET policy_metadata=jsonb_build_object(
+            'displacementType','PHYSICAL_EXAM_ONLY',
+            'affectedAppointmentIds',jsonb_build_array($2::text)
+          )
+        WHERE id=$1`,
+      [manualCase.id, physicalExam.id],
+    );
+
+    const listed = await listClinicClosureManualCases({ search: studentNumber }, admin);
+    expect(listed.items[0]).toMatchObject({
+      laboratory: { id: laboratory.id, status: "COMPLETED", affected: false },
+      physicalExam: { id: physicalExam.id, status: "AWAITING_RESCHEDULE", affected: true },
+      currentAssignmentBlock: null,
+    });
+    await resolveClinicClosureManualCase(manualCase.id, {
+      action: "ASSIGN_REPLACEMENT",
+      expectedOptimisticToken: manualCase.optimisticToken,
+      preserveLaboratory: true,
+      physicalExamDate: "2049-08-23",
+      reason: "Preserve the protected completed Laboratory and replace only PE.",
+    }, admin);
+
+    const current = await pool.query<{
+      id: string;
+      schedule_type: string;
+      appointment_date: string;
+      status: string;
+      is_published: boolean;
+    }>(
+      `SELECT id::text,schedule_type,appointment_date::text,status,is_published
+         FROM appointments WHERE student_number=$1 ORDER BY created_at,id`,
+      [studentNumber],
+    );
+    expect(current.rows).toEqual(expect.arrayContaining([
+      {
+        id: laboratory.id,
+        schedule_type: "LABORATORY",
+        appointment_date: "2049-08-12",
+        status: "COMPLETED",
+        is_published: true,
+      },
+      expect.objectContaining({
+        schedule_type: "PHYSICAL_EXAM",
+        appointment_date: "2049-08-23",
+        status: "PENDING",
+        is_published: true,
+      }),
+    ]));
+    expect(current.rows.filter((row) => row.schedule_type === "LABORATORY")).toHaveLength(1);
+  });
+
   it("rejects today as an automatic-displacement Manual Resolution destination", async () => {
     const manualCase = await createAutomaticManualCase({
       studentNumber: "UCAL-AUTO-TODAY",

@@ -1627,6 +1627,10 @@ export async function listClinicClosureManualCases(
           ? row.policy_metadata.affectedAppointmentIds.filter((id): id is string => typeof id === "string")
           : [],
       );
+      const isAssignmentRelevant = (appointmentId: string) =>
+        row.case_source !== "AUTOMATIC_DISPLACEMENT"
+        || affectedIds.size === 0
+        || affectedIds.has(appointmentId);
       return ({
       id: row.id,
       studentNumber: row.student_number,
@@ -1663,19 +1667,19 @@ export async function listClinicClosureManualCases(
         affected: affectedIds.has(row.physical_exam_id),
       } : null,
       currentAssignmentBlock: currentAssignmentBlock([
-        ...(row.laboratory_id ? [{
+        ...(row.laboratory_id && isAssignmentRelevant(row.laboratory_id) ? [{
           isManuallyLocked: Boolean(row.laboratory_is_manually_locked),
           resultProtectionState: protectionStates.get(row.laboratory_id) ?? { type: "CLEAR" as const },
         }] : []),
-        ...(row.physical_exam_id ? [{
+        ...(row.physical_exam_id && isAssignmentRelevant(row.physical_exam_id) ? [{
           isManuallyLocked: Boolean(row.physical_exam_is_manually_locked),
           resultProtectionState: protectionStates.get(row.physical_exam_id) ?? { type: "CLEAR" as const },
         }] : []),
-        ...(row.replacement_laboratory_id ? [{
+        ...(row.replacement_laboratory_id && isAssignmentRelevant(row.replacement_laboratory_id) ? [{
           isManuallyLocked: Boolean(row.replacement_laboratory_is_manually_locked),
           resultProtectionState: protectionStates.get(row.replacement_laboratory_id) ?? { type: "CLEAR" as const },
         }] : []),
-        ...(row.replacement_physical_exam_id ? [{
+        ...(row.replacement_physical_exam_id && isAssignmentRelevant(row.replacement_physical_exam_id) ? [{
           isManuallyLocked: Boolean(row.replacement_physical_exam_is_manually_locked),
           resultProtectionState: protectionStates.get(row.replacement_physical_exam_id) ?? { type: "CLEAR" as const },
         }] : []),
@@ -1875,10 +1879,6 @@ export async function resolveClinicClosureManualCase(
     let auditedAppointments: AppointmentState[] = recheckedAppointments;
     const insertedByType: Partial<Record<AppointmentState["scheduleType"], string>> = {};
     if (request.action === "ASSIGN_REPLACEMENT") {
-      const assignmentBlock = currentAssignmentBlock(recheckedAppointments);
-      if (assignmentBlock) {
-        throw new AppError(assignmentBlock.code, assignmentBlock.message, 409);
-      }
       const dateByType = {
         LABORATORY: request.laboratoryDate,
         PHYSICAL_EXAM: request.physicalExamDate,
@@ -1919,6 +1919,10 @@ export async function resolveClinicClosureManualCase(
         throw validationError("Physical Examination must follow Laboratory.");
       }
       const moving = affected.filter((appointment) => Boolean(dateByType[appointment.scheduleType]));
+      const assignmentBlock = currentAssignmentBlock(moving);
+      if (assignmentBlock) {
+        throw new AppError(assignmentBlock.code, assignmentBlock.message, 409);
+      }
       for (const appointment of moving) {
         const date = dateByType[appointment.scheduleType]!;
         if (manualCase.case_source === "AUTOMATIC_DISPLACEMENT") {

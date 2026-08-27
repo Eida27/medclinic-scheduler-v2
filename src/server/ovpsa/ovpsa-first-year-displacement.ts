@@ -84,6 +84,17 @@ function categoryTier(category: StudentCategory) {
   return category === "REGULAR" ? 2 : 1;
 }
 
+function compareDisplacementCandidates(
+  left: OvpsaDisplacementCandidate,
+  right: OvpsaDisplacementCandidate,
+) {
+  return categoryTier(left.category) - categoryTier(right.category) ||
+    left.acceptedAt.localeCompare(right.acceptedAt) ||
+    left.sourceRowOrder - right.sourceRowOrder ||
+    left.studentNumber.localeCompare(right.studentNumber) ||
+    left.schedulePairId.localeCompare(right.schedulePairId);
+}
+
 async function loadDateConflictAppointments(
   client: PoolClient,
   input: {
@@ -539,69 +550,54 @@ export async function planOvpsaLowerPriorityDisplacementsForServiceDates(
     const blockedPhysicalExamDates = [
       ...new Set([...blocked.physicalExamDates, ...input.serviceDates.physicalExamDates]),
     ];
-    const pairCandidates = boundedCandidates.filter(
-      ({ candidate, bounds }) => candidate.displacementType === "PAIR"
-        && bounds.lowerBound <= bounds.upperBound,
-    );
-    fallbacks.push(...boundedCandidates
-      .filter(({ candidate, bounds }) => candidate.displacementType === "PAIR"
-        && bounds.lowerBound > bounds.upperBound)
-      .map(({ candidate }) => candidate));
-    const paired = generatePairedSchedule({
-      requests: pairCandidates.map(({ candidate, bounds }) => ({
-        requestId: `ovpsa:${candidate.schedulePairId}`,
-        studentNumber: candidate.studentNumber,
-        category: candidate.category,
-        acceptedAt: candidate.acceptedAt,
-        sourceRowOrder: candidate.sourceRowOrder,
-        windowStart: bounds.lowerBound,
-      })),
-      laboratoryCapacity: {
-        maxDailyCapacity: laboratoryCapacity.max_daily_capacity,
-      },
-      physicalExamCapacity: {
-        maxDailyCapacity: physicalExamCapacity.max_daily_capacity,
-      },
-      existingLaboratoryLoad: laboratoryLoad,
-      existingPhysicalExamLoad: physicalExamLoad,
-      blockedLaboratoryDates,
-      blockedPhysicalExamDates,
-      searchEndDate: endDate,
-    });
-    const pairById = new Map(
-      pairCandidates.map(({ candidate }) => [candidate.schedulePairId, candidate]),
-    );
-    for (const assignment of paired.assignments) {
-      const pairId = assignment.requestId.slice("ovpsa:".length);
-      const candidate = pairById.get(pairId)!;
-      replacements.push({
-        candidate,
-        studentNumber: candidate.studentNumber,
-        category: candidate.category,
-        laboratoryDate: assignment.laboratoryDate,
-        physicalExamDate: assignment.physicalExamDate,
-      });
-      laboratoryLoad[assignment.laboratoryDate] =
-        (laboratoryLoad[assignment.laboratoryDate] ?? 0) + 1;
-      physicalExamLoad[assignment.physicalExamDate] =
-        (physicalExamLoad[assignment.physicalExamDate] ?? 0) + 1;
-    }
-    fallbacks.push(...paired.unscheduledRequestIds.map((requestId) => (
-      pairById.get(requestId.slice("ovpsa:".length))!
-    )));
     const blockedPhysicalExamSet = new Set(blockedPhysicalExamDates);
-    const physicalOnly = boundedCandidates
-      .filter(
-        ({ candidate }) => candidate.displacementType === "PHYSICAL_EXAM_ONLY",
-      )
-      .sort(
-        (left, right) =>
-          categoryTier(left.candidate.category) - categoryTier(right.candidate.category) ||
-          left.candidate.acceptedAt.localeCompare(right.candidate.acceptedAt) ||
-          left.candidate.sourceRowOrder - right.candidate.sourceRowOrder ||
-          left.candidate.studentNumber.localeCompare(right.candidate.studentNumber),
-      );
-    for (const { candidate, bounds } of physicalOnly) {
+    const globallyOrdered = boundedCandidates.sort((left, right) =>
+      compareDisplacementCandidates(left.candidate, right.candidate));
+    for (const { candidate, bounds } of globallyOrdered) {
+      if (bounds.lowerBound > bounds.upperBound) {
+        fallbacks.push(candidate);
+        continue;
+      }
+      if (candidate.displacementType === "PAIR") {
+        const paired = generatePairedSchedule({
+          requests: [{
+            requestId: `ovpsa:${candidate.schedulePairId}`,
+            studentNumber: candidate.studentNumber,
+            category: candidate.category,
+            acceptedAt: candidate.acceptedAt,
+            sourceRowOrder: candidate.sourceRowOrder,
+            windowStart: bounds.lowerBound,
+          }],
+          laboratoryCapacity: {
+            maxDailyCapacity: laboratoryCapacity.max_daily_capacity,
+          },
+          physicalExamCapacity: {
+            maxDailyCapacity: physicalExamCapacity.max_daily_capacity,
+          },
+          existingLaboratoryLoad: laboratoryLoad,
+          existingPhysicalExamLoad: physicalExamLoad,
+          blockedLaboratoryDates,
+          blockedPhysicalExamDates,
+          searchEndDate: endDate,
+        });
+        const assignment = paired.assignments[0];
+        if (!assignment) {
+          fallbacks.push(candidate);
+          continue;
+        }
+        replacements.push({
+          candidate,
+          studentNumber: candidate.studentNumber,
+          category: candidate.category,
+          laboratoryDate: assignment.laboratoryDate,
+          physicalExamDate: assignment.physicalExamDate,
+        });
+        laboratoryLoad[assignment.laboratoryDate] =
+          (laboratoryLoad[assignment.laboratoryDate] ?? 0) + 1;
+        physicalExamLoad[assignment.physicalExamDate] =
+          (physicalExamLoad[assignment.physicalExamDate] ?? 0) + 1;
+        continue;
+      }
       const start = bounds.lowerBound;
       let date: string | null = null;
       for (
