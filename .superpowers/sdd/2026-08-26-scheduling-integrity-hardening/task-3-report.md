@@ -204,5 +204,110 @@ The full suite was intentionally not run, per the task ledger ruling reserving i
 
 - No known Task 3 source defect remains.
 - The one observed Vitest worker-start timeout is documented above; both constituent groups passed cleanly when rerun in bounded batches.
-- Queue UI rendering of the new nullable closure context is intentionally deferred to Task 5.
+- Null-safe queue rendering was completed in Task 3 review fix round 1; later UI work may build on it without reintroducing a closure-only DTO.
 - Full integrated-suite verification remains intentionally deferred to the final ledger step.
+
+## Review fix round 1
+
+Implementation commit: `7942edb` (`fix: harden automatic manual resolution`).
+
+### Confirmed findings and fixes
+
+1. Automatic-displacement Manual Resolution assignment reused the legacy closure-only destination check. That check allowed the Manila current date, did not read the case cycle's `academic_years.closing_date`, counted only `DRAFT`/`PENDING` capacity, and returned closure-specific capacity errors.
+   - Automatic cases now read academic-year and active capacity state under the existing transaction/global queue/locked appointment flow through `getManualRescheduleDestinationState`.
+   - They apply `assertManualAppointmentDestination`, requiring a date strictly after Manila today, inside the case schedule cycle, on a weekday, unblocked/unreserved, and below capacity.
+   - Capacity counts `DRAFT`, `PENDING`, `COMPLETED`, and `NO_SHOW` and retains the hardened exclusion of external OVPSA Laboratory appointments.
+   - The existing final proposed-pair ordering check remains authoritative when both or either service moves.
+   - `CLINIC_CLOSURE` cases retain their existing date-validation branch and behavior.
+
+2. `ManualResolutionQueue` duplicated the old closure-only DTO and unconditionally rendered closure fields. An `AUTOMATIC_DISPLACEMENT` case with null closure context crashed in `label(null)`.
+   - The component now consumes `ClinicManualCaseDto`/`ClinicManualCasePageDto` directly.
+   - Automatic cases show source-specific displacement context without fabricating closure dates/category/reason.
+   - Closure cases retain the prior Closure, Category, and Reason rows.
+   - `NO_VALID_REPLACEMENT_WITHIN_CYCLE` is available in the reason filter, and both sources retain the same resolution controls.
+
+3. Automatic awaiting/completed messages used `CLINIC_CLOSURE_MANUAL_CASE` because the awaiting call site omitted its optional source and the completion builder hard-coded it.
+   - Priority fallback awaiting and automatic-case completion now use `AUTOMATIC_DISPLACEMENT_MANUAL_CASE`.
+   - Closure awaiting/completion callers retain the existing `CLINIC_CLOSURE_MANUAL_CASE` default.
+
+### Review TDD evidence
+
+Baseline command:
+
+```text
+npm.cmd test -- src/server/services/clinic-calendar.integration.test.ts src/components/settings/ManualResolutionQueue.test.tsx src/server/schedule/schedule-notifications.test.ts src/server/services/priority-displacement.integration.test.ts --run --maxWorkers=1 --no-file-parallelism --testTimeout=15000 --hookTimeout=30000 --reporter=dot
+```
+
+Baseline result at `ae2c369`: `4` files passed, `41/41` tests passed.
+
+#### RED/GREEN: automatic Manual Resolution destination policy
+
+RED command:
+
+```text
+npm.cmd test -- src/server/services/clinic-calendar.integration.test.ts --run --maxWorkers=1 --no-file-parallelism --testTimeout=15000 --hookTimeout=30000 --reporter=dot
+```
+
+The first fixture run reported `7` failures and `16` passes: three intended product failures plus test-only student-number-length and OVPSA revision-spacing defects. After correcting only those fixtures, the intended RED result was `6` failures and `17` passes:
+
+- today and the post-closing-date destination both resolved instead of rejecting;
+- published `DRAFT` and `PENDING` rows returned `CLINIC_CAPACITY_CONFLICT` rather than hardened `DAILY_CAPACITY_EXCEEDED`;
+- published `COMPLETED` and `NO_SHOW` rows did not consume capacity and the cases resolved;
+- the external OVPSA Laboratory exclusion test already passed, confirming behavior that had to be preserved.
+
+GREEN result after the automatic-source validation branch: `1` file passed, `23/23` tests passed. The same `23/23` result passed again after final fixture cleanup.
+
+#### RED/GREEN: Manual Resolution queue
+
+RED command:
+
+```text
+npm.cmd test -- src/components/settings/ManualResolutionQueue.test.tsx --run --maxWorkers=1 --no-file-parallelism --testTimeout=15000 --hookTimeout=30000 --reporter=dot
+```
+
+The first run included one invalid cross-element closure text matcher. After correcting only that assertion, the intended RED result was `1` failed and `6` passed with one uncaught `TypeError: Cannot read properties of null (reading 'toLowerCase')` from the automatic-case render.
+
+GREEN result: `1` file passed, `7/7` tests passed. The new test also submits a real automatic-case resolution request and checks the new reason filter option; existing closure labels and resolution tests remain green.
+
+#### RED/GREEN: notification source types
+
+RED command:
+
+```text
+npm.cmd test -- src/server/schedule/schedule-notifications.test.ts src/server/services/priority-displacement.integration.test.ts src/server/services/clinic-calendar.integration.test.ts --run --maxWorkers=1 --no-file-parallelism --testTimeout=15000 --hookTimeout=30000 --reporter=dot
+```
+
+RED result: `3` failed and `40` passed. The completion builder, priority fallback awaiting message, and automatic-case completion message all emitted `CLINIC_CLOSURE_MANUAL_CASE` instead of `AUTOMATIC_DISPLACEMENT_MANUAL_CASE`.
+
+GREEN result: `3` files passed, `43/43` tests passed.
+
+### Review-round final verification
+
+Requested consolidated regression command:
+
+```text
+npm.cmd test -- src/server/services/clinic-calendar.integration.test.ts src/components/settings/ManualResolutionQueue.test.tsx src/server/schedule/schedule-notifications.test.ts src/server/services/priority-displacement.integration.test.ts --run --maxWorkers=1 --no-file-parallelism --testTimeout=15000 --hookTimeout=30000 --reporter=dot
+```
+
+Result: `4` files passed, `50/50` tests passed, exit code `0`.
+
+Static verification:
+
+```text
+npx.cmd tsc --noEmit
+npx.cmd eslint src/components/settings/ManualResolutionQueue.test.tsx src/components/settings/ManualResolutionQueue.tsx src/server/schedule/schedule-notifications.test.ts src/server/schedule/schedule-notifications.ts src/server/services/clinic-calendar.integration.test.ts src/server/services/clinic-calendar.service.ts src/server/services/priority-displacement.integration.test.ts src/server/services/priority-displacement.service.ts
+git diff --check
+```
+
+Results: TypeScript exit `0`; eight-file scoped ESLint exit `0`; diff-check exit `0` with only LF-to-CRLF notices. After removing one unused test-helper parameter, the affected clinic-calendar integration reran `23/23`, followed by fresh TypeScript, focused fixture lint, and diff-check at exit `0`.
+
+### Review self-check
+
+- Confirmed only `AUTOMATIC_DISPLACEMENT` cases enter the new hardened destination branch; closure-source mutation behavior remains on the original path.
+- Confirmed the academic-year and capacity rows are read after the global scheduling queue and case/appointment row locks, before any destructive state change.
+- Confirmed proposed pair order is checked before destination writes and blocked/reserved dates still flow through the shared blocked-date reader.
+- Confirmed automatic capacity fixtures cover every active status and a complete database-valid released OVPSA Laboratory lineage.
+- Confirmed test-owned academic-year, reservation, revision, batch, appointment, case, event, audit, and notification rows are removed and capacity settings restored after every test.
+- Confirmed the queue uses the shared server DTO, renders nullable automatic context safely, preserves closure labels, and retains resolution submission for both sources.
+- Confirmed automatic awaiting/completed notifications carry the automatic source, while existing closure builder tests and integrations retain the closure source.
+- No First Year planner/apply logic, retired route, public lookup, migration, or unrelated UI was changed in this review round.
