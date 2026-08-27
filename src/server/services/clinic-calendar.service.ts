@@ -3,7 +3,9 @@ import { createHash, randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { z } from "zod";
 import { AppError } from "@/lib/errors";
+import { assertManualAppointmentDestination } from "@/server/appointments/manual-appointment-destination";
 import { transaction } from "@/server/db/pool";
+import { getManualRescheduleDestinationState } from "@/server/repositories/appointments.repository";
 import {
   createClosureGroupWithDates,
   listActiveClinicUnavailableDateRecords,
@@ -1763,6 +1765,50 @@ async function assertManualDateAvailable(
   }
 }
 
+async function assertAutomaticManualDateAvailable(
+  client: PoolClient,
+  appointment: AppointmentState,
+  date: string,
+  scheduleCycleStart: number,
+) {
+  const isBlocked = await isSchedulingDateBlocked(client, {
+    scheduleType: appointment.scheduleType,
+    date,
+  });
+  const destination = await getManualRescheduleDestinationState(client, {
+    appointmentId: appointment.id,
+    clinicId: appointment.clinicId,
+    scheduleType: appointment.scheduleType,
+    appointmentDate: date,
+    scheduleCycleStart,
+  });
+  if (!destination.cycleClosingDate) {
+    throw new AppError(
+      "OUTSIDE_SCHEDULING_CYCLE",
+      "The appointment scheduling cycle is not configured.",
+      409,
+    );
+  }
+  if (destination.maxDailyCapacity === null) {
+    throw new AppError(
+      "SCHEDULE_CAPACITY_NOT_CONFIGURED",
+      "Daily capacity is not configured for this service.",
+      409,
+    );
+  }
+  assertManualAppointmentDestination({
+    appointment,
+    pair: { laboratory: null, physicalExam: null },
+    destinationDate: date,
+    manilaToday: manilaToday(),
+    cycleStartDate: `${scheduleCycleStart}-08-01`,
+    cycleClosingDate: destination.cycleClosingDate,
+    isBlocked,
+    usedCapacity: destination.usedCapacity,
+    maxDailyCapacity: destination.maxDailyCapacity,
+  });
+}
+
 export async function resolveClinicClosureManualCase(
   caseId: string,
   raw: unknown,
@@ -1875,7 +1921,16 @@ export async function resolveClinicClosureManualCase(
       const moving = affected.filter((appointment) => Boolean(dateByType[appointment.scheduleType]));
       for (const appointment of moving) {
         const date = dateByType[appointment.scheduleType]!;
-        await assertManualDateAvailable(client, appointment.scheduleType, date);
+        if (manualCase.case_source === "AUTOMATIC_DISPLACEMENT") {
+          await assertAutomaticManualDateAvailable(
+            client,
+            appointment,
+            date,
+            manualCase.schedule_cycle_start,
+          );
+        } else {
+          await assertManualDateAvailable(client, appointment.scheduleType, date);
+        }
       }
       await client.query(
         `UPDATE appointments
@@ -2013,6 +2068,9 @@ export async function resolveClinicClosureManualCase(
         state,
         eventId: caseId,
         eventKeyDiscriminator: "resolved",
+        sourceType: manualCase.case_source === "AUTOMATIC_DISPLACEMENT"
+          ? "AUTOMATIC_DISPLACEMENT_MANUAL_CASE"
+          : "CLINIC_CLOSURE_MANUAL_CASE",
         reason: request.reason,
         previous: previousScheduleForAppointments(affected),
       }),

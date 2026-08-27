@@ -220,6 +220,24 @@ describe("typed schedule notification builders", () => {
     expect(notification.emailTextBody).not.toMatch(/replacement[^.]*2026-09-1[1-9]/i);
   });
 
+  it("uses an automatic-displacement Manual Resolution source when requested", () => {
+    const input = {
+      state: currentState,
+      eventId: "automatic-case-1",
+      reason: "Automatic displacement exhausted the current cycle.",
+      sourceType: "AUTOMATIC_DISPLACEMENT_MANUAL_CASE",
+    };
+
+    expect(buildAwaitingResolutionNotification(input)).toMatchObject({
+      sourceType: "AUTOMATIC_DISPLACEMENT_MANUAL_CASE",
+      sourceId: "automatic-case-1",
+    });
+    expect(buildManualResolutionCompletedNotification(input)).toMatchObject({
+      sourceType: "AUTOMATIC_DISPLACEMENT_MANUAL_CASE",
+      sourceId: "automatic-case-1",
+    });
+  });
+
   it("excludes prohibited student and medical data from every email body", () => {
     const secretState = {
       ...currentState,

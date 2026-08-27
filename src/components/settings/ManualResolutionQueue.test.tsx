@@ -7,6 +7,7 @@ const manualCase = {
   id: "80000000-0000-4000-8000-000000000001",
   studentNumber: "24-0001",
   studentName: "Santos, Ana M.",
+  caseSource: "CLINIC_CLOSURE",
   closureGroupId: "81000000-0000-4000-8000-000000000001",
   groupStartDate: "2026-08-18",
   groupEndDate: "2026-08-19",
@@ -50,6 +51,9 @@ describe("ManualResolutionQueue", () => {
     expect(await screen.findByRole("heading", { name: "Santos, Ana M." })).toBeVisible();
     expect(screen.getByText("24-0001")).toBeVisible();
     expect(screen.getByText("Generator testing")).toBeVisible();
+    expect(screen.getByText("Closure:").parentElement).toHaveTextContent("Closure: 2026-08-18 to 2026-08-19");
+    expect(screen.getByText("Category:").parentElement).toHaveTextContent("Category: Maintenance");
+    expect(screen.getByText("Reason:").parentElement).toHaveTextContent("Reason: Generator testing");
     expect(screen.getByText(/Laboratory.*2026-08-18.*Awaiting manual reschedule/)).toBeVisible();
     expect(screen.getByText(/Physical Examination.*2026-08-19.*Awaiting manual reschedule/)).toBeVisible();
     expect(screen.getByText(/Opened 2026-07-27/)).toBeVisible();
@@ -60,6 +64,49 @@ describe("ManualResolutionQueue", () => {
     await user.click(screen.getByRole("button", { name: "Apply filters" }));
     await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(expect.stringContaining("search=24-0001"), expect.anything()));
     expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain("service=LABORATORY");
+  });
+
+  it("renders and resolves an automatic-displacement case without closure context", async () => {
+    const automaticCase = {
+      ...manualCase,
+      id: "80000000-0000-4000-8000-000000000099",
+      studentNumber: "24-0099",
+      studentName: "Automatic, Aria",
+      caseSource: "AUTOMATIC_DISPLACEMENT",
+      closureGroupId: null,
+      groupStartDate: null,
+      groupEndDate: null,
+      category: null,
+      closureReason: null,
+      reasonCode: "NO_VALID_REPLACEMENT_WITHIN_CYCLE",
+      reasonMessage: "No valid automatic replacement remained inside the cycle.",
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ data: { page: 1, pageSize: 20, total: 1, items: [automaticCase] } }))
+      .mockResolvedValueOnce(jsonResponse({ data: { status: "RESOLVED" } }))
+      .mockResolvedValueOnce(jsonResponse({ data: { page: 1, pageSize: 20, total: 0, items: [] } }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ManualResolutionQueue />);
+    const user = userEvent.setup();
+
+    expect(await screen.findByRole("heading", { name: "Automatic, Aria" })).toBeVisible();
+    expect(screen.getByText("Automatic priority displacement")).toBeVisible();
+    expect(screen.getByText("No clinic closure is associated with this case.")).toBeVisible();
+    expect(screen.queryByText(/^Closure:/)).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "No valid replacement within cycle" })).toHaveValue(
+      "NO_VALID_REPLACEMENT_WITHIN_CYCLE",
+    );
+
+    await user.type(screen.getByLabelText("Laboratory replacement date for 24-0099"), "2026-08-24");
+    await user.type(screen.getByLabelText("Physical Examination replacement date for 24-0099"), "2026-08-25");
+    await user.type(screen.getByLabelText("Assignment reason for 24-0099"), "Same-cycle capacity confirmed");
+    await user.click(screen.getByRole("button", { name: "Assign replacement for 24-0099" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(fetchMock).toHaveBeenNthCalledWith(2,
+      `/api/clinic-unavailable-dates/manual-cases/${automaticCase.id}/resolve`,
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 
   it("submits a capacity-aware assignment with the optimistic token", async () => {

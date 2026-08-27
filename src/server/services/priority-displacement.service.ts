@@ -547,6 +547,7 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
       (state) => buildAwaitingResolutionNotification({
         state,
         eventId: manualCase.rows[0].id,
+        sourceType: "AUTOMATIC_DISPLACEMENT_MANUAL_CASE",
         reason: "No valid automatic replacement is available within the current scheduling cycle.",
         previous: {
           laboratory: { date: candidate.laboratoryDate, location: "KABALAKA Clinic" },

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { randomUUID } from "node:crypto";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { pool, transaction } from "@/server/db/pool";
 import { TEST_REFERENCE_IDS, insertTestStudent } from "@/test/integration-fixtures";
 import {
@@ -20,6 +20,8 @@ import {
 
 const studentPattern = "UCAL-%";
 let capacityFixture: CapacityFixtureLock | null = null;
+let createdManualResolutionAcademicYear = false;
+const automaticCapacityBatchIds: string[] = [];
 const admin: SessionUser = {
   userId: TEST_REFERENCE_IDS.adminUser,
   fullName: "System Admin",
@@ -89,6 +91,25 @@ async function cleanup() {
     );
     await client.query("DELETE FROM clinic_closure_groups WHERE reason LIKE 'TEST-UNIFIED%'");
   });
+  if (automaticCapacityBatchIds.length) {
+    await pool.query(
+      "DELETE FROM ovpsa_first_year_service_reservations WHERE batch_id=ANY($1::uuid[])",
+      [automaticCapacityBatchIds],
+    );
+    await pool.query(
+      "UPDATE ovpsa_first_year_batches SET current_revision_id=NULL WHERE id=ANY($1::uuid[])",
+      [automaticCapacityBatchIds],
+    );
+    await pool.query(
+      "DELETE FROM ovpsa_first_year_batch_revisions WHERE batch_id=ANY($1::uuid[])",
+      [automaticCapacityBatchIds],
+    );
+    await pool.query(
+      "DELETE FROM ovpsa_first_year_batches WHERE id=ANY($1::uuid[])",
+      [automaticCapacityBatchIds],
+    );
+    automaticCapacityBatchIds.length = 0;
+  }
 }
 
 async function createPair(input: {
@@ -129,6 +150,126 @@ async function createPair(input: {
       TEST_REFERENCE_IDS.adminUser,
     ],
   );
+}
+
+async function createAutomaticManualCase(input: {
+  studentNumber: string;
+  awaitingType: "LABORATORY" | "PHYSICAL_EXAM";
+}) {
+  await createPair({
+    studentNumber: input.studentNumber,
+    laboratoryDate: "2049-08-12",
+    physicalExamDate: "2049-08-20",
+    laboratoryStatus: input.awaitingType === "LABORATORY" ? "AWAITING_RESCHEDULE" : "PENDING",
+    physicalExamStatus: input.awaitingType === "PHYSICAL_EXAM" ? "AWAITING_RESCHEDULE" : "PENDING",
+  });
+  const appointments = await pool.query<{
+    id: string;
+    schedule_pair_id: string;
+    schedule_type: "LABORATORY" | "PHYSICAL_EXAM";
+  }>(
+    `SELECT id::text,schedule_pair_id::text,schedule_type
+       FROM appointments WHERE student_number=$1 ORDER BY schedule_type`,
+    [input.studentNumber],
+  );
+  const laboratory = appointments.rows.find((row) => row.schedule_type === "LABORATORY")!;
+  const physicalExam = appointments.rows.find((row) => row.schedule_type === "PHYSICAL_EXAM")!;
+  const manualCase = await pool.query<{ id: string; optimistic_token: string }>(
+    `INSERT INTO clinic_closure_manual_cases (
+       student_number,case_source,closure_group_id,schedule_pair_id,schedule_cycle_start,
+       affected_laboratory_appointment_id,affected_physical_exam_appointment_id,
+       reason_code,reason_message,policy_metadata
+     ) VALUES ($1,'AUTOMATIC_DISPLACEMENT',NULL,$2,2048,$3,$4,
+               'NO_VALID_REPLACEMENT_WITHIN_CYCLE',
+               'No valid replacement through cycle close.','{}'::jsonb)
+     RETURNING id::text,optimistic_token::text`,
+    [input.studentNumber, laboratory.schedule_pair_id, laboratory.id, physicalExam.id],
+  );
+  return {
+    id: manualCase.rows[0].id,
+    optimisticToken: manualCase.rows[0].optimistic_token,
+  };
+}
+
+async function insertPublishedLaboratoryCapacityOccupant(input: {
+  studentNumber: string;
+  appointmentDate: string;
+  status: "DRAFT" | "PENDING" | "COMPLETED" | "NO_SHOW";
+  ovpsaLineage?: {
+    batchId: string;
+    revisionId: string;
+    reservationId: string;
+  };
+}) {
+  await insertTestStudent({
+    studentNumber: input.studentNumber,
+    firstName: "Capacity",
+    lastName: "Occupant",
+    yearLevel: 4,
+  });
+  await pool.query(
+    `INSERT INTO appointments (
+       clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+       schedule_pair_id,schedule_cycle_start,created_by,updated_by,
+       ovpsa_batch_id,ovpsa_revision_id,ovpsa_service_reservation_id
+     ) VALUES ($1,$2,'LABORATORY',$3,$4,TRUE,$5,2048,$6,$6,$7,$8,$9)`,
+    [
+      TEST_REFERENCE_IDS.laboratoryClinic,
+      input.studentNumber,
+      input.appointmentDate,
+      input.status,
+      randomUUID(),
+      TEST_REFERENCE_IDS.adminUser,
+      input.ovpsaLineage?.batchId ?? null,
+      input.ovpsaLineage?.revisionId ?? null,
+      input.ovpsaLineage?.reservationId ?? null,
+    ],
+  );
+}
+
+async function createReleasedOvpsaLaboratoryLineage(date: string) {
+  const batch = await pool.query<{ id: string }>(
+    `INSERT INTO ovpsa_first_year_batches (
+       schedule_cycle_start,college_id,status,created_by,updated_by
+     ) VALUES (2048,$1,'DRAFT',$2,$2) RETURNING id::text`,
+    [TEST_REFERENCE_IDS.college, TEST_REFERENCE_IDS.adminUser],
+  );
+  automaticCapacityBatchIds.push(batch.rows[0].id);
+  const revision = await pool.query<{ id: string }>(
+    `INSERT INTO ovpsa_first_year_batch_revisions (
+       batch_id,revision_number,status,laboratory_date,physical_exam_date,created_by
+     ) VALUES ($1,1,'DRAFT',$2,'2049-08-23',$3) RETURNING id::text`,
+    [batch.rows[0].id, date, TEST_REFERENCE_IDS.adminUser],
+  );
+  const reservation = await pool.query<{ id: string }>(
+    `INSERT INTO ovpsa_first_year_service_reservations (
+       batch_id,revision_id,schedule_type,reservation_date,status,created_by
+     ) VALUES ($1,$2,'LABORATORY',$3,'ACTIVE',$4) RETURNING id::text`,
+    [batch.rows[0].id, revision.rows[0].id, date, TEST_REFERENCE_IDS.adminUser],
+  );
+  await pool.query(
+    `UPDATE ovpsa_first_year_service_reservations
+        SET status='RELEASED',released_at=clock_timestamp(),released_by=$2,
+            release_reason='Test automatic Manual Resolution capacity semantics'
+      WHERE id=$1`,
+    [reservation.rows[0].id, TEST_REFERENCE_IDS.adminUser],
+  );
+  return {
+    batchId: batch.rows[0].id,
+    revisionId: revision.rows[0].id,
+    reservationId: reservation.rows[0].id,
+  };
+}
+
+function manilaToday() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Manila",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${value.year}-${value.month}-${value.day}`;
 }
 
 async function addActiveDraftFile(studentNumber: string) {
@@ -172,9 +313,25 @@ async function addActiveDraftFileToAppointment(appointmentId: string, studentNum
 beforeAll(async () => {
   capacityFixture = await setupCapacityFixtureLock(pool, cleanup);
 });
+beforeEach(async () => {
+  const academicYear = await pool.query<{ start_year: number }>(
+    `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+     VALUES (2048,'2049-12-31',$1,$1)
+     ON CONFLICT (start_year) DO NOTHING
+     RETURNING start_year`,
+    [TEST_REFERENCE_IDS.adminUser],
+  );
+  createdManualResolutionAcademicYear = academicYear.rowCount === 1;
+});
 afterEach(async () => {
   if (!capacityFixture) return;
-  await cleanupAndRestoreCapacitySettings(pool, capacityFixture.originalCapacities, cleanup);
+  await cleanupAndRestoreCapacitySettings(pool, capacityFixture.originalCapacities, async () => {
+    await cleanup();
+    if (createdManualResolutionAcademicYear) {
+      await pool.query("DELETE FROM academic_years WHERE start_year=2048");
+    }
+    createdManualResolutionAcademicYear = false;
+  });
 });
 afterAll(async () => {
   if (!capacityFixture) return;
@@ -360,6 +517,108 @@ describe("unified clinic calendar lifecycle", () => {
     expect(resolutionAudit.rows).toEqual([{
       action: "AUTOMATIC_DISPLACEMENT_MANUAL_CASE_RESOLVED",
     }]);
+    const completionNotification = await pool.query(
+      `SELECT notification_type,metadata->>'sourceType' AS source_type
+         FROM student_portal_notifications
+        WHERE student_number='UCAL-AUTO-DISPLACE'`,
+    );
+    expect(completionNotification.rows).toEqual([{
+      notification_type: "SCHEDULE_MANUAL_RESOLUTION_COMPLETED",
+      source_type: "AUTOMATIC_DISPLACEMENT_MANUAL_CASE",
+    }]);
+  });
+
+  it("rejects today as an automatic-displacement Manual Resolution destination", async () => {
+    const manualCase = await createAutomaticManualCase({
+      studentNumber: "UCAL-AUTO-TODAY",
+      awaitingType: "LABORATORY",
+    });
+
+    await expect(resolveClinicClosureManualCase(manualCase.id, {
+      action: "ASSIGN_REPLACEMENT",
+      expectedOptimisticToken: manualCase.optimisticToken,
+      laboratoryDate: manilaToday(),
+      preservePhysicalExam: true,
+      reason: "Today must not be accepted as a replacement date.",
+    }, admin)).rejects.toMatchObject({ code: "APPOINTMENT_DATE_IN_PAST", status: 422 });
+  });
+
+  it("rejects an automatic-displacement destination after the authoritative cycle close", async () => {
+    const manualCase = await createAutomaticManualCase({
+      studentNumber: "UCAL-AUTO-CYCLE",
+      awaitingType: "PHYSICAL_EXAM",
+    });
+
+    await expect(resolveClinicClosureManualCase(manualCase.id, {
+      action: "ASSIGN_REPLACEMENT",
+      expectedOptimisticToken: manualCase.optimisticToken,
+      preserveLaboratory: true,
+      physicalExamDate: "2050-01-03",
+      reason: "The destination must remain inside the configured cycle.",
+    }, admin)).rejects.toMatchObject({ code: "OUTSIDE_SCHEDULING_CYCLE", status: 422 });
+  });
+
+  it.each(["DRAFT", "PENDING", "COMPLETED", "NO_SHOW"] as const)(
+    "counts a published %s appointment against automatic Manual Resolution capacity",
+    async (status) => {
+      const suffix = {
+        DRAFT: "DRA",
+        PENDING: "PEN",
+        COMPLETED: "COM",
+        NO_SHOW: "NOS",
+      }[status];
+      const manualCase = await createAutomaticManualCase({
+        studentNumber: `UCAL-AC-${suffix}`,
+        awaitingType: "LABORATORY",
+      });
+      await insertPublishedLaboratoryCapacityOccupant({
+        studentNumber: `UCAL-CO-${suffix}`,
+        appointmentDate: "2049-08-16",
+        status,
+      });
+      await pool.query(
+        `UPDATE clinic_capacity_settings
+            SET safe_daily_capacity=1,max_daily_capacity=1
+          WHERE clinic_id=$1 AND schedule_type='LABORATORY'`,
+        [TEST_REFERENCE_IDS.laboratoryClinic],
+      );
+
+      await expect(resolveClinicClosureManualCase(manualCase.id, {
+        action: "ASSIGN_REPLACEMENT",
+        expectedOptimisticToken: manualCase.optimisticToken,
+        laboratoryDate: "2049-08-16",
+        preservePhysicalExam: true,
+        reason: `Published ${status} appointments consume clinic capacity.`,
+      }, admin)).rejects.toMatchObject({ code: "DAILY_CAPACITY_EXCEEDED", status: 409 });
+    },
+  );
+
+  it("excludes an external OVPSA Laboratory from automatic Manual Resolution capacity", async () => {
+    const manualCase = await createAutomaticManualCase({
+      studentNumber: "UCAL-AUTO-EXT-SOURCE",
+      awaitingType: "LABORATORY",
+    });
+    const ovpsaLineage = await createReleasedOvpsaLaboratoryLineage("2049-08-16");
+    await insertPublishedLaboratoryCapacityOccupant({
+      studentNumber: "UCAL-AUTO-EXT-OVPSA",
+      appointmentDate: "2049-08-16",
+      status: "PENDING",
+      ovpsaLineage,
+    });
+    await pool.query(
+      `UPDATE clinic_capacity_settings
+          SET safe_daily_capacity=1,max_daily_capacity=1
+        WHERE clinic_id=$1 AND schedule_type='LABORATORY'`,
+      [TEST_REFERENCE_IDS.laboratoryClinic],
+    );
+
+    await expect(resolveClinicClosureManualCase(manualCase.id, {
+      action: "ASSIGN_REPLACEMENT",
+      expectedOptimisticToken: manualCase.optimisticToken,
+      laboratoryDate: "2049-08-16",
+      preservePhysicalExam: true,
+      reason: "External Mission Hospital Laboratory does not consume clinic capacity.",
+    }, admin)).resolves.toMatchObject({ status: "RESOLVED" });
   });
 
   it("keeps emergency cases manual in a mixed-category automatic batch", async () => {

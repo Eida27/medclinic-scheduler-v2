@@ -550,11 +550,12 @@ describe("priority displacement with the unified closure calendar", () => {
       { status: "AWAITING_RESCHEDULE" },
     ]);
     const fallbackNotification = await pool.query(
-      `SELECT notification_type,message
+      `SELECT notification_type,metadata->>'sourceType' AS source_type,message
          FROM student_portal_notifications WHERE student_number='99-9407-07'`,
     );
     expect(fallbackNotification.rows).toEqual([{
       notification_type: "SCHEDULE_AWAITING_RESOLUTION",
+      source_type: "AUTOMATIC_DISPLACEMENT_MANUAL_CASE",
       message: expect.not.stringContaining("2028-08"),
     }]);
   });

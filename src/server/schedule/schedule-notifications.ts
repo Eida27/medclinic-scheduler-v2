@@ -257,14 +257,16 @@ export function buildAwaitingResolutionNotification(input: ScheduleEventInput & 
   });
 }
 
-export function buildManualResolutionCompletedNotification(input: ScheduleEventInput) {
+export function buildManualResolutionCompletedNotification(input: ScheduleEventInput & {
+  sourceType?: string;
+}) {
   return buildEvent(input, {
     notificationType: "SCHEDULE_MANUAL_RESOLUTION_COMPLETED",
     title: "Replacement schedule assigned",
     portalMessage: "Manual Resolution is complete and your replacement schedule is available.",
     emailSubject: "Your MedClinic replacement schedule is ready",
     introduction: "Manual Resolution is complete. Your authoritative replacement schedule is below.",
-    sourceType: "CLINIC_CLOSURE_MANUAL_CASE",
+    sourceType: input.sourceType ?? "CLINIC_CLOSURE_MANUAL_CASE",
   });
 }
 

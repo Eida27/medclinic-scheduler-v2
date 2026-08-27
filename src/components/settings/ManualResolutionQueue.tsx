@@ -8,51 +8,15 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
-import type { OvpsaClosureBatchRecoveryPreview } from "@/types/clinic-calendar";
+import type {
+  ClinicManualCaseDto,
+  ClinicManualCasePageDto,
+  OvpsaClosureBatchRecoveryPreview,
+} from "@/types/clinic-calendar";
 
-type AppointmentSummary = {
-  id: string;
-  date: string | null;
-  status: string | null;
-  affected: boolean;
-};
-
-type ManualCase = {
-  id: string;
-  studentNumber: string;
-  studentName: string;
-  closureGroupId: string;
-  groupStartDate: string;
-  groupEndDate: string;
-  category: string;
-  closureReason: string;
-  reasonCode: string;
-  reasonMessage: string;
-  status: string;
-  optimisticToken: string;
-  createdAt: string;
-  resolvedAt: string | null;
-  resolutionAction: string | null;
-  resolutionDetails: unknown;
-  ovpsaBatchId: string | null;
-  ovpsaBatchOptimisticToken: string | null;
-  laboratory: AppointmentSummary | null;
-  physicalExam: AppointmentSummary | null;
-  currentAssignmentBlock: {
-    code:
-      | "DRAFT_RESULT_FILES_EXIST"
-      | "PROTECTED_RESULTS_EXIST"
-      | "APPOINTMENT_MANUALLY_LOCKED";
-    message: string;
-  } | null;
-};
-
-type ManualCasePage = {
-  page: number;
-  pageSize: number;
-  total: number;
-  items: ManualCase[];
-};
+type AppointmentSummary = NonNullable<ClinicManualCaseDto["laboratory"]>;
+type ManualCase = ClinicManualCaseDto;
+type ManualCasePage = ClinicManualCasePageDto;
 
 type Filters = {
   search: string;
@@ -83,11 +47,13 @@ const reasonOptions = [
   "PROTECTED_RESULTS_EXIST",
   "PAIR_MISSING_OR_INCONSISTENT",
   "NO_REPLACEMENT_CAPACITY",
+  "NO_VALID_REPLACEMENT_WITHIN_CYCLE",
   "CONCURRENT_APPOINTMENT_CHANGE",
   "UNSAFE_RESTORATION",
 ] as const;
 
-function label(value: string) {
+function label(value: string | null | undefined) {
+  if (!value) return "Not provided";
   return value.toLowerCase().replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
 }
 
@@ -169,9 +135,18 @@ function CaseResolutionCard({ manualCase, onResolved }: {
       </div>
 
       <div className="grid gap-2 rounded-xl border border-line bg-canvas/60 p-3 text-sm">
-        <p><span className="font-semibold">Closure:</span> {manualCase.groupStartDate} to {manualCase.groupEndDate}</p>
-        <p><span className="font-semibold">Category:</span> {label(manualCase.category)}</p>
-        <p><span className="font-semibold">Reason:</span> {manualCase.closureReason}</p>
+        {manualCase.caseSource === "AUTOMATIC_DISPLACEMENT" ? (
+          <>
+            <p><span className="font-semibold">Source:</span> Automatic priority displacement</p>
+            <p>No clinic closure is associated with this case.</p>
+          </>
+        ) : (
+          <>
+            <p><span className="font-semibold">Closure:</span> {manualCase.groupStartDate} to {manualCase.groupEndDate}</p>
+            <p><span className="font-semibold">Category:</span> {label(manualCase.category)}</p>
+            <p><span className="font-semibold">Reason:</span> {manualCase.closureReason}</p>
+          </>
+        )}
         <p>{manualCase.reasonMessage}</p>
         <AppointmentLine service="Laboratory" appointment={manualCase.laboratory} />
         <AppointmentLine service="Physical Examination" appointment={manualCase.physicalExam} />
@@ -199,7 +174,11 @@ function CaseResolutionCard({ manualCase, onResolved }: {
         <div className="grid gap-4 xl:grid-cols-2">
           <section className="grid content-start gap-3 rounded-xl border border-line p-3">
             <h4 className="font-bold text-ink">Assign replacement</h4>
-            <p className="text-xs text-muted">Dates are revalidated for closures, service capacity, and required-service order when submitted.</p>
+            <p className="text-xs text-muted">
+              {manualCase.caseSource === "AUTOMATIC_DISPLACEMENT"
+                ? "Dates are revalidated for future-day and cycle bounds, blocked dates, service capacity, and required-service order when submitted."
+                : "Dates are revalidated for closures, service capacity, and required-service order when submitted."}
+            </p>
             {manualCase.laboratory?.affected ? (
               <label className="grid gap-1 text-sm font-semibold">
                 Laboratory date
