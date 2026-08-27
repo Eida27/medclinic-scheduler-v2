@@ -142,6 +142,7 @@ function CaseResolutionCard({ manualCase, onResolved }: {
           </>
         ) : (
           <>
+            <p><span className="font-semibold">Source:</span> Clinic closure</p>
             <p><span className="font-semibold">Closure:</span> {manualCase.groupStartDate} to {manualCase.groupEndDate}</p>
             <p><span className="font-semibold">Category:</span> {label(manualCase.category)}</p>
             <p><span className="font-semibold">Reason:</span> {manualCase.closureReason}</p>

@@ -52,6 +52,7 @@ describe("ManualResolutionQueue", () => {
 
     expect(await screen.findByRole("heading", { name: "Santos, Ana M." })).toBeVisible();
     expect(screen.getByText("24-0001")).toBeVisible();
+    expect(screen.getByText("Clinic closure")).toBeVisible();
     expect(screen.getByText("Generator testing")).toBeVisible();
     expect(screen.getByText("Closure:").parentElement).toHaveTextContent("Closure: 2026-08-18 to 2026-08-19");
     expect(screen.getByText("Category:").parentElement).toHaveTextContent("Category: Maintenance");

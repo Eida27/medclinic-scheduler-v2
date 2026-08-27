@@ -48,6 +48,8 @@ function laboratoryStatusBadge(status: ClinicAppointment["laboratoryStatus"]) {
 }
 
 const operationalStatuses = ["PENDING", "COMPLETED", "NO_SHOW"];
+const physicalCompletionBlockReason =
+  "Laboratory must be completed before Physical Examination can be marked completed.";
 const sortOptions: Array<[AppointmentListSort, string]> = [
   ["surname_asc", "Surname A-Z"],
   ["surname_desc", "Surname Z-A"],
@@ -128,6 +130,11 @@ export function ClinicPublishedSchedule({
               <tbody className="divide-y divide-line">
                 {appointments.map((appointment) => {
                   const laboratoryStatus = laboratoryStatusBadge(appointment.laboratoryStatus);
+                  const completionBlockReason = appointment.scheduleType === "PHYSICAL_EXAM"
+                    && ["PENDING", "NO_SHOW"].includes(appointment.status)
+                    && appointment.laboratoryStatus !== "COMPLETED"
+                    ? physicalCompletionBlockReason
+                    : undefined;
                   return (
                     <tr key={appointment.id} className="transition hover:bg-cpu-navy-soft/35">
                     <td className="px-5 py-4">
@@ -163,6 +170,7 @@ export function ClinicPublishedSchedule({
                             appointmentId={appointment.id}
                             status={appointment.status}
                             completedFromStatus={appointment.completedFromStatus}
+                            completionBlockReason={completionBlockReason}
                           />}
                         {appointment.isManuallyLocked ? (
                           <span

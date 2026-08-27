@@ -132,6 +132,42 @@ describe("ClinicPublishedSchedule", () => {
     expect(laboratoryBadge).toHaveClass(backgroundClass, textClass);
     expect(within(laboratoryCell).queryByRole("button", { name: label })).not.toBeInTheDocument();
     expect(within(laboratoryCell).queryByRole("link", { name: label })).not.toBeInTheDocument();
+    const quickStatus = within(row).getByRole("button", { name: "Pending — click to mark completed" });
+    if (laboratoryStatus === "COMPLETED") {
+      expect(quickStatus).toBeEnabled();
+      expect(within(row).queryByText(/Laboratory must be completed/)).not.toBeInTheDocument();
+    } else {
+      const explanation = within(row).getByText(
+        "Laboratory must be completed before Physical Examination can be marked completed.",
+      );
+      expect(quickStatus).toBeDisabled();
+      expect(quickStatus).toHaveAttribute("aria-describedby", explanation.id);
+    }
+  });
+
+  it("keeps a completed Physical Examination revert available when Laboratory is incomplete", () => {
+    render(
+      <ClinicPublishedSchedule
+        basePath="/physical-exam"
+        title="Published physical examination schedule"
+        description="1 appointment"
+        emptyMessage="No appointments"
+        page={1}
+        total={1}
+        filters={{}}
+        showLaboratoryStatus
+        appointments={[{
+          ...appointment,
+          scheduleType: "PHYSICAL_EXAM",
+          status: "COMPLETED",
+          completedFromStatus: "PENDING",
+          laboratoryStatus: "PENDING",
+        }]}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Completed — click to restore pending" })).toBeEnabled();
+    expect(screen.queryByText(/Laboratory must be completed/)).not.toBeInTheDocument();
   });
 
   it("keeps the laboratory table at four columns without the cross-clinic status", () => {

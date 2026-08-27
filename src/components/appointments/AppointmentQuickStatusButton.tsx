@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect, useRef, useState } from "react";
+import { useId, useLayoutEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/cn";
@@ -9,6 +9,7 @@ type AppointmentQuickStatusButtonProps = {
   appointmentId: string;
   status: string;
   completedFromStatus: "PENDING" | "NO_SHOW" | null;
+  completionBlockReason?: string;
 };
 
 type QuickStatusAction = "MARK_COMPLETED" | "REVERT_COMPLETION";
@@ -91,8 +92,10 @@ export function AppointmentQuickStatusButton({
   appointmentId,
   status,
   completedFromStatus,
+  completionBlockReason,
 }: AppointmentQuickStatusButtonProps) {
   const router = useRouter();
+  const completionBlockExplanationId = useId();
   const requestKey = `${appointmentId}\u001f${status}\u001f${completedFromStatus ?? ""}`;
   const [requestContext, setRequestContext] = useState({ key: requestKey, generation: 0 });
   if (requestContext.key !== requestKey) {
@@ -115,6 +118,8 @@ export function AppointmentQuickStatusButton({
   const confirmationOpen = confirmationRequestIdentity === requestIdentity;
   const error = errorState?.requestIdentity === requestIdentity ? errorState.message : undefined;
   const config = quickStatusConfig(status, completedFromStatus);
+  const completionBlocked = config?.quickStatusAction === "MARK_COMPLETED"
+    && Boolean(completionBlockReason);
   const disabledVisibleLabel = status === "COMPLETED"
     ? "Completed"
     : status.replaceAll("_", " ");
@@ -127,7 +132,7 @@ export function AppointmentQuickStatusButton({
   const tone = config?.tone ?? (status === "COMPLETED" ? "completed" : "pending");
 
   async function submit() {
-    if (!config || inFlightRequestIdentitiesRef.current.has(requestIdentity)) return;
+    if (!config || completionBlocked || inFlightRequestIdentitiesRef.current.has(requestIdentity)) return;
     inFlightRequestIdentitiesRef.current.add(requestIdentity);
     setPendingRequestIdentity(requestIdentity);
     setErrorState(undefined);
@@ -172,7 +177,7 @@ export function AppointmentQuickStatusButton({
 
   function activate(event: React.MouseEvent<HTMLButtonElement>) {
     event.stopPropagation();
-    if (!config || pending) return;
+    if (!config || completionBlocked || pending) return;
     setErrorState(undefined);
     if (config.confirmation) {
       setConfirmationRequestIdentity(requestIdentity);
@@ -185,9 +190,10 @@ export function AppointmentQuickStatusButton({
     <div className="grid justify-items-start gap-2">
       <button
         type="button"
-        disabled={!config || pending}
+        disabled={!config || completionBlocked || pending}
         aria-busy={pending}
         aria-label={accessibleLabel}
+        aria-describedby={completionBlocked ? completionBlockExplanationId : undefined}
         onClick={activate}
         className={cn(
           "relative inline-flex min-h-9 w-fit items-center justify-center overflow-hidden rounded-full px-3 py-1.5 text-center text-xs font-bold text-white shadow-sm transition-[background-color,box-shadow,transform] duration-150 ease-out enabled:cursor-pointer enabled:hover:shadow-md enabled:focus-visible:shadow-md disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 motion-safe:enabled:hover:-translate-y-px motion-safe:enabled:hover:scale-[1.02] motion-safe:enabled:focus-visible:-translate-y-px motion-safe:enabled:focus-visible:scale-[1.02] before:pointer-events-none before:absolute before:inset-y-0 before:-left-1/2 before:w-1/3 before:-skew-x-12 before:bg-linear-to-r before:from-transparent before:via-white/35 before:to-transparent before:content-[''] motion-safe:enabled:hover:before:translate-x-[500%] motion-safe:enabled:hover:before:transition-transform motion-safe:enabled:hover:before:duration-500 motion-safe:enabled:hover:before:ease-out motion-safe:enabled:focus-visible:before:translate-x-[500%] motion-safe:enabled:focus-visible:before:transition-transform motion-safe:enabled:focus-visible:before:duration-500 motion-safe:enabled:focus-visible:before:ease-out",
@@ -206,6 +212,14 @@ export function AppointmentQuickStatusButton({
           ) : config?.visibleLabel ?? disabledVisibleLabel}
         </span>
       </button>
+      {completionBlocked ? (
+        <p
+          id={completionBlockExplanationId}
+          className="max-w-xs text-xs font-medium text-amber-800"
+        >
+          {completionBlockReason}
+        </p>
+      ) : null}
       {error && !confirmationOpen ? (
         <p role="alert" className="max-w-xs text-xs font-medium text-red-700">{error}</p>
       ) : null}

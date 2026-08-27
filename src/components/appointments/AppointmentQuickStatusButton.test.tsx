@@ -147,6 +147,59 @@ describe("AppointmentQuickStatusButton", () => {
     await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
   });
 
+  it.each(["PENDING", "NO_SHOW"])(
+    "disables %s completion with a visible accessible dependency explanation",
+    async (status) => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      const user = userEvent.setup();
+      render(
+        <AppointmentQuickStatusButton
+          appointmentId="appointment-1"
+          status={status}
+          completedFromStatus={null}
+          completionBlockReason="Laboratory must be completed before Physical Examination can be marked completed."
+        />,
+      );
+
+      const button = screen.getByRole("button", {
+        name: status === "PENDING"
+          ? "Pending — click to mark completed"
+          : "No-show — click to correct as completed",
+      });
+      const explanation = screen.getByText(
+        "Laboratory must be completed before Physical Examination can be marked completed.",
+      );
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute("aria-describedby", explanation.id);
+
+      await user.click(button);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    },
+  );
+
+  it("does not block a legitimate completed-PE revert", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: { status: "PENDING" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(
+      <AppointmentQuickStatusButton
+        appointmentId="appointment-1"
+        status="COMPLETED"
+        completedFromStatus="PENDING"
+        completionBlockReason="Laboratory must be completed before Physical Examination can be marked completed."
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: "Completed — click to restore pending" });
+    expect(button).toBeEnabled();
+    expect(screen.queryByText(/Laboratory must be completed/)).not.toBeInTheDocument();
+
+    await user.click(button);
+    await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+  });
+
   it("synchronously locks a direct action against two activations in the same act", async () => {
     const request = deferredResponse();
     const fetchMock = vi.fn().mockReturnValue(request.promise);
