@@ -11,7 +11,6 @@ import type { ImportedStudentRow } from "@/server/services/student-import-csv";
 import { resolveSchedulingWindow } from "@/server/services/scheduling-window";
 import { generatePairedSchedule } from "@/server/rule-engine/generate-paired-schedule";
 import {
-  applyPriorityDisplacementsWithLockedScopes,
   nextDateAfter,
   planCapacityForPriorityBatch,
   planPhysicalExamCapacityForPriorityBatch,
@@ -578,12 +577,6 @@ export async function createScheduleImport(
       ]),
       ...priorityDisplacementScopes(displacedCandidates),
     ]);
-    await applyPriorityDisplacementsWithLockedScopes(
-      displacedCandidates,
-      actorUserId,
-      client,
-    );
-
     const collegeIds = new Set(schedulableRows.map((row) => row.collegeId));
     const programIds = new Set(schedulableRows.map((row) => row.programId));
     const commonCollegeId = collegeIds.size === 1 ? [...collegeIds][0] : null;
@@ -733,8 +726,6 @@ export async function createScheduleImport(
       candidates: displacedCandidates,
       sourceImportGroupId: importId,
       actorUserId,
-      replacementWindowStart: nextDateAfter(preferredWindowEnd),
-      searchEndDate,
     }, client);
     for (const assignment of assignments.assignments) {
       await queueAuthoritativeScheduleNotification(

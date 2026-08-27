@@ -279,20 +279,24 @@ describe("unified clinic calendar lifecycle", () => {
       schedule_type: string;
     }>(
       `UPDATE appointments
-          SET status='AWAITING_RESCHEDULE'
+          SET status='AWAITING_RESCHEDULE',scheduling_category='REGULAR',
+              scheduling_accepted_at='2049-07-01T00:00:00.000Z',
+              scheduling_source_row_order=42,scheduling_window_start='2049-08-01',
+              scheduling_window_end='2050-03-31'
         WHERE student_number='UCAL-AUTO-DISPLACE'
       RETURNING id::text,schedule_pair_id::text,schedule_type`,
     );
     const laboratory = appointments.rows.find((row) => row.schedule_type === "LABORATORY")!;
     const physicalExam = appointments.rows.find((row) => row.schedule_type === "PHYSICAL_EXAM")!;
-    await pool.query(
+    const insertedCase = await pool.query<{ id: string; optimistic_token: string }>(
       `INSERT INTO clinic_closure_manual_cases (
          student_number,case_source,closure_group_id,schedule_pair_id,schedule_cycle_start,
          affected_laboratory_appointment_id,affected_physical_exam_appointment_id,
          reason_code,reason_message,policy_metadata
        ) VALUES ('UCAL-AUTO-DISPLACE','AUTOMATIC_DISPLACEMENT',NULL,$1,2048,$2,$3,
                  'NO_VALID_REPLACEMENT_WITHIN_CYCLE','No valid replacement through cycle close.',
-                 '{"sourceImportGroupId":"90000000-0000-4000-8000-000000000099"}'::jsonb)`,
+                 '{"sourceImportGroupId":"90000000-0000-4000-8000-000000000099"}'::jsonb)
+       RETURNING id::text,optimistic_token::text`,
       [laboratory.schedule_pair_id, laboratory.id, physicalExam.id],
     );
 
@@ -313,6 +317,49 @@ describe("unified clinic calendar lifecycle", () => {
         sourceImportGroupId: "90000000-0000-4000-8000-000000000099",
       },
     });
+
+    await resolveClinicClosureManualCase(insertedCase.rows[0].id, {
+      action: "ASSIGN_REPLACEMENT",
+      expectedOptimisticToken: insertedCase.rows[0].optimistic_token,
+      laboratoryDate: "2049-08-16",
+      physicalExamDate: "2049-08-17",
+      reason: "Assigned valid same-cycle replacement dates.",
+    }, admin);
+    const replacements = await pool.query(
+      `SELECT scheduling_category,scheduling_accepted_at,
+              scheduling_source_row_order,scheduling_window_start::text,
+              scheduling_window_end::text,schedule_pair_id::text,schedule_cycle_start
+         FROM appointments
+        WHERE student_number='UCAL-AUTO-DISPLACE' AND rescheduled_from IS NOT NULL
+        ORDER BY schedule_type`,
+    );
+    expect(replacements.rows).toEqual([
+      {
+        scheduling_category: "REGULAR",
+        scheduling_accepted_at: new Date("2049-07-01T00:00:00.000Z"),
+        scheduling_source_row_order: 42,
+        scheduling_window_start: "2049-08-01",
+        scheduling_window_end: "2050-03-31",
+        schedule_pair_id: laboratory.schedule_pair_id,
+        schedule_cycle_start: 2048,
+      },
+      {
+        scheduling_category: "REGULAR",
+        scheduling_accepted_at: new Date("2049-07-01T00:00:00.000Z"),
+        scheduling_source_row_order: 42,
+        scheduling_window_start: "2049-08-01",
+        scheduling_window_end: "2050-03-31",
+        schedule_pair_id: laboratory.schedule_pair_id,
+        schedule_cycle_start: 2048,
+      },
+    ]);
+    const resolutionAudit = await pool.query<{ action: string }>(
+      "SELECT action FROM audit_logs WHERE entity_id=$1 ORDER BY created_at DESC LIMIT 1",
+      [insertedCase.rows[0].id],
+    );
+    expect(resolutionAudit.rows).toEqual([{
+      action: "AUTOMATIC_DISPLACEMENT_MANUAL_CASE_RESOLVED",
+    }]);
   });
 
   it("keeps emergency cases manual in a mixed-category automatic batch", async () => {

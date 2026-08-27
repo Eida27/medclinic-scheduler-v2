@@ -5,12 +5,17 @@ import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-
 import {
   lockEligibleRegularPairs,
   lockEligibleRegularPhysicalExams,
+  markDisplacedAppointmentsAwaitingResolution,
   markDisplacedAppointmentsRescheduled,
   type DisplacementCandidate,
 } from "@/server/repositories/priority-displacement.repository";
 import { loadSchedulingBlockedDates } from "@/server/repositories/scheduling-blocked-dates.repository";
 import { queueAuthoritativeScheduleNotification } from "@/server/schedule/schedule-notification-hooks";
-import { buildPriorityDisplacementNotification } from "@/server/schedule/schedule-notifications";
+import {
+  buildAwaitingResolutionNotification,
+  buildPriorityDisplacementNotification,
+} from "@/server/schedule/schedule-notifications";
+import { resolveAutomaticReplacementBounds } from "@/server/scheduling/automatic-replacement-bounds";
 
 export function priorityDisplacementScopes(candidates: DisplacementCandidate[]) {
   return candidates.flatMap((candidate) => (
@@ -69,45 +74,6 @@ export async function planPhysicalExamCapacityForPriorityBatch(
   return candidates;
 }
 
-export async function applyPriorityDisplacementsWithLockedScopes(
-  candidates: DisplacementCandidate[],
-  actorUserId: string,
-  client: PoolClient,
-) {
-  await markDisplacedAppointmentsRescheduled(client, candidates, actorUserId);
-}
-
-export async function makeCapacityForPriorityBatch(
-  input: {
-    scheduleCycleStart: number;
-    windowStart: string;
-    windowEnd: string;
-    neededPairCount: number;
-    actorUserId: string;
-  },
-  client: PoolClient,
-) {
-  const candidates = await planCapacityForPriorityBatch(input, client);
-  await lockEffectiveAppointmentScopes(client, priorityDisplacementScopes(candidates));
-  await applyPriorityDisplacementsWithLockedScopes(candidates, input.actorUserId, client);
-  return candidates;
-}
-
-export async function makePhysicalExamCapacityForPriorityBatch(
-  input: {
-    scheduleCycleStart: number;
-    windowEnd: string;
-    physicalExamNotBeforeDates: string[];
-    actorUserId: string;
-  },
-  client: PoolClient,
-) {
-  const candidates = await planPhysicalExamCapacityForPriorityBatch(input, client);
-  await lockEffectiveAppointmentScopes(client, priorityDisplacementScopes(candidates));
-  await applyPriorityDisplacementsWithLockedScopes(candidates, input.actorUserId, client);
-  return candidates;
-}
-
 function addDays(date: string, days: number) {
   const [year, month, day] = date.split("-").map(Number);
   return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
@@ -118,18 +84,32 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
     candidates: DisplacementCandidate[];
     sourceImportGroupId: string;
     actorUserId: string;
-    replacementWindowStart: string;
-    searchEndDate: string;
   },
   client: PoolClient,
 ) {
   if (!input.candidates.length) return [];
-  const pairCandidates = input.candidates.filter(
-    (candidate) => candidate.displacementType === "PAIR",
+  const today = await client.query<{ manila_today: string }>(
+    "SELECT (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date::text AS manila_today",
   );
-  const physicalExamOnlyCandidates = input.candidates.filter(
-    (candidate) => candidate.displacementType === "PHYSICAL_EXAM_ONLY",
-  );
+  const boundedCandidates = input.candidates.map((candidate) => ({
+    candidate,
+    bounds: resolveAutomaticReplacementBounds({
+      replacementType: candidate.displacementType,
+      originalWindowStart: candidate.schedulingWindowStart,
+      manilaToday: today.rows[0].manila_today,
+      cycleClosingDate: candidate.scheduleCycleClosingDate,
+      laboratoryDate: candidate.displacementType === "PHYSICAL_EXAM_ONLY"
+        ? candidate.laboratoryDate
+        : undefined,
+    }),
+  }));
+  const replacementWindowStart = boundedCandidates
+    .map(({ bounds }) => bounds.lowerBound)
+    .sort()[0];
+  const searchEndDate = boundedCandidates
+    .map(({ bounds }) => bounds.upperBound)
+    .sort()
+    .at(-1)!;
   const capacities = await client.query<{
     clinic_id: string;
     clinic_code: "KABALAKA_CLINIC" | "CPU_CLINIC";
@@ -160,12 +140,19 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
        JOIN clinics clinic ON clinic.id=appointment.clinic_id
       WHERE appointment.appointment_date BETWEEN $1 AND $2
         AND appointment.status IN ('DRAFT','PENDING','COMPLETED','NO_SHOW')
+        AND NOT (appointment.id = ANY($3::uuid[]))
         AND NOT (
           appointment.schedule_type='LABORATORY'
           AND appointment.ovpsa_batch_id IS NOT NULL
         )
       GROUP BY clinic.code, appointment.appointment_date`,
-    [input.replacementWindowStart, input.searchEndDate],
+    [
+      replacementWindowStart,
+      searchEndDate,
+      input.candidates.flatMap((candidate) => candidate.displacementType === "PAIR"
+        ? [candidate.laboratoryAppointmentId, candidate.physicalExamAppointmentId]
+        : [candidate.physicalExamAppointmentId]),
+    ],
   );
   const loadFor = (clinicCode: string): Record<string, number> => Object.fromEntries(
     load.rows.filter((row) => row.clinic_code === clinicCode).map((row) => [row.date, row.count]),
@@ -173,77 +160,115 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
   const laboratoryLoad = loadFor("KABALAKA_CLINIC");
   const physicalExamLoad = loadFor("CPU_CLINIC");
   const blocked = await loadSchedulingBlockedDates(client, {
-    startDate: input.replacementWindowStart,
-    endDate: input.searchEndDate,
+    startDate: replacementWindowStart,
+    endDate: searchEndDate,
   });
   const blockedLaboratoryDates = blocked.laboratoryDates;
   const blockedPhysicalExamDates = blocked.physicalExamDates;
-  const generated = generatePairedSchedule({
-    requests: pairCandidates.map((candidate) => ({
-      requestId: `displacement:${candidate.schedulePairId}`,
-      studentNumber: candidate.studentNumber,
-      category: "REGULAR",
-      acceptedAt: candidate.acceptedAt.toISOString(),
-      sourceRowOrder: candidate.sourceRowOrder,
-      windowStart: input.replacementWindowStart,
-    })),
-    laboratoryCapacity: {
-      maxDailyCapacity: laboratoryCapacity.max_daily_capacity,
-    },
-    physicalExamCapacity: {
-      maxDailyCapacity: physicalExamCapacity.max_daily_capacity,
-    },
-    existingLaboratoryLoad: laboratoryLoad,
-    existingPhysicalExamLoad: physicalExamLoad,
-    blockedLaboratoryDates,
-    blockedPhysicalExamDates,
-    searchEndDate: input.searchEndDate,
-  });
-  if (generated.unscheduledRequestIds.length) {
-    throw new AppError(
-      "REGULAR_REPLACEMENT_CAPACITY_EXHAUSTED",
-      "Displaced Regular appointments could not be replaced atomically.",
-      409,
-    );
-  }
-  for (const assignment of generated.assignments) {
+  const orderCandidates = (entries: typeof boundedCandidates) => [...entries].sort((left, right) => (
+    left.candidate.acceptedAt.getTime() - right.candidate.acceptedAt.getTime()
+    || left.candidate.sourceRowOrder - right.candidate.sourceRowOrder
+    || left.candidate.studentNumber.localeCompare(right.candidate.studentNumber)
+  ));
+  const pairAssignments: Array<{
+    requestId: string;
+    studentNumber: string;
+    schedulePairId: string;
+    laboratoryDate: string;
+    physicalExamDate: string;
+  }> = [];
+  const fallbackCandidates: DisplacementCandidate[] = [];
+  for (const { candidate, bounds } of orderCandidates(
+    boundedCandidates.filter(({ candidate }) => candidate.displacementType === "PAIR"),
+  )) {
+    if (bounds.lowerBound > bounds.upperBound) {
+      fallbackCandidates.push(candidate);
+      continue;
+    }
+    const generated = generatePairedSchedule({
+      requests: [{
+        requestId: `displacement:${candidate.schedulePairId}`,
+        studentNumber: candidate.studentNumber,
+        category: candidate.schedulingCategory,
+        acceptedAt: candidate.acceptedAt.toISOString(),
+        sourceRowOrder: candidate.sourceRowOrder,
+        windowStart: bounds.lowerBound,
+      }],
+      laboratoryCapacity: { maxDailyCapacity: laboratoryCapacity.max_daily_capacity },
+      physicalExamCapacity: { maxDailyCapacity: physicalExamCapacity.max_daily_capacity },
+      existingLaboratoryLoad: laboratoryLoad,
+      existingPhysicalExamLoad: physicalExamLoad,
+      blockedLaboratoryDates,
+      blockedPhysicalExamDates,
+      searchEndDate: bounds.upperBound,
+    });
+    const assignment = generated.assignments[0];
+    if (!assignment) {
+      fallbackCandidates.push(candidate);
+      continue;
+    }
+    pairAssignments.push({ ...assignment, schedulePairId: candidate.schedulePairId });
     laboratoryLoad[assignment.laboratoryDate] = (laboratoryLoad[assignment.laboratoryDate] ?? 0) + 1;
     physicalExamLoad[assignment.physicalExamDate] = (physicalExamLoad[assignment.physicalExamDate] ?? 0) + 1;
   }
   const physicalExamCeiling = Math.max(0, physicalExamCapacity.max_daily_capacity);
   const blockedPhysicalExamSet = new Set(blockedPhysicalExamDates);
-  const physicalExamOnlyAssignments = [...physicalExamOnlyCandidates]
-    .sort((left, right) => (
-      left.acceptedAt.getTime() - right.acceptedAt.getTime()
-      || left.sourceRowOrder - right.sourceRowOrder
-      || left.studentNumber.localeCompare(right.studentNumber)
-    ))
-    .map((candidate) => {
-      const startDate = candidate.laboratoryDate >= input.replacementWindowStart
-        ? addDays(candidate.laboratoryDate, 1)
-        : input.replacementWindowStart;
-      let physicalExamDate: string | null = null;
-      for (let date = startDate; date <= input.searchEndDate; date = addDays(date, 1)) {
-        const weekday = new Date(`${date}T00:00:00.000Z`).getUTCDay();
-        if (weekday === 0 || weekday === 6 || blockedPhysicalExamSet.has(date)) continue;
-        if ((physicalExamLoad[date] ?? 0) < physicalExamCeiling) {
-          physicalExamDate = date;
-          physicalExamLoad[date] = (physicalExamLoad[date] ?? 0) + 1;
-          break;
-        }
+  const physicalExamOnlyAssignments: Array<{
+    candidate: DisplacementCandidate;
+    physicalExamDate: string;
+  }> = [];
+  for (const { candidate, bounds } of orderCandidates(
+    boundedCandidates.filter(({ candidate }) => candidate.displacementType === "PHYSICAL_EXAM_ONLY"),
+  )) {
+    const startDate = bounds.lowerBound;
+    let physicalExamDate: string | null = null;
+    for (let date = startDate; date <= bounds.upperBound; date = addDays(date, 1)) {
+      const weekday = new Date(`${date}T00:00:00.000Z`).getUTCDay();
+      if (weekday === 0 || weekday === 6 || blockedPhysicalExamSet.has(date)) continue;
+      if ((physicalExamLoad[date] ?? 0) < physicalExamCeiling) {
+        physicalExamDate = date;
+        physicalExamLoad[date] = (physicalExamLoad[date] ?? 0) + 1;
+        break;
       }
-      if (!physicalExamDate) {
-        throw new AppError(
-          "REGULAR_REPLACEMENT_CAPACITY_EXHAUSTED",
-          "Displaced Regular appointments could not be replaced atomically.",
-          409,
-        );
-      }
-      return { candidate, physicalExamDate };
-    });
+    }
+    if (!physicalExamDate) {
+      fallbackCandidates.push(candidate);
+      continue;
+    }
+    physicalExamOnlyAssignments.push({ candidate, physicalExamDate });
+  }
+  const successfulCandidateNumbers = new Set([
+    ...pairAssignments.map((assignment) => assignment.studentNumber),
+    ...physicalExamOnlyAssignments.map(({ candidate }) => candidate.studentNumber),
+  ]);
+  const successfulCandidates = input.candidates.filter(
+    (candidate) => successfulCandidateNumbers.has(candidate.studentNumber),
+  );
+  await markDisplacedAppointmentsRescheduled(client, successfulCandidates, input.actorUserId);
+  await markDisplacedAppointmentsAwaitingResolution(client, fallbackCandidates, input.actorUserId);
   const candidateByStudent = new Map(
     input.candidates.map((candidate) => [candidate.studentNumber, candidate]),
   );
+  const policyMetadata = (candidate: DisplacementCandidate) => ({
+    studentNumber: candidate.studentNumber,
+    sourceImportGroupId: input.sourceImportGroupId,
+    displacementType: candidate.displacementType,
+    originAppointmentIds: [
+      candidate.laboratoryAppointmentId,
+      candidate.physicalExamAppointmentId,
+    ],
+    displacedAppointmentIds: candidate.displacementType === "PAIR"
+      ? [candidate.laboratoryAppointmentId, candidate.physicalExamAppointmentId]
+      : [candidate.physicalExamAppointmentId],
+    schedulePairId: candidate.schedulePairId,
+    scheduleCycleStart: candidate.scheduleCycleStart,
+    scheduleCycleClosingDate: candidate.scheduleCycleClosingDate,
+    schedulingCategory: candidate.schedulingCategory,
+    schedulingAcceptedAt: candidate.acceptedAt.toISOString(),
+    schedulingSourceRowOrder: candidate.sourceRowOrder,
+    schedulingWindowStart: candidate.schedulingWindowStart,
+    schedulingWindowEnd: candidate.schedulingWindowEnd,
+  });
   const insertReplacements = async (
     scheduleType: "LABORATORY" | "PHYSICAL_EXAM",
     clinicId: string,
@@ -257,38 +282,52 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
     `INSERT INTO appointments (
        clinic_id, student_number, schedule_type, appointment_date, status,
        is_published, notes, rescheduled_from, created_by, updated_by,
-       schedule_pair_id, schedule_cycle_start
+       schedule_pair_id, schedule_cycle_start,scheduling_category,
+       scheduling_accepted_at,scheduling_source_row_order,
+       scheduling_window_start,scheduling_window_end
      )
      SELECT $1, fixture.student_number, $2, fixture.appointment_date, 'PENDING', TRUE,
             'Automatically rescheduled for priority capacity.', fixture.old_id,
-            $3, $3, fixture.schedule_pair_id, $4
-       FROM UNNEST($5::varchar[], $6::date[], $7::uuid[], $8::uuid[])
-         AS fixture(student_number, appointment_date, schedule_pair_id, old_id)
+            $3, $3, fixture.schedule_pair_id, fixture.schedule_cycle_start,
+            fixture.scheduling_category,fixture.accepted_at,fixture.source_row_order,
+            fixture.window_start,fixture.window_end
+       FROM UNNEST(
+         $4::varchar[], $5::date[], $6::uuid[], $7::uuid[], $8::integer[],
+         $9::varchar[], $10::timestamptz[], $11::integer[], $12::date[], $13::date[]
+       ) AS fixture(
+         student_number,appointment_date,schedule_pair_id,old_id,schedule_cycle_start,
+         scheduling_category,accepted_at,source_row_order,window_start,window_end
+       )
      RETURNING id, student_number, rescheduled_from::text`,
     [
       clinicId,
       scheduleType,
       input.actorUserId,
-      pairCandidates[0]?.scheduleCycleStart ?? input.candidates[0].scheduleCycleStart,
-      generated.assignments.map((assignment) => assignment.studentNumber),
+      pairAssignments.map((assignment) => assignment.studentNumber),
       dates,
-      generated.assignments.map((assignment) => assignment.schedulePairId),
+      pairAssignments.map((assignment) => assignment.schedulePairId),
       oldIds,
+      pairAssignments.map((assignment) => candidateByStudent.get(assignment.studentNumber)!.scheduleCycleStart),
+      pairAssignments.map((assignment) => candidateByStudent.get(assignment.studentNumber)!.schedulingCategory),
+      pairAssignments.map((assignment) => candidateByStudent.get(assignment.studentNumber)!.acceptedAt),
+      pairAssignments.map((assignment) => candidateByStudent.get(assignment.studentNumber)!.sourceRowOrder),
+      pairAssignments.map((assignment) => candidateByStudent.get(assignment.studentNumber)!.schedulingWindowStart),
+      pairAssignments.map((assignment) => candidateByStudent.get(assignment.studentNumber)!.schedulingWindowEnd),
     ],
   );
   const laboratory = await insertReplacements(
     "LABORATORY",
     laboratoryCapacity.clinic_id,
-    generated.assignments.map((assignment) => assignment.laboratoryDate),
-    generated.assignments.map(
+    pairAssignments.map((assignment) => assignment.laboratoryDate),
+    pairAssignments.map(
       (assignment) => candidateByStudent.get(assignment.studentNumber)!.laboratoryAppointmentId,
     ),
   );
   const physical = await insertReplacements(
     "PHYSICAL_EXAM",
     physicalExamCapacity.clinic_id,
-    generated.assignments.map((assignment) => assignment.physicalExamDate),
-    generated.assignments.map(
+    pairAssignments.map((assignment) => assignment.physicalExamDate),
+    pairAssignments.map(
       (assignment) => candidateByStudent.get(assignment.studentNumber)!.physicalExamAppointmentId,
     ),
   );
@@ -300,13 +339,22 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
     `INSERT INTO appointments (
        clinic_id, student_number, schedule_type, appointment_date, status,
        is_published, notes, rescheduled_from, created_by, updated_by,
-       schedule_pair_id, schedule_cycle_start
+       schedule_pair_id, schedule_cycle_start,scheduling_category,
+       scheduling_accepted_at,scheduling_source_row_order,
+       scheduling_window_start,scheduling_window_end
      )
      SELECT $1, fixture.student_number, 'PHYSICAL_EXAM', fixture.appointment_date,
             'PENDING', TRUE, 'Automatically rescheduled for priority capacity.',
-            fixture.old_id, $2, $2, fixture.schedule_pair_id, fixture.schedule_cycle_start
-       FROM UNNEST($3::varchar[], $4::date[], $5::uuid[], $6::uuid[], $7::integer[])
-         AS fixture(student_number, appointment_date, schedule_pair_id, old_id, schedule_cycle_start)
+            fixture.old_id, $2, $2, fixture.schedule_pair_id, fixture.schedule_cycle_start,
+            fixture.scheduling_category,fixture.accepted_at,fixture.source_row_order,
+            fixture.window_start,fixture.window_end
+       FROM UNNEST(
+         $3::varchar[], $4::date[], $5::uuid[], $6::uuid[], $7::integer[],
+         $8::varchar[], $9::timestamptz[], $10::integer[], $11::date[], $12::date[]
+       ) AS fixture(
+         student_number,appointment_date,schedule_pair_id,old_id,schedule_cycle_start,
+         scheduling_category,accepted_at,source_row_order,window_start,window_end
+       )
      RETURNING id, student_number, rescheduled_from::text`,
     [
       physicalExamCapacity.clinic_id,
@@ -316,6 +364,11 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
       physicalExamOnlyAssignments.map(({ candidate }) => candidate.schedulePairId),
       physicalExamOnlyAssignments.map(({ candidate }) => candidate.physicalExamAppointmentId),
       physicalExamOnlyAssignments.map(({ candidate }) => candidate.scheduleCycleStart),
+      physicalExamOnlyAssignments.map(({ candidate }) => candidate.schedulingCategory),
+      physicalExamOnlyAssignments.map(({ candidate }) => candidate.acceptedAt),
+      physicalExamOnlyAssignments.map(({ candidate }) => candidate.sourceRowOrder),
+      physicalExamOnlyAssignments.map(({ candidate }) => candidate.schedulingWindowStart),
+      physicalExamOnlyAssignments.map(({ candidate }) => candidate.schedulingWindowEnd),
     ],
   );
   const newAppointmentIds = [...laboratory.rows, ...physical.rows, ...physicalExamOnly.rows]
@@ -333,32 +386,41 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
        student_number, schedule_pair_id, cause, source_import_group_id,
        old_laboratory_appointment_id, new_laboratory_appointment_id,
        old_physical_exam_appointment_id, new_physical_exam_appointment_id,
-       actor_user_id
+       actor_user_id,schedule_cycle_start,strategy,outcome,policy_metadata
      )
      SELECT fixture.student_number, fixture.schedule_pair_id,
             'PRIORITY_DISPLACEMENT', $1, fixture.old_laboratory_id,
             fixture.new_laboratory_id, fixture.old_physical_id,
-            fixture.new_physical_id, $2
+            fixture.new_physical_id, $2, fixture.schedule_cycle_start,
+            'MOVE_COMPLETE_PAIR','REPLACED',fixture.policy_metadata
        FROM UNNEST(
-         $3::varchar[], $4::uuid[], $5::uuid[], $6::uuid[], $7::uuid[], $8::uuid[]
+         $3::varchar[], $4::uuid[], $5::uuid[], $6::uuid[], $7::uuid[], $8::uuid[],
+         $9::integer[], $10::jsonb[]
        ) AS fixture(
          student_number, schedule_pair_id, old_laboratory_id,
-         new_laboratory_id, old_physical_id, new_physical_id
+         new_laboratory_id, old_physical_id, new_physical_id,
+         schedule_cycle_start,policy_metadata
        )
      RETURNING id::text,student_number`,
     [
       input.sourceImportGroupId,
       input.actorUserId,
-      generated.assignments.map((assignment) => assignment.studentNumber),
-      generated.assignments.map((assignment) => assignment.schedulePairId),
-      generated.assignments.map(
+      pairAssignments.map((assignment) => assignment.studentNumber),
+      pairAssignments.map((assignment) => assignment.schedulePairId),
+      pairAssignments.map(
         (assignment) => candidateByStudent.get(assignment.studentNumber)!.laboratoryAppointmentId,
       ),
-      generated.assignments.map((assignment) => labByStudent.get(assignment.studentNumber)),
-      generated.assignments.map(
+      pairAssignments.map((assignment) => labByStudent.get(assignment.studentNumber)),
+      pairAssignments.map(
         (assignment) => candidateByStudent.get(assignment.studentNumber)!.physicalExamAppointmentId,
       ),
-      generated.assignments.map((assignment) => peByStudent.get(assignment.studentNumber)),
+      pairAssignments.map((assignment) => peByStudent.get(assignment.studentNumber)),
+      pairAssignments.map(
+        (assignment) => candidateByStudent.get(assignment.studentNumber)!.scheduleCycleStart,
+      ),
+      pairAssignments.map(
+        (assignment) => JSON.stringify(policyMetadata(candidateByStudent.get(assignment.studentNumber)!)),
+      ),
     ],
   );
   const physicalExamOnlyByStudent = new Map(
@@ -369,17 +431,19 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
        student_number, schedule_pair_id, cause, source_import_group_id,
        old_laboratory_appointment_id, new_laboratory_appointment_id,
        old_physical_exam_appointment_id, new_physical_exam_appointment_id,
-       actor_user_id
+       actor_user_id,schedule_cycle_start,strategy,outcome,policy_metadata
      )
      SELECT fixture.student_number, fixture.schedule_pair_id,
             'PRIORITY_DISPLACEMENT', $1, fixture.laboratory_id,
             fixture.laboratory_id, fixture.old_physical_id,
-            fixture.new_physical_id, $2
+            fixture.new_physical_id, $2, fixture.schedule_cycle_start,
+            'MOVE_PHYSICAL_ONLY','REPLACED',fixture.policy_metadata
        FROM UNNEST(
-         $3::varchar[], $4::uuid[], $5::uuid[], $6::uuid[], $7::uuid[]
+         $3::varchar[], $4::uuid[], $5::uuid[], $6::uuid[], $7::uuid[],
+         $8::integer[], $9::jsonb[]
        ) AS fixture(
          student_number, schedule_pair_id, laboratory_id,
-         old_physical_id, new_physical_id
+         old_physical_id, new_physical_id,schedule_cycle_start,policy_metadata
        )
      RETURNING id::text,student_number`,
     [
@@ -392,6 +456,8 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
       physicalExamOnlyAssignments.map(({ candidate }) => (
         physicalExamOnlyByStudent.get(candidate.studentNumber)
       )),
+      physicalExamOnlyAssignments.map(({ candidate }) => candidate.scheduleCycleStart),
+      physicalExamOnlyAssignments.map(({ candidate }) => JSON.stringify(policyMetadata(candidate))),
     ],
   );
   const eventByStudent = new Map(
@@ -400,7 +466,7 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
       event.id,
     ]),
   );
-  for (const assignment of generated.assignments) {
+  for (const assignment of pairAssignments) {
     const previous = candidateByStudent.get(assignment.studentNumber)!;
     await queueAuthoritativeScheduleNotification(
       client,
@@ -431,14 +497,88 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
       }),
     );
   }
+  for (const candidate of fallbackCandidates) {
+    const metadata = policyMetadata(candidate);
+    const manualCase = await client.query<{ id: string }>(
+      `INSERT INTO clinic_closure_manual_cases (
+         student_number,case_source,closure_group_id,schedule_pair_id,schedule_cycle_start,
+         affected_laboratory_appointment_id,affected_physical_exam_appointment_id,
+         reason_code,reason_message,policy_metadata
+       ) VALUES ($1,'AUTOMATIC_DISPLACEMENT',NULL,$2,$3,$4,$5,
+                 'NO_VALID_REPLACEMENT_WITHIN_CYCLE',$6,$7::jsonb)
+       RETURNING id::text`,
+      [
+        candidate.studentNumber,
+        candidate.schedulePairId,
+        candidate.scheduleCycleStart,
+        candidate.laboratoryAppointmentId,
+        candidate.physicalExamAppointmentId,
+        "No valid automatic replacement is available within the current scheduling cycle.",
+        JSON.stringify({
+          ...metadata,
+          affectedAppointmentIds: metadata.displacedAppointmentIds,
+        }),
+      ],
+    );
+    await client.query(
+      `INSERT INTO appointment_reschedule_events (
+         student_number,schedule_pair_id,cause,source_import_group_id,
+         old_laboratory_appointment_id,old_physical_exam_appointment_id,
+         actor_user_id,schedule_cycle_start,strategy,outcome,manual_case_id,
+         policy_reason_code,policy_metadata
+       ) VALUES ($1,$2,'PRIORITY_DISPLACEMENT',$3,$4,$5,$6,$7,
+                 'MANUAL_RESOLUTION_REQUIRED','AWAITING_RESCHEDULE',$8,
+                 'NO_VALID_REPLACEMENT_WITHIN_CYCLE',$9::jsonb)`,
+      [
+        candidate.studentNumber,
+        candidate.schedulePairId,
+        input.sourceImportGroupId,
+        candidate.laboratoryAppointmentId,
+        candidate.physicalExamAppointmentId,
+        input.actorUserId,
+        candidate.scheduleCycleStart,
+        manualCase.rows[0].id,
+        JSON.stringify(metadata),
+      ],
+    );
+    await queueAuthoritativeScheduleNotification(
+      client,
+      candidate.studentNumber,
+      (state) => buildAwaitingResolutionNotification({
+        state,
+        eventId: manualCase.rows[0].id,
+        reason: "No valid automatic replacement is available within the current scheduling cycle.",
+        previous: {
+          laboratory: { date: candidate.laboratoryDate, location: "KABALAKA Clinic" },
+          physicalExam: { date: candidate.physicalExamDate, location: "CPU Clinic" },
+        },
+      }),
+    );
+    await client.query(
+      `INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,metadata)
+       VALUES ($1,'PRIORITY_DISPLACEMENT_MANUAL_RESOLUTION_REQUIRED',
+               'clinic_closure_manual_case',$2,$3::jsonb)`,
+      [input.actorUserId, manualCase.rows[0].id, JSON.stringify(metadata)],
+    );
+  }
   await client.query(
     `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
      VALUES ($1, 'PRIORITY_DISPLACEMENT_APPLIED', 'schedule_import_group', $2,
-             jsonb_build_object('displacedStudentCount', $3::int))`,
-    [input.actorUserId, input.sourceImportGroupId, input.candidates.length],
+             jsonb_build_object(
+               'displacedStudentCount',$3::int,
+               'automaticReplacementCount',$4::int,
+               'manualResolutionCount',$5::int
+             ))`,
+    [
+      input.actorUserId,
+      input.sourceImportGroupId,
+      input.candidates.length,
+      successfulCandidates.length,
+      fallbackCandidates.length,
+    ],
   );
   return [
-    ...generated.assignments,
+    ...pairAssignments,
     ...physicalExamOnlyAssignments.map(({ candidate, physicalExamDate }) => ({
       requestId: `displacement:${candidate.schedulePairId}:physical-exam`,
       studentNumber: candidate.studentNumber,
@@ -454,8 +594,6 @@ export async function publishDisplacedRegularReplacements(
     candidates: DisplacementCandidate[];
     sourceImportGroupId: string;
     actorUserId: string;
-    replacementWindowStart: string;
-    searchEndDate: string;
   },
   client: PoolClient,
 ) {

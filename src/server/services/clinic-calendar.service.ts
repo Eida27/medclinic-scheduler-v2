@@ -391,6 +391,7 @@ const manualReasonPriority: Record<ClinicManualCaseReason, number> = {
   ADMIN_CHOSE_MANUAL_RECOVERY: 9,
   NO_REPLACEMENT_CAPACITY: 10,
   CONCURRENT_APPOINTMENT_CHANGE: 11,
+  NO_VALID_REPLACEMENT_WITHIN_CYCLE: 12,
 };
 
 function affectedAppointmentIds(
@@ -1649,14 +1650,14 @@ export async function listClinicClosureManualCases(
       closureReason: row.closure_reason,
       laboratory: row.laboratory_id ? {
         id: row.laboratory_id,
-        date: row.laboratory_date,
-        status: row.laboratory_status,
+        date: row.laboratory_date!,
+        status: row.laboratory_status!,
         affected: affectedIds.has(row.laboratory_id),
       } : null,
       physicalExam: row.physical_exam_id ? {
         id: row.physical_exam_id,
-        date: row.physical_exam_date,
-        status: row.physical_exam_status,
+        date: row.physical_exam_date!,
+        status: row.physical_exam_status!,
         affected: affectedIds.has(row.physical_exam_id),
       } : null,
       currentAssignmentBlock: currentAssignmentBlock([
@@ -1777,6 +1778,7 @@ export async function resolveClinicClosureManualCase(
     const caseResult = await client.query<{
       id: string;
       student_number: string;
+      case_source: ClinicManualCaseDto["caseSource"];
       closure_group_id: string | null;
       schedule_pair_id: string | null;
       schedule_cycle_start: number;
@@ -1786,7 +1788,7 @@ export async function resolveClinicClosureManualCase(
       optimistic_token: string;
       reason_code: string;
     }>(
-      `SELECT id::text,student_number,closure_group_id::text,schedule_pair_id::text,
+      `SELECT id::text,student_number,case_source,closure_group_id::text,schedule_pair_id::text,
               schedule_cycle_start,affected_laboratory_appointment_id::text,
               affected_physical_exam_appointment_id::text,status,optimistic_token::text,reason_code
          FROM clinic_closure_manual_cases WHERE id=$1 FOR UPDATE`,
@@ -1920,18 +1922,20 @@ export async function resolveClinicClosureManualCase(
           : await client.query<{ id: string }>(
               `INSERT INTO appointments (
                  clinic_id,student_number,schedule_type,appointment_date,status,is_published,
-                 notes,rescheduled_from,created_by,updated_by,schedule_pair_id,schedule_cycle_start
-               ) VALUES ($1,$2,$3,$4,'PENDING',TRUE,$5,$6,$7,$7,$8,$9) RETURNING id::text`,
+                 notes,rescheduled_from,created_by,updated_by,schedule_pair_id,schedule_cycle_start,
+                 scheduling_category,scheduling_accepted_at,scheduling_source_row_order,
+                 scheduling_window_start,scheduling_window_end
+               ) SELECT clinic_id,student_number,schedule_type,$2,'PENDING',TRUE,$3,id,$4,$4,
+                        schedule_pair_id,schedule_cycle_start,scheduling_category,
+                        scheduling_accepted_at,scheduling_source_row_order,
+                        scheduling_window_start,scheduling_window_end
+                   FROM appointments WHERE id=$1
+               RETURNING id::text`,
               [
-                appointment.clinicId,
-                appointment.studentNumber,
-                appointment.scheduleType,
+                appointment.id,
                 date,
                 `Manual clinic closure resolution ${caseId}.`,
-                appointment.id,
                 actor.userId,
-                appointment.schedulePairId,
-                appointment.scheduleCycleStart,
               ],
             );
         insertedByType[appointment.scheduleType] = inserted.rows[0].id;
@@ -1980,16 +1984,20 @@ export async function resolveClinicClosureManualCase(
       ],
     );
     const protectionMetadata = resultProtectionAuditMetadata(auditedAppointments);
+    const resolutionAuditAction = manualCase.case_source === "AUTOMATIC_DISPLACEMENT"
+      ? "AUTOMATIC_DISPLACEMENT_MANUAL_CASE_RESOLVED"
+      : "CLINIC_CLOSURE_MANUAL_CASE_RESOLVED";
     await client.query(
       `INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,metadata)
-       VALUES ($1,'CLINIC_CLOSURE_MANUAL_CASE_RESOLVED','clinic_closure_manual_case',$2::text,
+       VALUES ($1,$2,'clinic_closure_manual_case',$3::text,
                jsonb_build_object(
-                 'studentNumber',$3::text,'resolutionAction',$4::text,'reasonCode',$5::text,
-                 'appointmentIds',$6::jsonb,'submissionIds',$7::jsonb,
-                 'activeDraftFileCount',$8::int
+                 'studentNumber',$4::text,'resolutionAction',$5::text,'reasonCode',$6::text,
+                 'appointmentIds',$7::jsonb,'submissionIds',$8::jsonb,
+                 'activeDraftFileCount',$9::int
                ))`,
       [
         actor.userId,
+        resolutionAuditAction,
         caseId,
         manualCase.student_number,
         request.action,
