@@ -126,3 +126,92 @@ Per the task ledger ruling, the complete serialized suite remains reserved for t
 - The full serialized suite and production build are intentionally deferred to Task 6/final integrated verification by the approved ledger ruling.
 - The schema foreign key makes a missing academic-year row for an already stored batch structurally unreachable in a healthy database; the stable runtime guard remains defensive for damaged or partially migrated environments.
 
+## Review fix round 1
+
+Implementation commit: `82c9094 fix: harden First Year fallback recovery`
+
+Addressed all three Important findings:
+
+- First Year replacement planning now applies the established category, accepted-at, source-row, student-number, and pair-id ordering once across both pair and Physical Examination-only candidates. Each candidate consumes the same in-memory Laboratory/Physical Examination loads, while pair candidates still use the shared strict Laboratory-before-Physical generator.
+- Automatic-displacement Manual Resolution queue and assignment protection checks now consider only the affected/requested moving rows. A completed/result-protected preserved Laboratory no longer blocks a Physical Examination-only assignment, while attempts to move protected rows and closure-origin cases retain their existing blockers and pair-order validation.
+- Reservation release now recognizes zero-new-ID Manual Resolution fallback events. If the affected originals remain published `AWAITING_RESCHEDULE`, unprotected, unblocked, and within available capacity, it restores only those rows to `PENDING`, resolves the linked case with explicit `restorationAction: RESTORE_ORIGINAL` and restored appointment IDs, records event/audit/status-log state, and sends the existing restoration notification. Changed/protected rows remain awaiting with the case open and receive the appropriate skip decision. No replacement IDs or dates are invented.
+
+Changed files:
+
+- `src/server/ovpsa/ovpsa-first-year-displacement.ts`
+- `src/server/ovpsa/ovpsa-first-year-lifecycle.ts`
+- `src/server/ovpsa/ovpsa-first-year-publication.integration.test.ts`
+- `src/server/services/clinic-calendar.service.ts`
+- `src/server/services/clinic-calendar.integration.test.ts`
+
+### Review-fix TDD evidence
+
+The first direct `npx.cmd vitest` attempt did not reach test execution because it bypassed the repository's environment-loading test script. All behavior evidence below uses `npm.cmd test -- ...`.
+
+After correcting two test-only fixture defects (capacity safe/max consistency and required result/student fixture fields), the intended RED runs were:
+
+```text
+npm.cmd test -- src/server/ovpsa/ovpsa-first-year-publication.integration.test.ts --run --maxWorkers=1 --no-file-parallelism --testTimeout=15000 --hookTimeout=30000 --reporter=dot -t "allocates the last Physical Examination slot by global priority across pair and PE-only candidates"
+```
+
+Result: `1` failed, `16` skipped. The later Regular pair received the sole `2097-03-21` Physical Examination slot instead of the earlier OJT Physical Examination-only candidate.
+
+```text
+npm.cmd test -- src/server/services/clinic-calendar.integration.test.ts --run --maxWorkers=1 --no-file-parallelism --testTimeout=15000 --hookTimeout=30000 --reporter=dot -t "assigns only the awaiting PE when its preserved completed Laboratory has protected results"
+```
+
+Result: `1` failed, `23` skipped. The queue returned `PROTECTED_RESULTS_EXIST` from the preserved completed Laboratory.
+
+```text
+npm.cmd test -- src/server/ovpsa/ovpsa-first-year-publication.integration.test.ts --run --maxWorkers=1 --no-file-parallelism --testTimeout=15000 --hookTimeout=30000 --reporter=dot -t "restores a pair fallback and resolves its Manual Resolution case when cancellation releases the reservation"
+```
+
+Result: `1` failed, `16` skipped. The event was `SKIPPED_APPOINTMENT_CHANGED`, neither original was restored, the case stayed open, and no restoration notification was emitted.
+
+```text
+npm.cmd test -- src/server/ovpsa/ovpsa-first-year-publication.integration.test.ts --run --maxWorkers=1 --no-file-parallelism --testTimeout=20000 --hookTimeout=30000 --reporter=dot -t "restores only the awaiting PE fallback|restores only the PE fallback when a Laboratory revision|keeps a fallback case open"
+```
+
+Result: `3` failed, `17` skipped. Cancellation and revision both stranded the awaiting PE with `SKIPPED_APPOINTMENT_CHANGED`, and a newly protected PE also received the generic changed decision instead of `SKIPPED_PROTECTED`.
+
+Focused GREEN commands:
+
+```text
+npm.cmd test -- src/server/ovpsa/ovpsa-first-year-publication.integration.test.ts --run --maxWorkers=1 --no-file-parallelism --testTimeout=20000 --hookTimeout=30000 --reporter=dot -t "allocates the last Physical Examination slot by global priority across pair and PE-only candidates|restores a pair fallback|restores only the awaiting PE fallback|restores only the PE fallback when a Laboratory revision|keeps a fallback case open"
+```
+
+Result: `5/5` passed, `15` skipped.
+
+```text
+npm.cmd test -- src/server/services/clinic-calendar.integration.test.ts --run --maxWorkers=1 --no-file-parallelism --testTimeout=20000 --hookTimeout=30000 --reporter=dot -t "assigns only the awaiting PE when its preserved completed Laboratory has protected results"
+```
+
+Result: `1/1` passed, `23` skipped.
+
+The complete two-file behavior run passed `44/44` tests. A final focused rerun of the strengthened pair-restoration audit/status-log assertion passed `1/1`.
+
+### Review-fix regression verification
+
+```text
+npm.cmd test -- src/server/ovpsa/ovpsa-first-year-publication.integration.test.ts src/server/services/clinic-calendar.integration.test.ts src/server/services/appointments-manual-rescheduling.integration.test.ts src/server/services/first-year-schedule-import.integration.test.ts src/server/services/priority-displacement.integration.test.ts src/server/ovpsa/external-laboratory-verification.integration.test.ts src/server/scheduling/automatic-replacement-bounds.test.ts src/server/ovpsa/ovpsa-first-year-planner.test.ts src/server/schedule/schedule-notifications.test.ts src/server/db/scheduling-integrity-hardening-migration.integration.test.ts --run --maxWorkers=1 --no-file-parallelism --testTimeout=20000 --hookTimeout=30000 --reporter=dot
+```
+
+Result: `10` files passed, `92/92` tests passed, exit code `0`.
+
+```text
+npx.cmd tsc --noEmit
+npx.cmd eslint src/server/ovpsa/ovpsa-first-year-displacement.ts src/server/ovpsa/ovpsa-first-year-lifecycle.ts src/server/ovpsa/ovpsa-first-year-publication.integration.test.ts src/server/services/clinic-calendar.service.ts src/server/services/clinic-calendar.integration.test.ts
+git diff --check
+```
+
+Results: TypeScript exit `0`; five-file scoped ESLint exit `0`; diff-check exit `0` with only working-copy LF-to-CRLF notices.
+
+### Review-fix self-review and residual risks
+
+- Confirmed a successful earlier Physical Examination-only candidate consumes shared Physical capacity before a later pair is attempted; the later pair either receives a complete feasible Lab-before-PE assignment or one Manual Resolution fallback, never a partial allocation.
+- Confirmed protected preserved Laboratory data still participates in pair-order comparison but is neither protection-checked nor rewritten when only Physical Examination moves.
+- Confirmed closure-origin cases still include all related rows in their queue blocker and attempts to replace a protected row still fail.
+- Confirmed fallback restoration locks only affected effective appointment scopes, requires the case to remain open and every affected original to remain published `AWAITING_RESCHEDULE`, checks active replacements, result/manual protection, current blocked dates/reservations, and live capacity before any state write.
+- Confirmed pair restoration changes both affected originals, Physical Examination-only restoration changes only Physical Examination, and skipped restoration leaves appointments and the linked case untouched.
+- Confirmed cancellation and replacement-revision reservation releases both use the same transaction-scoped restoration path; successful case/event/appointment/log/audit/notification writes are atomic with the release.
+- The complete repository-wide serialized suite remains reserved for the Task 6 final integrated branch gate under the approved ledger ruling.
