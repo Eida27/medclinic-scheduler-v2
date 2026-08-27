@@ -108,6 +108,30 @@ describe("scheduling integrity hardening migration", () => {
     )).resolves.toBeDefined();
 
     await expect(pool.query(
+      `UPDATE clinic_closure_manual_cases
+          SET status='RESOLVED',resolved_at=clock_timestamp(),resolved_by=$2,
+              resolution_action='RESTORE_ORIGINAL',
+              resolution_details='{"restorationAction":"RESTORE_ORIGINAL"}'::jsonb
+        WHERE id=$1`,
+      [existingCase.rows[0].id, TEST_REFERENCE_IDS.adminUser],
+    )).resolves.toBeDefined();
+    await expect(pool.query(
+      `SELECT status,resolution_action,resolution_details->>'restorationAction' AS detail_action
+         FROM clinic_closure_manual_cases WHERE id=$1`,
+      [existingCase.rows[0].id],
+    )).resolves.toMatchObject({ rows: [{
+      status: "RESOLVED",
+      resolution_action: "RESTORE_ORIGINAL",
+      detail_action: "RESTORE_ORIGINAL",
+    }] });
+    await expect(pool.query(
+      `UPDATE clinic_closure_manual_cases
+          SET resolution_action='RESTORE_ORIGINAL'
+        WHERE id=$1`,
+      [automaticCase.rows[0].id],
+    )).rejects.toMatchObject({ code: "23514" });
+
+    await expect(pool.query(
       `INSERT INTO clinic_closure_manual_cases (
          student_number,case_source,closure_group_id,schedule_cycle_start,
          reason_code,reason_message

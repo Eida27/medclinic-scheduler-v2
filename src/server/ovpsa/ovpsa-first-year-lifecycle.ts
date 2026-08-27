@@ -258,7 +258,7 @@ export async function restoreAppointmentsDisplacedByReservationsWithClient(
         await client.query(
           `UPDATE clinic_closure_manual_cases
               SET status='RESOLVED',resolved_at=clock_timestamp(),resolved_by=$2,
-                  resolution_action='KEEP_CURRENT_REPLACEMENT',
+                  resolution_action='RESTORE_ORIGINAL',
                   resolution_details=$3::jsonb,optimistic_token=gen_random_uuid(),
                   updated_at=clock_timestamp()
             WHERE id=$1 AND status='OPEN'`,

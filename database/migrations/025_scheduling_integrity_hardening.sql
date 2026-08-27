@@ -45,6 +45,15 @@ ALTER TABLE clinic_closure_manual_cases
     'UNSAFE_RESTORATION'
   ));
 
+ALTER TABLE clinic_closure_manual_cases
+  DROP CONSTRAINT IF EXISTS clinic_closure_manual_cases_resolution_action_check;
+ALTER TABLE clinic_closure_manual_cases
+  ADD CONSTRAINT clinic_closure_manual_cases_resolution_action_check CHECK (
+    resolution_action IS NULL OR resolution_action IN (
+      'ASSIGN_REPLACEMENT','KEEP_CURRENT_REPLACEMENT','RESTORE_ORIGINAL'
+    )
+  );
+
 ALTER TABLE appointment_reschedule_events
   DROP CONSTRAINT IF EXISTS appointment_reschedule_events_policy_reason_check;
 ALTER TABLE appointment_reschedule_events

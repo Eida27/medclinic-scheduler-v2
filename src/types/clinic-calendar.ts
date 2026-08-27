@@ -136,7 +136,11 @@ export type ClinicManualCaseDto = {
   optimisticToken: string;
   createdAt: string;
   resolvedAt: string | null;
-  resolutionAction: "ASSIGN_REPLACEMENT" | "KEEP_CURRENT_REPLACEMENT" | null;
+  resolutionAction:
+    | "ASSIGN_REPLACEMENT"
+    | "KEEP_CURRENT_REPLACEMENT"
+    | "RESTORE_ORIGINAL"
+    | null;
   resolutionDetails: unknown;
   policyMetadata: Record<string, unknown>;
   ovpsaBatchId: string | null;

@@ -1033,6 +1033,7 @@ describe("First Year OVPSA publication", () => {
       open_cases: number;
       resolved_cases: number;
       restoration_decision: string;
+      canonical_action: string;
       restoration_action: string;
       notifications: number;
       restoration_logs: number;
@@ -1046,6 +1047,7 @@ describe("First Year OVPSA publication", () => {
          (SELECT COUNT(*)::int FROM clinic_closure_manual_cases
            WHERE student_number=$2 AND status='RESOLVED') AS resolved_cases,
          event.restoration_decision,
+         manual_case.resolution_action AS canonical_action,
          manual_case.resolution_details->>'restorationAction' AS restoration_action,
          (SELECT COUNT(*)::int FROM student_portal_notifications
            WHERE student_number=$2 AND notification_type='SCHEDULE_RESTORED') AS notifications,
@@ -1065,6 +1067,7 @@ describe("First Year OVPSA publication", () => {
       open_cases: 0,
       resolved_cases: 1,
       restoration_decision: "RESTORED",
+      canonical_action: "RESTORE_ORIGINAL",
       restoration_action: "RESTORE_ORIGINAL",
       notifications: 1,
       restoration_logs: 2,
@@ -1138,12 +1141,14 @@ describe("First Year OVPSA publication", () => {
       decision: string;
       affected_ids: string[];
       case_status: string;
+      resolution_action: string;
     }>(
       `SELECT event.restoration_decision AS decision,
               ARRAY(SELECT jsonb_array_elements_text(
                 manual_case.resolution_details->'restoredAppointmentIds'
               ) ORDER BY 1) AS affected_ids,
-              manual_case.status AS case_status
+              manual_case.status AS case_status,
+              manual_case.resolution_action
          FROM appointment_reschedule_events event
          JOIN clinic_closure_manual_cases manual_case ON manual_case.id=event.manual_case_id
         WHERE event.student_number=$1 AND event.ovpsa_batch_id=$2`,
@@ -1153,6 +1158,7 @@ describe("First Year OVPSA publication", () => {
       decision: "RESTORED",
       affected_ids: [physicalExamId],
       case_status: "RESOLVED",
+      resolution_action: "RESTORE_ORIGINAL",
     }]);
   });
 

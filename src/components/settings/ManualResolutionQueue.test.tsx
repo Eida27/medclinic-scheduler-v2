@@ -1,9 +1,10 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ClinicManualCaseDto } from "@/types/clinic-calendar";
 import { ManualResolutionQueue } from "./ManualResolutionQueue";
 
-const manualCase = {
+const manualCase: ClinicManualCaseDto = {
   id: "80000000-0000-4000-8000-000000000001",
   studentNumber: "24-0001",
   studentName: "Santos, Ana M.",
@@ -21,6 +22,7 @@ const manualCase = {
   resolvedAt: null,
   resolutionAction: null,
   resolutionDetails: null,
+  policyMetadata: {},
   laboratory: { id: "lab-1", date: "2026-08-18", status: "AWAITING_RESCHEDULE", affected: true },
   physicalExam: { id: "pe-1", date: "2026-08-19", status: "AWAITING_RESCHEDULE", affected: true },
   ovpsaBatchId: null,
@@ -64,6 +66,40 @@ describe("ManualResolutionQueue", () => {
     await user.click(screen.getByRole("button", { name: "Apply filters" }));
     await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(expect.stringContaining("search=24-0001"), expect.anything()));
     expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain("service=LABORATORY");
+  });
+
+  it("renders the system-owned restore action without changing administrator action labels", async () => {
+    const restoreOriginalAction: ClinicManualCaseDto["resolutionAction"] = "RESTORE_ORIGINAL";
+    const actionFixtures: Array<{
+      resolutionAction: ClinicManualCaseDto["resolutionAction"];
+      studentNumber: string;
+    }> = [
+      { resolutionAction: restoreOriginalAction, studentNumber: "24-0101" },
+      { resolutionAction: "ASSIGN_REPLACEMENT", studentNumber: "24-0102" },
+      { resolutionAction: "KEEP_CURRENT_REPLACEMENT", studentNumber: "24-0103" },
+    ];
+    const resolvedCases: ClinicManualCaseDto[] = actionFixtures.map((fixture, index) => ({
+      ...manualCase,
+      id: `80000000-0000-4000-8000-00000000010${index + 1}`,
+      studentNumber: fixture.studentNumber,
+      studentName: `Resolved Student ${index + 1}`,
+      status: "RESOLVED",
+      resolvedAt: "2026-08-20T01:00:00.000Z",
+      resolutionAction: fixture.resolutionAction,
+    }));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: {
+      page: 1,
+      pageSize: 20,
+      total: resolvedCases.length,
+      items: resolvedCases,
+    } }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ManualResolutionQueue />);
+
+    expect(await screen.findByText(/resolved 2026-08-20 by Restore original/)).toBeVisible();
+    expect(screen.getByText(/resolved 2026-08-20 by Assign replacement/)).toBeVisible();
+    expect(screen.getByText(/resolved 2026-08-20 by Keep current replacement/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: /Restore original/ })).not.toBeInTheDocument();
   });
 
   it("renders and resolves an automatic-displacement case without closure context", async () => {
