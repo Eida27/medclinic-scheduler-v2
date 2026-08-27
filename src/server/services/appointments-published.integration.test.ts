@@ -4,7 +4,6 @@ import { pool } from "@/server/db/pool";
 import {
   getPublishedAppointment,
   listAppointments,
-  publicStudentSchedule,
 } from "@/server/repositories/appointments.repository";
 import { studentHistory } from "@/server/repositories/students.repository";
 import { getStudentPortalSchedule } from "@/server/repositories/student-portal.repository";
@@ -141,16 +140,11 @@ describe("published-only appointment access", () => {
       isPublished: true,
     });
 
-    const publicSchedule = await publicStudentSchedule(studentNumber);
-    expect(Object.keys(publicSchedule!).sort()).toEqual(["appointments", "compliance", "studentNumber"]);
-    expect(publicSchedule?.appointments).toEqual(expect.arrayContaining([
-      expect.objectContaining({ scheduleType: "LABORATORY", appointmentDate: null, status: "AWAITING_RESCHEDULE" }),
-      expect.objectContaining({ scheduleType: "PHYSICAL_EXAM", status: "NO_SHOW" }),
-    ]));
     const portal = await getStudentPortalSchedule(studentNumber);
     expect(portal).toMatchObject({
       appointments: expect.arrayContaining([
         expect.objectContaining({ appointmentDate: null, status: "AWAITING_RESCHEDULE" }),
+        expect.objectContaining({ scheduleType: "PHYSICAL_EXAM", status: "NO_SHOW" }),
       ]),
       history: expect.arrayContaining([
         expect.objectContaining({ originalDate: "2047-08-05", status: "AWAITING_RESCHEDULE" }),
@@ -241,9 +235,8 @@ describe("published-only appointment access", () => {
       appointments: [],
       laboratoryResults: [],
     });
-    expect(await publicStudentSchedule(studentNumber)).toMatchObject({
+    expect(await getStudentPortalSchedule(studentNumber)).toMatchObject({
       appointments: [],
-      compliance: { laboratory: "PENDING_UPLOAD" },
     });
 
     await publishScheduleBatch(batch.rows[0].id, admin.userId);
@@ -269,11 +262,10 @@ describe("published-only appointment access", () => {
     expect(publishedHistory.laboratoryResults).toEqual([
       expect.objectContaining({ appointment_id: laboratoryDraft?.id }),
     ]);
-    expect(await publicStudentSchedule(studentNumber)).toMatchObject({
+    expect(await getStudentPortalSchedule(studentNumber)).toMatchObject({
       appointments: expect.arrayContaining([
         expect.objectContaining({ scheduleType: "LABORATORY" }),
       ]),
-      compliance: { laboratory: "COMPLETED" },
     });
     await expect(getPublishedAppointment(draftId)).resolves.toMatchObject({
       id: draftId,

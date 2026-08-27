@@ -319,6 +319,23 @@ describe("student scheduling imports", () => {
         scheduling_window_end: "2027-03-31",
       },
     ]);
+    const publishedPair = await pool.query<{
+      schedule_type: string;
+      appointment_date: string;
+      status: string;
+      is_published: boolean;
+    }>(
+      `SELECT schedule_type,appointment_date::text,status,is_published
+         FROM appointments
+        WHERE student_number=$1
+        ORDER BY appointment_date,schedule_type`,
+      [newStudentNumber],
+    );
+    expect(publishedPair.rows).toEqual([
+      expect.objectContaining({ schedule_type: "LABORATORY", status: "PENDING", is_published: true }),
+      expect.objectContaining({ schedule_type: "PHYSICAL_EXAM", status: "PENDING", is_published: true }),
+    ]);
+    expect(publishedPair.rows[0].appointment_date < publishedPair.rows[1].appointment_date).toBe(true);
     const snapshots = await pool.query(
       `SELECT student_number,student_name,college_name,program_code,program_name,
               year_level,source_type

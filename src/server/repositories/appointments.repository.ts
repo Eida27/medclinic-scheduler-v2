@@ -583,46 +583,6 @@ export async function publishBatch(batchId: string, actorUserId: string, client?
   return transaction(publish);
 }
 
-export async function publicStudentSchedule(studentNumber: string) {
-  const student = await query<{ student_number: string }>(
-    `SELECT s.student_number
-     FROM students s WHERE s.student_number=$1 AND s.is_active=TRUE`, [studentNumber]);
-  if (!student.rows[0]) return null;
-  const appointments = await query(
-    `SELECT schedule_type AS "scheduleType",
-            CASE WHEN status='AWAITING_RESCHEDULE' THEN NULL ELSE appointment_date::text END AS "appointmentDate",
-            status
-     FROM appointments WHERE student_number=$1 AND is_published=TRUE
-     AND status NOT IN ('RESCHEDULED','CANCELLED') ORDER BY appointment_date`, [studentNumber]);
-  const compliance = await query<{
-    physical_exam: string; laboratory: string;
-  }>(
-    `SELECT
-      COALESCE((
-        SELECT result.result_status
-          FROM exam_results result
-          LEFT JOIN appointments appointment ON appointment.id=result.appointment_id
-         WHERE result.student_number=$1
-           AND (result.appointment_id IS NULL OR appointment.is_published=TRUE)
-         ORDER BY result.completed_at DESC NULLS LAST, result.created_at DESC LIMIT 1
-      ), 'PENDING_UPLOAD') AS physical_exam,
-      COALESCE((
-        SELECT result.result_status
-          FROM laboratory_results result
-          LEFT JOIN appointments appointment ON appointment.id=result.appointment_id
-         WHERE result.student_number=$1
-           AND (result.appointment_id IS NULL OR appointment.is_published=TRUE)
-         ORDER BY result.completed_at DESC NULLS LAST, result.created_at DESC LIMIT 1
-      ), 'PENDING_UPLOAD') AS laboratory`,
-    [studentNumber],
-  );
-  return {
-    studentNumber: student.rows[0].student_number,
-    appointments: appointments.rows,
-    compliance: { physicalExam: compliance.rows[0].physical_exam, laboratory: compliance.rows[0].laboratory },
-  };
-}
-
 export async function getCapacitySettings() {
   return (await query(
     `SELECT s.schedule_type AS "scheduleType", c.code AS "clinicCode", c.name AS "clinicName",

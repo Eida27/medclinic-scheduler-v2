@@ -5,8 +5,8 @@ import { pool } from "@/server/db/pool";
 import {
   getPublishedAppointment,
   listAppointments,
-  publicStudentSchedule,
 } from "@/server/repositories/appointments.repository";
+import { getStudentPortalSchedule } from "@/server/repositories/student-portal.repository";
 import {
   cleanupTestFixtures,
   insertTestStudent,
@@ -264,14 +264,14 @@ describe("appointment lifecycle", () => {
     const batchId = String(batch?.id);
 
     await generateBatchAppointments(batchId, admin);
-    expect((await publicStudentSchedule(studentNumber))?.appointments).toHaveLength(0);
+    expect((await getStudentPortalSchedule(studentNumber))?.appointments).toHaveLength(0);
     await publishScheduleBatch(batchId, admin.userId);
-    const publicSchedule = await publicStudentSchedule(studentNumber);
-    expect(publicSchedule).toMatchObject({
+    const portalSchedule = await getStudentPortalSchedule(studentNumber);
+    expect(portalSchedule).toMatchObject({
       studentNumber,
+      studentName: "Fixture, Appointment Maria Angela (Jr.)",
       appointments: [expect.any(Object)],
     });
-    expect(publicSchedule).not.toHaveProperty("studentName");
     await expect(pool.query(
       `SELECT notification.notification_type,notification.event_key,
               notification.metadata->>'sourceType' AS source_type,

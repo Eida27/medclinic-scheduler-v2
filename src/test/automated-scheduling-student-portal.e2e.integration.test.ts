@@ -1,7 +1,6 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { pool } from "@/server/db/pool";
-import { publicStudentSchedule } from "@/server/repositories/appointments.repository";
 import { getStudentPortalSchedule } from "@/server/repositories/student-portal.repository";
 import { saveClinicCalendarChanges } from "@/server/services/clinic-calendar.service";
 import { acceptAndScheduleImport } from "@/server/services/schedule-imports.service";
@@ -161,16 +160,15 @@ describe("unified calendar scheduling and student flow", () => {
       ],
     }, admin);
     expect(moved).toMatchObject({ movedStudentCount: 1, movedAppointmentCount: 2 });
-    const publicSchedule = await publicStudentSchedule(studentNumber);
-    expect(publicSchedule).toMatchObject({
+    const portal = await getStudentPortalSchedule(studentNumber);
+    expect(portal).toMatchObject({
       studentNumber,
       appointments: [
         expect.objectContaining({ appointmentDate: "2050-08-04", status: "PENDING" }),
         expect.objectContaining({ appointmentDate: "2050-08-05", status: "PENDING" }),
       ],
     });
-    expect(JSON.stringify(publicSchedule)).not.toContain("2050-08-02");
-    const portal = await getStudentPortalSchedule(studentNumber);
+    expect(JSON.stringify(portal?.appointments)).not.toContain("2050-08-02");
     expect(portal?.history).toEqual(expect.arrayContaining([
       expect.objectContaining({ originalDate: "2050-08-02", closureReason: "TEST-UNIFIED-E2E current pair" }),
       expect.objectContaining({ originalDate: "2050-08-03", closureReason: "TEST-UNIFIED-E2E current pair" }),
@@ -191,7 +189,7 @@ describe("unified calendar scheduling and student flow", () => {
       changes: [{ action: "REOPEN", date: second.blockedDate, unavailableDateId: second.id, expectedUpdatedAt: second.updatedAt }],
     }, admin);
     expect(reopened).toMatchObject({ reopenedDateCount: 1, movedAppointmentCount: 0 });
-    await expect(publicStudentSchedule(studentNumber)).resolves.toMatchObject({
+    await expect(getStudentPortalSchedule(studentNumber)).resolves.toMatchObject({
       appointments: [
         expect.objectContaining({ appointmentDate: "2050-08-04", status: "PENDING" }),
         expect.objectContaining({ appointmentDate: "2050-08-05", status: "PENDING" }),
