@@ -215,3 +215,83 @@ Results: TypeScript exit `0`; five-file scoped ESLint exit `0`; diff-check exit 
 - Confirmed pair restoration changes both affected originals, Physical Examination-only restoration changes only Physical Examination, and skipped restoration leaves appointments and the linked case untouched.
 - Confirmed cancellation and replacement-revision reservation releases both use the same transaction-scoped restoration path; successful case/event/appointment/log/audit/notification writes are atomic with the release.
 - The complete repository-wide serialized suite remains reserved for the Task 6 final integrated branch gate under the approved ledger ruling.
+
+## Review fix round 2
+
+Implementation commit: `9a3824d fix: record truthful fallback restoration action`
+
+The successful fallback restoration path now persists the system-owned canonical action `RESTORE_ORIGINAL` instead of the contradictory administrator action `KEEP_CURRENT_REPLACEMENT`.
+
+- Migration 025 replaces the named `clinic_closure_manual_cases_resolution_action_check` with a stable three-value response-state contract: `ASSIGN_REPLACEMENT`, `KEEP_CURRENT_REPLACEMENT`, and `RESTORE_ORIGINAL`.
+- Existing OPEN/RESOLVED coherence remains enforced: `RESTORE_ORIGINAL` is valid only as part of a complete resolved-case state.
+- The shared Manual Resolution response DTO includes `RESTORE_ORIGINAL`; the administrator request union and resolution request schema remain limited to `ASSIGN_REPLACEMENT` and `KEEP_CURRENT_REPLACEMENT`.
+- Pair and Physical Examination-only reservation-release restoration persist `resolution_action='RESTORE_ORIGINAL'` while continuing to record truthful restoration details without replacement IDs or dates.
+- The queue safely renders “Restore original” in resolved history while existing “Assign replacement” and “Keep current replacement” history labels remain unchanged. No restore action control is exposed.
+
+Changed files:
+
+- `database/migrations/025_scheduling_integrity_hardening.sql`
+- `src/server/db/scheduling-integrity-hardening-migration.integration.test.ts`
+- `src/server/ovpsa/ovpsa-first-year-lifecycle.ts`
+- `src/server/ovpsa/ovpsa-first-year-publication.integration.test.ts`
+- `src/types/clinic-calendar.ts`
+- `src/components/settings/ManualResolutionQueue.test.tsx`
+
+### Review-fix round 2 TDD evidence
+
+Migration RED:
+
+```text
+npm.cmd test -- src/server/db/scheduling-integrity-hardening-migration.integration.test.ts --run --maxWorkers=1 --no-file-parallelism --testTimeout=20000 --hookTimeout=30000 --reporter=dot
+```
+
+Result: `1` failed. PostgreSQL rejected `RESTORE_ORIGINAL` with `23514` from `clinic_closure_manual_cases_resolution_action_check`.
+
+Lifecycle RED:
+
+```text
+npm.cmd test -- src/server/ovpsa/ovpsa-first-year-publication.integration.test.ts --run --maxWorkers=1 --no-file-parallelism --testTimeout=20000 --hookTimeout=30000 --reporter=dot -t "restores a pair fallback|restores only the awaiting PE fallback"
+```
+
+Result: `2` failed, `18` skipped. Both pair and Physical Examination-only cases stored `KEEP_CURRENT_REPLACEMENT` instead of `RESTORE_ORIGINAL`.
+
+Typed queue-contract RED:
+
+```text
+npx.cmd tsc --noEmit
+```
+
+Result: exit `2`, `TS2322`: `RESTORE_ORIGINAL` was not assignable to `ClinicManualCaseDto["resolutionAction"]`.
+
+The queue runtime characterization already passed `1/1` before production edits because the existing safe label formatter rendered `RESTORE_ORIGINAL` as “Restore original”; this proved no new request action or rendering branch was necessary.
+
+Focused GREEN results:
+
+- Migration command above: `1/1` passed.
+- Lifecycle command above: `2/2` passed, `18` skipped.
+- Queue characterization: `1/1` passed, `7` skipped.
+- `npx.cmd tsc --noEmit`: exit `0`.
+
+### Review-fix round 2 regression verification
+
+```text
+npm.cmd test -- src/server/db/scheduling-integrity-hardening-migration.integration.test.ts src/server/ovpsa/ovpsa-first-year-publication.integration.test.ts src/server/services/clinic-calendar.integration.test.ts src/components/settings/ManualResolutionQueue.test.tsx --run --maxWorkers=1 --no-file-parallelism --testTimeout=20000 --hookTimeout=30000 --reporter=dot
+```
+
+Result: `4` files passed, `53/53` tests passed, exit code `0`.
+
+```text
+npx.cmd tsc --noEmit
+npx.cmd eslint src/server/db/scheduling-integrity-hardening-migration.integration.test.ts src/server/ovpsa/ovpsa-first-year-lifecycle.ts src/server/ovpsa/ovpsa-first-year-publication.integration.test.ts src/types/clinic-calendar.ts src/components/settings/ManualResolutionQueue.test.tsx
+git diff --check
+```
+
+Results: TypeScript exit `0`; five-file scoped ESLint exit `0`; diff-check exit `0` with only working-copy LF-to-CRLF notices.
+
+### Review-fix round 2 self-review and residual risk
+
+- Confirmed `RESTORE_ORIGINAL` is added only to persisted/response state. Neither the public Manual Resolution request type nor the server request discriminator accepts it.
+- Confirmed the named migration constraint remains idempotent and the existing resolution-completeness constraint still rejects an action on an OPEN case.
+- Confirmed both fallback shapes store the same canonical action and continue to leave new appointment IDs/dates null.
+- Confirmed existing closure `ASSIGN_REPLACEMENT` and `KEEP_CURRENT_REPLACEMENT` behavior remains covered by the full clinic-calendar and queue regressions.
+- The complete repository-wide serialized suite remains reserved for the Task 6 final integrated branch gate under the approved ledger ruling.
