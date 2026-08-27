@@ -37,7 +37,7 @@ export type AppointmentMutationContext = {
   id: string;
   batchId: string | null;
   studentNumber: string;
-  scheduleType: string;
+  scheduleType: "LABORATORY" | "PHYSICAL_EXAM";
   status: AppointmentStatus;
   clinicId: string;
   clinicCode: ClinicCode;
@@ -252,7 +252,7 @@ export async function getAppointmentMutationContext(id: string, client: PoolClie
     id: string;
     batchId: string | null;
     studentNumber: string;
-    scheduleType: string;
+    scheduleType: "LABORATORY" | "PHYSICAL_EXAM";
     appointmentDate: string;
     status: AppointmentStatus;
     clinicId: string;
@@ -349,6 +349,20 @@ export async function getAppointmentMutationContext(id: string, client: PoolClie
     ovpsaRevisionId: row.ovpsaRevisionId,
     ovpsaServiceReservationId: row.ovpsaServiceReservationId,
   } satisfies AppointmentMutationContextWithDate;
+}
+
+export async function getAppointmentMutationScope(id: string, client: PoolClient) {
+  const result = await client.query<Pick<
+    AppointmentMutationContext,
+    "id" | "studentNumber" | "scheduleType" | "clinicId"
+  >>(
+    `SELECT id::text,student_number AS "studentNumber",schedule_type AS "scheduleType",
+            clinic_id::text AS "clinicId"
+       FROM appointments
+      WHERE id=$1 AND is_published=TRUE`,
+    [id],
+  );
+  return result.rows[0] ?? null;
 }
 
 export async function getAppointmentLockMutationContext(

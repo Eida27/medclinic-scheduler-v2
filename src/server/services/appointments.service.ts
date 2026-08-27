@@ -2,17 +2,27 @@ import "server-only";
 import type { PoolClient } from "pg";
 import { z } from "zod";
 import { AppError, isPostgresUniqueViolation } from "@/lib/errors";
+import {
+  assertLaboratoryCompletionRollbackAllowed,
+  assertPhysicalExamCompletionAllowed,
+  cancellationTargetsForPair,
+  type PairAppointment,
+} from "@/server/appointments/appointment-pair-integrity";
 import { isAutomaticNoShowLog } from "@/server/appointments/automatic-no-show";
 import { transaction } from "@/server/db/pool";
 import { writeAudit } from "@/server/repositories/audit.repository";
 import {
   changeAppointmentStatusWithClient, getAppointmentLockMutationContext,
-  getAppointmentMutationContext, getPublishedAppointment,
+  getAppointmentMutationContext, getAppointmentMutationScope, getPublishedAppointment,
   publishBatch, rescheduleAppointmentWithClient, updateCapacitySetting,
   setAppointmentManualLockWithClient,
   type AppointmentMutationContext, type AppointmentStatus,
 } from "@/server/repositories/appointments.repository";
 import { getScheduleBatch } from "@/server/repositories/coordinator-schedules.repository";
+import {
+  resolveEffectiveAppointmentPair,
+  type EffectivePairAppointment,
+} from "@/server/repositories/effective-appointment-pair.repository";
 import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import { ensureBatchStudentAcademicSnapshotsWithClient } from "@/server/repositories/student-academic-snapshots.repository";
 import {
@@ -34,7 +44,7 @@ import {
 const transitions: Record<AppointmentStatus, AppointmentStatus[]> = {
   DRAFT: ["PENDING", "CANCELLED"],
   PENDING: ["COMPLETED", "RESCHEDULED", "CANCELLED"],
-  COMPLETED: [], NO_SHOW: ["RESCHEDULED"], RESCHEDULED: [], CANCELLED: [],
+  COMPLETED: [], NO_SHOW: ["RESCHEDULED", "CANCELLED"], RESCHEDULED: [], CANCELLED: [],
   AWAITING_RESCHEDULE: [],
 };
 
@@ -67,6 +77,7 @@ export const appointmentUpdateSchema = z.object({
 });
 
 type AppointmentUpdateInput = z.infer<typeof appointmentUpdateSchema>;
+type AppointmentMutationContextWithDate = AppointmentMutationContext & { appointmentDate: string };
 
 export const appointmentQuickStatusSchema = z.object({
   quickStatusAction: z.enum(["MARK_COMPLETED", "REVERT_COMPLETION"]),
@@ -157,6 +168,25 @@ function previousStateForAppointment(appointment: {
     : { physicalExam: previous };
 }
 
+async function loadLockedAppointmentPair(
+  id: string,
+  actor: SessionUser,
+  client: PoolClient,
+) {
+  const scope = await getAppointmentMutationScope(id, client);
+  if (!scope) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
+  assertAppointmentMutationAuthorized(actor, scope);
+  await lockEffectiveAppointmentScopes(client, [
+    { studentNumber: scope.studentNumber, scheduleType: "LABORATORY" },
+    { studentNumber: scope.studentNumber, scheduleType: "PHYSICAL_EXAM" },
+  ]);
+  const appointment = await getAppointmentMutationContext(id, client);
+  if (!appointment) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
+  assertAppointmentMutationAuthorized(actor, appointment);
+  const pair = await resolveEffectiveAppointmentPair(client, appointment);
+  return { appointment, pair };
+}
+
 async function recordManualScheduleEvent(
   client: PoolClient,
   appointment: AppointmentMutationContext & { appointmentDate: string },
@@ -187,6 +217,48 @@ async function recordManualScheduleEvent(
     ],
   );
   return event.rows[0].id;
+}
+
+async function recordCancellationScheduleEvent(
+  client: PoolClient,
+  appointment: AppointmentMutationContextWithDate,
+  targets: PairAppointment[],
+  actorUserId: string,
+) {
+  const event = await client.query<{ id: string }>(
+    `INSERT INTO appointment_reschedule_events (
+       student_number,schedule_pair_id,cause,schedule_cycle_start,
+       old_laboratory_appointment_id,old_physical_exam_appointment_id,actor_user_id
+     ) VALUES ($1,$2,'MANUAL',$3,$4,$5,$6)
+     RETURNING id::text`,
+    [
+      appointment.studentNumber,
+      appointment.schedulePairId,
+      appointment.scheduleCycleStart,
+      targets.find((target) => target.scheduleType === "LABORATORY")?.id ?? null,
+      targets.find((target) => target.scheduleType === "PHYSICAL_EXAM")?.id ?? null,
+      actorUserId,
+    ],
+  );
+  return event.rows[0].id;
+}
+
+function previousStateForCancellation(
+  appointment: AppointmentMutationContextWithDate,
+  pair: { laboratory: EffectivePairAppointment | null; physicalExam: EffectivePairAppointment | null },
+  targets: PairAppointment[],
+) {
+  const state: PreviousScheduleState = {};
+  for (const target of targets) {
+    const detail = target.id === appointment.id
+      ? appointment
+      : target.scheduleType === "LABORATORY"
+        ? pair.laboratory
+        : pair.physicalExam;
+    if (!detail) continue;
+    Object.assign(state, previousStateForAppointment(detail));
+  }
+  return state;
 }
 
 async function applyAppointmentManualLockWithClient(
@@ -280,9 +352,7 @@ export async function completeAppointmentWithClient(
   reason: string | null | undefined,
   client: PoolClient,
 ) {
-  const appointment = await getAppointmentMutationContext(id, client);
-  if (!appointment) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
-  assertAppointmentMutationAuthorized(actor, appointment);
+  const { appointment, pair } = await loadLockedAppointmentPair(id, actor, client);
   if (appointment.ovpsaBatchId && appointment.scheduleType === "LABORATORY") {
     throw new AppError(
       "OVPSA_EXTERNAL_LABORATORY_VERIFICATION_REQUIRED",
@@ -291,6 +361,7 @@ export async function completeAppointmentWithClient(
     );
   }
   await assertOvpsaAppointmentCompletionAllowed(client, appointment);
+  assertPhysicalExamCompletionAllowed(appointment, pair);
   if (appointment.status === "COMPLETED") return appointment;
   if (appointment.status === "NO_SHOW") {
     if (!isAutomaticNoShowLog(appointment.latestLog)) {
@@ -322,9 +393,7 @@ async function correctCompletedAppointmentWithClient(
   actor: SessionUser,
   client: PoolClient,
 ) {
-  const appointment = await getAppointmentMutationContext(id, client);
-  if (!appointment) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
-  assertAppointmentMutationAuthorized(actor, appointment);
+  const { appointment, pair } = await loadLockedAppointmentPair(id, actor, client);
   if (appointment.ovpsaBatchId && appointment.scheduleType === "LABORATORY") {
     throw new AppError(
       "OVPSA_EXTERNAL_LABORATORY_VERIFICATION_REQUIRED",
@@ -354,6 +423,7 @@ async function correctCompletedAppointmentWithClient(
       422,
     );
   }
+  assertLaboratoryCompletionRollbackAllowed(appointment, pair);
   const resultState = await getAppointmentResultCorrectionState(client, appointment);
   if (resultState.type === "PROTECTED") {
     throw new AppError(
@@ -394,9 +464,7 @@ async function applyQuickStatusWithClient(
   actor: SessionUser,
   client: PoolClient,
 ) {
-  const appointment = await getAppointmentMutationContext(id, client);
-  if (!appointment) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
-  assertAppointmentMutationAuthorized(actor, appointment);
+  const { appointment, pair } = await loadLockedAppointmentPair(id, actor, client);
   if (appointment.ovpsaBatchId && appointment.scheduleType === "LABORATORY") {
     throw new AppError(
       "OVPSA_EXTERNAL_LABORATORY_VERIFICATION_REQUIRED",
@@ -414,6 +482,7 @@ async function applyQuickStatusWithClient(
 
   if (input.quickStatusAction === "MARK_COMPLETED") {
     await assertOvpsaAppointmentCompletionAllowed(client, appointment);
+    assertPhysicalExamCompletionAllowed(appointment, pair);
     if (appointment.status !== "PENDING" && appointment.status !== "NO_SHOW") {
       throw new AppError(
         "APPOINTMENT_QUICK_STATUS_NOT_ALLOWED",
@@ -457,6 +526,7 @@ async function applyQuickStatusWithClient(
       422,
     );
   }
+  assertLaboratoryCompletionRollbackAllowed(appointment, pair);
   const target = appointment.completedFromStatus;
   if (target !== "PENDING" && target !== "NO_SHOW") {
     throw new AppError(
@@ -639,10 +709,11 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
   if (input.status) {
     const requestedStatus = input.status;
     await transaction(async (client) => {
-      if (requestedStatus === "CANCELLED") {
-        await lockEffectiveAppointmentScopes(client, [current]);
-      }
-      const appointment = await getAppointmentMutationContext(id, client);
+      const lockedPair = requestedStatus === "CANCELLED"
+        ? await loadLockedAppointmentPair(id, actor, client)
+        : null;
+      const appointment = lockedPair?.appointment
+        ?? await getAppointmentMutationContext(id, client);
       if (!appointment) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
       assertAppointmentMutationAuthorized(actor, appointment);
       if (appointment.ovpsaBatchId && appointment.scheduleType === "LABORATORY") {
@@ -654,6 +725,52 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
       }
       assertManualNoShowNotRequested(requestedStatus);
       assertStatusTransition(appointment.status, requestedStatus);
+      if (requestedStatus === "CANCELLED") {
+        const targets = cancellationTargetsForPair(appointment, lockedPair!.pair);
+        const note = input.notes?.trim() || null;
+        for (const target of targets) {
+          await changeAppointmentStatusWithClient(
+            client,
+            target.id,
+            target.status as AppointmentStatus,
+            "CANCELLED",
+            note,
+            actor.userId,
+          );
+          await writeAudit(
+            actor.userId,
+            "APPOINTMENT_STATUS_CHANGED",
+            "appointment",
+            target.id,
+            {
+              oldStatus: target.status,
+              newStatus: "CANCELLED",
+              ...(target.id === appointment.id
+                ? {}
+                : { cascadeFromAppointmentId: appointment.id }),
+            },
+            client,
+          );
+        }
+        const eventId = await recordCancellationScheduleEvent(
+          client,
+          appointment,
+          targets,
+          actor.userId,
+        );
+        await queueAuthoritativeScheduleNotification(
+          client,
+          appointment.studentNumber,
+          (state) => buildCancellationNotification({
+            state,
+            eventId,
+            reason: ADMINISTRATOR_SCHEDULE_NOTIFICATION_REASON.CANCELLATION,
+            previous: previousStateForCancellation(appointment, lockedPair!.pair, targets),
+            sourceType: "APPOINTMENT_RESCHEDULE_EVENT",
+          }),
+        );
+        return;
+      }
       await changeAppointmentStatusWithClient(
         client,
         id,
@@ -670,25 +787,6 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
         { oldStatus: appointment.status, newStatus: requestedStatus },
         client,
       );
-      if (requestedStatus === "CANCELLED") {
-        const eventId = await recordManualScheduleEvent(
-          client,
-          appointment,
-          null,
-          actor.userId,
-        );
-        await queueAuthoritativeScheduleNotification(
-          client,
-          appointment.studentNumber,
-          (state) => buildCancellationNotification({
-            state,
-            eventId,
-            reason: ADMINISTRATOR_SCHEDULE_NOTIFICATION_REASON.CANCELLATION,
-            previous: previousStateForAppointment(appointment),
-            sourceType: "APPOINTMENT_RESCHEDULE_EVENT",
-          }),
-        );
-      }
     });
   }
   return getPublishedAppointment(id);

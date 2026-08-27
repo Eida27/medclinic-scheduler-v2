@@ -10,8 +10,10 @@ const {
   getAppointmentResultCorrectionState,
   getAppointmentLockMutationContext,
   getAppointmentMutationContext,
+  getAppointmentMutationScope,
   getPublishedAppointment,
   publishBatch,
+  resolveEffectiveAppointmentPair,
   rescheduleAppointmentWithClient,
   setAppointmentManualLockWithClient,
   transaction,
@@ -24,8 +26,10 @@ const {
   getAppointmentResultCorrectionState: vi.fn(),
   getAppointmentLockMutationContext: vi.fn(),
   getAppointmentMutationContext: vi.fn(),
+  getAppointmentMutationScope: vi.fn(),
   getPublishedAppointment: vi.fn(),
   publishBatch: vi.fn(),
+  resolveEffectiveAppointmentPair: vi.fn(),
   rescheduleAppointmentWithClient: vi.fn(),
   setAppointmentManualLockWithClient: vi.fn(),
   transaction: vi.fn(),
@@ -39,6 +43,7 @@ vi.mock("@/server/repositories/appointments.repository", () => ({
   changeAppointmentStatusWithClient,
   getAppointmentLockMutationContext,
   getAppointmentMutationContext,
+  getAppointmentMutationScope,
   getPublishedAppointment,
   publishBatch,
   rescheduleAppointmentWithClient,
@@ -47,6 +52,9 @@ vi.mock("@/server/repositories/appointments.repository", () => ({
 }));
 vi.mock("@/server/repositories/coordinator-schedules.repository", () => ({
   getScheduleBatch: vi.fn(),
+}));
+vi.mock("@/server/repositories/effective-appointment-pair.repository", () => ({
+  resolveEffectiveAppointmentPair,
 }));
 vi.mock("@/server/repositories/student-result-submissions.repository", () => ({
   deletePendingResultPlaceholder,
@@ -213,6 +221,36 @@ function mutationContext(
   };
 }
 
+function physicalMutationContext(
+  status: "PENDING" | "COMPLETED" | "NO_SHOW" = "PENDING",
+  completedFromStatus: "PENDING" | "NO_SHOW" | null = null,
+) {
+  return {
+    ...mutationContext(status, physicalExamClinicId, null, "2026-08-19", completedFromStatus),
+    scheduleType: "PHYSICAL_EXAM",
+  };
+}
+
+function effectivePair(
+  laboratoryStatus: "PENDING" | "COMPLETED" | "NO_SHOW" | null = "COMPLETED",
+  physicalExamStatus: "PENDING" | "COMPLETED" | "NO_SHOW" | null = "PENDING",
+) {
+  return {
+    laboratory: laboratoryStatus ? {
+      ...mutationContext(laboratoryStatus),
+      id: "55555555-5555-4555-8555-555555555555",
+      appointmentDate: "2026-08-18",
+      scheduleType: "LABORATORY" as const,
+    } : null,
+    physicalExam: physicalExamStatus ? {
+      ...physicalMutationContext(physicalExamStatus),
+      id: "66666666-6666-4666-8666-666666666666",
+      appointmentDate: "2026-08-19",
+      scheduleType: "PHYSICAL_EXAM" as const,
+    } : null,
+  };
+}
+
 const automaticNoShowLog = {
   oldStatus: "PENDING",
   newStatus: "NO_SHOW",
@@ -244,7 +282,9 @@ describe("appointment mutation authorization and automatic no-show correction", 
     getPublishedAppointment.mockResolvedValue(publishedAppointment());
     getAppointmentLockMutationContext.mockResolvedValue(mutationContext());
     getAppointmentMutationContext.mockResolvedValue(mutationContext());
+    getAppointmentMutationScope.mockResolvedValue(mutationContext());
     getAppointmentResultCorrectionState.mockResolvedValue({ type: "CLEAR" });
+    resolveEffectiveAppointmentPair.mockResolvedValue(effectivePair());
     changeAppointmentStatusWithClient.mockResolvedValue(undefined);
     deletePendingResultPlaceholder.mockResolvedValue(undefined);
     rescheduleAppointmentWithClient.mockResolvedValue(replacementId);
@@ -266,6 +306,82 @@ describe("appointment mutation authorization and automatic no-show correction", 
   });
 
   describe("clinic schedule quick status", () => {
+    it.each(["PENDING", "NO_SHOW", null] as const)(
+      "rejects Physical Examination completion when the effective Laboratory is %s",
+      async (laboratoryStatus) => {
+        const physical = physicalMutationContext("PENDING");
+        getAppointmentMutationContext.mockResolvedValue(physical);
+        resolveEffectiveAppointmentPair.mockResolvedValue(effectivePair(laboratoryStatus));
+
+        await expect(updateAppointment(appointmentId, {
+          quickStatusAction: "MARK_COMPLETED",
+          expectedStatus: "PENDING",
+        }, admin)).rejects.toMatchObject({
+          code: "LABORATORY_NOT_COMPLETED",
+          status: 409,
+        });
+
+        expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
+        expect(ensurePendingUploadResult).not.toHaveBeenCalled();
+        expect(writeAudit).not.toHaveBeenCalled();
+      },
+    );
+
+    it("completes Physical Examination when the effective Laboratory is completed", async () => {
+      const physical = physicalMutationContext("PENDING");
+      getAppointmentMutationContext.mockResolvedValue(physical);
+      resolveEffectiveAppointmentPair.mockResolvedValue(effectivePair("COMPLETED"));
+
+      await updateAppointment(appointmentId, {
+        quickStatusAction: "MARK_COMPLETED",
+        expectedStatus: "PENDING",
+      }, admin);
+
+      expect(changeAppointmentStatusWithClient).toHaveBeenCalledWith(
+        client,
+        appointmentId,
+        "PENDING",
+        "COMPLETED",
+        "Marked completed through the clinic schedule.",
+        admin.userId,
+      );
+    });
+
+    it("rejects Laboratory rollback before inspecting protected results when Physical Examination is completed", async () => {
+      const laboratory = mutationContext("COMPLETED", laboratoryClinicId, null, "2045-08-18", "PENDING");
+      getAppointmentMutationContext.mockResolvedValue(laboratory);
+      resolveEffectiveAppointmentPair.mockResolvedValue(effectivePair("COMPLETED", "COMPLETED"));
+
+      await expect(updateAppointment(appointmentId, {
+        quickStatusAction: "REVERT_COMPLETION",
+        expectedStatus: "COMPLETED",
+      }, admin)).rejects.toMatchObject({
+        code: "PHYSICAL_ALREADY_COMPLETED",
+        status: 409,
+      });
+
+      expect(getAppointmentResultCorrectionState).not.toHaveBeenCalled();
+      expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
+      expect(writeAudit).not.toHaveBeenCalled();
+    });
+
+    it("returns the paired Physical Examination guard before legacy completion-history errors", async () => {
+      const laboratory = mutationContext("COMPLETED", laboratoryClinicId, null, "2045-08-18", null);
+      getAppointmentMutationContext.mockResolvedValue(laboratory);
+      resolveEffectiveAppointmentPair.mockResolvedValue(effectivePair("COMPLETED", "COMPLETED"));
+
+      await expect(updateAppointment(appointmentId, {
+        quickStatusAction: "REVERT_COMPLETION",
+        expectedStatus: "COMPLETED",
+      }, admin)).rejects.toMatchObject({
+        code: "PHYSICAL_ALREADY_COMPLETED",
+        status: 409,
+      });
+
+      expect(getAppointmentResultCorrectionState).not.toHaveBeenCalled();
+      expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
+    });
+
     it("completes a future pending appointment with the server note and quick-status audit", async () => {
       const locked = mutationContext("PENDING", laboratoryClinicId, null, "2045-08-18");
       getAppointmentMutationContext.mockResolvedValue(locked);
@@ -693,6 +809,41 @@ describe("appointment mutation authorization and automatic no-show correction", 
     );
   });
 
+  it("rejects detailed Physical Examination completion when Laboratory is incomplete", async () => {
+    const current = {
+      ...publishedAppointment("PENDING", physicalExamClinicId),
+      scheduleType: "PHYSICAL_EXAM",
+    };
+    getPublishedAppointment.mockResolvedValue(current);
+    getAppointmentMutationContext.mockResolvedValue(physicalMutationContext("PENDING"));
+    resolveEffectiveAppointmentPair.mockResolvedValue(effectivePair("PENDING"));
+
+    await expect(updateAppointment(appointmentId, {
+      status: "COMPLETED",
+      notes: "Visit completed",
+    }, admin)).rejects.toMatchObject({ code: "LABORATORY_NOT_COMPLETED", status: 409 });
+
+    expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
+    expect(writeAudit).not.toHaveBeenCalled();
+  });
+
+  it("rejects detailed Laboratory rollback when Physical Examination is completed", async () => {
+    getPublishedAppointment.mockResolvedValue(publishedAppointment("COMPLETED"));
+    getAppointmentMutationContext.mockResolvedValue(
+      mutationContext("COMPLETED", laboratoryClinicId, null, "2026-07-21", "PENDING"),
+    );
+    resolveEffectiveAppointmentPair.mockResolvedValue(effectivePair("COMPLETED", "COMPLETED"));
+
+    await expect(updateAppointment(appointmentId, {
+      status: "PENDING",
+      correctionReason: "Incorrect completion",
+      source: "LABORATORY",
+    }, admin)).rejects.toMatchObject({ code: "PHYSICAL_ALREADY_COMPLETED", status: 409 });
+
+    expect(getAppointmentResultCorrectionState).not.toHaveBeenCalled();
+    expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
+  });
+
   it("rejects a manual no-show after locking the current appointment without writing changes", async () => {
     await expect(updateAppointment(appointmentId, {
       status: "NO_SHOW",
@@ -782,11 +933,101 @@ describe("appointment mutation authorization and automatic no-show correction", 
       "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
       ["medclinic:effective-appointment:v1:LABORATORY:2026-0001"],
     );
+    expect(query).toHaveBeenCalledWith(
+      "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+      ["medclinic:effective-appointment:v1:PHYSICAL_EXAM:2026-0001"],
+    );
     const scopeLockIndex = query.mock.calls.findIndex(([, values]) => (
       Array.isArray(values) && values[0] === "medclinic:effective-appointment:v1:LABORATORY:2026-0001"
     ));
     const cancellationIndex = changeAppointmentStatusWithClient.mock.invocationCallOrder[0];
     expect(query.mock.invocationCallOrder[scopeLockIndex]).toBeLessThan(cancellationIndex);
+  });
+
+  it.each(["PENDING", "NO_SHOW"] as const)(
+    "cascades Laboratory cancellation to a paired %s Physical Examination with one audit per mutation",
+    async (physicalExamStatus) => {
+      const laboratory = mutationContext("PENDING");
+      const pair = effectivePair("PENDING", physicalExamStatus);
+      getAppointmentMutationContext.mockResolvedValue(laboratory);
+      resolveEffectiveAppointmentPair.mockResolvedValue(pair);
+
+      await updateAppointment(appointmentId, {
+        status: "CANCELLED",
+        notes: "Cancel unfinished pair",
+      }, admin);
+
+      expect(changeAppointmentStatusWithClient).toHaveBeenNthCalledWith(
+        1,
+        client,
+        appointmentId,
+        "PENDING",
+        "CANCELLED",
+        "Cancel unfinished pair",
+        admin.userId,
+      );
+      expect(changeAppointmentStatusWithClient).toHaveBeenNthCalledWith(
+        2,
+        client,
+        pair.physicalExam!.id,
+        physicalExamStatus,
+        "CANCELLED",
+        "Cancel unfinished pair",
+        admin.userId,
+      );
+      expect(writeAudit).toHaveBeenCalledTimes(2);
+      expect(writeAudit).toHaveBeenNthCalledWith(
+        2,
+        admin.userId,
+        "APPOINTMENT_STATUS_CHANGED",
+        "appointment",
+        pair.physicalExam!.id,
+        {
+          oldStatus: physicalExamStatus,
+          newStatus: "CANCELLED",
+          cascadeFromAppointmentId: appointmentId,
+        },
+        client,
+      );
+    },
+  );
+
+  it("does not cascade Physical Examination cancellation to Laboratory", async () => {
+    const physical = physicalMutationContext("PENDING");
+    getPublishedAppointment.mockResolvedValue({
+      ...publishedAppointment("PENDING", physicalExamClinicId),
+      scheduleType: "PHYSICAL_EXAM",
+    });
+    getAppointmentMutationContext.mockResolvedValue(physical);
+    resolveEffectiveAppointmentPair.mockResolvedValue(effectivePair("PENDING", "PENDING"));
+
+    await updateAppointment(appointmentId, {
+      status: "CANCELLED",
+      notes: "Cancel Physical Examination only",
+    }, admin);
+
+    expect(changeAppointmentStatusWithClient).toHaveBeenCalledTimes(1);
+    expect(changeAppointmentStatusWithClient).toHaveBeenCalledWith(
+      client,
+      appointmentId,
+      "PENDING",
+      "CANCELLED",
+      "Cancel Physical Examination only",
+      admin.userId,
+    );
+  });
+
+  it("rejects Laboratory cancellation when paired Physical Examination is completed", async () => {
+    getAppointmentMutationContext.mockResolvedValue(mutationContext("PENDING"));
+    resolveEffectiveAppointmentPair.mockResolvedValue(effectivePair("PENDING", "COMPLETED"));
+
+    await expect(updateAppointment(appointmentId, {
+      status: "CANCELLED",
+      notes: "Attempt inconsistent cancellation",
+    }, admin)).rejects.toMatchObject({ code: "PHYSICAL_ALREADY_COMPLETED", status: 409 });
+
+    expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
+    expect(writeAudit).not.toHaveBeenCalled();
   });
 
   it("rejects a mixed dated request when the locked appointment completed after preflight", async () => {
