@@ -19,7 +19,7 @@ describe("HomePage", () => {
     expect(screen.queryByText("For CPU students")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Staff sign in" })).toHaveAttribute("href", "/login");
     expect(screen.getByRole("link", { name: "Find my schedule" })).toBeVisible();
-    expect(screen.getByRole("link", { name: "Find my schedule" })).toHaveAttribute("href", "/student-lookup");
+    expect(screen.getByRole("link", { name: "Find my schedule" })).toHaveAttribute("href", "/student/login");
     expect(screen.getByRole("link", { name: "Open staff dashboard" })).toHaveAttribute("href", "/login");
     expect(screen.queryByText("Clinic scheduling and compliance")).not.toBeInTheDocument();
     expect(screen.queryByText("Organize coordinator submissions, publish validated appointments, and track physical examination and laboratory completion in one focused system.")).not.toBeInTheDocument();

@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AppError } from "@/lib/errors";
 
 const { requireUser, getScheduleBatch, editBatch } = vi.hoisted(() => ({
   requireUser: vi.fn(),
@@ -41,28 +42,47 @@ describe("/api/coordinator-schedules/[batchId] legacy compatibility", () => {
     });
   });
 
-  it("keeps ungrouped GET and PATCH compatibility", async () => {
+  it("keeps ungrouped GET compatibility", async () => {
     getScheduleBatch.mockResolvedValue({ id: "batch-1", importGroupId: null, items: [] });
 
     const getResponse = await GET(
       new Request("http://localhost/api/coordinator-schedules/batch-1"),
       context,
     );
-    const patchResponse = await PATCH(new Request(
-      "http://localhost/api/coordinator-schedules/batch-1",
-      {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ batchName: "Historical update" }),
-      },
-    ), context);
-
     expect(getResponse.status).toBe(200);
-    expect(patchResponse.status).toBe(200);
-    expect(editBatch).toHaveBeenCalledWith(
-      "batch-1",
-      { batchName: "Historical update" },
-      user.userId,
-    );
+    expect(editBatch).not.toHaveBeenCalled();
+  });
+
+  it("preserves authentication precedence for retired edits", async () => {
+    requireUser.mockRejectedValue(new AppError("UNAUTHORIZED", "Authentication required.", 401));
+    const request = new Request("http://localhost/api/coordinator-schedules/batch-1", { method: "PATCH" });
+    const json = vi.spyOn(request, "json");
+
+    const response = await PATCH(request, context);
+
+    expect(response.status).toBe(401);
+    expect(json).not.toHaveBeenCalled();
+    expect(editBatch).not.toHaveBeenCalled();
+  });
+
+  it("retires edits before parsing the body, awaiting params, or mutating", async () => {
+    const request = new Request("http://localhost/api/coordinator-schedules/batch-1", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ batchName: "Must stay unchanged" }),
+    });
+    const json = vi.spyOn(request, "json");
+    const then = vi.fn((_resolve, reject) => reject(new Error("params must not be awaited")));
+    const untouchedContext = { params: { then } as unknown as Promise<{ batchId: string }> };
+
+    const response = await PATCH(request, untouchedContext);
+
+    expect(response.status).toBe(410);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "SCHEDULING_WORKFLOW_RETIRED" },
+    });
+    expect(json).not.toHaveBeenCalled();
+    expect(then).not.toHaveBeenCalled();
+    expect(editBatch).not.toHaveBeenCalled();
   });
 });

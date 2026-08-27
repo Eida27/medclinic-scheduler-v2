@@ -1,8 +1,8 @@
 import { dataResponse, errorResponse } from "@/lib/api-response";
 import { AppError } from "@/lib/errors";
+import { schedulingWorkflowRetiredError } from "@/lib/retired-workflows";
 import { requireUser } from "@/server/auth/current-user";
 import { getScheduleBatch } from "@/server/repositories/coordinator-schedules.repository";
-import { editBatch } from "@/server/services/coordinator-schedules.service";
 
 type Context = { params: Promise<{ batchId: string }> };
 
@@ -23,6 +23,11 @@ export async function GET(_: Request, context: Context) {
     return errorResponse(error);
   }
 }
-export async function PATCH(request: Request, context: Context) {
-  try { const user = await requireUser(); return dataResponse(await editBatch((await context.params).batchId, await request.json(), user.userId)); } catch (error) { return errorResponse(error); }
+export async function PATCH(_request: Request, _context: Context) {
+  try {
+    await requireUser();
+    throw schedulingWorkflowRetiredError();
+  } catch (error) {
+    return errorResponse(error);
+  }
 }

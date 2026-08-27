@@ -27,7 +27,7 @@ export default function HomePage() {
             </h1>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
               <Link
-                href="/student-lookup"
+                href="/student/login"
                 className="inline-flex min-h-12 items-center justify-center rounded-lg bg-cpu-gold px-6 py-3 text-sm font-bold text-cpu-navy shadow-sm transition duration-200 hover:bg-cpu-gold-light focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cpu-gold-dark"
               >
                 Find my schedule

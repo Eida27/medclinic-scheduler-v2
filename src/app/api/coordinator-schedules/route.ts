@@ -1,8 +1,8 @@
 import { dataResponse, errorResponse } from "@/lib/api-response";
+import { schedulingWorkflowRetiredError } from "@/lib/retired-workflows";
 import { isClinicCode } from "@/server/clinics";
 import { requireUser } from "@/server/auth/current-user";
 import { listScheduleBatches } from "@/server/repositories/coordinator-schedules.repository";
-import { addScheduleBatch } from "@/server/services/coordinator-schedules.service";
 
 export async function GET(request: Request) {
   try {
@@ -13,6 +13,11 @@ export async function GET(request: Request) {
   } catch (error) { return errorResponse(error); }
 }
 
-export async function POST(request: Request) {
-  try { const user = await requireUser(); return dataResponse(await addScheduleBatch(await request.json(), user), { status: 201 }); } catch (error) { return errorResponse(error); }
+export async function POST(_request: Request) {
+  try {
+    await requireUser();
+    throw schedulingWorkflowRetiredError();
+  } catch (error) {
+    return errorResponse(error);
+  }
 }
