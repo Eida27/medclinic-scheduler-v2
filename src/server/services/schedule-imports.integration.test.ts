@@ -288,6 +288,37 @@ describe("student scheduling imports", () => {
       preferred_month: null,
       accepted: true,
     }]);
+    const lineage = await pool.query(
+      `SELECT appointment.schedule_type,
+              appointment.scheduling_category,
+              appointment.scheduling_accepted_at=import.accepted_at AS accepted_matches,
+              appointment.scheduling_source_row_order,
+              appointment.scheduling_window_start IS NOT NULL AS has_window_start,
+              appointment.scheduling_window_end::text
+         FROM appointments appointment
+         JOIN schedule_import_groups import ON import.id=$2
+        WHERE appointment.student_number=$1
+        ORDER BY appointment.schedule_type`,
+      [newStudentNumber, created.importId],
+    );
+    expect(lineage.rows).toEqual([
+      {
+        schedule_type: "LABORATORY",
+        scheduling_category: "REGULAR",
+        accepted_matches: true,
+        scheduling_source_row_order: 2,
+        has_window_start: true,
+        scheduling_window_end: "2027-03-31",
+      },
+      {
+        schedule_type: "PHYSICAL_EXAM",
+        scheduling_category: "REGULAR",
+        accepted_matches: true,
+        scheduling_source_row_order: 2,
+        has_window_start: true,
+        scheduling_window_end: "2027-03-31",
+      },
+    ]);
     const snapshots = await pool.query(
       `SELECT student_number,student_name,college_name,program_code,program_name,
               year_level,source_type

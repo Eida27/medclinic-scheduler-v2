@@ -92,6 +92,11 @@ describe("rescheduleAppointmentWithClient", () => {
       updatedAt: new Date("2026-08-01T00:00:00.000Z"),
       latestLog: null,
       completedFromStatus: null,
+      schedulingCategory: "OJT",
+      schedulingAcceptedAt: new Date("2026-07-15T01:02:03.000Z"),
+      schedulingSourceRowOrder: 7,
+      schedulingWindowStart: "2026-09-01",
+      schedulingWindowEnd: "2026-09-30",
     } satisfies AppointmentMutationContext;
     const replacementId = "22222222-2222-4222-8222-222222222222";
     const actorUserId = "00000000-0000-4000-8000-000000000001";
@@ -124,7 +129,7 @@ describe("rescheduleAppointmentWithClient", () => {
     );
     expect(client.query).toHaveBeenNthCalledWith(
       3,
-      expect.stringContaining("is_manually_locked,locked_by,locked_at,lock_reason"),
+      expect.stringContaining("scheduling_category,scheduling_accepted_at,scheduling_source_row_order"),
       [
         appointment.batchId,
         appointment.clinicId,
@@ -139,6 +144,11 @@ describe("rescheduleAppointmentWithClient", () => {
         appointment.scheduleCycleStart,
         true,
         "Inherited protection reason",
+        "OJT",
+        new Date("2026-07-15T01:02:03.000Z"),
+        7,
+        "2026-09-01",
+        "2026-09-30",
       ],
     );
     expect(client.query).toHaveBeenNthCalledWith(

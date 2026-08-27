@@ -11,6 +11,7 @@ const {
   getAppointmentLockMutationContext,
   getAppointmentMutationContext,
   getAppointmentMutationScope,
+  getManualRescheduleDestinationState,
   getPublishedAppointment,
   publishBatch,
   resolveEffectiveAppointmentPair,
@@ -27,6 +28,7 @@ const {
   getAppointmentLockMutationContext: vi.fn(),
   getAppointmentMutationContext: vi.fn(),
   getAppointmentMutationScope: vi.fn(),
+  getManualRescheduleDestinationState: vi.fn(),
   getPublishedAppointment: vi.fn(),
   publishBatch: vi.fn(),
   resolveEffectiveAppointmentPair: vi.fn(),
@@ -44,6 +46,7 @@ vi.mock("@/server/repositories/appointments.repository", () => ({
   getAppointmentLockMutationContext,
   getAppointmentMutationContext,
   getAppointmentMutationScope,
+  getManualRescheduleDestinationState,
   getPublishedAppointment,
   publishBatch,
   rescheduleAppointmentWithClient,
@@ -218,6 +221,11 @@ function mutationContext(
     updatedAt: new Date("2026-08-01T00:00:00.000Z"),
     latestLog,
     completedFromStatus,
+    schedulingCategory: null,
+    schedulingAcceptedAt: null,
+    schedulingSourceRowOrder: null,
+    schedulingWindowStart: null,
+    schedulingWindowEnd: null,
   };
 }
 
@@ -289,6 +297,11 @@ describe("appointment mutation authorization and automatic no-show correction", 
     getAppointmentLockMutationContext.mockResolvedValue(mutationContext());
     getAppointmentMutationContext.mockResolvedValue(mutationContext());
     getAppointmentMutationScope.mockResolvedValue(mutationContext());
+    getManualRescheduleDestinationState.mockResolvedValue({
+      cycleClosingDate: "2100-07-31",
+      maxDailyCapacity: 150,
+      usedCapacity: 0,
+    });
     getAppointmentResultCorrectionState.mockResolvedValue({ type: "CLEAR" });
     resolveEffectiveAppointmentPair.mockResolvedValue(effectivePair());
     changeAppointmentStatusWithClient.mockResolvedValue(undefined);
@@ -689,22 +702,22 @@ describe("appointment mutation authorization and automatic no-show correction", 
   it("rejects an ordinary reschedule onto an active First Year OVPSA service reservation", async () => {
     query.mockImplementation(async (sql: string) => ({
       rows: sql.includes("ovpsa_first_year_service_reservations")
-        ? [{ schedule_type: "LABORATORY", date: "2026-08-19" }]
+        ? [{ schedule_type: "LABORATORY", date: "2045-08-21" }]
         : [],
     }));
 
     await expect(updateAppointment(appointmentId, {
-      appointmentDate: "2026-08-19",
+      appointmentDate: "2045-08-21",
       notes: "Student requested a replacement",
     }, admin)).rejects.toMatchObject({
-      code: "OVPSA_SERVICE_RESERVATION_CONFLICT",
+      code: "APPOINTMENT_DATE_BLOCKED",
       status: 409,
     });
 
     expect(rescheduleAppointmentWithClient).not.toHaveBeenCalled();
     expect(query).toHaveBeenCalledWith(
       expect.stringContaining("ovpsa_first_year_service_reservations"),
-      ["2026-08-19", "2026-08-19", null],
+      ["2045-08-21", "2045-08-21", null],
     );
   });
 
@@ -869,7 +882,7 @@ describe("appointment mutation authorization and automatic no-show correction", 
   it("rejects a manual no-show request that also includes a replacement date", async () => {
     await expect(updateAppointment(appointmentId, {
       status: "NO_SHOW",
-      appointmentDate: "2026-08-19",
+      appointmentDate: "2045-08-21",
       notes: "Attempted mixed manual no-show",
     }, admin)).rejects.toMatchObject({
       code: "MANUAL_NO_SHOW_NOT_ALLOWED",
@@ -1081,16 +1094,20 @@ describe("appointment mutation authorization and automatic no-show correction", 
       laboratoryClinicId,
       latestLog,
     ));
+    resolveEffectiveAppointmentPair.mockResolvedValue({
+      laboratory: mutationContext(status, laboratoryClinicId, latestLog),
+      physicalExam: null,
+    });
     await expect(updateAppointment(appointmentId, {
       status: "COMPLETED",
-      appointmentDate: "2026-08-19",
+      appointmentDate: "2045-08-21",
       notes: "Student requested a replacement",
     }, admin)).resolves.toEqual(replacement);
 
     expect(rescheduleAppointmentWithClient).toHaveBeenCalledWith(
       client,
       mutationContext(status, laboratoryClinicId, latestLog),
-      "2026-08-19",
+      "2045-08-21",
       "Student requested a replacement",
       admin.userId,
     );
@@ -1099,11 +1116,25 @@ describe("appointment mutation authorization and automatic no-show correction", 
       "APPOINTMENT_RESCHEDULED",
       "appointment",
       appointmentId,
-      { replacementId, appointmentDate: "2026-08-19" },
+      { replacementId, appointmentDate: "2045-08-21" },
       client,
     );
     expect(transaction).toHaveBeenCalledOnce();
     expect(changeAppointmentStatusWithClient).not.toHaveBeenCalled();
+    expect(query).toHaveBeenNthCalledWith(
+      1,
+      "SELECT pg_advisory_xact_lock(hashtext('medclinic:schedule-import-queue'))",
+    );
+    expect(query).toHaveBeenNthCalledWith(
+      2,
+      "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+      ["medclinic:effective-appointment:v1:LABORATORY:2026-0001"],
+    );
+    expect(query).toHaveBeenNthCalledWith(
+      3,
+      "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+      ["medclinic:effective-appointment:v1:PHYSICAL_EXAM:2026-0001"],
+    );
   });
 
   it("lets an administrator correct a canonical automatic no-show when a reason is supplied", async () => {

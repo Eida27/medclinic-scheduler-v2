@@ -159,6 +159,7 @@ describe("AppointmentDetail", () => {
       status: "NO_SHOW",
       canCorrectNoShow: true,
       isManuallyLocked: true,
+      updatedAt: "2026-08-01T03:00:00.000Z",
       basePath: "/laboratory",
     }, undefined);
   });

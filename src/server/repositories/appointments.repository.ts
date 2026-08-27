@@ -54,6 +54,11 @@ export type AppointmentMutationContext = {
   ovpsaBatchId?: string | null;
   ovpsaRevisionId?: string | null;
   ovpsaServiceReservationId?: string | null;
+  schedulingCategory: "REGULAR" | "OJT" | "TOUR" | null;
+  schedulingAcceptedAt: Date | null;
+  schedulingSourceRowOrder: number | null;
+  schedulingWindowStart: string | null;
+  schedulingWindowEnd: string | null;
 };
 
 type AppointmentMutationContextWithDate = AppointmentMutationContext & {
@@ -273,6 +278,11 @@ export async function getAppointmentMutationContext(id: string, client: PoolClie
     ovpsaBatchId: string | null;
     ovpsaRevisionId: string | null;
     ovpsaServiceReservationId: string | null;
+    schedulingCategory: "REGULAR" | "OJT" | "TOUR" | null;
+    schedulingAcceptedAt: Date | null;
+    schedulingSourceRowOrder: number | null;
+    schedulingWindowStart: string | null;
+    schedulingWindowEnd: string | null;
   }>(
     `SELECT appointment.id, appointment.batch_id AS "batchId",
             appointment.student_number AS "studentNumber",
@@ -285,6 +295,11 @@ export async function getAppointmentMutationContext(id: string, client: PoolClie
             appointment.ovpsa_batch_id::text AS "ovpsaBatchId",
             appointment.ovpsa_revision_id::text AS "ovpsaRevisionId",
             appointment.ovpsa_service_reservation_id::text AS "ovpsaServiceReservationId",
+            appointment.scheduling_category AS "schedulingCategory",
+            appointment.scheduling_accepted_at AS "schedulingAcceptedAt",
+            appointment.scheduling_source_row_order AS "schedulingSourceRowOrder",
+            appointment.scheduling_window_start::text AS "schedulingWindowStart",
+            appointment.scheduling_window_end::text AS "schedulingWindowEnd",
             appointment.is_manually_locked AS "isManuallyLocked",
             appointment.lock_reason AS "lockReason",
             appointment.locked_by::text AS "lockedById",
@@ -348,6 +363,11 @@ export async function getAppointmentMutationContext(id: string, client: PoolClie
     ovpsaBatchId: row.ovpsaBatchId,
     ovpsaRevisionId: row.ovpsaRevisionId,
     ovpsaServiceReservationId: row.ovpsaServiceReservationId,
+    schedulingCategory: row.schedulingCategory,
+    schedulingAcceptedAt: row.schedulingAcceptedAt,
+    schedulingSourceRowOrder: row.schedulingSourceRowOrder,
+    schedulingWindowStart: row.schedulingWindowStart,
+    schedulingWindowEnd: row.schedulingWindowEnd,
   } satisfies AppointmentMutationContextWithDate;
 }
 
@@ -363,6 +383,47 @@ export async function getAppointmentMutationScope(id: string, client: PoolClient
     [id],
   );
   return result.rows[0] ?? null;
+}
+
+export async function getManualRescheduleDestinationState(
+  client: PoolClient,
+  input: {
+    appointmentId: string;
+    clinicId: string;
+    scheduleType: "LABORATORY" | "PHYSICAL_EXAM";
+    appointmentDate: string;
+    scheduleCycleStart: number;
+  },
+) {
+  const academicYear = await client.query<{ closingDate: string }>(
+    `SELECT closing_date::text AS "closingDate"
+       FROM academic_years
+      WHERE start_year=$1
+      FOR SHARE`,
+    [input.scheduleCycleStart],
+  );
+  const capacity = await client.query<{ maxDailyCapacity: number }>(
+    `SELECT max_daily_capacity AS "maxDailyCapacity"
+       FROM clinic_capacity_settings
+      WHERE clinic_id=$1 AND schedule_type=$2 AND is_active=TRUE
+      FOR UPDATE`,
+    [input.clinicId, input.scheduleType],
+  );
+  const used = await client.query<{ usedCapacity: number }>(
+    `SELECT COUNT(*)::int AS "usedCapacity"
+       FROM appointments
+      WHERE clinic_id=$1
+        AND schedule_type=$2
+        AND appointment_date=$3::date
+        AND id<>$4::uuid
+        AND status IN ('DRAFT','PENDING','COMPLETED','NO_SHOW')`,
+    [input.clinicId, input.scheduleType, input.appointmentDate, input.appointmentId],
+  );
+  return {
+    cycleClosingDate: academicYear.rows[0]?.closingDate ?? null,
+    maxDailyCapacity: capacity.rows[0]?.maxDailyCapacity ?? null,
+    usedCapacity: used.rows[0]?.usedCapacity ?? 0,
+  };
 }
 
 export async function getAppointmentLockMutationContext(
@@ -457,11 +518,13 @@ export async function rescheduleAppointmentWithClient(
     `INSERT INTO appointments (
       batch_id, clinic_id, student_number, schedule_type, appointment_date,
       status, is_published, notes, rescheduled_from, created_by, updated_by,
-      schedule_pair_id, schedule_cycle_start,is_manually_locked,locked_by,locked_at,lock_reason
+      schedule_pair_id, schedule_cycle_start,is_manually_locked,locked_by,locked_at,lock_reason,
+      scheduling_category,scheduling_accepted_at,scheduling_source_row_order,
+      scheduling_window_start,scheduling_window_end
     ) VALUES ($1,$2,$3,$4,$5,'PENDING',$6,$7,$8,$9,$9,$10,$11,$12,
               CASE WHEN $12 THEN $9::uuid ELSE NULL END,
               CASE WHEN $12 THEN NOW() ELSE NULL END,
-              CASE WHEN $12 THEN $13 ELSE NULL END)
+              CASE WHEN $12 THEN $13 ELSE NULL END,$14,$15,$16,$17,$18)
     RETURNING id`,
     [
       appointment.batchId,
@@ -477,6 +540,11 @@ export async function rescheduleAppointmentWithClient(
       appointment.scheduleCycleStart,
       appointment.isManuallyLocked,
       appointment.lockReason,
+      appointment.schedulingCategory,
+      appointment.schedulingAcceptedAt,
+      appointment.schedulingSourceRowOrder,
+      appointment.schedulingWindowStart,
+      appointment.schedulingWindowEnd,
     ],
   );
   await client.query(

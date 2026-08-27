@@ -3,6 +3,9 @@ import type { PoolClient } from "pg";
 import { z } from "zod";
 import { AppError, isPostgresUniqueViolation } from "@/lib/errors";
 import {
+  assertManualAppointmentDestination,
+} from "@/server/appointments/manual-appointment-destination";
+import {
   assertLaboratoryCompletionRollbackAllowed,
   assertPhysicalExamCompletionAllowed,
   cancellationTargetsForPair,
@@ -14,6 +17,7 @@ import { writeAudit } from "@/server/repositories/audit.repository";
 import {
   changeAppointmentStatusWithClient, getAppointmentLockMutationContext,
   getAppointmentMutationContext, getAppointmentMutationScope, getPublishedAppointment,
+  getManualRescheduleDestinationState,
   publishBatch, rescheduleAppointmentWithClient, updateCapacitySetting,
   setAppointmentManualLockWithClient,
   type AppointmentMutationContext, type AppointmentStatus,
@@ -588,7 +592,16 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
     const appointmentDate = input.appointmentDate;
     try {
       const replacementId = await transaction(async (client) => {
-        await lockEffectiveAppointmentScopes(client, [current]);
+        const scope = await getAppointmentMutationScope(id, client);
+        if (!scope) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
+        assertAppointmentMutationAuthorized(actor, scope);
+        await client.query(
+          "SELECT pg_advisory_xact_lock(hashtext('medclinic:schedule-import-queue'))",
+        );
+        await lockEffectiveAppointmentScopes(client, [
+          { studentNumber: scope.studentNumber, scheduleType: "LABORATORY" },
+          { studentNumber: scope.studentNumber, scheduleType: "PHYSICAL_EXAM" },
+        ]);
         const appointment = await getAppointmentMutationContext(id, client);
         if (!appointment) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
         assertAppointmentMutationAuthorized(actor, appointment);
@@ -603,16 +616,53 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
             409,
           );
         }
-        if (await isSchedulingDateBlocked(client, {
-          scheduleType: appointment.scheduleType as "LABORATORY" | "PHYSICAL_EXAM",
-          date: appointmentDate,
-        })) {
+        if (
+          input.expectedUpdatedAt
+          && appointment.updatedAt.getTime() !== new Date(input.expectedUpdatedAt).getTime()
+        ) {
           throw new AppError(
-            "OVPSA_SERVICE_RESERVATION_CONFLICT",
-            `${appointmentDate} is closed or reserved for First Year OVPSA scheduling.`,
+            "APPOINTMENT_STALE",
+            "The appointment changed. Reload before creating a replacement.",
             409,
           );
         }
+        const pair = await resolveEffectiveAppointmentPair(client, appointment);
+        const blocked = await isSchedulingDateBlocked(client, {
+          scheduleType: appointment.scheduleType as "LABORATORY" | "PHYSICAL_EXAM",
+          date: appointmentDate,
+        });
+        const destination = await getManualRescheduleDestinationState(client, {
+          appointmentId: appointment.id,
+          clinicId: appointment.clinicId,
+          scheduleType: appointment.scheduleType,
+          appointmentDate,
+          scheduleCycleStart: appointment.scheduleCycleStart,
+        });
+        if (!destination.cycleClosingDate) {
+          throw new AppError(
+            "OUTSIDE_SCHEDULING_CYCLE",
+            "The appointment scheduling cycle is not configured.",
+            409,
+          );
+        }
+        if (destination.maxDailyCapacity === null) {
+          throw new AppError(
+            "SCHEDULE_CAPACITY_NOT_CONFIGURED",
+            "Daily capacity is not configured for this service.",
+            409,
+          );
+        }
+        assertManualAppointmentDestination({
+          appointment,
+          pair,
+          destinationDate: appointmentDate,
+          manilaToday: manilaToday(),
+          cycleStartDate: `${appointment.scheduleCycleStart}-08-01`,
+          cycleClosingDate: destination.cycleClosingDate,
+          isBlocked: blocked,
+          usedCapacity: destination.usedCapacity,
+          maxDailyCapacity: destination.maxDailyCapacity,
+        });
         const replacementAppointmentId = await rescheduleAppointmentWithClient(
           client,
           appointment,

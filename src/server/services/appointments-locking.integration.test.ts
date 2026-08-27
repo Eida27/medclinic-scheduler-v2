@@ -21,6 +21,7 @@ const laboratoryStaff: SessionUser = {
   role: "CLINIC_STAFF",
   clinicId: TEST_REFERENCE_IDS.laboratoryClinic,
 };
+let createdAcademicYear = false;
 
 async function cleanup() {
   await cleanupTestFixtures("LOCK-%", "LOCK-%", "LOCK-%");
@@ -43,9 +44,22 @@ async function createAppointment(studentNumber: string) {
   return result.rows[0].id;
 }
 
-beforeAll(cleanup);
+beforeAll(async () => {
+  await cleanup();
+  const academicYear = await pool.query<{ start_year: number }>(
+    `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+     VALUES (2049,'2050-07-31',$1,$1)
+     ON CONFLICT (start_year) DO NOTHING
+     RETURNING start_year`,
+    [TEST_REFERENCE_IDS.adminUser],
+  );
+  createdAcademicYear = academicYear.rowCount === 1;
+});
 afterAll(async () => {
   await cleanup();
+  if (createdAcademicYear) {
+    await pool.query("DELETE FROM academic_years WHERE start_year=2049");
+  }
   await pool.end();
 });
 

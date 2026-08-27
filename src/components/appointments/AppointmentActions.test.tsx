@@ -167,4 +167,34 @@ describe("AppointmentActions automatic no-show correction", () => {
     await waitFor(() => expect(push).toHaveBeenCalledWith("/physical-exam/replacement-physical"));
     expect(refresh).not.toHaveBeenCalled();
   });
+
+  it("sends the appointment version with a manual reschedule when one is available", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      data: { id: "replacement-3", status: "PENDING" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(
+      <AppointmentActions
+        id="appointment-3"
+        status="PENDING"
+        updatedAt="2094-09-01T01:02:03.000Z"
+      />,
+    );
+
+    await user.type(screen.getByLabelText("Replacement appointment date"), "2094-09-12");
+    await user.type(screen.getByLabelText("Reason for rescheduling"), "Student requested a safe date");
+    await user.click(screen.getByRole("button", { name: "Create replacement" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/appointments/appointment-3",
+      expect.objectContaining({
+        body: JSON.stringify({
+          appointmentDate: "2094-09-12",
+          notes: "Student requested a safe date",
+          expectedUpdatedAt: "2094-09-01T01:02:03.000Z",
+        }),
+      }),
+    ));
+  });
 });

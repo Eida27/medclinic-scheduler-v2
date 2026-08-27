@@ -44,6 +44,7 @@ const coordinator = {
   clinicName: null,
 } satisfies SessionUser;
 const studentNumber = "TEST-APPT-0001";
+const createdAcademicYears: number[] = [];
 const correctionStudentNumbers = [
   "TEST-APPT-AUTO-ADMIN",
   "TEST-APPT-AUTO-STAFF",
@@ -155,12 +156,14 @@ async function insertQuickPendingAppointment(
 
 beforeAll(async () => {
   await cleanupTestFixtures("TEST-APPT-%", "TEST appointment lifecycle%");
-  await pool.query(
+  const academicYears = await pool.query<{ start_year: number }>(
     `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
-     VALUES (2026,'2027-07-31',$1,$1)
-     ON CONFLICT (start_year) DO NOTHING`,
+     VALUES (2026,'2027-07-31',$1,$1),(2044,'2045-07-31',$1,$1)
+     ON CONFLICT (start_year) DO NOTHING
+     RETURNING start_year`,
     [TEST_REFERENCE_IDS.adminUser],
   );
+  createdAcademicYears.push(...academicYears.rows.map((row) => row.start_year));
   await insertTestStudent({
     studentNumber,
     firstName: "Appointment",
@@ -201,6 +204,12 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cleanupTestFixtures("TEST-APPT-%", "TEST appointment lifecycle%");
+  if (createdAcademicYears.length) {
+    await pool.query(
+      "DELETE FROM academic_years WHERE start_year=ANY($1::integer[])",
+      [createdAcademicYears],
+    );
+  }
   await pool.end();
 });
 
@@ -249,7 +258,7 @@ describe("appointment lifecycle", () => {
       items: [{
         studentNumber, scheduleType: "PHYSICAL_EXAM",
         priorityGroupId: TEST_REFERENCE_IDS.regularPriority,
-        targetDate: "2026-08-05", targetWeekStart: null, targetWeekEnd: null, remarks: "",
+        targetDate: "2044-09-01", targetWeekStart: null, targetWeekEnd: null, remarks: "",
       }],
     }, admin.userId);
     const batchId = String(batch?.id);
@@ -282,7 +291,7 @@ describe("appointment lifecycle", () => {
     const snapshot = await pool.query(
       `SELECT student_name,college_name,program_code,program_name,year_level,source_type
          FROM student_academic_snapshots
-        WHERE student_number=$1 AND academic_year_start=2026`,
+        WHERE student_number=$1 AND academic_year_start=2044`,
       [studentNumber],
     );
     expect(snapshot.rows).toEqual([{
@@ -315,7 +324,7 @@ describe("appointment lifecycle", () => {
     const privateRescheduleNote = "Student conflict: private medical/internal case 4401";
     const replacement = await updateAppointment(current.rows[0].id, {
       status: "COMPLETED",
-      appointmentDate: "2026-08-06", notes: privateRescheduleNote,
+      appointmentDate: "2044-09-02", notes: privateRescheduleNote,
     }, admin);
     expect(replacement?.status).toBe("PENDING");
     expect(replacement?.rescheduledFrom).toBe(current.rows[0].id);
@@ -334,10 +343,10 @@ describe("appointment lifecycle", () => {
     );
     expect(rescheduled.rows).toEqual([{
       notification_type: "SCHEDULE_ADMINISTRATOR_RESCHEDULED",
-      message: expect.stringContaining("2026-08-06 at CPU Clinic (Pending)"),
+      message: expect.stringContaining("2044-09-02 at CPU Clinic (Pending)"),
       source_type: "APPOINTMENT_RESCHEDULE_EVENT",
       source_id: expect.any(String),
-      text_body: expect.stringMatching(/Previous Physical Examination: 2026-08-05 at CPU Clinic[\s\S]*Reason: Administrator-authorized reschedule/),
+      text_body: expect.stringMatching(/Previous Physical Examination: 2044-09-01 at CPU Clinic[\s\S]*Reason: Administrator-authorized reschedule/),
     }]);
     expect(JSON.stringify(rescheduled.rows)).not.toContain(privateRescheduleNote);
 
@@ -446,14 +455,14 @@ describe("appointment lifecycle", () => {
 
     const replacement = await updateAppointment(appointmentId, {
       status: "COMPLETED",
-      appointmentDate: "2045-01-15",
+      appointmentDate: "2045-01-16",
       notes: "Student requested a replacement",
     }, admin);
 
     expect(replacement).toMatchObject({
       status: "PENDING",
       rescheduledFrom: appointmentId,
-      appointmentDate: "2045-01-15",
+      appointmentDate: "2045-01-16",
     });
     await expect(pool.query(
       "SELECT status FROM appointments WHERE id=$1",

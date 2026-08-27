@@ -14,6 +14,7 @@ type AppointmentActionsProps = {
   status: string;
   canCorrectNoShow?: boolean;
   isManuallyLocked?: boolean;
+  updatedAt?: string;
   basePath?: "/appointments" | "/laboratory" | "/physical-exam";
 };
 
@@ -22,6 +23,7 @@ export function AppointmentActions({
   status,
   canCorrectNoShow = false,
   isManuallyLocked = false,
+  updatedAt,
   basePath = "/appointments",
 }: AppointmentActionsProps) {
   const router = useRouter();
@@ -65,6 +67,7 @@ export function AppointmentActions({
     void update({
       appointmentDate: form.get("appointmentDate"),
       notes: form.get("notes"),
+      ...(updatedAt ? { expectedUpdatedAt: updatedAt } : {}),
     }, true);
   }
 

@@ -680,11 +680,14 @@ export async function createScheduleImport(
         `INSERT INTO appointments (
            batch_id, schedule_item_id, clinic_id, student_number, schedule_type,
            appointment_date, status, is_published, created_by, updated_by,
-           schedule_pair_id, schedule_cycle_start
+           schedule_pair_id, schedule_cycle_start,scheduling_category,
+           scheduling_accepted_at,scheduling_source_row_order,
+           scheduling_window_start,scheduling_window_end
          )
          SELECT $1, item.id, $2, fixture.student_number, $3, fixture.appointment_date,
-                'PENDING', TRUE, $4, $4, fixture.schedule_pair_id, $5
-           FROM UNNEST($6::varchar[], $7::date[], $8::uuid[])
+                'PENDING', TRUE, $4, $4, fixture.schedule_pair_id, $5,$6,$7,
+                item.source_row_order,$8,$9
+           FROM UNNEST($10::varchar[], $11::date[], $12::uuid[])
              AS fixture(student_number, appointment_date, schedule_pair_id)
            JOIN coordinator_schedule_items item
              ON item.batch_id=$1 AND item.student_number=fixture.student_number
@@ -696,6 +699,10 @@ export async function createScheduleImport(
           scheduleType,
           actorUserId,
           input.academicYearStart,
+          input.studentCategory,
+          accepted.rows[0].acceptedAt,
+          windowStart,
+          preferredWindowEnd,
           assignments.assignments.map((assignment) => assignment.studentNumber),
           dates,
           assignments.assignments.map((assignment) => assignment.schedulePairId),

@@ -117,6 +117,7 @@ export async function AppointmentDetail({
               status={String(appointment.status)}
               canCorrectNoShow={canCorrectNoShow}
               isManuallyLocked={Boolean(appointment.isManuallyLocked)}
+              updatedAt={appointment.updatedAt.toISOString()}
               basePath={source === "LABORATORY" ? "/laboratory" : "/physical-exam"}
             />}
           {appointment.status === "COMPLETED" && !(appointment.isOvpsaFirstYear && appointment.scheduleType === "LABORATORY") ? (
