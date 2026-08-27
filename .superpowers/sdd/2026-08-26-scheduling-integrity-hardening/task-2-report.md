@@ -202,3 +202,80 @@ Result: exit code `0`. Git emitted only the repository's existing LF-to-CRLF wor
 - The hour-long full serialized suite was intentionally not run, per the ledger ruling; it remains reserved for final integrated verification.
 - Automatic replacement/displacement and First Year recovery lineage are intentionally deferred to their later tasks and were not modified here.
 - Browser acceptance was not requested for this server-integrity task; component/page request-shape coverage is included in the focused verification.
+
+## Review fix round 1 of 5
+
+Fix commit: `04f26ed5fe4b6c68fa2bbd037e32ba8ac327bdc3` (`fix: align manual reschedule validation semantics`).
+
+### Confirmed findings
+
+1. The manual destination count included published First Year OVPSA Laboratory appointments even though Standard Import and priority-displacement capacity load both exclude `schedule_type='LABORATORY' AND ovpsa_batch_id IS NOT NULL` as external Laboratory service.
+2. The locked manual-reschedule flow checked source-status and OVPSA eligibility before comparing the optional `expectedUpdatedAt`, so a status-changing concurrent write could return `INVALID_RESCHEDULE` instead of the stable stale-write result.
+
+### Fix 1 TDD: external OVPSA Laboratory capacity
+
+Regression behavior: with KABALAKA capacity set to one and an otherwise-empty destination containing only an OVPSA-linked external Laboratory appointment, a normal manual Laboratory replacement must still succeed.
+
+The first fixture-only RED attempts were rejected before reaching application behavior by the existing `ovpsa_first_year_revision_exception_reason`, `appointments_ovpsa_lineage_complete`, and `ovpsa_first_year_reservation_lifecycle` constraints. The fixture was corrected to create complete batch/revision/reservation lineage and a valid released reservation; no production code was changed during those setup corrections.
+
+Intended RED command:
+
+```text
+npm.cmd test -- --run 'src/server/services/appointments-manual-rescheduling.integration.test.ts' --maxWorkers=1 --no-file-parallelism --testTimeout=30000 --hookTimeout=30000 --reporter=verbose
+```
+
+Intended RED result: `1` failed and `13` passed. The new test reached `updateAppointment` and received `DAILY_CAPACITY_EXCEEDED` instead of succeeding, proving the manual count treated the external OVPSA Laboratory row as clinic load.
+
+Minimal production change: `getManualRescheduleDestinationState` now applies the same exclusion predicate as both existing automatic capacity loaders:
+
+```sql
+AND NOT (schedule_type='LABORATORY' AND ovpsa_batch_id IS NOT NULL)
+```
+
+GREEN result after this change: `1` file passed, `14/14` tests passed.
+
+### Fix 2 TDD: stale-version precedence
+
+Regression behavior: capture the UI's appointment version, concurrently change the source status to `COMPLETED` and advance `updated_at`, then attempt the manual replacement with the stale token. The request must return `APPOINTMENT_STALE` and create no replacement.
+
+RED command:
+
+```text
+npm.cmd test -- --run 'src/server/services/appointments-manual-rescheduling.integration.test.ts' --maxWorkers=1 --no-file-parallelism --testTimeout=30000 --hookTimeout=30000 --reporter=verbose
+```
+
+RED result: `1` failed and `14` passed. Expected `APPOINTMENT_STALE` (`409`), but the service returned `INVALID_RESCHEDULE` (`422`).
+
+Minimal production change: the optional version comparison now runs immediately after locked authorization and before manual no-show, source-status, or OVPSA batch eligibility checks.
+
+GREEN result after this change: `1` file passed, `15/15` tests passed. The test also proves the source remains `COMPLETED` and no replacement row is created.
+
+### Fix-round covering verification
+
+Command:
+
+```text
+npm.cmd test -- --run 'src/server/services/appointments-manual-rescheduling.integration.test.ts' 'src/server/services/appointments.service.test.ts' 'src/server/repositories/appointments.repository.test.ts' --maxWorkers=1 --no-file-parallelism --testTimeout=30000 --hookTimeout=30000 --reporter=dot
+```
+
+Result: `3` files passed, `92/92` tests passed.
+
+Static verification:
+
+```text
+npx.cmd tsc --noEmit
+npx.cmd eslint 'src/server/repositories/appointments.repository.ts' 'src/server/services/appointments.service.ts' 'src/server/services/appointments-manual-rescheduling.integration.test.ts'
+git diff --check
+```
+
+Results: all three commands exited `0`; TypeScript and ESLint emitted no diagnostics, and diff-check reported no whitespace errors (only the repository's LF-to-CRLF notices).
+
+### Fix-round self-review
+
+- Confirmed the capacity predicate exactly matches Standard Import and priority-displacement semantics and remains limited to OVPSA-linked Laboratory appointments; OVPSA Physical Examination appointments still consume CPU capacity.
+- Confirmed the new capacity regression uses a complete database-valid OVPSA lineage and exercises the real repository/service transaction rather than a mock.
+- Confirmed authorization still precedes stale-version disclosure, while every mutable eligibility result now follows the stale comparison as requested.
+- Confirmed requests without `expectedUpdatedAt` remain backward-compatible and retain the original eligibility errors.
+- Confirmed both rejected stale requests leave appointment history, audit/event rows, and notifications unchanged.
+- Confirmed this round touched only the manual-reschedule repository query, validation ordering, and their integration fixtures/tests; the deferred exact-window-start assertion was not included.
+- No new concern was identified. The full serialized suite remains intentionally reserved for final integrated verification.
