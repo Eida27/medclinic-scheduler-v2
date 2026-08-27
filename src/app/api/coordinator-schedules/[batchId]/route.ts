@@ -23,9 +23,11 @@ export async function GET(_: Request, context: Context) {
     return errorResponse(error);
   }
 }
-export async function PATCH(_request: Request, _context: Context) {
+export async function PATCH(request: Request, context: Context) {
   try {
     await requireUser();
+    void request;
+    void context;
     throw schedulingWorkflowRetiredError();
   } catch (error) {
     return errorResponse(error);

@@ -13,9 +13,10 @@ export async function GET(request: Request) {
   } catch (error) { return errorResponse(error); }
 }
 
-export async function POST(_request: Request) {
+export async function POST(request: Request) {
   try {
     await requireUser();
+    void request;
     throw schedulingWorkflowRetiredError();
   } catch (error) {
     return errorResponse(error);
