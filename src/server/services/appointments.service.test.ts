@@ -274,6 +274,12 @@ describe("appointment status transitions", () => {
   it("rejects manually changing a pending appointment to no-show", () => {
     expect(() => assertStatusTransition("PENDING", "NO_SHOW")).toThrow();
   });
+
+  it("keeps direct no-show cancellation out of the ordinary transition path", () => {
+    expect(() => assertStatusTransition("NO_SHOW", "CANCELLED")).toThrow(
+      expect.objectContaining({ code: "INVALID_STATUS_TRANSITION", status: 422 }),
+    );
+  });
 });
 
 describe("appointment mutation authorization and automatic no-show correction", () => {
