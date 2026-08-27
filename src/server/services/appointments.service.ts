@@ -605,6 +605,16 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
         const appointment = await getAppointmentMutationContext(id, client);
         if (!appointment) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
         assertAppointmentMutationAuthorized(actor, appointment);
+        if (
+          input.expectedUpdatedAt
+          && appointment.updatedAt.getTime() !== new Date(input.expectedUpdatedAt).getTime()
+        ) {
+          throw new AppError(
+            "APPOINTMENT_STALE",
+            "The appointment changed. Reload before creating a replacement.",
+            409,
+          );
+        }
         assertManualNoShowNotRequested(input.status);
         if (!["PENDING", "NO_SHOW"].includes(appointment.status)) {
           throw new AppError("INVALID_RESCHEDULE", "Only pending or no-show appointments can be rescheduled.", 422);
@@ -613,16 +623,6 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
           throw new AppError(
             "OVPSA_APPOINTMENT_REQUIRES_BATCH_RESCHEDULE",
             "First Year OVPSA appointments must be moved through the batch reschedule workflow.",
-            409,
-          );
-        }
-        if (
-          input.expectedUpdatedAt
-          && appointment.updatedAt.getTime() !== new Date(input.expectedUpdatedAt).getTime()
-        ) {
-          throw new AppError(
-            "APPOINTMENT_STALE",
-            "The appointment changed. Reload before creating a replacement.",
             409,
           );
         }

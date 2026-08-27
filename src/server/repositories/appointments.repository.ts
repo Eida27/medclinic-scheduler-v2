@@ -416,7 +416,8 @@ export async function getManualRescheduleDestinationState(
         AND schedule_type=$2
         AND appointment_date=$3::date
         AND id<>$4::uuid
-        AND status IN ('DRAFT','PENDING','COMPLETED','NO_SHOW')`,
+        AND status IN ('DRAFT','PENDING','COMPLETED','NO_SHOW')
+        AND NOT (schedule_type='LABORATORY' AND ovpsa_batch_id IS NOT NULL)`,
     [input.clinicId, input.scheduleType, input.appointmentDate, input.appointmentId],
   );
   return {

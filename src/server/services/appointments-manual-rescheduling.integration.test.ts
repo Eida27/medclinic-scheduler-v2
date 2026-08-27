@@ -94,7 +94,15 @@ async function insertPair(studentNumber: string, options: InsertPairOptions = {}
   };
 }
 
-async function insertStandaloneLaboratory(studentNumber: string, appointmentDate: string) {
+async function insertStandaloneLaboratory(
+  studentNumber: string,
+  appointmentDate: string,
+  ovpsaLineage: {
+    batchId: string;
+    revisionId: string;
+    reservationId: string;
+  } | null = null,
+) {
   await insertTestStudent({
     studentNumber,
     firstName: "Capacity",
@@ -104,8 +112,9 @@ async function insertStandaloneLaboratory(studentNumber: string, appointmentDate
   await pool.query(
     `INSERT INTO appointments (
        clinic_id,student_number,schedule_type,appointment_date,status,is_published,
-       schedule_pair_id,schedule_cycle_start,created_by,updated_by
-     ) VALUES ($1,$2,'LABORATORY',$3,'PENDING',TRUE,$4,$5,$6,$6)`,
+       schedule_pair_id,schedule_cycle_start,created_by,updated_by,
+       ovpsa_batch_id,ovpsa_revision_id,ovpsa_service_reservation_id
+     ) VALUES ($1,$2,'LABORATORY',$3,'PENDING',TRUE,$4,$5,$6,$6,$7,$8,$9)`,
     [
       TEST_REFERENCE_IDS.laboratoryClinic,
       studentNumber,
@@ -113,6 +122,9 @@ async function insertStandaloneLaboratory(studentNumber: string, appointmentDate
       randomUUID(),
       cycleStart,
       TEST_REFERENCE_IDS.adminUser,
+      ovpsaLineage?.batchId ?? null,
+      ovpsaLineage?.revisionId ?? null,
+      ovpsaLineage?.reservationId ?? null,
     ],
   );
 }
@@ -131,10 +143,7 @@ async function insertGlobalClosure(date: string) {
   );
 }
 
-async function insertServiceReservation(
-  scheduleType: "LABORATORY" | "PHYSICAL_EXAM",
-  date: string,
-) {
+async function insertOvpsaBatch() {
   const batch = await pool.query<{ id: string }>(
     `INSERT INTO ovpsa_first_year_batches (
        schedule_cycle_start,college_id,status,created_by,updated_by
@@ -142,20 +151,33 @@ async function insertServiceReservation(
     [cycleStart, TEST_REFERENCE_IDS.college, TEST_REFERENCE_IDS.adminUser],
   );
   reservationBatchIds.push(batch.rows[0].id);
+  return batch.rows[0].id;
+}
+
+async function insertServiceReservation(
+  scheduleType: "LABORATORY" | "PHYSICAL_EXAM",
+  date: string,
+) {
+  const batchId = await insertOvpsaBatch();
   const laboratoryDate = scheduleType === "LABORATORY" ? date : "2094-09-13";
   const physicalExamDate = scheduleType === "PHYSICAL_EXAM" ? date : "2094-09-21";
   const revision = await pool.query<{ id: string }>(
     `INSERT INTO ovpsa_first_year_batch_revisions (
        batch_id,revision_number,status,laboratory_date,physical_exam_date,created_by
      ) VALUES ($1,1,'DRAFT',$2,$3,$4) RETURNING id::text`,
-    [batch.rows[0].id, laboratoryDate, physicalExamDate, TEST_REFERENCE_IDS.adminUser],
+    [batchId, laboratoryDate, physicalExamDate, TEST_REFERENCE_IDS.adminUser],
   );
-  await pool.query(
+  const reservation = await pool.query<{ id: string }>(
     `INSERT INTO ovpsa_first_year_service_reservations (
        batch_id,revision_id,schedule_type,reservation_date,status,created_by
-     ) VALUES ($1,$2,$3,$4,'ACTIVE',$5)`,
-    [batch.rows[0].id, revision.rows[0].id, scheduleType, date, TEST_REFERENCE_IDS.adminUser],
+     ) VALUES ($1,$2,$3,$4,'ACTIVE',$5) RETURNING id::text`,
+    [batchId, revision.rows[0].id, scheduleType, date, TEST_REFERENCE_IDS.adminUser],
   );
+  return {
+    batchId,
+    revisionId: revision.rows[0].id,
+    reservationId: reservation.rows[0].id,
+  };
 }
 
 async function cleanup() {
@@ -292,6 +314,30 @@ describe("manual appointment rescheduling integrity", () => {
     }, admin)).rejects.toMatchObject({ code: "DAILY_CAPACITY_EXCEEDED", status: 409 });
   });
 
+  it("does not count an external OVPSA Laboratory appointment against KABALAKA capacity", async () => {
+    const pair = await insertPair("TEST-MR-EXT-SOURCE");
+    const ovpsaLineage = await insertServiceReservation("LABORATORY", "2094-09-14");
+    await pool.query(
+      `UPDATE ovpsa_first_year_service_reservations
+          SET status='RELEASED',released_at=clock_timestamp(),released_by=$2,
+              release_reason='Test external Laboratory capacity semantics'
+        WHERE id=$1`,
+      [ovpsaLineage.reservationId, TEST_REFERENCE_IDS.adminUser],
+    );
+    await insertStandaloneLaboratory("TEST-MR-EXT-OVPSA", "2094-09-14", ovpsaLineage);
+    await pool.query(
+      `UPDATE clinic_capacity_settings
+          SET safe_daily_capacity=1,max_daily_capacity=1
+        WHERE clinic_id=$1 AND schedule_type='LABORATORY'`,
+      [TEST_REFERENCE_IDS.laboratoryClinic],
+    );
+
+    await expect(updateAppointment(pair.laboratory.id, {
+      appointmentDate: "2094-09-14",
+      notes: "External First Year Laboratory does not consume clinic capacity",
+    }, admin)).resolves.toMatchObject({ appointmentDate: "2094-09-14" });
+  });
+
   it.each([
     ["Laboratory on Physical Examination", "LABORATORY", "2094-09-17"],
     ["Physical Examination on Laboratory", "PHYSICAL_EXAM", "2094-09-13"],
@@ -337,6 +383,31 @@ describe("manual appointment rescheduling integrity", () => {
       [pair.laboratory.id],
     );
     expect(state.rows).toEqual([{ status: "PENDING", replacements: 0 }]);
+  });
+
+  it("reports a stale UI version before eligibility when the appointment status changed", async () => {
+    const pair = await insertPair("TEST-MR-STALE-STATUS");
+    const expectedUpdatedAt = pair.laboratory.updated_at.toISOString();
+    await pool.query(
+      `UPDATE appointments
+          SET status='COMPLETED',updated_at=updated_at + INTERVAL '1 second'
+        WHERE id=$1`,
+      [pair.laboratory.id],
+    );
+
+    await expect(updateAppointment(pair.laboratory.id, {
+      appointmentDate: "2094-09-14",
+      notes: "Stale replacement after status change",
+      expectedUpdatedAt,
+    }, admin)).rejects.toMatchObject({ code: "APPOINTMENT_STALE", status: 409 });
+    const state = await pool.query(
+      `SELECT status,
+              (SELECT COUNT(*)::int FROM appointments replacement
+                WHERE replacement.rescheduled_from=appointment.id) AS replacements
+         FROM appointments appointment WHERE appointment.id=$1`,
+      [pair.laboratory.id],
+    );
+    expect(state.rows).toEqual([{ status: "COMPLETED", replacements: 0 }]);
   });
 
   it("moves only the selected appointment and preserves history, audit, pair, cycle, and lineage", async () => {
