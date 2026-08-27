@@ -68,10 +68,10 @@ function assertToken(batch: StoredOvpsaBatch, optimisticToken: string) {
   }
 }
 
-function cycleBoundary(scheduleCycleStart: number) {
+function cycleBoundary(scheduleCycleStart: number, closingDate: string) {
   return {
     startDate: `${scheduleCycleStart}-08-01`,
-    endDate: `${scheduleCycleStart + 1}-07-31`,
+    endDate: closingDate,
   };
 }
 
@@ -166,7 +166,7 @@ async function planWithClient(
   batch: StoredOvpsaBatch,
   options: { forPublication: boolean },
 ) {
-  const boundary = cycleBoundary(batch.scheduleCycleStart);
+  const boundary = cycleBoundary(batch.scheduleCycleStart, batch.closingDate);
   const students = await loadEligibleFirstYearStudents(client, {
     collegeId: batch.collegeId,
   });
@@ -475,7 +475,7 @@ export async function publishOvpsaFirstYearBatch(
               ],
         ),
       ]);
-      const { preview, supersededByStudent, plannedReplacements } =
+      const { preview, supersededByStudent, plannedReplacements, plannedFallbacks } =
         await planWithClient(client, batch, { forPublication: true });
       if (!preview.canPublish) {
         throw new AppError(
@@ -615,6 +615,7 @@ export async function publishOvpsaFirstYearBatch(
           batch,
           actorUserId,
           plannedReplacements,
+          plannedFallbacks,
           laboratoryReservationId: reservationByService.get("LABORATORY")!,
           physicalExamReservationId: reservationByService.get("PHYSICAL_EXAM")!,
         },
@@ -889,7 +890,7 @@ async function buildReplacementRevisionPreview(
   members: Awaited<ReturnType<typeof loadPublishedMembershipForRevision>>,
   forUpdate: boolean,
 ) {
-  const boundary = cycleBoundary(batch.scheduleCycleStart);
+  const boundary = cycleBoundary(batch.scheduleCycleStart, batch.closingDate);
   const capacity = await loadCpuPhysicalExamMaximumCapacity(client);
   if (capacity === null) {
     throw new AppError(
@@ -1220,6 +1221,7 @@ export async function rescheduleOvpsaFirstYearBatch(
       batch: replacementBatch,
       actorUserId,
       plannedReplacements: planned.plannedReplacements,
+      plannedFallbacks: planned.plannedFallbacks,
       laboratoryReservationId,
       physicalExamReservationId,
     });

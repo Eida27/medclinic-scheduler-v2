@@ -10,7 +10,11 @@ import {
   type StudentCategory,
 } from "@/server/services/scheduling-window";
 import { queueAuthoritativeScheduleNotification } from "@/server/schedule/schedule-notification-hooks";
-import { buildPriorityDisplacementNotification } from "@/server/schedule/schedule-notifications";
+import {
+  buildAwaitingResolutionNotification,
+  buildPriorityDisplacementNotification,
+} from "@/server/schedule/schedule-notifications";
+import { resolveAutomaticReplacementBounds } from "@/server/scheduling/automatic-replacement-bounds";
 import type {
   OvpsaBatchBlocker,
   OvpsaDisplacement,
@@ -56,6 +60,8 @@ export type OvpsaDisplacementCandidate = {
 type PlannedReplacement = OvpsaProposedReplacement & {
   candidate: OvpsaDisplacementCandidate;
 };
+
+type PlannedFallback = OvpsaDisplacementCandidate;
 
 export type OvpsaServiceDates = {
   laboratoryDates: string[];
@@ -109,9 +115,11 @@ async function loadDateConflictAppointments(
             appointment.status,appointment.schedule_pair_id::text,
             appointment.clinic_id::text,appointment.batch_id::text,
             appointment.is_manually_locked,
-            COALESCE(appointment.scheduling_category,import_group.student_category) AS category,
-            COALESCE(appointment.scheduling_accepted_at,import_group.accepted_at) AS accepted_at,
-            COALESCE(appointment.scheduling_source_row_order,item.source_row_order) AS source_row_order,
+            COALESCE(appointment.scheduling_category,import_group.student_category,'REGULAR') AS category,
+            COALESCE(appointment.scheduling_accepted_at,import_group.accepted_at,
+                     appointment.created_at) AS accepted_at,
+            COALESCE(appointment.scheduling_source_row_order,item.source_row_order,
+                     2147483647) AS source_row_order,
             import_group.preferred_month,
             appointment.scheduling_window_start::text AS window_start,
             appointment.scheduling_window_end::text AS window_end
@@ -334,8 +342,7 @@ export async function planOvpsaLowerPriorityDisplacementsForServiceDates(
     if (
       !conflict.category ||
       !conflict.acceptedAt ||
-      conflict.sourceRowOrder === null ||
-      !conflict.batchId
+      conflict.sourceRowOrder === null
     ) {
       recordProtected(
         protectedConflict(
@@ -441,14 +448,27 @@ export async function planOvpsaLowerPriorityDisplacementsForServiceDates(
 
   const blockers: OvpsaBatchBlocker[] = [];
   const replacements: PlannedReplacement[] = [];
+  const fallbacks: PlannedFallback[] = [];
   if (candidates.length) {
-    const startDate = candidates
-      .map((candidate) => candidate.schedulingWindowStart)
+    const today = await client.query<{ manila_today: string }>(
+      "SELECT (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date::text AS manila_today",
+    );
+    const boundedCandidates = candidates.map((candidate) => ({
+      candidate,
+      bounds: resolveAutomaticReplacementBounds({
+        replacementType: candidate.displacementType,
+        originalWindowStart: candidate.schedulingWindowStart,
+        manilaToday: today.rows[0].manila_today,
+        cycleClosingDate: input.batch.closingDate,
+        laboratoryDate: candidate.displacementType === "PHYSICAL_EXAM_ONLY"
+          ? candidate.laboratory.appointmentDate
+          : undefined,
+      }),
+    }));
+    const startDate = boundedCandidates
+      .map(({ bounds }) => bounds.lowerBound)
       .sort()[0];
-    const endDate = candidates
-      .map((candidate) => candidate.schedulingWindowEnd)
-      .sort()
-      .at(-1)!;
+    const endDate = input.batch.closingDate;
     const capacities = await client.query<{
       clinic_id: string;
       clinic_code: "KABALAKA_CLINIC" | "CPU_CLINIC";
@@ -519,17 +539,22 @@ export async function planOvpsaLowerPriorityDisplacementsForServiceDates(
     const blockedPhysicalExamDates = [
       ...new Set([...blocked.physicalExamDates, ...input.serviceDates.physicalExamDates]),
     ];
-    const pairCandidates = candidates.filter(
-      (candidate) => candidate.displacementType === "PAIR",
+    const pairCandidates = boundedCandidates.filter(
+      ({ candidate, bounds }) => candidate.displacementType === "PAIR"
+        && bounds.lowerBound <= bounds.upperBound,
     );
+    fallbacks.push(...boundedCandidates
+      .filter(({ candidate, bounds }) => candidate.displacementType === "PAIR"
+        && bounds.lowerBound > bounds.upperBound)
+      .map(({ candidate }) => candidate));
     const paired = generatePairedSchedule({
-      requests: pairCandidates.map((candidate) => ({
+      requests: pairCandidates.map(({ candidate, bounds }) => ({
         requestId: `ovpsa:${candidate.schedulePairId}`,
         studentNumber: candidate.studentNumber,
         category: candidate.category,
         acceptedAt: candidate.acceptedAt,
         sourceRowOrder: candidate.sourceRowOrder,
-        windowStart: candidate.schedulingWindowStart,
+        windowStart: bounds.lowerBound,
       })),
       laboratoryCapacity: {
         maxDailyCapacity: laboratoryCapacity.max_daily_capacity,
@@ -544,7 +569,7 @@ export async function planOvpsaLowerPriorityDisplacementsForServiceDates(
       searchEndDate: endDate,
     });
     const pairById = new Map(
-      pairCandidates.map((candidate) => [candidate.schedulePairId, candidate]),
+      pairCandidates.map(({ candidate }) => [candidate.schedulePairId, candidate]),
     );
     for (const assignment of paired.assignments) {
       const pairId = assignment.requestId.slice("ovpsa:".length);
@@ -561,37 +586,27 @@ export async function planOvpsaLowerPriorityDisplacementsForServiceDates(
       physicalExamLoad[assignment.physicalExamDate] =
         (physicalExamLoad[assignment.physicalExamDate] ?? 0) + 1;
     }
-    if (paired.unscheduledRequestIds.length) {
-      blockers.push({
-        code: "OVPSA_REPLACEMENT_CAPACITY_EXHAUSTED",
-        message:
-          "At least one displaced appointment cannot be replaced inside its original scheduling window.",
-        details: { requestIds: paired.unscheduledRequestIds },
-      });
-    }
+    fallbacks.push(...paired.unscheduledRequestIds.map((requestId) => (
+      pairById.get(requestId.slice("ovpsa:".length))!
+    )));
     const blockedPhysicalExamSet = new Set(blockedPhysicalExamDates);
-    const physicalOnly = candidates
+    const physicalOnly = boundedCandidates
       .filter(
-        (candidate) => candidate.displacementType === "PHYSICAL_EXAM_ONLY",
+        ({ candidate }) => candidate.displacementType === "PHYSICAL_EXAM_ONLY",
       )
       .sort(
         (left, right) =>
-          categoryTier(left.category) - categoryTier(right.category) ||
-          left.acceptedAt.localeCompare(right.acceptedAt) ||
-          left.sourceRowOrder - right.sourceRowOrder ||
-          left.studentNumber.localeCompare(right.studentNumber),
+          categoryTier(left.candidate.category) - categoryTier(right.candidate.category) ||
+          left.candidate.acceptedAt.localeCompare(right.candidate.acceptedAt) ||
+          left.candidate.sourceRowOrder - right.candidate.sourceRowOrder ||
+          left.candidate.studentNumber.localeCompare(right.candidate.studentNumber),
       );
-    for (const candidate of physicalOnly) {
-      const start = [
-        candidate.schedulingWindowStart,
-        addDays(candidate.laboratory.appointmentDate, 1),
-      ]
-        .sort()
-        .at(-1)!;
+    for (const { candidate, bounds } of physicalOnly) {
+      const start = bounds.lowerBound;
       let date: string | null = null;
       for (
         let proposed = start;
-        proposed <= candidate.schedulingWindowEnd;
+        proposed <= bounds.upperBound;
         proposed = addDays(proposed, 1)
       ) {
         if (!isWeekday(proposed) || blockedPhysicalExamSet.has(proposed))
@@ -606,11 +621,7 @@ export async function planOvpsaLowerPriorityDisplacementsForServiceDates(
         }
       }
       if (!date) {
-        blockers.push({
-          code: "OVPSA_REPLACEMENT_CAPACITY_EXHAUSTED",
-          message: `No Physical Examination replacement is available for ${candidate.studentNumber}.`,
-          details: { studentNumber: candidate.studentNumber },
-        });
+        fallbacks.push(candidate);
         continue;
       }
       replacements.push({
@@ -632,17 +643,10 @@ export async function planOvpsaLowerPriorityDisplacementsForServiceDates(
     oldPhysicalExamDate: candidate.physicalExam.appointmentDate,
     displacementType: candidate.displacementType,
   }));
-  const replacementPairIds = new Set(
-    replacements.map((replacement) => replacement.candidate.schedulePairId),
-  );
-  const replacementBlockedServiceDateKeys = new Set(
-    candidates
-      .filter((candidate) => !replacementPairIds.has(candidate.schedulePairId))
-      .map((candidate) => `${candidate.conflictingServiceType}:${candidate.conflictingServiceDate}`),
-  );
   return {
     candidates,
     plannedReplacements: replacements,
+    plannedFallbacks: fallbacks,
     protectedConflicts,
     protectedServiceDates: [...protectedServiceDateKeys].map((key) => {
       const separator = key.indexOf(":");
@@ -651,13 +655,10 @@ export async function planOvpsaLowerPriorityDisplacementsForServiceDates(
         date: key.slice(separator + 1),
       };
     }),
-    replacementBlockedServiceDates: [...replacementBlockedServiceDateKeys].map((key) => {
-      const separator = key.indexOf(":");
-      return {
-        scheduleType: key.slice(0, separator) as "LABORATORY" | "PHYSICAL_EXAM",
-        date: key.slice(separator + 1),
-      };
-    }),
+    replacementBlockedServiceDates: [] as Array<{
+      scheduleType: "LABORATORY" | "PHYSICAL_EXAM";
+      date: string;
+    }>,
     blockers,
     displacements,
     proposedReplacements: replacements.map((replacement) => ({
@@ -675,12 +676,15 @@ export async function applyOvpsaLowerPriorityDisplacements(
     batch: StoredOvpsaBatch;
     actorUserId: string;
     plannedReplacements: PlannedReplacement[];
+    plannedFallbacks: PlannedFallback[];
     laboratoryReservationId: string;
     physicalExamReservationId?: string;
     physicalExamReservationIdsByDate?: Record<string, string>;
   },
 ) {
-  if (!input.plannedReplacements.length) return { displacedCount: 0 };
+  if (!input.plannedReplacements.length && !input.plannedFallbacks.length) {
+    return { displacedCount: 0, automaticReplacementCount: 0, manualResolutionCount: 0 };
+  }
   const movingIds = input.plannedReplacements.flatMap(({ candidate }) =>
     candidate.displacementType === "PAIR"
       ? [candidate.laboratory.id, candidate.physicalExam.id]
@@ -708,6 +712,35 @@ export async function applyOvpsaLowerPriorityDisplacements(
          FROM UNNEST($1::uuid[]) fixture(id)`,
     [movingIds, input.actorUserId],
   );
+  const fallbackMovingIds = input.plannedFallbacks.flatMap((candidate) =>
+    candidate.displacementType === "PAIR"
+      ? [candidate.laboratory.id, candidate.physicalExam.id]
+      : [candidate.physicalExam.id],
+  );
+  if (fallbackMovingIds.length) {
+    const awaiting = await client.query<{ id: string }>(
+      `UPDATE appointments
+          SET status='AWAITING_RESCHEDULE',updated_by=$2,updated_at=clock_timestamp()
+        WHERE id=ANY($1::uuid[]) AND status='PENDING' AND is_published=TRUE
+        RETURNING id::text`,
+      [fallbackMovingIds, input.actorUserId],
+    );
+    if (awaiting.rowCount !== fallbackMovingIds.length) {
+      throw new AppError(
+        "OVPSA_CONCURRENT_APPOINTMENT_CHANGE",
+        "A conflicting appointment changed during publication.",
+        409,
+      );
+    }
+    await client.query(
+      `INSERT INTO appointment_status_logs (
+         appointment_id,old_status,new_status,notes,changed_by
+       ) SELECT id,'PENDING','AWAITING_RESCHEDULE',
+                'First Year OVPSA displacement requires Manual Resolution.',$2
+           FROM UNNEST($1::uuid[]) fixture(id)`,
+      [fallbackMovingIds, input.actorUserId],
+    );
+  }
   const replacementRows = input.plannedReplacements.flatMap(
     ({ candidate, ...replacement }) => {
       const common = {
@@ -852,5 +885,102 @@ export async function applyOvpsaLowerPriorityDisplacements(
       }),
     );
   }
-  return { displacedCount: input.plannedReplacements.length };
+  for (const candidate of input.plannedFallbacks) {
+    const displacedAppointmentIds = candidate.displacementType === "PAIR"
+      ? [candidate.laboratory.id, candidate.physicalExam.id]
+      : [candidate.physicalExam.id];
+    const policyMetadata = {
+      studentNumber: candidate.studentNumber,
+      displacementType: candidate.displacementType,
+      originAppointmentIds: [candidate.laboratory.id, candidate.physicalExam.id],
+      affectedAppointmentIds: displacedAppointmentIds,
+      schedulePairId: candidate.schedulePairId,
+      scheduleCycleStart: input.batch.scheduleCycleStart,
+      scheduleCycleClosingDate: input.batch.closingDate,
+      schedulingCategory: candidate.category,
+      schedulingAcceptedAt: candidate.acceptedAt,
+      schedulingSourceRowOrder: candidate.sourceRowOrder,
+      preferredMonth: candidate.preferredMonth,
+      schedulingWindowStart: candidate.schedulingWindowStart,
+      schedulingWindowEnd: candidate.schedulingWindowEnd,
+      ovpsaBatchId: input.batch.batchId,
+      ovpsaRevisionId: input.batch.revisionId,
+    };
+    const manualCase = await client.query<{ id: string }>(
+      `INSERT INTO clinic_closure_manual_cases (
+         student_number,case_source,closure_group_id,schedule_pair_id,schedule_cycle_start,
+         affected_laboratory_appointment_id,affected_physical_exam_appointment_id,
+         reason_code,reason_message,policy_metadata
+       ) VALUES ($1,'AUTOMATIC_DISPLACEMENT',NULL,$2,$3,$4,$5,
+                 'NO_VALID_REPLACEMENT_WITHIN_CYCLE',$6,$7::jsonb)
+       RETURNING id::text`,
+      [
+        candidate.studentNumber,
+        candidate.schedulePairId,
+        input.batch.scheduleCycleStart,
+        candidate.laboratory.id,
+        candidate.physicalExam.id,
+        "No valid automatic replacement is available within the current scheduling cycle.",
+        JSON.stringify(policyMetadata),
+      ],
+    );
+    await client.query(
+      `INSERT INTO appointment_reschedule_events (
+         student_number,schedule_pair_id,cause,schedule_cycle_start,
+         old_laboratory_appointment_id,old_physical_exam_appointment_id,
+         actor_user_id,ovpsa_batch_id,ovpsa_source_reservation_id,
+         ovpsa_target_revision_id,strategy,outcome,manual_case_id,
+         policy_reason_code,policy_metadata
+       ) VALUES ($1,$2,'OVPSA_PUBLICATION',$3,$4,$5,$6,$7,$8,$9,
+                 'MANUAL_RESOLUTION_REQUIRED','AWAITING_RESCHEDULE',$10,
+                 'NO_VALID_REPLACEMENT_WITHIN_CYCLE',$11::jsonb)`,
+      [
+        candidate.studentNumber,
+        candidate.schedulePairId,
+        input.batch.scheduleCycleStart,
+        candidate.laboratory.id,
+        candidate.physicalExam.id,
+        input.actorUserId,
+        input.batch.batchId,
+        candidate.displacementType === "PAIR"
+          ? input.laboratoryReservationId
+          : input.physicalExamReservationIdsByDate?.[candidate.conflictingServiceDate]
+            ?? input.physicalExamReservationId,
+        input.batch.revisionId,
+        manualCase.rows[0].id,
+        JSON.stringify(policyMetadata),
+      ],
+    );
+    await queueAuthoritativeScheduleNotification(
+      client,
+      candidate.studentNumber,
+      (state) => buildAwaitingResolutionNotification({
+        state,
+        eventId: manualCase.rows[0].id,
+        sourceType: "AUTOMATIC_DISPLACEMENT_MANUAL_CASE",
+        reason: "No valid automatic replacement is available within the current scheduling cycle.",
+        previous: {
+          laboratory: {
+            date: candidate.laboratory.appointmentDate,
+            location: "KABALAKA Clinic",
+          },
+          physicalExam: {
+            date: candidate.physicalExam.appointmentDate,
+            location: "CPU Clinic",
+          },
+        },
+      }),
+    );
+    await client.query(
+      `INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,metadata)
+       VALUES ($1,'OVPSA_DISPLACEMENT_MANUAL_RESOLUTION_REQUIRED',
+               'clinic_closure_manual_case',$2,$3::jsonb)`,
+      [input.actorUserId, manualCase.rows[0].id, JSON.stringify(policyMetadata)],
+    );
+  }
+  return {
+    displacedCount: input.plannedReplacements.length + input.plannedFallbacks.length,
+    automaticReplacementCount: input.plannedReplacements.length,
+    manualResolutionCount: input.plannedFallbacks.length,
+  };
 }

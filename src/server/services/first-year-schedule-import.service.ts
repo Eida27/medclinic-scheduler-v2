@@ -34,12 +34,14 @@ type ResolvedFirstYearRow = ImportedStudentRow & {
 type PreparedFirstYearImport = {
   rows: ResolvedFirstYearRow[];
   plan: FirstYearImportPlan;
+  closingDate: string;
   displacement: Awaited<ReturnType<typeof planOvpsaLowerPriorityDisplacementsForServiceDates>> | null;
 };
 
 function publicationPlanFingerprint(prepared: PreparedFirstYearImport) {
   return JSON.stringify({
     laboratoryDate: prepared.plan.laboratory.date,
+    closingDate: prepared.closingDate,
     allocations: prepared.plan.allocations.map((allocation) => ({
       date: allocation.date,
       studentCount: allocation.studentCount,
@@ -53,8 +55,25 @@ function publicationPlanFingerprint(prepared: PreparedFirstYearImport) {
     replacements: (prepared.displacement?.plannedReplacements ?? [])
       .map((replacement) => ({
         schedulePairId: replacement.candidate.schedulePairId,
+        displacementType: replacement.candidate.displacementType,
+        category: replacement.candidate.category,
+        acceptedAt: replacement.candidate.acceptedAt,
+        sourceRowOrder: replacement.candidate.sourceRowOrder,
+        schedulingWindowStart: replacement.candidate.schedulingWindowStart,
+        schedulingWindowEnd: replacement.candidate.schedulingWindowEnd,
         laboratoryDate: replacement.laboratoryDate,
         physicalExamDate: replacement.physicalExamDate,
+      }))
+      .sort((left, right) => left.schedulePairId.localeCompare(right.schedulePairId)),
+    fallbacks: (prepared.displacement?.plannedFallbacks ?? [])
+      .map((fallback) => ({
+        schedulePairId: fallback.schedulePairId,
+        displacementType: fallback.displacementType,
+        category: fallback.category,
+        acceptedAt: fallback.acceptedAt,
+        sourceRowOrder: fallback.sourceRowOrder,
+        schedulingWindowStart: fallback.schedulingWindowStart,
+        schedulingWindowEnd: fallback.schedulingWindowEnd,
       }))
       .sort((left, right) => left.schedulePairId.localeCompare(right.schedulePairId)),
   });
@@ -155,12 +174,15 @@ async function resolveRows(
 async function assertAcademicCycle(
   client: PoolClient,
   input: FirstYearScheduleImportInput,
+  forUpdate: boolean,
 ) {
-  const result = await client.query<{ today: string }>(
-    `SELECT (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date::text AS today
+  const result = await client.query<{ today: string; closing_date: string }>(
+    `SELECT (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date::text AS today,
+            closing_date::text
        FROM academic_years
       WHERE start_year=$1
-        AND closing_date >= (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date`,
+        AND closing_date >= (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date
+      ${forUpdate ? "FOR KEY SHARE" : ""}`,
     [input.academicYearStart],
   );
   if (!result.rowCount) {
@@ -171,7 +193,7 @@ async function assertAcademicCycle(
     );
   }
   const cycleStartDate = `${input.academicYearStart}-08-01`;
-  const cycleEndDate = `${input.academicYearStart + 1}-07-31`;
+  const cycleEndDate = result.rows[0].closing_date;
   if (
     input.laboratoryDate < cycleStartDate
     || input.laboratoryDate > cycleEndDate
@@ -190,10 +212,12 @@ async function assertAcademicCycle(
 function virtualBatch(
   input: FirstYearScheduleImportInput,
   rows: ResolvedFirstYearRow[],
+  closingDate: string,
 ): StoredOvpsaBatch {
   return {
     batchId: "00000000-0000-4000-8000-000000000099",
     scheduleCycleStart: input.academicYearStart,
+    closingDate,
     collegeId: rows[0].collegeId,
     collegeName: rows[0].resolvedCollegeName,
     status: "DRAFT",
@@ -213,7 +237,7 @@ async function prepareFirstYearImport(
   forUpdate: boolean,
 ): Promise<PreparedFirstYearImport> {
   const rows = await resolveRows(client, input.rows);
-  const boundary = await assertAcademicCycle(client, input);
+  const boundary = await assertAcademicCycle(client, input, forUpdate);
   const capacity = await loadCpuPhysicalExamMaximumCapacity(client);
   const blocked = await loadSchedulingBlockedDates(client, {
     startDate: input.laboratoryDate < addDays(input.laboratoryDate, 7)
@@ -284,7 +308,7 @@ async function prepareFirstYearImport(
     physicalExamCandidates: candidates,
   });
   let displacement: PreparedFirstYearImport["displacement"] = null;
-  const batch = virtualBatch(input, rows);
+  const batch = virtualBatch(input, rows, boundary.cycleEndDate);
   while (plan.canPublish) {
     displacement = await planOvpsaLowerPriorityDisplacementsForServiceDates(client, {
       batch,
@@ -355,7 +379,7 @@ async function prepareFirstYearImport(
       physicalExamCandidates: candidates,
     });
   }
-  return { rows, plan, displacement };
+  return { rows, plan, closingDate: boundary.cycleEndDate, displacement };
 }
 
 export async function reviewFirstYearScheduleImportPlan(
@@ -669,7 +693,7 @@ export async function publishFirstYearScheduleImport(
       const laboratoryBatchId = await insertBatch(laboratoryClinicId, "Iloilo Mission Hospital Laboratory");
       const physicalExamBatchId = await insertBatch(physicalExamClinicId, "CPU Clinic Physical Examination");
       const batchForDisplacement: StoredOvpsaBatch = {
-        ...virtualBatch(input, prepared.rows),
+        ...virtualBatch(input, prepared.rows, prepared.closingDate),
         batchId,
         revisionId,
         revisionStatus: "PUBLISHED",
@@ -678,6 +702,7 @@ export async function publishFirstYearScheduleImport(
         batch: batchForDisplacement,
         actorUserId,
         plannedReplacements: prepared.displacement.plannedReplacements,
+        plannedFallbacks: prepared.displacement.plannedFallbacks,
         laboratoryReservationId,
         physicalExamReservationIdsByDate: physicalReservationByDate,
       });

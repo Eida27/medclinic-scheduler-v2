@@ -18,6 +18,8 @@ import {
 } from "@/server/services/clinic-calendar.service";
 import { markOverdueAppointmentsNoShow } from "@/server/repositories/appointment-no-show.repository";
 import type { SessionUser } from "@/types/roles";
+import { planOvpsaLowerPriorityDisplacementsForServiceDates } from "./ovpsa-first-year-displacement";
+import type { StoredOvpsaBatch } from "./ovpsa-first-year.repository";
 
 const studentPrefix = "OVP-T1-";
 const cycleStart = 2096;
@@ -146,10 +148,19 @@ async function insertLowerPriorityConflict(
   studentNumber: string,
   category: "REGULAR" | "OJT" | "TOUR",
   sourceRowOrder: number,
-  options: { manuallyLocked?: boolean; withLineage?: boolean } = {},
+  options: {
+    manuallyLocked?: boolean;
+    withLineage?: boolean;
+    scheduleCycleStart?: number;
+    laboratoryDate?: string;
+    physicalExamDate?: string;
+  } = {},
 ) {
   await insertStudent(studentNumber, 4);
   const pairId = randomUUID();
+  const appointmentCycleStart = options.scheduleCycleStart ?? cycleStart;
+  const laboratoryDate = options.laboratoryDate ?? "2096-09-10";
+  const physicalExamDate = options.physicalExamDate ?? "2096-09-11";
   if (options.withLineage === false) {
     const appointments = await pool.query<{ id: string; schedule_type: string }>(
       `INSERT INTO appointments (
@@ -157,10 +168,10 @@ async function insertLowerPriorityConflict(
          schedule_pair_id,schedule_cycle_start,created_by,updated_by,
          is_manually_locked,locked_by,locked_at,lock_reason
        ) VALUES
-         ($1,$3,'LABORATORY','2096-09-10','PENDING',TRUE,$4,$5,$6,$6,
+         ($1,$3,'LABORATORY',$8,'PENDING',TRUE,$4,$5,$6,$6,
           $7,CASE WHEN $7 THEN $6::uuid END,CASE WHEN $7 THEN clock_timestamp() END,
           CASE WHEN $7 THEN 'Protected OVPSA fixture' END),
-         ($2,$3,'PHYSICAL_EXAM','2096-09-11','PENDING',TRUE,$4,$5,$6,$6,
+         ($2,$3,'PHYSICAL_EXAM',$9,'PENDING',TRUE,$4,$5,$6,$6,
           FALSE,NULL,NULL,NULL)
        RETURNING id::text,schedule_type`,
       [
@@ -168,9 +179,11 @@ async function insertLowerPriorityConflict(
         TEST_REFERENCE_IDS.physicalExamClinic,
         studentNumber,
         pairId,
-        cycleStart,
+        appointmentCycleStart,
         TEST_REFERENCE_IDS.adminUser,
         options.manuallyLocked ?? false,
+        laboratoryDate,
+        physicalExamDate,
       ],
     );
     return { pairId, appointments: appointments.rows };
@@ -185,7 +198,7 @@ async function insertLowerPriorityConflict(
       `OVP-T1-${category}-${studentNumber}`,
       TEST_REFERENCE_IDS.adminUser,
       category,
-      cycleStart,
+      appointmentCycleStart,
       category === "REGULAR" ? null : 9,
       `2096-08-0${Math.min(sourceRowOrder, 9)}T00:00:00.000Z`,
     ],
@@ -207,8 +220,8 @@ async function insertLowerPriorityConflict(
        batch_id,clinic_id,student_number,schedule_type,target_date,status,
        source_row_order,schedule_cycle_start
      ) VALUES
-       ($1,$2,$4,'LABORATORY','2096-09-10','SCHEDULED',$5,$6),
-       ($1,$3,$4,'PHYSICAL_EXAM','2096-09-11','SCHEDULED',$5,$6)
+       ($1,$2,$4,'LABORATORY',$7,'SCHEDULED',$5,$6),
+       ($1,$3,$4,'PHYSICAL_EXAM',$8,'SCHEDULED',$5,$6)
      RETURNING id::text,schedule_type`,
     [
       batch.rows[0].id,
@@ -216,7 +229,9 @@ async function insertLowerPriorityConflict(
       TEST_REFERENCE_IDS.physicalExamClinic,
       studentNumber,
       sourceRowOrder,
-      cycleStart,
+      appointmentCycleStart,
+      laboratoryDate,
+      physicalExamDate,
     ],
   );
   const itemByService = new Map(items.rows.map((item) => [item.schedule_type, item.id]));
@@ -226,10 +241,10 @@ async function insertLowerPriorityConflict(
        appointment_date,status,is_published,schedule_pair_id,schedule_cycle_start,
        created_by,updated_by,is_manually_locked,locked_by,locked_at,lock_reason
      ) VALUES
-       ($1,$2,$4,$6,'LABORATORY','2096-09-10','PENDING',TRUE,$7,$8,$9,$9,
+       ($1,$2,$4,$6,'LABORATORY',$11,'PENDING',TRUE,$7,$8,$9,$9,
         $10,CASE WHEN $10 THEN $9::uuid END,CASE WHEN $10 THEN clock_timestamp() END,
         CASE WHEN $10 THEN 'Protected OVPSA fixture' END),
-       ($1,$3,$5,$6,'PHYSICAL_EXAM','2096-09-11','PENDING',TRUE,$7,$8,$9,$9,
+       ($1,$3,$5,$6,'PHYSICAL_EXAM',$12,'PENDING',TRUE,$7,$8,$9,$9,
         FALSE,NULL,NULL,NULL)
      RETURNING id::text,schedule_type`,
     [
@@ -240,9 +255,11 @@ async function insertLowerPriorityConflict(
       TEST_REFERENCE_IDS.physicalExamClinic,
       studentNumber,
       pairId,
-      cycleStart,
+      appointmentCycleStart,
       TEST_REFERENCE_IDS.adminUser,
       options.manuallyLocked ?? false,
+      laboratoryDate,
+      physicalExamDate,
     ],
   );
   return { pairId, appointments: appointments.rows };
@@ -575,6 +592,11 @@ describe("First Year OVPSA publication", () => {
       [...categories].sort(),
     );
     expect(validated.proposedReplacements).toHaveLength(3);
+    expect(validated.proposedReplacements.map((item) => item.category)).toEqual([
+      "OJT",
+      "TOUR",
+      "REGULAR",
+    ]);
     expect(validated.canPublish).toBe(true);
     await publishOvpsaFirstYearBatch(
       created.batchId,
@@ -618,7 +640,322 @@ describe("First Year OVPSA publication", () => {
     expect(displacementNotifications.rows).toEqual([{ count: 3 }]);
   });
 
-  it("reports protected and unknown-lineage conflicts without reserving dates", async () => {
+  it("uses the next Manila clinic day when a persisted scheduling window is historical", async () => {
+    const displacedStudent = `${studentPrefix}0180`;
+    const conflict = await insertLowerPriorityConflict(
+      displacedStudent,
+      "REGULAR",
+      1,
+      {
+        scheduleCycleStart: 2026,
+        laboratoryDate: "2026-09-10",
+        physicalExamDate: "2026-09-11",
+      },
+    );
+    await pool.query(
+      `UPDATE appointments
+          SET scheduling_category='REGULAR',
+              scheduling_accepted_at='2026-08-01T00:00:00.000Z',
+              scheduling_source_row_order=17,
+              scheduling_window_start='2026-08-01',
+              scheduling_window_end='2027-03-31'
+        WHERE schedule_pair_id=$1`,
+      [conflict.pairId],
+    );
+    const today = await pool.query<{ date: string }>(
+      "SELECT (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date::text AS date",
+    );
+    const batch: StoredOvpsaBatch = {
+      batchId: "00000000-0000-4000-8000-000000000180",
+      scheduleCycleStart: 2026,
+      closingDate: "2027-07-31",
+      collegeId: TEST_REFERENCE_IDS.college,
+      collegeName: "College of Computer Studies",
+      status: "DRAFT",
+      optimisticToken: "00000000-0000-4000-8000-000000000181",
+      revisionId: "00000000-0000-4000-8000-000000000182",
+      revisionNumber: 1,
+      revisionStatus: "VALIDATED",
+      laboratoryDate: "2026-09-10",
+      physicalExamDate: "2026-09-17",
+      physicalExamExceptionReason: null,
+    };
+    const client = await pool.connect();
+    try {
+      const planned = await planOvpsaLowerPriorityDisplacementsForServiceDates(client, {
+        batch,
+        memberStudentNumbers: [],
+        forUpdate: false,
+        serviceDates: {
+          laboratoryDates: [batch.laboratoryDate],
+          physicalExamDates: [batch.physicalExamDate],
+        },
+      });
+      expect(planned.proposedReplacements).toHaveLength(1);
+      expect(planned.proposedReplacements[0].laboratoryDate! > today.rows[0].date).toBe(true);
+      expect(
+        planned.proposedReplacements[0].physicalExamDate
+          > planned.proposedReplacements[0].laboratoryDate!,
+      ).toBe(true);
+    } finally {
+      client.release();
+    }
+  });
+
+  it("continues pair recovery after March and preserves persisted lineage over import fallback", async () => {
+    await insertStudent(`${studentPrefix}0181`, 1);
+    const displacedStudent = `${studentPrefix}0182`;
+    const conflict = await insertLowerPriorityConflict(
+      displacedStudent,
+      "REGULAR",
+      1,
+      { laboratoryDate: "2097-03-29", physicalExamDate: "2097-04-01" },
+    );
+    await pool.query(
+      `UPDATE appointments
+          SET scheduling_category='OJT',
+              scheduling_accepted_at='2097-02-01T01:02:03.000Z',
+              scheduling_source_row_order=42,
+              scheduling_window_start='2097-03-29',
+              scheduling_window_end='2097-03-31'
+        WHERE schedule_pair_id=$1`,
+      [conflict.pairId],
+    );
+    const created = await createOvpsaFirstYearBatch({
+      scheduleCycleStart: cycleStart,
+      collegeId: TEST_REFERENCE_IDS.college,
+      laboratoryDate: "2097-03-29",
+      physicalExamDateOverride: null,
+      physicalExamExceptionReason: null,
+    }, TEST_REFERENCE_IDS.adminUser);
+    const validated = await validateOvpsaFirstYearBatch(
+      created.batchId,
+      { optimisticToken: created.optimisticToken },
+      TEST_REFERENCE_IDS.adminUser,
+    );
+    expect(validated).toMatchObject({
+      canPublish: true,
+      proposedReplacements: [{
+        studentNumber: displacedStudent,
+        category: "OJT",
+        laboratoryDate: "2097-04-01",
+        physicalExamDate: "2097-04-02",
+      }],
+    });
+    await publishOvpsaFirstYearBatch(
+      created.batchId,
+      { optimisticToken: validated.optimisticToken },
+      TEST_REFERENCE_IDS.adminUser,
+    );
+    const replacement = await pool.query<{
+      schedule_type: string;
+      appointment_date: string;
+      schedule_pair_id: string;
+      scheduling_category: string;
+      scheduling_accepted_at: Date;
+      scheduling_source_row_order: number;
+      scheduling_window_start: string;
+      scheduling_window_end: string;
+    }>(
+      `SELECT schedule_type,appointment_date::text,schedule_pair_id::text,
+              scheduling_category,scheduling_accepted_at,
+              scheduling_source_row_order,scheduling_window_start::text,
+              scheduling_window_end::text
+         FROM appointments
+        WHERE student_number=$1 AND rescheduled_from IS NOT NULL
+        ORDER BY schedule_type`,
+      [displacedStudent],
+    );
+    expect(replacement.rows).toEqual([
+      expect.objectContaining({
+        schedule_type: "LABORATORY",
+        appointment_date: "2097-04-01",
+        schedule_pair_id: conflict.pairId,
+        scheduling_category: "OJT",
+        scheduling_source_row_order: 42,
+        scheduling_window_start: "2097-03-29",
+        scheduling_window_end: "2097-03-31",
+      }),
+      expect.objectContaining({
+        schedule_type: "PHYSICAL_EXAM",
+        appointment_date: "2097-04-02",
+        schedule_pair_id: conflict.pairId,
+        scheduling_category: "OJT",
+        scheduling_source_row_order: 42,
+        scheduling_window_start: "2097-03-29",
+        scheduling_window_end: "2097-03-31",
+      }),
+    ]);
+    expect(replacement.rows.every(
+      (row) => row.scheduling_accepted_at.toISOString() === "2097-02-01T01:02:03.000Z",
+    )).toBe(true);
+  });
+
+  it("publishes First Year ownership atomically with a pair Manual Resolution fallback at cycle close", async () => {
+    const member = `${studentPrefix}0183`;
+    const displacedStudent = `${studentPrefix}0184`;
+    await insertStudent(member, 1);
+    const conflict = await insertLowerPriorityConflict(
+      displacedStudent,
+      "REGULAR",
+      3,
+      { laboratoryDate: "2097-03-13", physicalExamDate: "2097-03-14" },
+    );
+    await pool.query(
+      "UPDATE students SET email='ovpsa.fallback@example.test',email_verified_at=NOW() WHERE student_number=$1",
+      [displacedStudent],
+    );
+    await pool.query(
+      `UPDATE appointments
+          SET scheduling_category='REGULAR',
+              scheduling_accepted_at='2097-03-01T00:00:00.000Z',
+              scheduling_source_row_order=3,
+              scheduling_window_start='2097-03-20',
+              scheduling_window_end='2097-03-20'
+        WHERE schedule_pair_id=$1`,
+      [conflict.pairId],
+    );
+    await pool.query(
+      "UPDATE academic_years SET closing_date='2097-03-20' WHERE start_year=$1",
+      [cycleStart],
+    );
+    const created = await createOvpsaFirstYearBatch({
+      scheduleCycleStart: cycleStart,
+      collegeId: TEST_REFERENCE_IDS.college,
+      laboratoryDate: "2097-03-13",
+      physicalExamDateOverride: null,
+      physicalExamExceptionReason: null,
+    }, TEST_REFERENCE_IDS.adminUser);
+    const validated = await validateOvpsaFirstYearBatch(
+      created.batchId,
+      { optimisticToken: created.optimisticToken },
+      TEST_REFERENCE_IDS.adminUser,
+    );
+    expect(validated).toMatchObject({
+      canPublish: true,
+      displacements: [{ studentNumber: displacedStudent, displacementType: "PAIR" }],
+      proposedReplacements: [],
+    });
+    await expect(publishOvpsaFirstYearBatch(
+      created.batchId,
+      { optimisticToken: validated.optimisticToken },
+      TEST_REFERENCE_IDS.adminUser,
+    )).resolves.toMatchObject({ status: "PUBLISHED" });
+
+    const state = await pool.query<{
+      incoming_appointments: number;
+      awaiting_appointments: number;
+      replacement_appointments: number;
+      manual_cases: number;
+      manual_events: number;
+      audits: number;
+      notifications: number;
+    }>(
+      `SELECT
+         (SELECT COUNT(*)::int FROM appointments
+           WHERE ovpsa_batch_id=$1 AND status='PENDING' AND is_published=TRUE) AS incoming_appointments,
+         (SELECT COUNT(*)::int FROM appointments
+           WHERE student_number=$2 AND status='AWAITING_RESCHEDULE' AND is_published=TRUE) AS awaiting_appointments,
+         (SELECT COUNT(*)::int FROM appointments
+           WHERE student_number=$2 AND rescheduled_from IS NOT NULL) AS replacement_appointments,
+         (SELECT COUNT(*)::int FROM clinic_closure_manual_cases
+           WHERE student_number=$2 AND case_source='AUTOMATIC_DISPLACEMENT'
+             AND status='OPEN' AND reason_code='NO_VALID_REPLACEMENT_WITHIN_CYCLE') AS manual_cases,
+         (SELECT COUNT(*)::int FROM appointment_reschedule_events event
+           JOIN clinic_closure_manual_cases manual_case ON manual_case.id=event.manual_case_id
+          WHERE event.student_number=$2 AND event.cause='OVPSA_PUBLICATION'
+            AND event.strategy='MANUAL_RESOLUTION_REQUIRED'
+            AND event.outcome='AWAITING_RESCHEDULE'
+            AND event.policy_reason_code='NO_VALID_REPLACEMENT_WITHIN_CYCLE'
+            AND event.new_laboratory_appointment_id IS NULL
+            AND event.new_physical_exam_appointment_id IS NULL) AS manual_events,
+         (SELECT COUNT(*)::int FROM audit_logs
+           WHERE action='OVPSA_DISPLACEMENT_MANUAL_RESOLUTION_REQUIRED'
+             AND metadata->>'studentNumber'=$2) AS audits,
+         (SELECT COUNT(*)::int FROM student_portal_notifications
+           WHERE student_number=$2
+             AND metadata->>'sourceType'='AUTOMATIC_DISPLACEMENT_MANUAL_CASE'
+             AND message NOT LIKE '%2097-03-2%') AS notifications`,
+      [created.batchId, displacedStudent],
+    );
+    expect(state.rows).toEqual([{
+      incoming_appointments: 2,
+      awaiting_appointments: 2,
+      replacement_appointments: 0,
+      manual_cases: 1,
+      manual_events: 1,
+      audits: 1,
+      notifications: 1,
+    }]);
+  });
+
+  it("keeps a completed Laboratory and replaces only Physical Examination after Lab plus one", async () => {
+    await insertStudent(`${studentPrefix}0185`, 1);
+    const displacedStudent = `${studentPrefix}0186`;
+    const conflict = await insertLowerPriorityConflict(
+      displacedStudent,
+      "REGULAR",
+      5,
+      { laboratoryDate: "2097-03-19", physicalExamDate: "2097-03-20" },
+    );
+    await pool.query(
+      `UPDATE appointments
+          SET status=CASE WHEN schedule_type='LABORATORY' THEN 'COMPLETED' ELSE status END,
+              scheduling_category='REGULAR',
+              scheduling_accepted_at='2097-03-01T00:00:00.000Z',
+              scheduling_source_row_order=5,
+              scheduling_window_start='2097-03-17',
+              scheduling_window_end='2097-03-22'
+        WHERE schedule_pair_id=$1`,
+      [conflict.pairId],
+    );
+    await pool.query(
+      "UPDATE academic_years SET closing_date='2097-03-22' WHERE start_year=$1",
+      [cycleStart],
+    );
+    const created = await createOvpsaFirstYearBatch({
+      scheduleCycleStart: cycleStart,
+      collegeId: TEST_REFERENCE_IDS.college,
+      laboratoryDate: "2097-03-13",
+      physicalExamDateOverride: null,
+      physicalExamExceptionReason: null,
+    }, TEST_REFERENCE_IDS.adminUser);
+    const validated = await validateOvpsaFirstYearBatch(
+      created.batchId,
+      { optimisticToken: created.optimisticToken },
+      TEST_REFERENCE_IDS.adminUser,
+    );
+    expect(validated).toMatchObject({
+      canPublish: true,
+      proposedReplacements: [{
+        studentNumber: displacedStudent,
+        laboratoryDate: null,
+        physicalExamDate: "2097-03-21",
+      }],
+    });
+    await publishOvpsaFirstYearBatch(
+      created.batchId,
+      { optimisticToken: validated.optimisticToken },
+      TEST_REFERENCE_IDS.adminUser,
+    );
+    const appointments = await pool.query<{
+      schedule_type: string;
+      appointment_date: string;
+      status: string;
+      is_published: boolean;
+    }>(
+      `SELECT schedule_type,appointment_date::text,status,is_published
+         FROM appointments WHERE student_number=$1 ORDER BY created_at,id`,
+      [displacedStudent],
+    );
+    expect(appointments.rows).toEqual(expect.arrayContaining([
+      { schedule_type: "LABORATORY", appointment_date: "2097-03-19", status: "COMPLETED", is_published: true },
+      { schedule_type: "PHYSICAL_EXAM", appointment_date: "2097-03-20", status: "RESCHEDULED", is_published: false },
+      { schedule_type: "PHYSICAL_EXAM", appointment_date: "2097-03-21", status: "PENDING", is_published: true },
+    ]));
+  });
+
+  it("uses deterministic legacy import lineage but still blocks protected conflicts", async () => {
     await insertStudent(`${studentPrefix}0200`, 1);
     await insertLowerPriorityConflict(
       `${studentPrefix}0201`,
@@ -626,11 +963,15 @@ describe("First Year OVPSA publication", () => {
       1,
       { manuallyLocked: true },
     );
-    await insertLowerPriorityConflict(
-      `${studentPrefix}0202`,
-      "REGULAR",
-      2,
-      { withLineage: false },
+    const legacyStudent = `${studentPrefix}0202`;
+    const legacy = await insertLowerPriorityConflict(legacyStudent, "REGULAR", 2);
+    await pool.query(
+      `UPDATE appointments
+          SET scheduling_category=NULL,scheduling_accepted_at=NULL,
+              scheduling_source_row_order=NULL,scheduling_window_start=NULL,
+              scheduling_window_end=NULL
+        WHERE schedule_pair_id=$1`,
+      [legacy.pairId],
     );
     const created = await createOvpsaFirstYearBatch({
       scheduleCycleStart: cycleStart,
@@ -648,13 +989,28 @@ describe("First Year OVPSA publication", () => {
     expect(validated.canPublish).toBe(false);
     expect(validated.protectedConflicts.map((conflict) => conflict.reasonCode)).toEqual([
       "APPOINTMENT_MANUALLY_LOCKED",
-      "UNKNOWN_SCHEDULING_LINEAGE",
+    ]);
+    expect(validated.displacements).toEqual([
+      expect.objectContaining({ studentNumber: legacyStudent, category: "REGULAR", sourceRowOrder: 2 }),
     ]);
     const reservations = await pool.query(
       "SELECT 1 FROM ovpsa_first_year_service_reservations WHERE batch_id=$1",
       [created.batchId],
     );
     expect(reservations.rowCount).toBe(0);
+  });
+
+  it("fails with a stable cycle configuration error when no academic year is configured", async () => {
+    await expect(createOvpsaFirstYearBatch({
+      scheduleCycleStart: 2088,
+      collegeId: TEST_REFERENCE_IDS.college,
+      laboratoryDate: "2088-09-10",
+      physicalExamDateOverride: null,
+      physicalExamExceptionReason: null,
+    }, TEST_REFERENCE_IDS.adminUser)).rejects.toMatchObject({
+      code: "OVPSA_ACADEMIC_YEAR_OR_COLLEGE_UNAVAILABLE",
+      status: 409,
+    });
   });
 
   it("restores appointments displaced by a released reservation and audits the decision", async () => {
