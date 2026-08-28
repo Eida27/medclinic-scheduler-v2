@@ -38,7 +38,10 @@
     "acceptance:staff-account-security:setup": "node --conditions=react-server --import tsx --env-file=.env.local scripts/browser-staff-account-security-fixture.ts setup",
     "acceptance:staff-account-security:dev": "node --conditions=react-server --import tsx --env-file=.env.local scripts/browser-staff-account-security-dev.ts",
     "acceptance:staff-account-security:status": "node --conditions=react-server --import tsx --env-file=.env.local scripts/browser-staff-account-security-fixture.ts status",
-    "acceptance:staff-account-security:cleanup": "node --conditions=react-server --import tsx --env-file=.env.local scripts/browser-staff-account-security-fixture.ts cleanup"
+    "acceptance:staff-account-security:cleanup": "node --conditions=react-server --import tsx --env-file=.env.local scripts/browser-staff-account-security-fixture.ts cleanup",
+    "acceptance:scheduling-integrity:setup": "tsx --env-file=.env.local scripts/browser-scheduling-integrity-fixture.ts setup",
+    "acceptance:scheduling-integrity:status": "tsx --env-file=.env.local scripts/browser-scheduling-integrity-fixture.ts status",
+    "acceptance:scheduling-integrity:cleanup": "tsx --env-file=.env.local scripts/browser-scheduling-integrity-fixture.ts cleanup"
   },
   "dependencies": {
     "archiver": "^8.0.0",
