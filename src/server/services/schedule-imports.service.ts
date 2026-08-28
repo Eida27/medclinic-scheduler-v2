@@ -21,8 +21,9 @@ import type { SessionUser } from "@/types/roles";
 import { isImportOperatorRole } from "@/types/roles";
 import { publishScheduleBatchWithClient } from "./appointments.service";
 import {
-  generateBatchAppointmentsWithClient,
+  generateValidatedBatchAppointmentsWithClient,
   validateBatchWithClient,
+  type BatchValidationResult,
 } from "./coordinator-schedules.service";
 import {
   parseStudentImportCsv,
@@ -320,6 +321,25 @@ function scheduleImportNotFound() {
   );
 }
 
+function assertGeneratedPairOrder(validations: BatchValidationResult[]) {
+  const datesByStudent = new Map<string, { laboratory?: string; physicalExam?: string }>();
+  for (const appointment of validations.flatMap((validation) => validation.preview.appointments)) {
+    const dates = datesByStudent.get(appointment.studentNumber) ?? {};
+    if (appointment.scheduleType === "LABORATORY") dates.laboratory = appointment.appointmentDate;
+    if (appointment.scheduleType === "PHYSICAL_EXAM") dates.physicalExam = appointment.appointmentDate;
+    datesByStudent.set(appointment.studentNumber, dates);
+  }
+  for (const dates of datesByStudent.values()) {
+    if (dates.laboratory && dates.physicalExam && dates.laboratory >= dates.physicalExam) {
+      throw new AppError(
+        "PAIR_ORDER_VIOLATION",
+        "Laboratory must be scheduled before Physical Examination.",
+        409,
+      );
+    }
+  }
+}
+
 export async function validateScheduleImport(
   importId: string,
   actor: SessionUser,
@@ -381,15 +401,26 @@ export async function generateScheduleImport(
       throw invalidImportStatus("Only validated schedule imports can generate appointments.");
     }
 
-    let appointmentCount = 0;
-    let appliedOverrideReason: string | null = null;
+    const validations: BatchValidationResult[] = [];
     for (const child of children) {
-      const generated = await generateBatchAppointmentsWithClient(
+      validations.push(await validateBatchWithClient(
         child.id,
-        actor,
-        validOverrideReason,
+        actor.userId,
         client,
         true,
+      ));
+    }
+    assertGeneratedPairOrder(validations);
+
+    let appointmentCount = 0;
+    let appliedOverrideReason: string | null = null;
+    for (const [index, child] of children.entries()) {
+      const generated = await generateValidatedBatchAppointmentsWithClient(
+        child.id,
+        actor,
+        validations[index],
+        validOverrideReason,
+        client,
       );
       appointmentCount += generated.appointmentCount;
       appliedOverrideReason ??= generated.appliedOverrideReason;

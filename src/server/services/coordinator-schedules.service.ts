@@ -241,6 +241,24 @@ export async function generateBatchAppointmentsWithClient(
   allowGrouped = false,
 ) {
   const validation = await validateBatchWithClient(batchId, user.userId, client, allowGrouped);
+  return generateValidatedBatchAppointmentsWithClient(
+    batchId,
+    user,
+    validation,
+    overrideReason,
+    client,
+  );
+}
+
+export type BatchValidationResult = Awaited<ReturnType<typeof validateBatchWithClient>>;
+
+export async function generateValidatedBatchAppointmentsWithClient(
+  batchId: string,
+  user: SessionUser,
+  validation: BatchValidationResult,
+  overrideReason?: string,
+  client?: PoolClient,
+) {
   const conflicts = validation.items.flatMap((item) => item.issues.filter((issue) => issue.severity === "CONFLICT"));
   const nonCapacityConflicts = conflicts.filter((issue) => issue.code !== "CAPACITY_CONFLICT");
   if (nonCapacityConflicts.length) throw new AppError("BATCH_CONFLICTS", "Resolve non-capacity conflicts before generating appointments.", 409);

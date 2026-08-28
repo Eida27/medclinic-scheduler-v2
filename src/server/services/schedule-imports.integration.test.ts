@@ -80,6 +80,59 @@ afterAll(async () => {
 });
 
 describe("student scheduling imports", () => {
+  it("rejects legacy grouped generation when Laboratory and Physical Examination resolve to the same date", async () => {
+    const studentNumber = "99-9110-10";
+    await insertTestStudent({
+      studentNumber,
+      firstName: "Legacy",
+      middleName: "Maria",
+      lastName: "Pair",
+      yearLevel: 3,
+    });
+    const created = await addScheduleBatch({
+      batchName: "TEST-AY legacy same-day pair",
+      collegeId: TEST_REFERENCE_IDS.college,
+      programId: TEST_REFERENCE_IDS.program,
+      submittedByName: "Legacy Fixture",
+      description: "Grouped same-day pair fixture",
+      items: [{
+        studentNumber,
+        scheduleType: "BOTH",
+        priorityGroupId: TEST_REFERENCE_IDS.regularPriority,
+        targetDate: "2026-12-01",
+        targetWeekStart: null,
+        targetWeekEnd: null,
+        remarks: null,
+      }],
+    }, admin);
+    const importGroup = await pool.query<{ id: string }>(
+      `INSERT INTO schedule_import_groups (
+         import_name,source_filename,total_rows,created_by,student_category,
+         academic_year_start,accepted_at
+       ) VALUES (
+         'REGULAR 2026-2027 - TEST-AY-legacy-pair.csv',
+         'TEST-AY-legacy-pair.csv',1,$1,'REGULAR',2026,clock_timestamp()
+       ) RETURNING id::text`,
+      [TEST_REFERENCE_IDS.adminUser],
+    );
+    const importId = importGroup.rows[0].id;
+    await pool.query(
+      "UPDATE schedule_batches SET import_group_id=$1 WHERE id=ANY($2::uuid[])",
+      [importId, created!.batchIds],
+    );
+    await validateScheduleImport(importId, admin);
+    await expect(generateScheduleImport(importId, admin)).rejects.toMatchObject({
+      code: "PAIR_ORDER_VIOLATION",
+      status: 409,
+    });
+
+    const appointments = await pool.query(
+      "SELECT id FROM appointments WHERE batch_id=ANY($1::uuid[])",
+      [created!.batchIds],
+    );
+    expect(appointments.rowCount).toBe(0);
+  });
+
   it("publishes one parent notification for grouped child batches", async () => {
     const studentNumber = "99-9109-09";
     await insertTestStudent({
@@ -123,6 +176,13 @@ describe("student scheduling imports", () => {
     await pool.query(
       "UPDATE schedule_batches SET import_group_id=$1 WHERE id=ANY($2::uuid[])",
       [importId, created!.batchIds],
+    );
+    await pool.query(
+      `UPDATE coordinator_schedule_items
+          SET target_date='2026-12-02'
+        WHERE batch_id=ANY($1::uuid[])
+          AND schedule_type='PHYSICAL_EXAM'`,
+      [created!.batchIds],
     );
 
     await validateScheduleImport(importId, admin);
