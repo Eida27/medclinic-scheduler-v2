@@ -180,6 +180,9 @@ async function loadLockedAppointmentPair(
   const scope = await getAppointmentMutationScope(id, client);
   if (!scope) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
   assertAppointmentMutationAuthorized(actor, scope);
+  await client.query(
+    "SELECT pg_advisory_xact_lock(hashtext('medclinic:schedule-import-queue'))",
+  );
   await lockEffectiveAppointmentScopes(client, [
     { studentNumber: scope.studentNumber, scheduleType: "LABORATORY" },
     { studentNumber: scope.studentNumber, scheduleType: "PHYSICAL_EXAM" },

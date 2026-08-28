@@ -2,6 +2,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { pool } from "@/server/db/pool";
+import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import { getPublishedAppointment, listAppointments } from "@/server/repositories/appointments.repository";
 import { cleanupTestFixtures, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import type { SessionUser } from "@/types/roles";
@@ -42,6 +43,24 @@ async function createAppointment(studentNumber: string) {
     [TEST_REFERENCE_IDS.laboratoryClinic, studentNumber, TEST_REFERENCE_IDS.adminUser],
   );
   return result.rows[0].id;
+}
+
+async function waitForSchedulingQueueWaiter() {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const blocked = await pool.query(
+      `SELECT 1
+         FROM pg_stat_activity
+        WHERE datname=current_database()
+          AND pid <> pg_backend_pid()
+          AND state='active'
+          AND wait_event_type='Lock'
+          AND query LIKE '%medclinic:schedule-import-queue%'
+        LIMIT 1`,
+    );
+    if (blocked.rowCount) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("Timed out waiting for the lifecycle mutation to reach the scheduling queue lock.");
 }
 
 beforeAll(async () => {
@@ -207,6 +226,52 @@ describe("appointment locking and inheritance", () => {
       status: "rejected",
       reason: { code: "APPOINTMENT_STALE", status: 409 },
     });
+  });
+
+  it("does not deadlock a lifecycle mutation with a schedule import row lock", async () => {
+    const studentNumber = "LOCK-IMPORT-ORDER";
+    const appointmentId = await createAppointment(studentNumber);
+    const importClient = await pool.connect();
+    let importCommitted = false;
+    let mutation: Promise<
+      | { status: "fulfilled"; value: Awaited<ReturnType<typeof updateAppointment>> }
+      | { status: "rejected"; reason: unknown }
+    > | undefined;
+    try {
+      await importClient.query("BEGIN");
+      await importClient.query(
+        "SELECT pg_advisory_xact_lock(hashtext('medclinic:schedule-import-queue'))",
+      );
+      await importClient.query("SELECT id FROM appointments WHERE id=$1 FOR UPDATE", [appointmentId]);
+
+      mutation = updateAppointment(appointmentId, {
+        status: "CANCELLED",
+        notes: "Concurrent schedule import lock-order fixture",
+      }, admin).then(
+        (value) => ({ status: "fulfilled" as const, value }),
+        (reason: unknown) => ({ status: "rejected" as const, reason }),
+      );
+      await waitForSchedulingQueueWaiter();
+
+      await lockEffectiveAppointmentScopes(importClient, [
+        { studentNumber, scheduleType: "LABORATORY" },
+        { studentNumber, scheduleType: "PHYSICAL_EXAM" },
+      ]);
+      await importClient.query("COMMIT");
+      importCommitted = true;
+
+      const outcome = await mutation;
+      if (outcome.status === "rejected") throw outcome.reason;
+      const stored = await pool.query<{ status: string }>(
+        "SELECT status FROM appointments WHERE id=$1",
+        [appointmentId],
+      );
+      expect(stored.rows).toEqual([{ status: "CANCELLED" }]);
+    } finally {
+      if (!importCommitted) await importClient.query("ROLLBACK").catch(() => undefined);
+      await mutation?.catch(() => undefined);
+      importClient.release();
+    }
   });
 
   it("rolls back the source transition and inherited lock when replacement insertion fails", async () => {
