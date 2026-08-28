@@ -16,6 +16,7 @@ const STORAGE_ROOT = resolve(
 );
 const LABORATORY_CLINIC_ID = "60000000-0000-4000-8000-000000000001";
 const PHYSICAL_EXAM_CLINIC_ID = "60000000-0000-4000-8000-000000000002";
+const PRIORITY_GROUP_ID = "30000000-0000-4000-8000-000000000002";
 const CAPACITY_STUDENT_COUNT = 150;
 
 // Acceptance-only credentials. They are intentionally excluded from every
@@ -40,6 +41,10 @@ const FIXED_IDS = {
   reservation: "5a260826-0000-4000-8000-00000000000c",
   manualCase: "5a260826-0000-4000-8000-00000000000d",
   rescheduleEvent: "5a260826-0000-4000-8000-00000000000e",
+  generateBatch: "5a260826-0000-4000-8000-00000000000f",
+  generateItem: "5a260826-0000-4000-8000-000000000010",
+  publishBatch: "5a260826-0000-4000-8000-000000000019",
+  publishItem: "5a260826-0000-4000-8000-00000000001a",
 } as const;
 
 const APPOINTMENT_IDS = {
@@ -51,6 +56,7 @@ const APPOINTMENT_IDS = {
   displacementPhysicalExam: "5a260826-0000-4000-8000-000000000016",
   portalLaboratory: "5a260826-0000-4000-8000-000000000017",
   portalPhysicalExam: "5a260826-0000-4000-8000-000000000018",
+  retiredPublish: "5a260826-0000-4000-8000-00000000001b",
 } as const;
 
 const PAIR_IDS = {
@@ -75,6 +81,8 @@ const DATES = {
   exclusiveReservation: "2027-04-27",
   displacementReplacementPhysicalExam: "2027-04-28",
   capacityFull: "2027-04-29",
+  retiredGenerate: "2027-04-22",
+  retiredPublish: "2027-04-23",
 } as const;
 
 const CORE_STUDENTS = {
@@ -115,6 +123,7 @@ export const SCHEDULING_INTEGRITY_FIXTURE = {
   pairIds: PAIR_IDS,
   dates: DATES,
   capacityStudentCount: CAPACITY_STUDENT_COUNT,
+  priorityGroupId: PRIORITY_GROUP_ID,
   ids: FIXED_IDS,
   routes: {
     homepage: "/",
@@ -127,15 +136,58 @@ export const SCHEDULING_INTEGRITY_FIXTURE = {
     manualResolution: "/settings/clinic-unavailable-dates/manual-resolution",
   },
   retiredRequests: [
-    { method: "POST", path: "/api/coordinator-schedules" },
-    { method: "POST", path: "/api/coordinator-schedules/validate" },
-    { method: "PATCH", path: `/api/coordinator-schedules/${FIXED_IDS.scheduleBatch}` },
-    { method: "POST", path: "/api/appointments/generate" },
-    { method: "POST", path: "/api/appointments/publish" },
+    {
+      method: "POST",
+      path: "/api/coordinator-schedules",
+      body: {
+        clinicCode: "KABALAKA_CLINIC",
+        batchName: `${MARKER}-RETIRED-POST`,
+        collegeId: FIXED_IDS.college,
+        programId: FIXED_IDS.program,
+        submittedByName: "Browser Scheduling Integrity",
+        description: MARKER,
+        items: [{
+          studentNumber: CORE_STUDENTS.legacySentinel.studentNumber,
+          scheduleType: "LABORATORY",
+          priorityGroupId: PRIORITY_GROUP_ID,
+          targetDate: DATES.retiredGenerate,
+          targetWeekStart: null,
+          targetWeekEnd: null,
+          remarks: MARKER,
+        }],
+      },
+    },
+    {
+      method: "POST",
+      path: "/api/coordinator-schedules/validate",
+      body: { batchId: FIXED_IDS.scheduleBatch },
+    },
+    {
+      method: "PATCH",
+      path: `/api/coordinator-schedules/${FIXED_IDS.scheduleBatch}`,
+      body: {
+        clinicCode: "KABALAKA_CLINIC",
+        batchName: `${MARKER}-RETIRED-PATCH`,
+        collegeId: FIXED_IDS.college,
+        programId: FIXED_IDS.program,
+        submittedByName: "Browser Scheduling Integrity",
+        description: MARKER,
+      },
+    },
+    {
+      method: "POST",
+      path: "/api/appointments/generate",
+      body: { batchId: FIXED_IDS.generateBatch },
+    },
+    {
+      method: "POST",
+      path: "/api/appointments/publish",
+      body: { batchId: FIXED_IDS.publishBatch, confirm: true },
+    },
   ],
   publicLookupRequests: [
-    `/api/student-lookup?studentNumber=${CORE_STUDENTS.portal.studentNumber}&dateOfBirth=1900-01-01`,
-    "/api/student-lookup?studentNumber=B-SIH-MISSING&dateOfBirth=1900-01-01",
+    `/api/student-lookup?studentNumber=${CORE_STUDENTS.portal.studentNumber}`,
+    "/api/student-lookup?studentNumber=B-SIH-MISSING",
     "/api/student-lookup?unexpected=%7Bmalformed%7D",
   ],
 } as const;
@@ -151,10 +203,11 @@ export type RetiredRouteSentinelSnapshot = {
   importGroups: number;
   batches: number;
   items: number;
-  batchStatus: string | null;
-  itemStatus: string | null;
-  batchUpdatedAt: string | null;
-  itemUpdatedAt: string | null;
+  appointments: number;
+  importGroupStates: string[];
+  batchStates: string[];
+  itemStates: string[];
+  appointmentStates: string[];
 };
 
 export type SchedulingIntegrityResidue = {
@@ -213,11 +266,11 @@ const EXPECTED_PREPARED_COUNTS: SchedulingIntegrityPreparedCounts = {
   users: 2,
   coreStudents: 5,
   capacityStudents: CAPACITY_STUDENT_COUNT,
-  pairAppointments: 8,
+  pairAppointments: 9,
   capacityAppointments: CAPACITY_STUDENT_COUNT,
   importGroups: 1,
-  scheduleBatches: 1,
-  scheduleItems: 1,
+  scheduleBatches: 3,
+  scheduleItems: 3,
   manualCases: 1,
   rescheduleEvents: 1,
   closureGroups: 1,
@@ -228,6 +281,9 @@ const EXPECTED_PREPARED_COUNTS: SchedulingIntegrityPreparedCounts = {
 };
 
 type OwnedManifest = {
+  importGroupIds: string[];
+  scheduleBatchIds: string[];
+  scheduleItemIds: string[];
   appointmentIds: string[];
   statusLogIds: string[];
   laboratoryResultIds: string[];
@@ -386,6 +442,17 @@ export function assertSafeSchedulingIntegrityStatus<T>(value: T): T {
 
 function emptyManifest(): OwnedManifest {
   return {
+    importGroupIds: [FIXED_IDS.importGroup],
+    scheduleBatchIds: [
+      FIXED_IDS.scheduleBatch,
+      FIXED_IDS.generateBatch,
+      FIXED_IDS.publishBatch,
+    ],
+    scheduleItemIds: [
+      FIXED_IDS.scheduleItem,
+      FIXED_IDS.generateItem,
+      FIXED_IDS.publishItem,
+    ],
     appointmentIds: Object.values(APPOINTMENT_IDS),
     statusLogIds: [],
     laboratoryResultIds: [],
@@ -441,37 +508,111 @@ async function queryIds(
   return result.rows.map((row) => row.id);
 }
 
+type RetiredRouteOwnedIds = {
+  importGroupIds: string[];
+  scheduleBatchIds: string[];
+  scheduleItemIds: string[];
+  appointmentIds: string[];
+};
+
+async function discoverRetiredRouteOwnedIds(
+  client: PoolClient,
+  preparedAt: string,
+): Promise<RetiredRouteOwnedIds> {
+  const importGroupIds = await queryIds(
+    client,
+    `SELECT id::text FROM schedule_import_groups
+      WHERE id=ANY($1::uuid[])
+         OR (
+           created_by=$2
+           AND created_at >= $3::timestamptz
+           AND (
+             import_name LIKE $4
+             OR COALESCE(description,'') LIKE $4
+             OR source_filename LIKE 'browser-scheduling-integrity%'
+           )
+         )
+      ORDER BY id`,
+    [[FIXED_IDS.importGroup], FIXED_IDS.adminUser, preparedAt, `${MARKER}%`],
+  );
+  const scheduleBatchIds = await queryIds(
+    client,
+    `SELECT id::text FROM schedule_batches
+      WHERE id=ANY($1::uuid[])
+         OR import_group_id=ANY($2::uuid[])
+         OR (
+           created_by=$3
+           AND created_at >= $4::timestamptz
+           AND (
+             batch_name LIKE $5
+             OR COALESCE(description,'') LIKE $5
+           )
+         )
+      ORDER BY id`,
+    [
+      [FIXED_IDS.scheduleBatch, FIXED_IDS.generateBatch, FIXED_IDS.publishBatch],
+      importGroupIds,
+      FIXED_IDS.adminUser,
+      preparedAt,
+      `${MARKER}%`,
+    ],
+  );
+  const scheduleItemIds = await queryIds(
+    client,
+    `SELECT id::text FROM coordinator_schedule_items
+      WHERE id=ANY($1::uuid[]) OR batch_id=ANY($2::uuid[])
+      ORDER BY id`,
+    [
+      [FIXED_IDS.scheduleItem, FIXED_IDS.generateItem, FIXED_IDS.publishItem],
+      scheduleBatchIds,
+    ],
+  );
+  const appointmentIds = await queryIds(
+    client,
+    `SELECT id::text FROM appointments
+      WHERE batch_id=ANY($1::uuid[])
+         OR schedule_item_id=ANY($2::uuid[])
+      ORDER BY id`,
+    [scheduleBatchIds, scheduleItemIds],
+  );
+  return { importGroupIds, scheduleBatchIds, scheduleItemIds, appointmentIds };
+}
+
 async function retiredRouteSentinelSnapshot(
   client: PoolClient,
+  preparedAt: string,
 ): Promise<RetiredRouteSentinelSnapshot> {
-  const result = await client.query<{
-    import_groups: number;
-    batches: number;
-    items: number;
-    batch_status: string | null;
-    item_status: string | null;
-    batch_updated_at: Date | null;
-    item_updated_at: Date | null;
-  }>(
-    `SELECT
-       (SELECT COUNT(*)::int FROM schedule_import_groups WHERE id=$1) AS import_groups,
-       (SELECT COUNT(*)::int FROM schedule_batches WHERE id=$2) AS batches,
-       (SELECT COUNT(*)::int FROM coordinator_schedule_items WHERE id=$3) AS items,
-       (SELECT status FROM schedule_batches WHERE id=$2) AS batch_status,
-       (SELECT status FROM coordinator_schedule_items WHERE id=$3) AS item_status,
-       (SELECT updated_at FROM schedule_batches WHERE id=$2) AS batch_updated_at,
-       (SELECT updated_at FROM coordinator_schedule_items WHERE id=$3) AS item_updated_at`,
-    [FIXED_IDS.importGroup, FIXED_IDS.scheduleBatch, FIXED_IDS.scheduleItem],
-  );
-  const row = result.rows[0];
+  const owned = await discoverRetiredRouteOwnedIds(client, preparedAt);
+  const importGroups = await client.query<{ state: string }>(
+      `SELECT CONCAT_WS('|',id::text,import_name,source_filename,updated_at::text) AS state
+         FROM schedule_import_groups WHERE id=ANY($1::uuid[]) ORDER BY id`,
+      [owned.importGroupIds],
+    );
+  const batches = await client.query<{ state: string }>(
+      `SELECT CONCAT_WS('|',id::text,batch_name,status,COALESCE(import_group_id::text,''),updated_at::text) AS state
+         FROM schedule_batches WHERE id=ANY($1::uuid[]) ORDER BY id`,
+      [owned.scheduleBatchIds],
+    );
+  const items = await client.query<{ state: string }>(
+      `SELECT CONCAT_WS('|',id::text,batch_id::text,status,updated_at::text) AS state
+         FROM coordinator_schedule_items WHERE id=ANY($1::uuid[]) ORDER BY id`,
+      [owned.scheduleItemIds],
+    );
+  const appointments = await client.query<{ state: string }>(
+      `SELECT CONCAT_WS('|',id::text,COALESCE(batch_id::text,''),COALESCE(schedule_item_id::text,''),
+                        status,is_published::text,updated_at::text) AS state
+         FROM appointments WHERE id=ANY($1::uuid[]) ORDER BY id`,
+      [owned.appointmentIds],
+    );
   return {
-    importGroups: row.import_groups,
-    batches: row.batches,
-    items: row.items,
-    batchStatus: row.batch_status,
-    itemStatus: row.item_status,
-    batchUpdatedAt: row.batch_updated_at?.toISOString() ?? null,
-    itemUpdatedAt: row.item_updated_at?.toISOString() ?? null,
+    importGroups: importGroups.rowCount ?? 0,
+    batches: batches.rowCount ?? 0,
+    items: items.rowCount ?? 0,
+    appointments: appointments.rowCount ?? 0,
+    importGroupStates: importGroups.rows.map((row) => row.state),
+    batchStates: batches.rows.map((row) => row.state),
+    itemStates: items.rows.map((row) => row.state),
+    appointmentStates: appointments.rows.map((row) => row.state),
   };
 }
 
@@ -501,9 +642,9 @@ async function preparedCounts(
        (SELECT COUNT(*)::int FROM students WHERE student_number=ANY($3::varchar[])) AS capacity_students,
        (SELECT COUNT(*)::int FROM appointments WHERE id=ANY($4::uuid[])) AS pair_appointments,
        (SELECT COUNT(*)::int FROM appointments WHERE student_number=ANY($3::varchar[])) AS capacity_appointments,
-       (SELECT COUNT(*)::int FROM schedule_import_groups WHERE id=$5) AS import_groups,
-       (SELECT COUNT(*)::int FROM schedule_batches WHERE id=$6) AS schedule_batches,
-       (SELECT COUNT(*)::int FROM coordinator_schedule_items WHERE id=$7) AS schedule_items,
+       (SELECT COUNT(*)::int FROM schedule_import_groups WHERE id=ANY($5::uuid[])) AS import_groups,
+       (SELECT COUNT(*)::int FROM schedule_batches WHERE id=ANY($6::uuid[])) AS schedule_batches,
+       (SELECT COUNT(*)::int FROM coordinator_schedule_items WHERE id=ANY($7::uuid[])) AS schedule_items,
        (SELECT COUNT(*)::int FROM clinic_closure_manual_cases WHERE id=$8) AS manual_cases,
        (SELECT COUNT(*)::int FROM appointment_reschedule_events WHERE id=$9) AS reschedule_events,
        (SELECT COUNT(*)::int FROM clinic_closure_groups WHERE id=$10) AS closure_groups,
@@ -516,9 +657,9 @@ async function preparedCounts(
       Object.values(CORE_STUDENTS).map((student) => student.studentNumber),
       CAPACITY_STUDENT_NUMBERS,
       Object.values(APPOINTMENT_IDS),
-      FIXED_IDS.importGroup,
-      FIXED_IDS.scheduleBatch,
-      FIXED_IDS.scheduleItem,
+      [FIXED_IDS.importGroup],
+      [FIXED_IDS.scheduleBatch, FIXED_IDS.generateBatch, FIXED_IDS.publishBatch],
+      [FIXED_IDS.scheduleItem, FIXED_IDS.generateItem, FIXED_IDS.publishItem],
       FIXED_IDS.manualCase,
       FIXED_IDS.rescheduleEvent,
       FIXED_IDS.closureGroup,
@@ -552,10 +693,19 @@ async function discoverOwnedManifest(
   client: PoolClient,
   preparedAt: string,
 ): Promise<OwnedManifest> {
+  const retiredRouteOwnedIds = await discoverRetiredRouteOwnedIds(client, preparedAt);
   const appointmentIds = await queryIds(
     client,
-    "SELECT id::text FROM appointments WHERE student_number=ANY($1::varchar[]) ORDER BY id",
-    [ALL_STUDENT_NUMBERS],
+    `SELECT id::text FROM appointments
+      WHERE student_number=ANY($1::varchar[])
+         OR batch_id=ANY($2::uuid[])
+         OR schedule_item_id=ANY($3::uuid[])
+      ORDER BY id`,
+    [
+      ALL_STUDENT_NUMBERS,
+      retiredRouteOwnedIds.scheduleBatchIds,
+      retiredRouteOwnedIds.scheduleItemIds,
+    ],
   );
   const statusLogIds = await queryIds(
     client,
@@ -650,9 +800,9 @@ async function discoverOwnedManifest(
     ...files.rows.map((row) => row.id),
     ...manualCaseIds,
     ...rescheduleEventIds,
-    FIXED_IDS.importGroup,
-    FIXED_IDS.scheduleBatch,
-    FIXED_IDS.scheduleItem,
+    ...retiredRouteOwnedIds.importGroupIds,
+    ...retiredRouteOwnedIds.scheduleBatchIds,
+    ...retiredRouteOwnedIds.scheduleItemIds,
     FIXED_IDS.closureGroup,
     FIXED_IDS.unavailableDate,
     FIXED_IDS.ovpsaBatch,
@@ -675,6 +825,9 @@ async function discoverOwnedManifest(
     ],
   );
   return {
+    importGroupIds: retiredRouteOwnedIds.importGroupIds,
+    scheduleBatchIds: retiredRouteOwnedIds.scheduleBatchIds,
+    scheduleItemIds: retiredRouteOwnedIds.scheduleItemIds,
     appointmentIds,
     statusLogIds,
     laboratoryResultIds,
@@ -715,9 +868,9 @@ async function schedulingIntegrityResidue(
        (SELECT COUNT(*)::int FROM student_result_submissions WHERE student_number=ANY($2::varchar[]) OR id=ANY($9::uuid[])) AS "resultSubmissions",
        (SELECT COUNT(*)::int FROM student_result_files WHERE id=ANY($10::uuid[]) OR submission_id=ANY($9::uuid[])) AS "resultFiles",
        (SELECT COUNT(*)::int FROM student_result_storage_cleanup_intents WHERE storage_key=ANY($31::text[])) AS "storageCleanupIntents",
-       (SELECT COUNT(*)::int FROM schedule_import_groups WHERE id=$11) AS "importGroups",
-       (SELECT COUNT(*)::int FROM schedule_batches WHERE id=$12) AS "scheduleBatches",
-       (SELECT COUNT(*)::int FROM coordinator_schedule_items WHERE id=$13) AS "scheduleItems",
+       (SELECT COUNT(*)::int FROM schedule_import_groups WHERE id=ANY($11::uuid[])) AS "importGroups",
+       (SELECT COUNT(*)::int FROM schedule_batches WHERE id=ANY($12::uuid[])) AS "scheduleBatches",
+       (SELECT COUNT(*)::int FROM coordinator_schedule_items WHERE id=ANY($13::uuid[])) AS "scheduleItems",
        (SELECT COUNT(*)::int FROM clinic_closure_manual_cases WHERE student_number=ANY($2::varchar[]) OR id=ANY($14::uuid[])) AS "manualCases",
        (SELECT COUNT(*)::int FROM appointment_reschedule_events WHERE student_number=ANY($2::varchar[]) OR id=ANY($15::uuid[])) AS "rescheduleEvents",
        (SELECT COUNT(*)::int FROM clinic_closure_groups WHERE id=$16 OR reason LIKE $17) AS "closureGroups",
@@ -744,9 +897,9 @@ async function schedulingIntegrityResidue(
       manifest.examResultIds,
       manifest.submissionIds,
       manifest.fileIds,
-      FIXED_IDS.importGroup,
-      FIXED_IDS.scheduleBatch,
-      FIXED_IDS.scheduleItem,
+      manifest.importGroupIds,
+      manifest.scheduleBatchIds,
+      manifest.scheduleItemIds,
       manifest.manualCaseIds,
       manifest.rescheduleEventIds,
       FIXED_IDS.closureGroup,
@@ -970,8 +1123,8 @@ async function setup(
     );
     await client.query(
       `INSERT INTO schedule_batches (
-         id,clinic_id,batch_name,college_id,program_id,status,created_by,import_group_id
-       ) VALUES ($1,$2,$3,$4,$5,'DRAFT',$6,$7)`,
+         id,clinic_id,batch_name,college_id,program_id,status,created_by,description
+       ) VALUES ($1,$2,$3::varchar,$4,$5,'DRAFT',$6,$3::text)`,
       [
         FIXED_IDS.scheduleBatch,
         LABORATORY_CLINIC_ID,
@@ -979,21 +1132,61 @@ async function setup(
         FIXED_IDS.college,
         FIXED_IDS.program,
         FIXED_IDS.adminUser,
-        FIXED_IDS.importGroup,
       ],
     );
     await client.query(
       `INSERT INTO coordinator_schedule_items (
-         id,batch_id,clinic_id,student_number,schedule_type,target_date,
+         id,batch_id,clinic_id,student_number,schedule_type,priority_group_id,target_date,
          remarks,status,source_row_order,schedule_cycle_start
-       ) VALUES ($1,$2,$3,$4,'LABORATORY',$5,$6,'PENDING',2,2026)`,
+       ) VALUES ($1,$2,$3,$4,'LABORATORY',$5,$6,$7,'PENDING',2,2026)`,
       [
         FIXED_IDS.scheduleItem,
         FIXED_IDS.scheduleBatch,
         LABORATORY_CLINIC_ID,
         CORE_STUDENTS.legacySentinel.studentNumber,
-        DATES.lifecycleLaboratory,
+        PRIORITY_GROUP_ID,
+        DATES.retiredGenerate,
         MARKER,
+      ],
+    );
+    await client.query(
+      `INSERT INTO schedule_batches (
+         id,clinic_id,batch_name,college_id,program_id,status,validation_summary,
+         validated_by,validated_at,created_by,description
+       ) VALUES
+         ($1,$2,$3::varchar,$4,$5,'VALIDATED','{}'::jsonb,$6,clock_timestamp(),$6,$3::text),
+         ($7,$8,$9::varchar,$4,$5,'GENERATED','{}'::jsonb,$6,clock_timestamp(),$6,$9::text)`,
+      [
+        FIXED_IDS.generateBatch,
+        LABORATORY_CLINIC_ID,
+        `${MARKER}-GENERATE`,
+        FIXED_IDS.college,
+        FIXED_IDS.program,
+        FIXED_IDS.adminUser,
+        FIXED_IDS.publishBatch,
+        PHYSICAL_EXAM_CLINIC_ID,
+        `${MARKER}-PUBLISH`,
+      ],
+    );
+    await client.query(
+      `INSERT INTO coordinator_schedule_items (
+         id,batch_id,clinic_id,student_number,schedule_type,priority_group_id,target_date,
+         remarks,status,validation_issues,source_row_order,schedule_cycle_start
+       ) VALUES
+         ($1,$2,$3,$4,'LABORATORY',$5,$6,$7,'VALID','[]'::jsonb,3,2026),
+         ($8,$9,$10,$4,'PHYSICAL_EXAM',$5,$11,$7,'SCHEDULED','[]'::jsonb,4,2026)`,
+      [
+        FIXED_IDS.generateItem,
+        FIXED_IDS.generateBatch,
+        LABORATORY_CLINIC_ID,
+        CORE_STUDENTS.legacySentinel.studentNumber,
+        PRIORITY_GROUP_ID,
+        DATES.retiredGenerate,
+        MARKER,
+        FIXED_IDS.publishItem,
+        FIXED_IDS.publishBatch,
+        PHYSICAL_EXAM_CLINIC_ID,
+        DATES.retiredPublish,
       ],
     );
 
@@ -1078,19 +1271,34 @@ async function setup(
         pair_id: PAIR_IDS.portal,
         source_order: 4,
       },
+      {
+        id: APPOINTMENT_IDS.retiredPublish,
+        clinic_id: PHYSICAL_EXAM_CLINIC_ID,
+        student_number: CORE_STUDENTS.legacySentinel.studentNumber,
+        schedule_type: "PHYSICAL_EXAM",
+        appointment_date: DATES.retiredPublish,
+        status: "DRAFT",
+        pair_id: null,
+        source_order: 5,
+        batch_id: FIXED_IDS.publishBatch,
+        schedule_item_id: FIXED_IDS.publishItem,
+        is_published: false,
+      },
     ];
     await client.query(
       `INSERT INTO appointments (
          id,clinic_id,student_number,schedule_type,appointment_date,status,is_published,
          schedule_pair_id,schedule_cycle_start,created_by,updated_by,scheduling_category,
          scheduling_accepted_at,scheduling_source_row_order,scheduling_window_start,
-         scheduling_window_end,notes
+         scheduling_window_end,notes,batch_id,schedule_item_id
        ) SELECT row.id,row.clinic_id,row.student_number,row.schedule_type,row.appointment_date,
-                row.status,TRUE,row.pair_id,2026,$2,$2,'REGULAR',
+                row.status,COALESCE(row.is_published,TRUE),row.pair_id,2026,$2,$2,'REGULAR',
                 '2026-08-26T00:00:00.000Z',row.source_order,'2026-08-01','2027-03-31',$3
+                ,row.batch_id,row.schedule_item_id
            FROM jsonb_to_recordset($1::jsonb) AS row(
              id uuid,clinic_id uuid,student_number varchar,schedule_type varchar,
-             appointment_date date,status varchar,pair_id uuid,source_order integer
+             appointment_date date,status varchar,pair_id uuid,source_order integer,
+             batch_id uuid,schedule_item_id uuid,is_published boolean
            )`,
       [JSON.stringify(pairAppointments), FIXED_IDS.adminUser, MARKER],
     );
@@ -1204,14 +1412,13 @@ async function setup(
     throw error;
   }
 
-  const retiredRouteSentinel = await retiredRouteSentinelSnapshot(client);
+  const retiredRouteSentinel = await retiredRouteSentinelSnapshot(client, preparedAt);
   assertRetiredRouteSentinelUnchanged({
     ...retiredRouteSentinel,
     importGroups: 1,
-    batches: 1,
-    items: 1,
-    batchStatus: "DRAFT",
-    itemStatus: "PENDING",
+    batches: 3,
+    items: 3,
+    appointments: 1,
   }, retiredRouteSentinel);
   const counts = assertSchedulingIntegrityPreparedCounts(await preparedCounts(client));
   state = {
@@ -1247,7 +1454,7 @@ async function status(
       "Scheduling integrity setup did not finish. Run acceptance:scheduling-integrity:cleanup before retrying setup.",
     );
   }
-  const currentSentinel = await retiredRouteSentinelSnapshot(client);
+  const currentSentinel = await retiredRouteSentinelSnapshot(client, state.preparedAt);
   assertRetiredRouteSentinelUnchanged(state.retiredRouteSentinel, currentSentinel);
   const manifest = state.phase === "PREPARED"
     ? await discoverOwnedManifest(client, state.preparedAt)
@@ -1449,12 +1656,12 @@ async function deleteOwnedDatabaseRows(
       [manifest.appointmentIds],
     );
     await client.query(
-      "DELETE FROM coordinator_schedule_items WHERE id=$1",
-      [FIXED_IDS.scheduleItem],
+      "DELETE FROM coordinator_schedule_items WHERE id=ANY($1::uuid[])",
+      [manifest.scheduleItemIds],
     );
     await client.query(
-      "DELETE FROM schedule_batches WHERE id=$1",
-      [FIXED_IDS.scheduleBatch],
+      "DELETE FROM schedule_batches WHERE id=ANY($1::uuid[])",
+      [manifest.scheduleBatchIds],
     );
     await client.query(
       "DELETE FROM ovpsa_first_year_service_reservations WHERE id=$1",
@@ -1469,8 +1676,8 @@ async function deleteOwnedDatabaseRows(
       [FIXED_IDS.ovpsaBatch],
     );
     await client.query(
-      "DELETE FROM schedule_import_groups WHERE id=$1",
-      [FIXED_IDS.importGroup],
+      "DELETE FROM schedule_import_groups WHERE id=ANY($1::uuid[])",
+      [manifest.importGroupIds],
     );
     await client.query(
       "DELETE FROM clinic_calendar_requests WHERE request_id=ANY($1::uuid[])",
@@ -1579,33 +1786,57 @@ async function cleanup(
   };
 }
 
-async function run() {
-  const mode = process.argv[2];
-  if (!mode || !["setup", "status", "cleanup"].includes(mode)) {
-    throw new Error(
-      `Use setup, status, or cleanup with a loopback PostgreSQL DATABASE_URL and ${SCHEDULING_INTEGRITY_ACCEPTANCE_FLAG}=1.`,
-    );
-  }
+type SchedulingIntegrityFixtureMode = "setup" | "status" | "cleanup";
+type SchedulingIntegrityFixtureOperationOutput = {
+  setup: Awaited<ReturnType<typeof setup>>;
+  status: Awaited<ReturnType<typeof status>>;
+  cleanup: Awaited<ReturnType<typeof cleanup>>;
+};
+
+export async function runSchedulingIntegrityFixtureOperation<
+  TMode extends SchedulingIntegrityFixtureMode,
+>(input: {
+  mode: TMode;
+  databaseUrl: string | undefined;
+  exclusiveFlag: string | undefined;
+}): Promise<SchedulingIntegrityFixtureOperationOutput[TMode]> {
   const databaseIdentity = assertSafeSchedulingIntegrityAcceptanceDatabase(
-    process.env.DATABASE_URL,
-    process.env[SCHEDULING_INTEGRITY_ACCEPTANCE_FLAG],
+    input.databaseUrl,
+    input.exclusiveFlag,
   );
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const pool = new Pool({ connectionString: input.databaseUrl });
   try {
     const client = await pool.connect();
     try {
-      const output = mode === "setup"
+      const output = input.mode === "setup"
         ? await setup(client, databaseIdentity)
-        : mode === "status"
+        : input.mode === "status"
           ? await status(client, databaseIdentity)
           : await cleanup(client, databaseIdentity);
-      console.log(JSON.stringify(assertSafeSchedulingIntegrityStatus(output), null, 2));
+      return assertSafeSchedulingIntegrityStatus(output) as
+        SchedulingIntegrityFixtureOperationOutput[TMode];
     } finally {
       client.release();
     }
   } finally {
     await pool.end();
   }
+}
+
+async function run() {
+  const rawMode = process.argv[2];
+  if (!rawMode || !["setup", "status", "cleanup"].includes(rawMode)) {
+    throw new Error(
+      `Use setup, status, or cleanup with a loopback PostgreSQL DATABASE_URL and ${SCHEDULING_INTEGRITY_ACCEPTANCE_FLAG}=1.`,
+    );
+  }
+  const mode = rawMode as SchedulingIntegrityFixtureMode;
+  const output = await runSchedulingIntegrityFixtureOperation({
+    mode,
+    databaseUrl: process.env.DATABASE_URL,
+    exclusiveFlag: process.env[SCHEDULING_INTEGRITY_ACCEPTANCE_FLAG],
+  });
+  console.log(JSON.stringify(output, null, 2));
 }
 
 const invokedPath = process.argv[1] ? resolve(process.argv[1]) : "";

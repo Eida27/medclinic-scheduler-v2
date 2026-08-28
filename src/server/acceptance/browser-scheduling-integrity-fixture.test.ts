@@ -70,6 +70,40 @@ describe("scheduling integrity Browser acceptance fixture", () => {
     expect(fixture.routes.studentPortal).toBe("/student");
   });
 
+  it("provides mutation-capable bodies for every retired scheduling request", () => {
+    const requests = new Map(
+      SCHEDULING_INTEGRITY_FIXTURE.retiredRequests.map((request) => [
+        `${request.method} ${request.path}`,
+        request,
+      ]),
+    );
+    expect(requests.get("POST /api/coordinator-schedules")).toMatchObject({
+      body: {
+        batchName: expect.stringContaining(SCHEDULING_INTEGRITY_FIXTURE.marker),
+        items: [{
+          studentNumber: SCHEDULING_INTEGRITY_FIXTURE.students.legacySentinel.studentNumber,
+          scheduleType: "LABORATORY",
+          priorityGroupId: expect.any(String),
+          targetDate: expect.any(String),
+        }],
+      },
+    });
+    expect(requests.get("POST /api/coordinator-schedules/validate")?.body)
+      .toEqual({ batchId: SCHEDULING_INTEGRITY_FIXTURE.ids.scheduleBatch });
+    expect(requests.get(
+      `PATCH /api/coordinator-schedules/${SCHEDULING_INTEGRITY_FIXTURE.ids.scheduleBatch}`,
+    )?.body).toMatchObject({
+      batchName: expect.stringContaining(SCHEDULING_INTEGRITY_FIXTURE.marker),
+    });
+    expect(requests.get("POST /api/appointments/generate")?.body)
+      .toEqual({ batchId: SCHEDULING_INTEGRITY_FIXTURE.ids.generateBatch });
+    expect(requests.get("POST /api/appointments/publish")?.body)
+      .toEqual({
+        batchId: SCHEDULING_INTEGRITY_FIXTURE.ids.publishBatch,
+        confirm: true,
+      });
+  });
+
   it("rejects any credential field in status output", () => {
     const safe = {
       mode: "status",
@@ -98,17 +132,19 @@ describe("scheduling integrity Browser acceptance fixture", () => {
   it("detects a retired-route sentinel mutation", () => {
     const baseline = {
       importGroups: 1,
-      batches: 1,
-      items: 1,
-      batchStatus: "DRAFT",
-      itemStatus: "PENDING",
-      batchUpdatedAt: "2026-08-28T00:00:00.000Z",
-      itemUpdatedAt: "2026-08-28T00:00:00.000Z",
+      batches: 3,
+      items: 3,
+      appointments: 1,
+      importGroupStates: ["import-baseline"],
+      batchStates: ["batch-baseline"],
+      itemStates: ["item-baseline"],
+      appointmentStates: ["appointment-baseline"],
     };
     expect(assertRetiredRouteSentinelUnchanged(baseline, { ...baseline })).toEqual(baseline);
     expect(() => assertRetiredRouteSentinelUnchanged(baseline, {
       ...baseline,
-      batchStatus: "PUBLISHED",
+      batches: 4,
+      batchStates: [...baseline.batchStates, "dynamic-batch"],
     })).toThrow(/retired scheduling sentinel changed/i);
   });
 
@@ -117,11 +153,11 @@ describe("scheduling integrity Browser acceptance fixture", () => {
       users: 2,
       coreStudents: 5,
       capacityStudents: 150,
-      pairAppointments: 8,
+      pairAppointments: 9,
       capacityAppointments: 150,
       importGroups: 1,
-      scheduleBatches: 1,
-      scheduleItems: 1,
+      scheduleBatches: 3,
+      scheduleItems: 3,
       manualCases: 1,
       rescheduleEvents: 1,
       closureGroups: 1,
