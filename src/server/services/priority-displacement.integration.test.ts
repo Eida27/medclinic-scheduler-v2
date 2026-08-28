@@ -265,6 +265,40 @@ describe("priority displacement with the unified closure calendar", () => {
     })]);
   });
 
+  it("keeps a successful Regular replacement eligible for later priority displacement", async () => {
+    const original = await candidateFixture({
+      studentNumber: "99-9411-11",
+      laboratoryDate: "2027-08-30",
+      physicalExamDate: "2027-08-31",
+      windowStart: "2027-09-01",
+      windowEnd: "2027-09-30",
+      sourceRowOrder: 11,
+      acceptedAt: "2027-08-20T00:00:00.000Z",
+    });
+    await transaction((client) => publishDisplacedRegularReplacements({
+      candidates: [original.candidate],
+      sourceImportGroupId: original.created.importGroupId,
+      actorUserId: TEST_REFERENCE_IDS.adminUser,
+    }, client));
+
+    const laterCandidates = await transaction((client) => lockEligibleRegularPairs(client, {
+      scheduleCycleStart: 2027,
+      windowStart: "2027-09-01",
+      windowEnd: "2027-09-30",
+      limit: 1,
+    }));
+
+    expect(laterCandidates).toEqual([expect.objectContaining({
+      studentNumber: "99-9411-11",
+      schedulePairId: original.created.pairId,
+      schedulingCategory: "REGULAR",
+      acceptedAt: new Date("2027-08-20T00:00:00.000Z"),
+      sourceRowOrder: 11,
+    })]);
+    expect(laterCandidates[0].laboratoryAppointmentId).not.toBe(original.created.laboratory.id);
+    expect(laterCandidates[0].physicalExamAppointmentId).not.toBe(original.created.physicalExam.id);
+  });
+
   it("excludes a pair when either appointment has an active draft result file", async () => {
     const created = await eligibleFixture("99-9403-03");
     await addActiveDraftFile(created.laboratory.id, "99-9403-03");

@@ -280,13 +280,14 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
     rescheduled_from: string;
   }>(
     `INSERT INTO appointments (
-       clinic_id, student_number, schedule_type, appointment_date, status,
+       clinic_id, batch_id, schedule_item_id, student_number, schedule_type, appointment_date, status,
        is_published, notes, rescheduled_from, created_by, updated_by,
        schedule_pair_id, schedule_cycle_start,scheduling_category,
        scheduling_accepted_at,scheduling_source_row_order,
        scheduling_window_start,scheduling_window_end
      )
-     SELECT $1, fixture.student_number, $2, fixture.appointment_date, 'PENDING', TRUE,
+     SELECT $1, original.batch_id, original.schedule_item_id,
+            fixture.student_number, $2, fixture.appointment_date, 'PENDING', TRUE,
             'Automatically rescheduled for priority capacity.', fixture.old_id,
             $3, $3, fixture.schedule_pair_id, fixture.schedule_cycle_start,
             fixture.scheduling_category,fixture.accepted_at,fixture.source_row_order,
@@ -298,6 +299,7 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
          student_number,appointment_date,schedule_pair_id,old_id,schedule_cycle_start,
          scheduling_category,accepted_at,source_row_order,window_start,window_end
        )
+       JOIN appointments original ON original.id=fixture.old_id
      RETURNING id, student_number, rescheduled_from::text`,
     [
       clinicId,
@@ -337,13 +339,14 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
     rescheduled_from: string;
   }>(
     `INSERT INTO appointments (
-       clinic_id, student_number, schedule_type, appointment_date, status,
+       clinic_id, batch_id, schedule_item_id, student_number, schedule_type, appointment_date, status,
        is_published, notes, rescheduled_from, created_by, updated_by,
        schedule_pair_id, schedule_cycle_start,scheduling_category,
        scheduling_accepted_at,scheduling_source_row_order,
        scheduling_window_start,scheduling_window_end
      )
-     SELECT $1, fixture.student_number, 'PHYSICAL_EXAM', fixture.appointment_date,
+     SELECT $1, original.batch_id, original.schedule_item_id,
+            fixture.student_number, 'PHYSICAL_EXAM', fixture.appointment_date,
             'PENDING', TRUE, 'Automatically rescheduled for priority capacity.',
             fixture.old_id, $2, $2, fixture.schedule_pair_id, fixture.schedule_cycle_start,
             fixture.scheduling_category,fixture.accepted_at,fixture.source_row_order,
@@ -355,6 +358,7 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
          student_number,appointment_date,schedule_pair_id,old_id,schedule_cycle_start,
          scheduling_category,accepted_at,source_row_order,window_start,window_end
        )
+       JOIN appointments original ON original.id=fixture.old_id
      RETURNING id, student_number, rescheduled_from::text`,
     [
       physicalExamCapacity.clinic_id,
