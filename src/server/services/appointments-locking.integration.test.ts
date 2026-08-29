@@ -7,6 +7,7 @@ import { getPublishedAppointment, listAppointments } from "@/server/repositories
 import { cleanupTestFixtures, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import type { SessionUser } from "@/types/roles";
 import { updateAppointment } from "./appointments.service";
+import { getStudentResultSubmission } from "./student-result-submissions.service";
 
 const admin: SessionUser = {
   userId: TEST_REFERENCE_IDS.adminUser,
@@ -61,6 +62,27 @@ async function waitForSchedulingQueueWaiter() {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   throw new Error("Timed out waiting for the lifecycle mutation to reach the scheduling queue lock.");
+}
+
+async function waitForBlockedResultMutation() {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const blocked = await pool.query(
+      `SELECT 1
+         FROM pg_stat_activity
+        WHERE datname=current_database()
+          AND pid <> pg_backend_pid()
+          AND state='active'
+          AND wait_event_type='Lock'
+          AND (
+            query LIKE '%medclinic:schedule-import-queue%'
+            OR (query LIKE '%FROM appointments%' AND query LIKE '%FOR UPDATE%')
+          )
+        LIMIT 1`,
+    );
+    if (blocked.rowCount) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("Timed out waiting for result access to reach its scheduling lock.");
 }
 
 beforeAll(async () => {
@@ -270,6 +292,50 @@ describe("appointment locking and inheritance", () => {
     } finally {
       if (!importCommitted) await importClient.query("ROLLBACK").catch(() => undefined);
       await mutation?.catch(() => undefined);
+      importClient.release();
+    }
+  });
+
+  it("does not deadlock result draft access with a schedule import row lock", async () => {
+    const studentNumber = "LOCK-RESULT-ORDER";
+    const appointmentId = await createAppointment(studentNumber);
+    const importClient = await pool.connect();
+    let importCommitted = false;
+    let resultAccess: Promise<
+      | { status: "fulfilled"; value: Awaited<ReturnType<typeof getStudentResultSubmission>> }
+      | { status: "rejected"; reason: unknown }
+    > | undefined;
+    try {
+      await importClient.query("BEGIN");
+      await importClient.query(
+        "SELECT pg_advisory_xact_lock(hashtext('medclinic:schedule-import-queue'))",
+      );
+      await importClient.query("SELECT id FROM appointments WHERE id=$1 FOR UPDATE", [appointmentId]);
+
+      resultAccess = getStudentResultSubmission(studentNumber, appointmentId).then(
+        (value) => ({ status: "fulfilled" as const, value }),
+        (reason: unknown) => ({ status: "rejected" as const, reason }),
+      );
+      await waitForBlockedResultMutation();
+
+      await lockEffectiveAppointmentScopes(importClient, [
+        { studentNumber, scheduleType: "LABORATORY" },
+      ]);
+      await importClient.query("COMMIT");
+      importCommitted = true;
+
+      const outcome = await resultAccess;
+      expect(outcome).toMatchObject({
+        status: "rejected",
+        reason: { code: "RESULT_UPLOAD_NOT_AVAILABLE", status: 409 },
+      });
+      await expect(pool.query(
+        "SELECT 1 FROM student_result_submissions WHERE appointment_id=$1",
+        [appointmentId],
+      )).resolves.toMatchObject({ rowCount: 0 });
+    } finally {
+      if (!importCommitted) await importClient.query("ROLLBACK").catch(() => undefined);
+      await resultAccess?.catch(() => undefined);
       importClient.release();
     }
   });

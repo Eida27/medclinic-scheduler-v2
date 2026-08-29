@@ -1,6 +1,7 @@
 import "server-only";
 import type { PoolClient } from "pg";
 import { transaction } from "@/server/db/pool";
+import { lockSchedulingMutationQueue } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import {
   deleteRetiredStudentResultDraftIfClean,
   lockExpiredStudentResultDraftForRetirement,
@@ -62,6 +63,7 @@ export async function cleanupExpiredResultDrafts(
   const candidates = await transaction((client) => lockExpiredDrafts(client, now));
   for (const candidate of candidates) {
     await transaction(async (client) => {
+      await lockSchedulingMutationQueue(client);
       const locked = await lockExpiredStudentResultDraftForRetirement(
         client,
         candidate,

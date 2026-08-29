@@ -8,6 +8,12 @@ export type EffectiveAppointmentScope = {
 
 const LOCK_NAMESPACE = "medclinic:effective-appointment:v1";
 
+export async function lockSchedulingMutationQueue(client: PoolClient) {
+  await client.query(
+    "SELECT pg_advisory_xact_lock(hashtext('medclinic:schedule-import-queue'))",
+  );
+}
+
 function scopeLockKey(scope: EffectiveAppointmentScope) {
   return `${LOCK_NAMESPACE}:${scope.scheduleType}:${scope.studentNumber}`;
 }

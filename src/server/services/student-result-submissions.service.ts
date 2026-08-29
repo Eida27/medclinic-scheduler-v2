@@ -11,6 +11,7 @@ import {
   validateResultFile,
 } from "@/server/files/result-file-validation";
 import { transaction } from "@/server/db/pool";
+import { lockSchedulingMutationQueue } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import {
   deleteRetiredStudentResultDraftIfClean,
   finalizeStudentResultDraft,
@@ -130,6 +131,7 @@ export async function getStudentResultSubmission(studentNumber: string, appointm
   const existing = await getStudentResultSubmissionRow(studentNumber, appointmentId);
   if (existing) return existing;
   return transaction(async (client) => {
+    await lockSchedulingMutationQueue(client);
     const outcome = await lockOrCreateStudentResultDraft(client, studentNumber, appointmentId);
     if (outcome.type !== "draft") throw draftError(outcome.type);
     const refreshed = await getStudentResultSubmissionRow(studentNumber, appointmentId, client);
@@ -154,6 +156,7 @@ export async function beginStudentResultEdit(
   try {
     await createStudentResultStorageCleanupIntents(armedStorageKeys);
     return await transaction(async (client) => {
+      await lockSchedulingMutationQueue(client);
       const outcome = await lockOrCreateStudentResultEditDraft(
         client,
         studentNumber,
@@ -257,6 +260,7 @@ export async function cancelStudentResultEdit(
   storage: ResultStorage = localResultStorage,
 ) {
   const retired = await transaction(async (client) => {
+    await lockSchedulingMutationQueue(client);
     const outcome = await lockExpectedStudentResultDraft(
       client,
       studentNumber,
@@ -324,6 +328,7 @@ export async function addStudentResultFiles(
   try {
     await createStudentResultStorageCleanupIntents(armedStorageKeys);
     return await transaction(async (client) => {
+      await lockSchedulingMutationQueue(client);
       const outcome = await lockExpectedStudentResultDraft(
         client,
         studentNumber,
@@ -370,6 +375,7 @@ export async function removeStudentResultFile(
   storage: ResultStorage = localResultStorage,
 ) {
   const file = await transaction(async (client) => {
+    await lockSchedulingMutationQueue(client);
     const outcome = await lockExpectedStudentResultDraft(
       client,
       studentNumber,
@@ -402,6 +408,7 @@ export async function finalizeStudentResultSubmission(
   storage: ResultStorage = localResultStorage,
 ) {
   return transaction(async (client) => {
+    await lockSchedulingMutationQueue(client);
     const outcome = await lockExpectedStudentResultDraft(
       client,
       studentNumber,
@@ -457,6 +464,7 @@ export async function submitStudentResultChanges(
   storage: ResultStorage = localResultStorage,
 ) {
   return transaction(async (client) => {
+    await lockSchedulingMutationQueue(client);
     const outcome = await lockExpectedStudentResultDraft(
       client,
       studentNumber,
@@ -715,6 +723,7 @@ export async function invalidateStudentResultSubmission(
   assertAdmin(actor);
   const reason = invalidationReasonSchema.parse(rawReason);
   const invalidated = await transaction(async (client) => {
+    await lockSchedulingMutationQueue(client);
     const lock = await lockCurrentFinalizedSubmissionForInvalidation(client, submissionId);
     if (lock.type === "not_found") {
       throw new AppError("RESULT_SUBMISSION_NOT_FOUND", "Finalized result submission not found.", 404);
