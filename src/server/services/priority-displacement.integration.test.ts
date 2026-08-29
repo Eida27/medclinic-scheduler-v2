@@ -110,6 +110,30 @@ async function eligibleFixture(studentNumber: string) {
   return created;
 }
 
+async function attachSourceScheduleItems(appointmentIds: string[], sourceRowOrder: number) {
+  await pool.query(
+    `WITH inserted AS (
+       INSERT INTO coordinator_schedule_items (
+         batch_id,clinic_id,student_number,schedule_type,priority_group_id,
+         target_date,status,source_row_order,schedule_cycle_start
+       )
+       SELECT batch_id,clinic_id,student_number,schedule_type,NULL,
+              appointment_date,'SCHEDULED',$2,schedule_cycle_start
+         FROM appointments
+        WHERE id=ANY($1::uuid[])
+       RETURNING id,batch_id,student_number,schedule_type
+     )
+     UPDATE appointments appointment
+        SET schedule_item_id=inserted.id
+       FROM inserted
+      WHERE appointment.id=ANY($1::uuid[])
+        AND appointment.batch_id=inserted.batch_id
+        AND appointment.student_number=inserted.student_number
+        AND appointment.schedule_type=inserted.schedule_type`,
+    [appointmentIds, sourceRowOrder],
+  );
+}
+
 async function candidateFixture(input: {
   studentNumber: string;
   laboratoryDate: string;
@@ -275,6 +299,10 @@ describe("priority displacement with the unified closure calendar", () => {
       sourceRowOrder: 11,
       acceptedAt: "2027-08-20T00:00:00.000Z",
     });
+    await attachSourceScheduleItems([
+      original.created.laboratory.id,
+      original.created.physicalExam.id,
+    ], 11);
     await transaction((client) => publishDisplacedRegularReplacements({
       candidates: [original.candidate],
       sourceImportGroupId: original.created.importGroupId,
@@ -297,6 +325,16 @@ describe("priority displacement with the unified closure calendar", () => {
     })]);
     expect(laterCandidates[0].laboratoryAppointmentId).not.toBe(original.created.laboratory.id);
     expect(laterCandidates[0].physicalExamAppointmentId).not.toBe(original.created.physicalExam.id);
+    const replacementLineage = await pool.query(
+      `SELECT batch_id::text,schedule_item_id::text
+         FROM appointments
+        WHERE student_number='99-9411-11' AND rescheduled_from IS NOT NULL
+        ORDER BY schedule_type`,
+    );
+    expect(replacementLineage.rows).toEqual([
+      { batch_id: expect.any(String), schedule_item_id: null },
+      { batch_id: expect.any(String), schedule_item_id: null },
+    ]);
   });
 
   it("excludes a pair when either appointment has an active draft result file", async () => {

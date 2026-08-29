@@ -945,20 +945,22 @@ async function applyAutomaticMove(
         )
       : await client.query<{ id: string }>(
           `INSERT INTO appointments (
-             clinic_id,student_number,schedule_type,appointment_date,status,is_published,
-             notes,rescheduled_from,created_by,updated_by,schedule_pair_id,schedule_cycle_start
-           ) VALUES ($1,$2,$3,$4,'PENDING',TRUE,$5,$6,$7,$7,$8,$9)
+             batch_id,clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+             notes,rescheduled_from,created_by,updated_by,schedule_pair_id,schedule_cycle_start,
+             scheduling_category,scheduling_accepted_at,scheduling_source_row_order,
+             scheduling_window_start,scheduling_window_end
+           ) SELECT batch_id,$2,student_number,schedule_type,$3,'PENDING',TRUE,$4,id,$5,$5,
+                    schedule_pair_id,schedule_cycle_start,scheduling_category,
+                    scheduling_accepted_at,scheduling_source_row_order,
+                    scheduling_window_start,scheduling_window_end
+               FROM appointments WHERE id=$1
            RETURNING id::text`,
           [
+            original.id,
             input.clinicIds[original.scheduleType],
-            input.cycle.studentNumber,
-            original.scheduleType,
             appointmentDate,
             `Automatically rescheduled after closure group ${input.group.closureGroupId}.`,
-            original.id,
             input.actorUserId,
-            original.schedulePairId,
-            original.scheduleCycleStart,
           ],
         );
     replacementByType[original.scheduleType] = inserted.rows[0].id;
@@ -1965,12 +1967,12 @@ export async function resolveClinicClosureManualCase(
         const inserted = recoveryReservationId
           ? await client.query<{ id: string }>(
               `INSERT INTO appointments (
-                 clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+                 batch_id,clinic_id,student_number,schedule_type,appointment_date,status,is_published,
                  notes,rescheduled_from,created_by,updated_by,schedule_pair_id,schedule_cycle_start,
                  ovpsa_batch_id,ovpsa_revision_id,ovpsa_service_reservation_id,
                  scheduling_category,scheduling_accepted_at,scheduling_source_row_order,
                  scheduling_window_start,scheduling_window_end
-               ) SELECT clinic_id,student_number,schedule_type,$2,'PENDING',TRUE,$3,id,$4,$4,
+               ) SELECT batch_id,clinic_id,student_number,schedule_type,$2,'PENDING',TRUE,$3,id,$4,$4,
                         schedule_pair_id,schedule_cycle_start,ovpsa_batch_id,ovpsa_revision_id,$5,
                         scheduling_category,scheduling_accepted_at,scheduling_source_row_order,
                         scheduling_window_start,scheduling_window_end
@@ -1980,11 +1982,11 @@ export async function resolveClinicClosureManualCase(
             )
           : await client.query<{ id: string }>(
               `INSERT INTO appointments (
-                 clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+                 batch_id,clinic_id,student_number,schedule_type,appointment_date,status,is_published,
                  notes,rescheduled_from,created_by,updated_by,schedule_pair_id,schedule_cycle_start,
                  scheduling_category,scheduling_accepted_at,scheduling_source_row_order,
                  scheduling_window_start,scheduling_window_end
-               ) SELECT clinic_id,student_number,schedule_type,$2,'PENDING',TRUE,$3,id,$4,$4,
+               ) SELECT batch_id,clinic_id,student_number,schedule_type,$2,'PENDING',TRUE,$3,id,$4,$4,
                         schedule_pair_id,schedule_cycle_start,scheduling_category,
                         scheduling_accepted_at,scheduling_source_row_order,
                         scheduling_window_start,scheduling_window_end

@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { pool, transaction } from "@/server/db/pool";
+import { lockEligibleRegularPairs } from "@/server/repositories/priority-displacement.repository";
 import { TEST_REFERENCE_IDS, insertTestStudent } from "@/test/integration-fixtures";
 import {
   cleanupAndRestoreCapacitySettings,
@@ -22,6 +23,8 @@ const studentPattern = "UCAL-%";
 let capacityFixture: CapacityFixtureLock | null = null;
 let createdManualResolutionAcademicYear = false;
 const automaticCapacityBatchIds: string[] = [];
+const standardLineageBatchIds: string[] = [];
+const standardLineageImportIds: string[] = [];
 const admin: SessionUser = {
   userId: TEST_REFERENCE_IDS.adminUser,
   fullName: "System Admin",
@@ -82,6 +85,19 @@ async function cleanup() {
     await client.query("DELETE FROM laboratory_results WHERE student_number LIKE $1", [studentPattern]);
     await client.query("DELETE FROM student_result_submissions WHERE student_number LIKE $1", [studentPattern]);
     await client.query("DELETE FROM appointments WHERE student_number LIKE $1", [studentPattern]);
+    if (standardLineageBatchIds.length) {
+      await client.query(
+        "DELETE FROM coordinator_schedule_items WHERE batch_id=ANY($1::uuid[])",
+        [standardLineageBatchIds],
+      );
+      await client.query("DELETE FROM schedule_batches WHERE id=ANY($1::uuid[])", [standardLineageBatchIds]);
+    }
+    if (standardLineageImportIds.length) {
+      await client.query(
+        "DELETE FROM schedule_import_groups WHERE id=ANY($1::uuid[])",
+        [standardLineageImportIds],
+      );
+    }
     await client.query("DELETE FROM students WHERE student_number LIKE $1", [studentPattern]);
     await client.query(
       `DELETE FROM clinic_unavailable_dates
@@ -91,6 +107,8 @@ async function cleanup() {
     );
     await client.query("DELETE FROM clinic_closure_groups WHERE reason LIKE 'TEST-UNIFIED%'");
   });
+  standardLineageBatchIds.length = 0;
+  standardLineageImportIds.length = 0;
   if (automaticCapacityBatchIds.length) {
     await pool.query(
       "DELETE FROM ovpsa_first_year_service_reservations WHERE batch_id=ANY($1::uuid[])",
@@ -110,6 +128,43 @@ async function cleanup() {
     );
     automaticCapacityBatchIds.length = 0;
   }
+}
+
+async function attachStandardBatchLineage(studentNumber: string) {
+  const importGroup = await pool.query<{ id: string }>(
+    `INSERT INTO schedule_import_groups (
+       import_name,source_filename,total_rows,created_by,student_category,
+       academic_year_start,accepted_at
+     ) VALUES ($1,$1,1,$2,'REGULAR',2048,'2049-07-01T00:00:00.000Z')
+     RETURNING id::text`,
+    [`UCAL-LINEAGE-${studentNumber}`, TEST_REFERENCE_IDS.adminUser],
+  );
+  standardLineageImportIds.push(importGroup.rows[0].id);
+  const batches = await pool.query<{ id: string }>(
+    `INSERT INTO schedule_batches (
+       clinic_id,batch_name,status,created_by,import_group_id
+     ) VALUES
+       ($1,$3,'PUBLISHED',$4,$5),
+       ($2,$3,'PUBLISHED',$4,$5)
+     RETURNING id::text`,
+    [
+      TEST_REFERENCE_IDS.laboratoryClinic,
+      TEST_REFERENCE_IDS.physicalExamClinic,
+      `UCAL-LINEAGE-${studentNumber}`,
+      TEST_REFERENCE_IDS.adminUser,
+      importGroup.rows[0].id,
+    ],
+  );
+  standardLineageBatchIds.push(...batches.rows.map((batch) => batch.id));
+  await pool.query(
+    `UPDATE appointments appointment
+        SET batch_id=batch.id
+       FROM schedule_batches batch
+      WHERE appointment.student_number=$1
+        AND batch.id=ANY($2::uuid[])
+        AND batch.clinic_id=appointment.clinic_id`,
+    [studentNumber, standardLineageBatchIds],
+  );
 }
 
 async function createPair(input: {
@@ -430,6 +485,7 @@ describe("unified clinic calendar lifecycle", () => {
       laboratoryDate: "2049-08-12",
       physicalExamDate: "2049-08-20",
     });
+    await attachStandardBatchLineage("UCAL-AUTO-DISPLACE");
     const appointments = await pool.query<{
       id: string;
       schedule_pair_id: string;
@@ -483,7 +539,7 @@ describe("unified clinic calendar lifecycle", () => {
       reason: "Assigned valid same-cycle replacement dates.",
     }, admin);
     const replacements = await pool.query(
-      `SELECT scheduling_category,scheduling_accepted_at,
+      `SELECT batch_id::text,scheduling_category,scheduling_accepted_at,
               scheduling_source_row_order,scheduling_window_start::text,
               scheduling_window_end::text,schedule_pair_id::text,schedule_cycle_start
          FROM appointments
@@ -492,6 +548,7 @@ describe("unified clinic calendar lifecycle", () => {
     );
     expect(replacements.rows).toEqual([
       {
+        batch_id: expect.any(String),
         scheduling_category: "REGULAR",
         scheduling_accepted_at: new Date("2049-07-01T00:00:00.000Z"),
         scheduling_source_row_order: 42,
@@ -501,6 +558,7 @@ describe("unified clinic calendar lifecycle", () => {
         schedule_cycle_start: 2048,
       },
       {
+        batch_id: expect.any(String),
         scheduling_category: "REGULAR",
         scheduling_accepted_at: new Date("2049-07-01T00:00:00.000Z"),
         scheduling_source_row_order: 42,
@@ -510,6 +568,18 @@ describe("unified clinic calendar lifecycle", () => {
         schedule_cycle_start: 2048,
       },
     ]);
+    const laterCandidates = await transaction((client) => lockEligibleRegularPairs(client, {
+      scheduleCycleStart: 2048,
+      windowStart: "2049-08-01",
+      windowEnd: "2050-03-31",
+      limit: 1,
+    }));
+    expect(laterCandidates).toEqual([expect.objectContaining({
+      studentNumber: "UCAL-AUTO-DISPLACE",
+      schedulingCategory: "REGULAR",
+      acceptedAt: new Date("2049-07-01T00:00:00.000Z"),
+      sourceRowOrder: 42,
+    })]);
     const resolutionAudit = await pool.query<{ action: string }>(
       "SELECT action FROM audit_logs WHERE entity_id=$1 ORDER BY created_at DESC LIMIT 1",
       [insertedCase.rows[0].id],
@@ -732,6 +802,15 @@ describe("unified clinic calendar lifecycle", () => {
       laboratoryDate: "2049-08-09",
       physicalExamDate: "2049-08-10",
     });
+    await attachStandardBatchLineage("UCAL-PAIR");
+    await pool.query(
+      `UPDATE appointments
+          SET scheduling_category='REGULAR',
+              scheduling_accepted_at='2049-07-02T00:00:00.000Z',
+              scheduling_source_row_order=7,scheduling_window_start='2049-08-01',
+              scheduling_window_end='2050-03-31'
+        WHERE student_number='UCAL-PAIR'`,
+    );
     await pool.query(
       `UPDATE students SET email='ucal.pair@example.test',email_verified_at=NOW()
         WHERE student_number='UCAL-PAIR'`,
@@ -760,6 +839,18 @@ describe("unified clinic calendar lifecycle", () => {
       expect.objectContaining({ status: "PENDING", is_published: true, appointment_date: "2049-08-11", rescheduled_from: expect.any(String) }),
       expect.objectContaining({ status: "PENDING", is_published: true, appointment_date: "2049-08-12", rescheduled_from: expect.any(String) }),
     ]);
+    const laterCandidates = await transaction((client) => lockEligibleRegularPairs(client, {
+      scheduleCycleStart: 2048,
+      windowStart: "2049-08-11",
+      windowEnd: "2050-03-31",
+      limit: 1,
+    }));
+    expect(laterCandidates).toEqual([expect.objectContaining({
+      studentNumber: "UCAL-PAIR",
+      schedulingCategory: "REGULAR",
+      acceptedAt: new Date("2049-07-02T00:00:00.000Z"),
+      sourceRowOrder: 7,
+    })]);
     const notifications = await pool.query<{ notification_type: string; event_key: string; source_type: string; text_body: string }>(
       `SELECT notification.notification_type,notification.event_key,
               notification.metadata->>'sourceType' AS source_type,outbox.text_body
