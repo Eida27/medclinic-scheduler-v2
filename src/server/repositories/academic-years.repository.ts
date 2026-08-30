@@ -12,6 +12,11 @@ export type AcademicYearRecord = {
   linkedSnapshotCount: number;
 };
 
+export type AcademicYearSchedulingBoundary = {
+  startYear: number;
+  closingDate: string;
+};
+
 function run<T extends QueryResultRow>(
   client: PoolClient | undefined,
   sql: string,
@@ -95,6 +100,20 @@ export async function lockAcademicYearWithSnapshotCount(
     ...locked.rows[0],
     linkedSnapshotCount: linked.rows[0].linkedSnapshotCount,
   };
+}
+
+export async function lockAcademicYearSchedulingBoundary(
+  client: PoolClient,
+  startYear: number,
+): Promise<AcademicYearSchedulingBoundary | undefined> {
+  const result = await client.query<AcademicYearSchedulingBoundary>(
+    `SELECT start_year AS "startYear", closing_date::text AS "closingDate"
+       FROM academic_years
+      WHERE start_year=$1
+      FOR SHARE`,
+    [startYear],
+  );
+  return result.rows[0];
 }
 
 export async function updateAcademicYearClosingDateWithClient(

@@ -57,6 +57,32 @@ async function cleanup() {
       WHERE closure_group_id IN (SELECT id FROM clinic_closure_groups WHERE reason LIKE 'TEST-AY%')`,
   );
   await pool.query("DELETE FROM clinic_closure_groups WHERE reason LIKE 'TEST-AY%'");
+  await pool.query("DELETE FROM academic_years WHERE start_year=2098");
+}
+
+async function insertHorizonTestAcademicYear(closingDate: string) {
+  await pool.query(
+    `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+     VALUES (2098,$1,$2,$2)`,
+    [closingDate, TEST_REFERENCE_IDS.adminUser],
+  );
+}
+
+async function blockHorizonTestStartDate() {
+  await pool.query(
+    `WITH closure AS (
+       INSERT INTO clinic_closure_groups (
+         start_date,end_date,category,reason,created_by,creation_batch_id
+       ) VALUES (
+         '2098-08-01','2098-08-01','CLOSURE',
+         'TEST-AY Standard horizon boundary',$1,gen_random_uuid()
+       )
+       RETURNING id
+     )
+     INSERT INTO clinic_unavailable_dates (closure_group_id,blocked_date)
+     SELECT id,'2098-08-01' FROM closure`,
+    [TEST_REFERENCE_IDS.adminUser],
+  );
 }
 
 beforeAll(async () => {
@@ -362,6 +388,82 @@ describe("student scheduling imports", () => {
       [studentNumber],
     );
     expect(writes.rows[0]).toEqual({ students: 0, imports: 0 });
+  });
+
+  it("allows a Standard pair whose Physical Examination lands exactly on the cycle closing date", async () => {
+    const studentNumber = "99-9192-92";
+    await insertHorizonTestAcademicYear("2098-08-05");
+    await blockHorizonTestStartDate();
+
+    const created = await acceptAndScheduleImport(input(csv(
+      `${studentNumber},Boundary,Inclusive,Maria Angela,,College of Computer Studies,BSIT,3,2003-05-06`,
+    ), { academicYearStart: 2098 }), admin);
+
+    expect(created).toMatchObject({
+      outcome: "PUBLISHED",
+      generatedRange: { startDate: "2098-08-04", endDate: "2098-08-05" },
+    });
+
+    const appointments = await pool.query<{
+      schedule_type: string;
+      appointment_date: string;
+    }>(
+      `SELECT schedule_type,appointment_date::text
+         FROM appointments
+        WHERE student_number=$1 AND status='PENDING'
+        ORDER BY appointment_date,schedule_type`,
+      [studentNumber],
+    );
+
+    expect(appointments.rows).toEqual([
+      { schedule_type: "LABORATORY", appointment_date: "2098-08-04" },
+      { schedule_type: "PHYSICAL_EXAM", appointment_date: "2098-08-05" },
+    ]);
+  });
+
+  it("rejects a Standard import when the complete pair cannot fit by the cycle closing date", async () => {
+    const studentNumber = "99-9193-93";
+    await insertHorizonTestAcademicYear("2098-08-04");
+    await blockHorizonTestStartDate();
+
+    await expect(acceptAndScheduleImport(input(csv(
+      `${studentNumber},Boundary,Exhausted,Maria Angela,,College of Computer Studies,BSIT,3,2003-05-06`,
+    ), { academicYearStart: 2098 }), admin)).rejects.toMatchObject({
+      code: "SCHEDULE_CAPACITY_EXHAUSTED",
+      status: 409,
+    });
+
+    const writes = await pool.query(
+      `SELECT
+         (SELECT COUNT(*)::int FROM students WHERE student_number=$1) AS students,
+         (SELECT COUNT(*)::int FROM student_academic_snapshots WHERE student_number=$1) AS snapshots,
+         (SELECT COUNT(*)::int FROM schedule_import_groups WHERE academic_year_start=2098) AS imports,
+         (SELECT COUNT(*)::int FROM schedule_batches
+           WHERE import_group_id IN (
+             SELECT id FROM schedule_import_groups WHERE academic_year_start=2098
+           )) AS batches,
+         (SELECT COUNT(*)::int FROM coordinator_schedule_items WHERE student_number=$1) AS items,
+         (SELECT COUNT(*)::int FROM appointments WHERE student_number=$1) AS appointments,
+         (SELECT COUNT(*)::int FROM audit_logs
+           WHERE action='SCHEDULE_IMPORT_PUBLISHED'
+             AND metadata->>'sourceFilename'=$2
+             AND metadata->>'academicYearStart'='2098') AS publication_audits,
+         (SELECT COUNT(*)::int FROM student_portal_notifications WHERE student_number=$1) AS notifications,
+         (SELECT COUNT(*)::int FROM email_outbox WHERE student_number=$1) AS email_outbox`,
+      [studentNumber, sourceFilename],
+    );
+
+    expect(writes.rows[0]).toEqual({
+      students: 0,
+      snapshots: 0,
+      imports: 0,
+      batches: 0,
+      items: 0,
+      appointments: 0,
+      publication_audits: 0,
+      notifications: 0,
+      email_outbox: 0,
+    });
   });
 
   it("rolls back all writes when a reference is unknown", async () => {

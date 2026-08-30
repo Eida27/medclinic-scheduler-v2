@@ -9,6 +9,7 @@ import {
   createAcademicYearWithClient,
   deleteAcademicYearWithClient,
   listAcademicYearRecords,
+  lockAcademicYearSchedulingBoundary,
   lockAcademicYearWithSnapshotCount,
   updateAcademicYearClosingDateWithClient,
 } from "./academic-years.repository";
@@ -19,8 +20,9 @@ afterAll(async () => {
 
 const concurrentYear = 2096;
 const reverseConcurrentYear = 2095;
+const shareLockYear = 2094;
 
-async function waitForAcademicYearDeleteToBlock(
+async function waitForAcademicYearOperationToBlock(
   observer: PoolClient,
   blockerTransactionId: string,
 ) {
@@ -51,7 +53,7 @@ async function waitForAcademicYearDeleteToBlock(
     [blockerTransactionId],
   );
   throw new Error(
-    `Timed out waiting for academic-year deletion to block: ${JSON.stringify(locks.rows)}`,
+    `Timed out waiting for academic-year operation to block: ${JSON.stringify(locks.rows)}`,
   );
 }
 
@@ -115,6 +117,25 @@ async function cleanupReverseConcurrentYear() {
   }
 }
 
+async function cleanupShareLockYear() {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `DELETE FROM audit_logs
+        WHERE entity_type='academic_year' AND entity_id=$1`,
+      [String(shareLockYear)],
+    );
+    await client.query("DELETE FROM academic_years WHERE start_year=$1", [shareLockYear]);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 describe("academic-years repository", () => {
   it("returns the configured-year domain conflict when deletion locks and commits first", async () => {
     await cleanupReverseConcurrentYear();
@@ -167,7 +188,7 @@ describe("academic-years repository", () => {
         },
       );
 
-      await waitForAcademicYearDeleteToBlock(
+      await waitForAcademicYearOperationToBlock(
         deleter,
         blocker.rows[0].transaction_id,
       );
@@ -238,7 +259,7 @@ describe("academic-years repository", () => {
         (value) => ({ outcome: "resolved" as const, value }),
         (error: unknown) => ({ outcome: "rejected" as const, error }),
       );
-      await waitForAcademicYearDeleteToBlock(
+      await waitForAcademicYearOperationToBlock(
         inserter,
         blocker.rows[0].transaction_id,
       );
@@ -273,6 +294,64 @@ describe("academic-years repository", () => {
       if (!inserterCommitted) await inserter.query("ROLLBACK");
       inserter.release();
       await cleanupConcurrentYear();
+    }
+  });
+
+  it("keeps a closing-date update waiting while the scheduling boundary is share locked", async () => {
+    await cleanupShareLockYear();
+    await pool.query(
+      `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+       VALUES ($1,'2095-07-31',$2,$2)`,
+      [shareLockYear, TEST_REFERENCE_IDS.adminUser],
+    );
+    const scheduler = await pool.connect();
+    const updater = await pool.connect();
+    let schedulerCommitted = false;
+    let updateSettled = false;
+    let update: ReturnType<typeof updateAcademicYearClosingDateWithClient> | undefined;
+    try {
+      await scheduler.query("BEGIN");
+      await expect(lockAcademicYearSchedulingBoundary(scheduler, shareLockYear)).resolves.toEqual({
+        startYear: shareLockYear,
+        closingDate: "2095-07-31",
+      });
+      const blocker = await scheduler.query<{ transaction_id: string }>(
+        "SELECT txid_current()::text AS transaction_id",
+      );
+      update = updateAcademicYearClosingDateWithClient(updater, {
+        startYear: shareLockYear,
+        closingDate: "2095-07-15",
+        actorUserId: TEST_REFERENCE_IDS.clinicStaffUser,
+      }).then(
+        (value) => {
+          updateSettled = true;
+          return value;
+        },
+        (error: unknown) => {
+          updateSettled = true;
+          throw error;
+        },
+      );
+
+      await waitForAcademicYearOperationToBlock(
+        scheduler,
+        blocker.rows[0].transaction_id,
+      );
+      expect(updateSettled).toBe(false);
+      await scheduler.query("COMMIT");
+      schedulerCommitted = true;
+
+      await expect(update).resolves.toMatchObject({
+        startYear: shareLockYear,
+        closingDate: "2095-07-15",
+        updatedBy: TEST_REFERENCE_IDS.clinicStaffUser,
+      });
+    } finally {
+      if (!schedulerCommitted) await scheduler.query("ROLLBACK");
+      scheduler.release();
+      if (update && !updateSettled) await update.catch(() => undefined);
+      updater.release();
+      await cleanupShareLockYear();
     }
   });
 

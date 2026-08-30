@@ -19,6 +19,7 @@ import {
 import { studentDisplayNameSql } from "@/server/students/student-display-name";
 import { queueAuthoritativeScheduleNotification } from "@/server/schedule/schedule-notification-hooks";
 import { buildInitialPublicationNotification } from "@/server/schedule/schedule-notifications";
+import { lockAcademicYearSchedulingBoundary } from "./academic-years.repository";
 import { ensureStudentAcademicSnapshotsWithClient } from "./student-academic-snapshots.repository";
 import { loadSchedulingBlockedDates } from "./scheduling-blocked-dates.repository";
 import type { HistoricalStaffActor, UserRole } from "@/types/roles";
@@ -362,6 +363,19 @@ export async function createScheduleImport(
     if (Object.keys(fields).length) return { fields };
 
     await client.query("SELECT pg_advisory_xact_lock(hashtext('medclinic:schedule-import-queue'))");
+    const academicYear = await lockAcademicYearSchedulingBoundary(
+      client,
+      input.academicYearStart,
+    );
+    if (!academicYear) {
+      throw new AppError(
+        "ACADEMIC_YEAR_NOT_CONFIGURED",
+        "Configure the academic year before importing schedules.",
+        409,
+        undefined,
+        { academicYearStart: [input.academicYearStart] },
+      );
+    }
     const accepted = await client.query<{ acceptedAt: Date }>(
       `SELECT clock_timestamp() AS "acceptedAt"`,
     );
@@ -502,7 +516,7 @@ export async function createScheduleImport(
       acceptedAt: accepted.rows[0].acceptedAt.toISOString(),
       timeZone: "Asia/Manila",
     });
-    const searchEndDate = `${input.academicYearStart + 5}-07-31`;
+    const searchEndDate = academicYear.closingDate;
     const capacityRows = await client.query<{
       clinic_id: string;
       clinic_code: ClinicCode;
