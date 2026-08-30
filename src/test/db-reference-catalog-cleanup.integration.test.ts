@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { Pool } from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -110,11 +110,11 @@ integration("reference catalog destructive cleanup", () => {
     );
     await pool.query(
       `INSERT INTO coordinator_schedule_items (
-         id, batch_id, clinic_id, student_number, schedule_type, priority_group_id,
+         id, batch_id, clinic_id, student_number, schedule_type,
          target_date, status, source_row_order, schedule_cycle_start
        ) VALUES
-         ($1,$3,'60000000-0000-4000-8000-000000000001',$4,'LABORATORY',NULL,'2026-08-03','SCHEDULED',1,2026),
-         ($2,$3,'60000000-0000-4000-8000-000000000001',$5,'LABORATORY',NULL,'2026-08-03','SCHEDULED',2,2026)`,
+         ($1,$3,'60000000-0000-4000-8000-000000000001',$4,'LABORATORY','2026-08-03','SCHEDULED',1,2026),
+         ($2,$3,'60000000-0000-4000-8000-000000000001',$5,'LABORATORY','2026-08-03','SCHEDULED',2,2026)`,
       [targetItemId, retainedItemId, created.batchId, created.targetStudent, created.retainedStudent],
     );
     await pool.query(
@@ -221,109 +221,4 @@ integration("reference catalog destructive cleanup", () => {
     await expect(access(join(storageRoot, submissionId))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("blocks direct migration until referenced obsolete data is cleaned, then reconciles legacy values", async () => {
-    created.collegeId = randomUUID();
-    created.programId = randomUUID();
-    const suffix = randomUUID().slice(0, 8).toUpperCase();
-    created.targetStudent = `CAT-${suffix}-M`;
-    await pool.query(
-      "INSERT INTO colleges (id, code, name) VALUES ($1,$2,$3)",
-      [created.collegeId, `OLD${suffix.slice(0, 6)}`, `Migration College ${suffix}`],
-    );
-    await pool.query(
-      "INSERT INTO programs (id, college_id, code, name) VALUES ($1,$2,$3,$4)",
-      [created.programId, created.collegeId, `OLD${suffix.slice(0, 6)}`, `Migration Program ${suffix}`],
-    );
-    await pool.query(
-      `INSERT INTO students (student_number, first_name, last_name, college_id, program_id, year_level)
-       VALUES ($1,'Migration','Blocked',$2,$3,1)`,
-      [created.targetStudent, created.collegeId, created.programId],
-    );
-    const migration = await readFile(resolve("database/migrations/012_cpu_reference_catalog.sql"), "utf8");
-    created.retainedStudent = `CAT-${suffix}-L`;
-    created.batchId = randomUUID();
-    const legacyItemId = randomUUID();
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      await expect(client.query(migration)).rejects.toThrow(/db:reference-catalog-cleanup -- apply/u);
-      await client.query("ROLLBACK");
-
-      const manifestClient = await pool.connect();
-      let manifest;
-      try {
-        manifest = await captureCleanupManifest(manifestClient);
-      } finally {
-        manifestClient.release();
-      }
-      await deleteManifestDatabaseRows(pool, manifest);
-
-      await client.query("BEGIN");
-      await client.query("UPDATE colleges SET code='COE' WHERE id='10000000-0000-4000-8000-000000000001'");
-      await client.query("UPDATE programs SET name='BS Civil Engineering' WHERE id='20000000-0000-4000-8000-000000000001'");
-      await client.query(
-        `INSERT INTO priority_groups (id, name, rank_order)
-         VALUES ('30000000-0000-4000-8000-000000000001','Graduating',4)`,
-      );
-      await client.query(
-        `INSERT INTO students (student_number, first_name, last_name, college_id, program_id, year_level)
-         VALUES ($1,'Legacy','Priority','10000000-0000-4000-8000-000000000003',
-           '20000000-0000-4000-8000-000000000003',1)`,
-        [created.retainedStudent],
-      );
-      await client.query(
-        `INSERT INTO schedule_batches (id, clinic_id, batch_name, created_by)
-         VALUES ($1,'60000000-0000-4000-8000-000000000001',$2,
-           '00000000-0000-4000-8000-000000000001')`,
-        [created.batchId, `Legacy Graduating ${suffix}`],
-      );
-      await client.query(
-        `INSERT INTO coordinator_schedule_items (
-           id, batch_id, clinic_id, student_number, schedule_type, priority_group_id,
-           target_date, source_row_order, schedule_cycle_start
-         ) VALUES ($1,$2,'60000000-0000-4000-8000-000000000001',$3,'LABORATORY',
-           '30000000-0000-4000-8000-000000000001','2026-08-03',1,2026)`,
-        [legacyItemId, created.batchId, created.retainedStudent],
-      );
-      await client.query(migration);
-      const proof = await client.query<{
-        colleges: number;
-        programs: number;
-        engineeringCode: string;
-        civilEngineeringName: string;
-        graduating: number;
-        priorities: string;
-        legacyPriorityCleared: boolean;
-      }>(
-        `SELECT
-           (SELECT COUNT(*)::int FROM colleges) AS colleges,
-           (SELECT COUNT(*)::int FROM programs) AS programs,
-           (SELECT code FROM colleges WHERE id='10000000-0000-4000-8000-000000000001') AS "engineeringCode",
-           (SELECT name FROM programs WHERE id='20000000-0000-4000-8000-000000000001') AS "civilEngineeringName",
-           (SELECT COUNT(*)::int FROM priority_groups WHERE name='Graduating') AS graduating,
-           (SELECT priority_group_id IS NULL
-              FROM coordinator_schedule_items
-             WHERE id='${legacyItemId}') AS "legacyPriorityCleared",
-           (SELECT string_agg(name || ':' || rank_order, ',' ORDER BY rank_order)
-              FROM priority_groups
-             WHERE id IN (
-               '30000000-0000-4000-8000-000000000002',
-               '30000000-0000-4000-8000-000000000003',
-               '30000000-0000-4000-8000-000000000004'
-             )) AS priorities`,
-      );
-      expect(proof.rows).toEqual([{
-        colleges: 13,
-        programs: 48,
-        engineeringCode: "COEng",
-        civilEngineeringName: "Bachelor of Science in Civil Engineering",
-        graduating: 0,
-        priorities: "OJT:1,Tour:2,Regular:3",
-        legacyPriorityCleared: true,
-      }]);
-      await client.query("ROLLBACK");
-    } finally {
-      client.release();
-    }
-  });
 });

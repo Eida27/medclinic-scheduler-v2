@@ -55,26 +55,12 @@ describe("DashboardShell", () => {
     );
   });
 
-  it("shows an accessible link back to coordinator schedules on batch details", () => {
-    usePathname.mockReturnValue("/coordinator-schedules/batch-123");
-
-    render(<DashboardShell user={user}>Batch details</DashboardShell>);
-
-    expect(screen.getByRole("link", { name: "Back to coordinator schedules" })).toHaveAttribute(
-      "href",
-      "/coordinator-schedules",
-    );
-  });
-
   it.each([
     "/appointments",
     "/appointments/appointment-123",
     "/students",
-    "/coordinator-schedules",
     "/students/new",
-    "/coordinator-schedules/new",
     "/students/DEMO-0001/history",
-    "/coordinator-schedules/batch-123/items",
     "/results/result-123",
   ])("does not show a back link on %s", (pathname) => {
     usePathname.mockReturnValue(pathname);

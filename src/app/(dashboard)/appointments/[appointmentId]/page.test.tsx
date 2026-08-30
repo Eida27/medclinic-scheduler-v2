@@ -35,19 +35,22 @@ vi.mock("@/server/repositories/appointments.repository", () => ({ getPublishedAp
 
 import AppointmentPage from "./page";
 
+const appointmentId = "11111111-1111-4111-8111-111111111111";
+const missingAppointmentId = "22222222-2222-4222-8222-222222222222";
+
 describe("AppointmentPage", () => {
   it("delegates rendering to the shared appointment detail", async () => {
-    render(await AppointmentPage({ params: Promise.resolve({ appointmentId: "appointment-1" }) }));
+    render(await AppointmentPage({ params: Promise.resolve({ appointmentId }) }));
 
     expect(appointmentDetail).toHaveBeenCalledWith({
-      appointmentId: "appointment-1",
+      appointmentId,
       source: "APPOINTMENTS",
     }, undefined);
   });
 });
 
 const publishedAppointment = {
-  id: "appointment-1",
+  id: appointmentId,
   studentNumber: "2026-0001",
   studentName: "Santos, Ana Maria Angela (Jr.)",
   scheduleType: "LABORATORY",
@@ -85,17 +88,29 @@ describe("AppointmentDetail", () => {
     getPublishedAppointment.mockResolvedValue(publishedAppointment);
   });
 
+  it("returns not found for a non-UUID path segment without querying appointments", async () => {
+    const AppointmentDetail = await getActualAppointmentDetail();
+
+    await expect(AppointmentDetail({
+      appointmentId: "coordinator-schedules",
+      source: "LABORATORY",
+    })).rejects.toThrow("NEXT_NOT_FOUND");
+
+    expect(requireUser).not.toHaveBeenCalled();
+    expect(getPublishedAppointment).not.toHaveBeenCalled();
+  });
+
   it("renders a published appointment after enforcing the allowed roles", async () => {
     const AppointmentDetail = await getActualAppointmentDetail();
 
-    render(await AppointmentDetail({ appointmentId: "appointment-1", source: "LABORATORY" }));
+    render(await AppointmentDetail({ appointmentId, source: "LABORATORY" }));
 
     expect(requireUser).toHaveBeenCalledWith(["ADMIN", "CLINIC_STAFF"]);
-    expect(getPublishedAppointment).toHaveBeenCalledWith("appointment-1");
+    expect(getPublishedAppointment).toHaveBeenCalledWith(appointmentId);
     expect(screen.getByRole("heading", { level: 1, name: "Santos, Ana Maria Angela (Jr.)" })).toBeVisible();
     expect(screen.getByText("Published")).toBeVisible();
     expect(appointmentProtectionPanel).toHaveBeenCalledWith({
-      appointmentId: "appointment-1",
+      appointmentId,
       status: "PENDING",
       isManuallyLocked: true,
       lockReason: "Administrator review",
@@ -116,7 +131,7 @@ describe("AppointmentDetail", () => {
     });
     const AppointmentDetail = await getActualAppointmentDetail();
 
-    render(await AppointmentDetail({ appointmentId: "appointment-1", source: "LABORATORY" }));
+    render(await AppointmentDetail({ appointmentId, source: "LABORATORY" }));
 
     expect(screen.getByText(/Former Administrator/)).toBeVisible();
     expect(screen.getByText("Deleted")).toBeVisible();
@@ -127,9 +142,10 @@ describe("AppointmentDetail", () => {
     const AppointmentDetail = await getActualAppointmentDetail();
 
     await expect(AppointmentDetail({
-      appointmentId: "draft-appointment",
+      appointmentId: missingAppointmentId,
       source: "APPOINTMENTS",
     })).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(getPublishedAppointment).toHaveBeenCalledWith(missingAppointmentId);
     expect(notFound).toHaveBeenCalledOnce();
   });
 
@@ -149,13 +165,13 @@ describe("AppointmentDetail", () => {
     });
     const AppointmentDetail = await getActualAppointmentDetail();
 
-    render(await AppointmentDetail({ appointmentId: "appointment-1", source: "LABORATORY" }));
+    render(await AppointmentDetail({ appointmentId, source: "LABORATORY" }));
 
     expect(screen.getByText("No-show")).toBeVisible();
     expect(screen.getByText("Pending → No-show")).toBeVisible();
     expect(screen.queryByText("NO_SHOW")).not.toBeInTheDocument();
     expect(appointmentActions).toHaveBeenCalledWith({
-      id: "appointment-1",
+      id: appointmentId,
       status: "NO_SHOW",
       canCorrectNoShow: true,
       isManuallyLocked: true,
@@ -171,10 +187,10 @@ describe("AppointmentDetail", () => {
     });
     const AppointmentDetail = await getActualAppointmentDetail();
 
-    render(await AppointmentDetail({ appointmentId: "appointment-1", source: "LABORATORY" }));
+    render(await AppointmentDetail({ appointmentId, source: "LABORATORY" }));
 
     expect(completedStatusCorrection).toHaveBeenCalledWith({
-      appointmentId: "appointment-1",
+      appointmentId,
       appointmentDate: "2026-08-18",
       source: "LABORATORY",
     }, undefined);
@@ -183,7 +199,7 @@ describe("AppointmentDetail", () => {
   it("does not render completed correction for an ordinary pending appointment", async () => {
     const AppointmentDetail = await getActualAppointmentDetail();
 
-    render(await AppointmentDetail({ appointmentId: "appointment-1", source: "LABORATORY" }));
+    render(await AppointmentDetail({ appointmentId, source: "LABORATORY" }));
 
     expect(completedStatusCorrection).not.toHaveBeenCalled();
   });
@@ -192,7 +208,7 @@ describe("AppointmentDetail", () => {
     const AppointmentDetail = await getActualAppointmentDetail();
 
     await expect(AppointmentDetail({
-      appointmentId: "appointment-1",
+      appointmentId,
       expectedScheduleType: "PHYSICAL_EXAM",
       source: "PHYSICAL_EXAM",
     })).rejects.toThrow("NEXT_NOT_FOUND");
@@ -207,7 +223,7 @@ describe("AppointmentDetail", () => {
     const AppointmentDetail = await getActualAppointmentDetail();
 
     await expect(AppointmentDetail({
-      appointmentId: "appointment-1",
+      appointmentId,
       expectedScheduleType: "LABORATORY",
       source: "LABORATORY",
     })).rejects.toThrow("NEXT_NOT_FOUND");
@@ -219,7 +235,7 @@ describe("AppointmentDetail", () => {
     const AppointmentDetail = await getActualAppointmentDetail();
 
     await expect(AppointmentDetail({
-      appointmentId: "appointment-1",
+      appointmentId,
       source: "LABORATORY",
     })).rejects.toThrow("NEXT_NOT_FOUND");
     expect(notFound).toHaveBeenCalledOnce();
@@ -229,7 +245,7 @@ describe("AppointmentDetail", () => {
     requireUser.mockResolvedValue({ role: "ADMIN", clinicId: null });
     const AppointmentDetail = await getActualAppointmentDetail();
 
-    render(await AppointmentDetail({ appointmentId: "appointment-1", source: "LABORATORY" }));
+    render(await AppointmentDetail({ appointmentId, source: "LABORATORY" }));
 
     expect(screen.getByRole("heading", { level: 1, name: "Santos, Ana Maria Angela (Jr.)" })).toBeVisible();
     expect(notFound).not.toHaveBeenCalled();
@@ -240,10 +256,10 @@ describe("AppointmentDetail", () => {
   });
 
   it.each([
-    ["CLINIC_STAFF", "LABORATORY", "clinic-1", "/laboratory/appointment-1"],
-    ["CLINIC_STAFF", "PHYSICAL_EXAM", "clinic-2", "/physical-exam/appointment-1"],
-    ["ADMIN", "LABORATORY", null, "/laboratory/appointment-1"],
-    ["ADMIN", "PHYSICAL_EXAM", null, "/physical-exam/appointment-1"],
+    ["CLINIC_STAFF", "LABORATORY", "clinic-1", `/laboratory/${appointmentId}`],
+    ["CLINIC_STAFF", "PHYSICAL_EXAM", "clinic-2", `/physical-exam/${appointmentId}`],
+    ["ADMIN", "LABORATORY", null, `/laboratory/${appointmentId}`],
+    ["ADMIN", "PHYSICAL_EXAM", null, `/physical-exam/${appointmentId}`],
   ] as const)(
     "redirects %s legacy %s detail access into its operational clinic flow",
     async (role, scheduleType, clinicId, target) => {
@@ -256,7 +272,7 @@ describe("AppointmentDetail", () => {
       const AppointmentDetail = await getActualAppointmentDetail();
 
       await expect(AppointmentDetail({
-        appointmentId: "appointment-1",
+        appointmentId,
         source: "APPOINTMENTS",
       })).rejects.toThrow("NEXT_REDIRECT");
 

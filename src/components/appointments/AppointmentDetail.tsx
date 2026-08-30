@@ -30,6 +30,8 @@ export type AppointmentDetailProps = {
   source: "APPOINTMENTS" | "LABORATORY" | "PHYSICAL_EXAM";
 };
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
 function statusLogTimestamp(value: Date) {
   return new Intl.DateTimeFormat("en-PH", {
     dateStyle: "medium",
@@ -43,6 +45,7 @@ export async function AppointmentDetail({
   expectedScheduleType,
   source,
 }: AppointmentDetailProps) {
+  if (!UUID_PATTERN.test(appointmentId)) notFound();
   const user = await requireUser(["ADMIN", "CLINIC_STAFF"]);
   const appointment = await getPublishedAppointment(appointmentId);
   if (!appointment) notFound();

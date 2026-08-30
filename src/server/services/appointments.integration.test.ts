@@ -13,8 +13,7 @@ import {
   TEST_REFERENCE_IDS,
 } from "@/test/integration-fixtures";
 import type { SessionUser } from "@/types/roles";
-import { addScheduleBatch, generateBatchAppointments } from "./coordinator-schedules.service";
-import { publishScheduleBatch, updateAppointment } from "./appointments.service";
+import { updateAppointment } from "./appointments.service";
 
 const admin = {
   userId: TEST_REFERENCE_IDS.adminUser,
@@ -243,67 +242,26 @@ describe("appointment lifecycle", () => {
     expect([...firstPage.items, ...secondPage.items].map((item) => item.studentNumber)).toEqual(expected);
   });
 
-  it("hides drafts, publishes them, and creates a logged replacement on reschedule", async () => {
+  it("reads a published appointment and creates a logged replacement on reschedule", async () => {
     await pool.query(
       `UPDATE students SET email='appointment.fixture@example.test',email_verified_at=NOW()
         WHERE student_number=$1`,
       [studentNumber],
     );
-    const batch = await addScheduleBatch({
-      batchName: "TEST appointment lifecycle fixture",
-      collegeId: TEST_REFERENCE_IDS.college,
-      programId: TEST_REFERENCE_IDS.program,
-      submittedByName: "Test",
-      description: "Disposable",
-      items: [{
-        studentNumber, scheduleType: "PHYSICAL_EXAM",
-        priorityGroupId: TEST_REFERENCE_IDS.regularPriority,
-        targetDate: "2044-09-01", targetWeekStart: null, targetWeekEnd: null, remarks: "",
-      }],
-    }, admin.userId);
-    const batchId = String(batch?.id);
-
-    await generateBatchAppointments(batchId, admin);
-    expect((await getStudentPortalSchedule(studentNumber))?.appointments).toHaveLength(0);
-    await publishScheduleBatch(batchId, admin.userId);
+    const current = await pool.query<{ id: string }>(
+      `INSERT INTO appointments (
+         clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+         schedule_cycle_start,created_by,updated_by
+       ) VALUES ($1,$2,'PHYSICAL_EXAM','2044-09-01','PENDING',TRUE,2044,$3,$3)
+       RETURNING id::text`,
+      [TEST_REFERENCE_IDS.physicalExamClinic, studentNumber, admin.userId],
+    );
     const portalSchedule = await getStudentPortalSchedule(studentNumber);
     expect(portalSchedule).toMatchObject({
       studentNumber,
       studentName: "Fixture, Appointment Maria Angela (Jr.)",
       appointments: [expect.any(Object)],
     });
-    await expect(pool.query(
-      `SELECT notification.notification_type,notification.event_key,
-              notification.metadata->>'sourceType' AS source_type,
-              outbox.notification_type AS outbox_type,outbox.source_id
-         FROM student_portal_notifications notification
-         LEFT JOIN email_outbox outbox ON outbox.portal_notification_id=notification.id
-        WHERE notification.student_number=$1`,
-      [studentNumber],
-    )).resolves.toMatchObject({ rows: [{
-      notification_type: "SCHEDULE_INITIAL_PUBLICATION",
-      event_key: `schedule:initial:SCHEDULE_BATCH:${batchId}:${studentNumber}`,
-      source_type: "SCHEDULE_BATCH",
-      outbox_type: "SCHEDULE_INITIAL_PUBLICATION",
-      source_id: batchId,
-    }] });
-
-    const snapshot = await pool.query(
-      `SELECT student_name,college_name,program_code,program_name,year_level,source_type
-         FROM student_academic_snapshots
-        WHERE student_number=$1 AND academic_year_start=2044`,
-      [studentNumber],
-    );
-    expect(snapshot.rows).toEqual([{
-      student_name: "Fixture, Appointment Maria Angela (Jr.)",
-      college_name: "College of Computer Studies",
-      program_code: "BSIT",
-      program_name: "Bachelor of Science in Information Technology",
-      year_level: 3,
-      source_type: "MIGRATED_INCOMPLETE",
-    }]);
-
-    const current = await pool.query<{ id: string }>("SELECT id FROM appointments WHERE batch_id=$1", [batchId]);
     await expect(getPublishedAppointment(current.rows[0].id)).resolves.toMatchObject({
       studentName: "Fixture, Appointment Maria Angela (Jr.)",
     });
@@ -383,68 +341,6 @@ describe("appointment lifecycle", () => {
       privateRescheduleNote,
       privateCancellationNote,
     ]));
-  });
-
-  it("commits a legacy publication conflict without publishing draft appointments", async () => {
-    const conflictStudentNumber = "TEST-APPT-SNAP-CONF";
-    await pool.query(
-      `INSERT INTO student_academic_snapshots (
-         student_number,academic_year_start,student_name,college_id,college_name,
-         program_id,program_code,program_name,year_level,source_type,source_metadata
-       ) VALUES (
-         $1,2026,'Fixture, Correction',$2,'College of Computer Studies',
-         $3,'BSIT','Bachelor of Science in Information Technology',2,
-         'MIGRATED_INCOMPLETE','{"fixture":true}'::jsonb
-       ) ON CONFLICT (student_number,academic_year_start) DO NOTHING`,
-      [conflictStudentNumber, TEST_REFERENCE_IDS.college, TEST_REFERENCE_IDS.program],
-    );
-    const batch = await addScheduleBatch({
-      batchName: "TEST appointment lifecycle snapshot conflict",
-      collegeId: TEST_REFERENCE_IDS.college,
-      programId: TEST_REFERENCE_IDS.program,
-      submittedByName: "Test",
-      description: "Disposable",
-      items: [{
-        studentNumber: conflictStudentNumber,
-        scheduleType: "LABORATORY",
-        priorityGroupId: TEST_REFERENCE_IDS.regularPriority,
-        targetDate: "2026-09-01",
-        targetWeekStart: null,
-        targetWeekEnd: null,
-        remarks: "",
-      }],
-    }, admin.userId);
-    const batchId = String(batch?.id);
-    await generateBatchAppointments(batchId, admin);
-    const auditBefore = await pool.query<{ count: number }>(
-      `SELECT COUNT(*)::int AS count FROM audit_logs
-        WHERE action='SNAPSHOT_CONFLICT_DETECTED' AND entity_id=$1`,
-      [`${conflictStudentNumber}:2026`],
-    );
-
-    await expect(publishScheduleBatch(batchId, admin.userId)).rejects.toMatchObject({
-      code: "SNAPSHOT_CONFLICT",
-      status: 409,
-    });
-    const state = await pool.query(
-      `SELECT batch.status AS batch_status,appointment.status AS appointment_status,
-              appointment.is_published
-         FROM schedule_batches batch
-         JOIN appointments appointment ON appointment.batch_id=batch.id
-        WHERE batch.id=$1`,
-      [batchId],
-    );
-    expect(state.rows).toEqual([{
-      batch_status: "GENERATED",
-      appointment_status: "DRAFT",
-      is_published: false,
-    }]);
-    const auditAfter = await pool.query<{ count: number }>(
-      `SELECT COUNT(*)::int AS count FROM audit_logs
-        WHERE action='SNAPSHOT_CONFLICT_DETECTED' AND entity_id=$1`,
-      [`${conflictStudentNumber}:2026`],
-    );
-    expect(auditAfter.rows[0].count).toBe(auditBefore.rows[0].count + 1);
   });
 
   it("reschedules a manual no-show when a mixed request also carries completed status", async () => {

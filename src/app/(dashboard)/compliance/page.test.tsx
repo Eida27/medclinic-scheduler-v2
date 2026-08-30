@@ -23,7 +23,6 @@ describe("CompliancePage legacy redirect", () => {
         dataQuality: "MIGRATED_INCOMPLETE",
         sort: "attention_first",
         page: "2",
-        priorityGroupId: "discard-me",
       }),
     });
 

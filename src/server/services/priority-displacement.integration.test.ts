@@ -114,10 +114,10 @@ async function attachSourceScheduleItems(appointmentIds: string[], sourceRowOrde
   await pool.query(
     `WITH inserted AS (
        INSERT INTO coordinator_schedule_items (
-         batch_id,clinic_id,student_number,schedule_type,priority_group_id,
+         batch_id,clinic_id,student_number,schedule_type,
          target_date,status,source_row_order,schedule_cycle_start
        )
-       SELECT batch_id,clinic_id,student_number,schedule_type,NULL,
+       SELECT batch_id,clinic_id,student_number,schedule_type,
               appointment_date,'SCHEDULED',$2,schedule_cycle_start
          FROM appointments
         WHERE id=ANY($1::uuid[])

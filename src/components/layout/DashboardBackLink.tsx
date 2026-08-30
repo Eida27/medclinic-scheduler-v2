@@ -10,10 +10,6 @@ const backLinks = {
     label: "Back to Physical Examination",
   },
   students: { href: "/students", label: "Back to students" },
-  "coordinator-schedules": {
-    href: "/coordinator-schedules",
-    label: "Back to coordinator schedules",
-  },
 } as const;
 
 const scheduleImportsBackLink = {

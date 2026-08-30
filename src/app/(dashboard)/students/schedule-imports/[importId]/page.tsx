@@ -1,4 +1,3 @@
-import { ScheduleImportActions } from "@/components/schedules/ScheduleImportActions";
 import { ScheduleImportClinicPanel } from "@/components/schedules/ScheduleImportClinicPanel";
 import { Badge } from "@/components/ui/Badge";
 import { Card, CardTitle } from "@/components/ui/Card";
@@ -33,12 +32,15 @@ export default async function ScheduleImportDetailPage({
   const academicYear = detail.academicYearStart
     ? `${detail.academicYearStart}–${detail.academicYearStart + 1}`
     : "Legacy import";
+  const isPublished = detail.status === "PUBLISHED";
 
   return (
     <>
       <PageHeader
         title={detail.importName}
-        description="Published paired schedules and compact import outcomes."
+        description={isPublished
+          ? "Published paired schedules and compact import outcomes."
+          : "Historical import data is read-only and cannot be advanced."}
         actions={<Badge tone={statusTone(detail.status)}>{detail.status}</Badge>}
       />
       <Card>
@@ -67,7 +69,9 @@ export default async function ScheduleImportDetailPage({
               <p className="mt-1 text-xs text-muted">{detail.createdStudentCount} inserted · {detail.matchedStudentCount} updated · {detail.skippedStudentCount} skipped</p>
             </div>
             <div className="rounded-xl border border-cpu-navy/8 bg-cpu-navy-soft/55 p-4">
-              <dt className="text-xs font-semibold text-muted">Published pairs</dt>
+              <dt className="text-xs font-semibold text-muted">
+                {isPublished ? "Published pairs" : "Planned pairs"}
+              </dt>
               <dd className="mt-1 text-2xl font-black text-ink">{Math.min(detail.laboratoryItemCount, detail.physicalExaminationItemCount)}</dd>
             </div>
             <div className="rounded-xl border border-cpu-navy/8 bg-cpu-navy-soft/55 p-4">
@@ -129,19 +133,12 @@ export default async function ScheduleImportDetailPage({
                   ))}
                 </ul>
               ) : <p className="mt-2 text-sm text-muted">No candidate dates were skipped.</p>}
-              <p className="mt-3 text-sm text-muted">{detail.firstYearSummary.displacementTotal} lower-priority appointments displaced and replaced.</p>
+              <p className="mt-3 text-sm text-muted">{detail.firstYearSummary.displacementTotal} Regular appointments displaced and replaced.</p>
             </div>
           </div>
           <p className="mt-5 break-all text-xs text-muted">
             {`OVPSA lineage: ${detail.firstYearSummary.batchId} / ${detail.firstYearSummary.revisionId}`}
           </p>
-        </Card>
-      ) : null}
-      {detail.status === "DRAFT" || detail.status === "VALIDATED" || detail.status === "GENERATED" ? (
-        <Card>
-          <CardTitle>Historical import actions</CardTitle>
-          <p className="my-3 text-sm text-muted">Lifecycle actions remain available for imports saved before automatic publication.</p>
-          <ScheduleImportActions importId={detail.importId} status={detail.status} actorRole={actor.role} />
         </Card>
       ) : null}
       <div className="grid gap-6">

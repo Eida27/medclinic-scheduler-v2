@@ -25,7 +25,6 @@ describe("AppointmentsPage legacy redirect", () => {
         page: "2",
         appointmentDate: "2026-07-30",
         appointmentStatus: "PENDING",
-        priorityGroupId: "priority-1",
         unknown: "discard-me",
       }),
     });

@@ -9,7 +9,7 @@ import { appointmentSummaryReport } from "./appointment-summary.repository";
 
 export async function complianceReport(filters: {
   clinicCode?: ClinicCode;
-  collegeId?: string; programId?: string; priorityGroupId?: string; physicalExamStatus?: string;
+  collegeId?: string; programId?: string; physicalExamStatus?: string;
   laboratoryStatus?: string; appointmentStatus?: string; appointmentDate?: string; overallStatus?: OverallStatus;
   search?: string; sort?: string; page: number; limit: number; offset: number;
 }) {

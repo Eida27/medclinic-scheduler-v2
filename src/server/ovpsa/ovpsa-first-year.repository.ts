@@ -9,7 +9,7 @@ export type StoredOvpsaBatch = {
   batchId: string;
   scheduleCycleStart: number;
   closingDate: string;
-  collegeId: string;
+  collegeId: string | null;
   collegeName: string;
   status: "DRAFT" | "PUBLISHED" | "RESCHEDULE_REQUIRED" | "CANCELLED";
   optimisticToken: string;
@@ -41,7 +41,7 @@ export async function loadOvpsaBatchWithCurrentRevision(
     batch_id: string;
     schedule_cycle_start: number;
     closing_date: string | null;
-    college_id: string;
+    college_id: string | null;
     college_name: string;
     status: StoredOvpsaBatch["status"];
     optimistic_token: string;
@@ -54,7 +54,8 @@ export async function loadOvpsaBatchWithCurrentRevision(
   }>(
     `SELECT batch.id::text AS batch_id,batch.schedule_cycle_start,
             academic_year.closing_date::text,
-            batch.college_id::text,college.name AS college_name,batch.status,
+            batch.college_id::text,COALESCE(college.name,'All Colleges') AS college_name,
+            batch.status,
             batch.optimistic_token::text,revision.id::text AS revision_id,
             revision.revision_number,revision.status AS revision_status,
             revision.laboratory_date::text,revision.physical_exam_date::text,
@@ -62,7 +63,7 @@ export async function loadOvpsaBatchWithCurrentRevision(
        FROM ovpsa_first_year_batches batch
        LEFT JOIN academic_years academic_year
          ON academic_year.start_year=batch.schedule_cycle_start
-       JOIN colleges college ON college.id=batch.college_id
+       LEFT JOIN colleges college ON college.id=batch.college_id
        JOIN ovpsa_first_year_batch_revisions revision
          ON revision.id=batch.current_revision_id
       WHERE batch.id=$1

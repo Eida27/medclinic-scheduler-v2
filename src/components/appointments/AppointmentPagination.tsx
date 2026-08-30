@@ -9,7 +9,6 @@ type AppointmentPaginationFilters = {
   appointmentStatus?: string;
   collegeId?: string;
   programId?: string;
-  priorityGroupId?: string;
   physicalExamStatus?: string;
   laboratoryStatus?: string;
   overallStatus?: string;
@@ -33,7 +32,6 @@ const filterNames = [
   "appointmentStatus",
   "collegeId",
   "programId",
-  "priorityGroupId",
   "physicalExamStatus",
   "laboratoryStatus",
 ] as const;

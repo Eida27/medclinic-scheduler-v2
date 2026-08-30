@@ -14,12 +14,6 @@ const { admin, getScheduleImport, requireUser } = vi.hoisted(() => ({
 
 vi.mock("@/server/auth/current-user", () => ({ requireUser }));
 vi.mock("@/server/services/schedule-imports.service", () => ({ getScheduleImport }));
-vi.mock("@/components/schedules/ScheduleImportActions", () => ({
-  ScheduleImportActions: ({ importId, status, actorRole }: { importId: string; status: string; actorRole: string }) => (
-    <div>Grouped actions for {importId} in {status} as {actorRole}</div>
-  ),
-}));
-
 import ScheduleImportDetailPage from "./page";
 
 function childBatch({
@@ -59,7 +53,6 @@ function childBatch({
       studentNumber: "2026-0001",
       studentName: "Review Student",
       scheduleType,
-      priorityGroupName: "Regular",
       targetDate,
       targetWeekStart: null,
       targetWeekEnd: null,
@@ -90,7 +83,7 @@ describe("ScheduleImportDetailPage", () => {
     expect(getScheduleImport).not.toHaveBeenCalled();
   });
 
-  it("allows administrators and coordinators and passes the role to grouped actions", async () => {
+  it("allows administrators and coordinators to read historical staged imports without actions", async () => {
     requireUser.mockResolvedValue(admin);
     getScheduleImport.mockResolvedValue({
       importId: "import-1",
@@ -147,8 +140,11 @@ describe("ScheduleImportDetailPage", () => {
     expect(screen.getByText("Students")).toBeVisible();
     expect(screen.getByText("3", { selector: "dd" })).toBeVisible();
     expect(screen.getByText("1 inserted · 2 updated · 0 skipped")).toBeVisible();
-    expect(screen.getByText("Published pairs")).toBeVisible();
-    expect(screen.getByText("Grouped actions for import-1 in GENERATED as ADMIN")).toBeVisible();
+    expect(screen.getByText("Historical import data is read-only and cannot be advanced.")).toBeVisible();
+    expect(screen.getByText("Planned pairs")).toBeVisible();
+    expect(screen.queryByText("Published pairs")).not.toBeInTheDocument();
+    expect(screen.queryByText("Historical import actions")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Laboratory schedule review" })).toBeVisible();
     expect(screen.getByRole("region", { name: "Physical examination schedule review" })).toBeVisible();
     expect(screen.getAllByText("Draft — not published")).toHaveLength(2);

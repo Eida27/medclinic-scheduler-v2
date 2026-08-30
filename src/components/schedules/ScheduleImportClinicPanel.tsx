@@ -28,7 +28,6 @@ type ScheduleRequest = {
   studentNumber: string;
   studentName: string;
   scheduleType: string;
-  priorityGroupName: string;
   targetDate: string | null;
   targetWeekStart: string | null;
   targetWeekEnd: string | null;
@@ -42,7 +41,6 @@ type GeneratedAppointment = {
   studentNumber: string;
   studentName: string;
   scheduleType: string;
-  priorityGroupName: string | null;
   appointmentDate: string;
   status: string;
   isPublished: boolean;
@@ -115,7 +113,7 @@ export function ScheduleImportClinicPanel({ batch }: { batch: ScheduleImportClin
             </>
           ) : (
             <p className="mt-2 text-sm text-muted">
-              Validate the import to see validation totals and capacity results.
+              Validation totals are not available for this historical import.
             </p>
           )}
         </section>
@@ -152,7 +150,6 @@ export function ScheduleImportClinicPanel({ batch }: { batch: ScheduleImportClin
                     <div>
                       <p className="font-bold text-ink">{item.studentName}</p>
                       <p className="font-mono text-xs text-muted">{item.studentNumber}</p>
-                      <p className="mt-1 text-xs text-muted-strong">Priority: {item.priorityGroupName}</p>
                     </div>
                     <Badge tone={statusTone(item.status)}>{item.status}</Badge>
                   </div>
@@ -178,7 +175,6 @@ export function ScheduleImportClinicPanel({ batch }: { batch: ScheduleImportClin
                 <thead className="bg-cpu-navy-soft/70">
                   <tr>
                     <th className="px-4 py-3">Student</th>
-                    <th className="px-4 py-3">Priority</th>
                     <th className="px-4 py-3">Date</th>
                     <th className="px-4 py-3">Publication</th>
                   </tr>
@@ -190,7 +186,6 @@ export function ScheduleImportClinicPanel({ batch }: { batch: ScheduleImportClin
                         <p className="font-bold text-ink">{appointment.studentName}</p>
                         <p className="font-mono text-xs text-muted">{appointment.studentNumber}</p>
                       </td>
-                      <td className="px-4 py-3">{appointment.priorityGroupName ?? "Not available"}</td>
                       <td className="px-4 py-3">{appointment.appointmentDate}</td>
                       <td className="px-4 py-3">
                         <Badge tone={appointment.isPublished ? "success" : "neutral"}>
@@ -204,7 +199,7 @@ export function ScheduleImportClinicPanel({ batch }: { batch: ScheduleImportClin
             </div>
           ) : (
             <p className="mt-2 text-sm text-muted">
-              Draft appointments will appear here after this import is generated.
+              No appointments are recorded for this clinic batch.
             </p>
           )}
         </section>

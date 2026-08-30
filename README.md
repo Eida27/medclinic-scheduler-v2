@@ -6,9 +6,9 @@ Academic-year Laboratory and Physical Examination scheduling, clinic operations,
 
 - Separate JWT sessions for administrators, coordinators, clinic staff, and students
 - Atomic academic-year student imports with deterministic, date-only Laboratory/PE pairs
-- Regular FCFS scheduling plus OJT, Tour, and Specialized priority windows
+- Regular FCFS scheduling plus OJT, Tour, and First-Year/OVPSA scheduling
 - Maximum daily capacity as the sole scheduling ceiling across imports, displacement, and clinic closures
-- Minimum Regular displacement for priority capacity, with linked history and student notifications
+- Minimum Regular displacement for OJT, Tour, and First-Year/OVPSA capacity, with linked history and student notifications
 - Future clinic unavailable dates: CPU Clinic moves PE only; KABALAKA Clinic replaces the pair
 - Administrator appointment locks that automatic moves cannot override
 - Published clinic schedules, next-midnight automatic no-shows, corrections, filters, and server-side sorting
@@ -93,12 +93,13 @@ Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Bir
 - College names and course codes must match active reference data case-insensitively.
 - Files may contain up to 3,000 data rows and may not exceed 1 MB.
 - Student IDs must be valid and unique within the file after normalization.
-- Choose the student category and academic-year start. OJT, Tour, and Specialized imports also require a preferred month; Regular does not.
+- Choose the student category and academic-year start. OJT and Tour imports also require a preferred month; Regular does not. First-Year/OVPSA imports use the guarded review with a Laboratory date.
 - One POST validates references, acquires the scheduling lock, assigns acceptance order, upserts students, skips same-cycle duplicates, displaces only eligible Regular pairs when needed, creates both clinic batches, and publishes atomically.
 - A failed row or protected/capacity conflict rolls back the complete import. New uploads do not create manual review checkpoints.
-- Historical manually saved imports keep their protected lifecycle actions for backward compatibility.
+- Historical `DRAFT`, `VALIDATED`, and `GENERATED` imports remain readable, but no action can advance or publish them.
+- Published First-Year/OVPSA batches retain their administrator-only history, emergency rescheduling, and cancellation lifecycle; those operations cannot create or publish a new batch.
 
-Scheduling is Monday–Friday in Manila. Laboratory always precedes PE. Regular scheduling begins at the later of the first weekday in August or the seven-Manila-calendar-day preparation boundary. Priority scheduling uses the selected academic-year month and the same preparation boundary.
+Scheduling is Monday–Friday in Manila. Laboratory always precedes PE. Regular scheduling begins at the later of the first weekday in August or the seven-Manila-calendar-day preparation boundary. OJT and Tour scheduling use the selected academic-year month and the same preparation boundary. First-Year/OVPSA review assigns the fixed Laboratory date and capacity-aware PE dates before the same atomic publication request.
 
 ## Clinic Calendar and Date-Only Appointments
 
@@ -176,7 +177,7 @@ npm run db:migrate
 npm run db:seed
 ```
 
-Migrations 008 and 009 add academic-year ordering/cycles, displacement/closure metadata, student identity/notifications, private submission metadata, `PENDING_UPLOAD`, and the date-only appointment schema. Migration 010 normalizes the deprecated safe-capacity column to maximum capacity; application scheduling uses maximum capacity only. Migration 012 replaces the college/program catalog with the exact CPU workbook catalog and removes the legacy `Graduating` priority group.
+Migrations 008 and 009 add academic-year ordering/cycles, displacement/closure metadata, student identity/notifications, private submission metadata, `PENDING_UPLOAD`, and the date-only appointment schema. Migration 010 normalizes the deprecated safe-capacity column to maximum capacity; application scheduling uses maximum capacity only. Migration 012 replaces the college/program catalog with the exact CPU workbook catalog. Migrations 020–025 consolidate First-Year/OVPSA imports, harden closure recovery, validate year/category policy, add verified student notifications, enforce clinic scope, and secure staff account lifecycles. Migration 026 removes configurable priority groups and the schedule-item priority-group column while preserving import, appointment, audit, and displacement history.
 
 Migration 012 is intentionally destructive when a database contains non-workbook reference data. Back up PostgreSQL and `RESULT_UPLOAD_ROOT`, stop the application and workers, and keep an exclusive maintenance window. Review the cleanup manifest first:
 
@@ -233,6 +234,21 @@ Remove-Item Env:APP_URL
 
 Setup saves a credential-free database identity and the exact `APP_URL`; the dev launcher refuses a mismatch and probes the isolated schema before starting on that URL's host and port. Cleanup proves zero fixture users, tokens, staff outbox rows, related audits, historical fixture records, and state files before dropping the isolated schema.
 
+### Scheduling integrity Browser acceptance fixture
+
+This guarded fixture retains the appointment locking, pair-integrity, Manual Resolution, displacement, capacity, portal, and cleanup scenarios without creating priority groups or legacy scheduling batches. Run it only against a dedicated loopback acceptance database:
+
+```powershell
+$env:SCHEDULING_INTEGRITY_ACCEPTANCE_EXCLUSIVE_DATABASE = "1"
+npm run acceptance:scheduling-integrity:setup
+# Verify retained flows and ordinary 404 responses for removed scheduling routes in Browser.
+npm run acceptance:scheduling-integrity:status
+npm run acceptance:scheduling-integrity:cleanup
+Remove-Item Env:SCHEDULING_INTEGRITY_ACCEPTANCE_EXCLUSIVE_DATABASE
+```
+
+Both `status` and `cleanup` verify the persisted database identity. Cleanup discovers the exact owned manifest, removes only those database rows and private files, restores capacity settings, and proves zero database, file, and state residue.
+
 ### Appointment protection Browser acceptance fixture
 
 The focused appointment-protection fixture creates two synthetic students with exact owned appointment and pair IDs for the locking/inheritance and active-draft-file closure journeys. Every command requires a PostgreSQL `DATABASE_URL` on `localhost`, `127.0.0.1`, or `::1` plus an explicit `APPOINTMENT_PROTECTION_ACCEPTANCE_EXCLUSIVE_DATABASE=1` opt-in. Set that flag only while the configured local database is dedicated exclusively to this acceptance run.
@@ -270,7 +286,7 @@ The ignored state is `.data/browser-clinic-scheduler-ux/state.json`. `stage`, `s
 1. Sign in as coordinator and open **Students & Schedules → New academic-year import**.
 2. Upload an exported nine-column CSV UTF-8 or Excel CSV (Comma delimited) / Windows-1252 file, choose category/year (and preferred month when required), and submit once.
 3. Confirm the import is `PUBLISHED`, dates are date-only, Laboratory precedes PE, and overflow/displacement totals are visible.
-4. Import a priority category against constrained capacity and review the Regular student's linked replacement history and notification.
+4. Import an OJT or Tour category against constrained capacity and review the Regular student's linked replacement history and notification.
 5. As administrator, add CPU and KABALAKA unavailable dates and confirm their PE-only/pair rules.
 6. As KABALAKA clinic staff, complete a Laboratory appointment.
 7. Use **Student sign in** with that Student Number/DOB, upload multiple synthetic PDF/PNG files, finalize, and download them.
@@ -294,7 +310,7 @@ App Router pages and client components
 - Coordinators can operate imports but cannot access medical documents or clinic/admin operations.
 - Clinic staff are limited to their assigned clinic.
 - Audit metadata records aggregate file counts/bytes and operational reasons, never file contents or DOB.
-- Public lookup remains available but exposes only published schedule/compliance data.
+- Public schedule lookup is retired; students use the authenticated Student Portal for published schedule and compliance data.
 
 For production:
 

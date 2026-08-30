@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   importNameFromFileName,
-  importStudentScheduleCsv,
+  acceptAndScheduleImport,
   preflightScheduleImport,
 } from "./schedule-imports.service";
 
@@ -29,7 +29,7 @@ describe("importNameFromFileName", () => {
   });
 
   it("keeps XLSX uploads outside the CSV import contract", async () => {
-    await expect(importStudentScheduleCsv({
+    await expect(acceptAndScheduleImport({
       fileName: "student-schedule-import-template.xlsx",
       fileSize: 4,
       contents: new Uint8Array([0x50, 0x4b, 0x03, 0x04]),

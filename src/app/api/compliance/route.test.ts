@@ -61,13 +61,23 @@ describe("GET /api/compliance", () => {
   it.each([
     "collegeId=not-a-uuid",
     "programId=not-a-uuid",
-    "priorityGroupId=not-a-uuid",
     "appointmentDate=2026-99-99",
   ])("rejects a malformed identifier or date: %s", async (query) => {
     const response = await GET(new Request(`http://localhost/api/compliance?${query}`));
 
     expect(response.status).toBe(422);
     expect(complianceReport).not.toHaveBeenCalled();
+  });
+
+  it("does not forward the retired priority-group query parameter", async () => {
+    const response = await GET(new Request(
+      "http://localhost/api/compliance?priorityGroupId=33333333-3333-4333-8333-333333333333",
+    ));
+
+    expect(response.status).toBe(200);
+    expect(complianceReport).toHaveBeenCalledWith(expect.not.objectContaining({
+      priorityGroupId: expect.anything(),
+    }));
   });
 
   it("requires authentication", async () => {

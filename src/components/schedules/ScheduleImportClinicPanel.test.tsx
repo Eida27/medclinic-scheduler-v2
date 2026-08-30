@@ -26,7 +26,6 @@ const laboratoryBatch = {
     studentNumber: "2026-0001",
     studentName: "Draft Reviewer",
     scheduleType: "LABORATORY",
-    priorityGroupName: "Graduating",
     targetDate: "2026-12-10",
     targetWeekStart: null,
     targetWeekEnd: null,
@@ -42,7 +41,6 @@ const laboratoryBatch = {
     studentNumber: "2026-0001",
     studentName: "Draft Reviewer",
     scheduleType: "LABORATORY",
-    priorityGroupName: "Graduating",
     appointmentDate: "2026-12-10",
     status: "DRAFT",
     isPublished: false,
@@ -51,7 +49,7 @@ const laboratoryBatch = {
 };
 
 describe("ScheduleImportClinicPanel", () => {
-  it("moves priority to generated appointments and keeps issues in a collapsed exception review", () => {
+  it("shows generated appointments without retired priority labels and keeps issues collapsed", () => {
     render(<ScheduleImportClinicPanel batch={laboratoryBatch} />);
 
     const section = screen.getByRole("region", { name: "Laboratory schedule review" });
@@ -68,8 +66,8 @@ describe("ScheduleImportClinicPanel", () => {
     const generatedSection = generatedHeading.closest("section");
     expect(generatedSection).not.toBeNull();
     const appointmentsTable = within(generatedSection as HTMLElement).getByRole("table");
-    expect(within(appointmentsTable).getByRole("columnheader", { name: "Priority" })).toBeVisible();
-    expect(within(appointmentsTable).getByText("Graduating")).toBeVisible();
+    expect(within(appointmentsTable).queryByRole("columnheader", { name: "Priority" })).not.toBeInTheDocument();
+    expect(within(section).queryByText(/priority:/i)).not.toBeInTheDocument();
 
     const exceptionSummary = within(section).getByText("Review exceptions (1 issue)");
     const conflict = within(section).getByText("Student already has an active laboratory appointment.");
@@ -80,7 +78,7 @@ describe("ScheduleImportClinicPanel", () => {
     expect(within(section).getAllByText("2026-12-10")).toHaveLength(2);
   });
 
-  it("explains when generated drafts are not present yet", () => {
+  it("explains read-only historical states without lifecycle-action copy", () => {
     render(<ScheduleImportClinicPanel batch={{
       ...laboratoryBatch,
       clinicCode: "CPU_CLINIC",
@@ -99,8 +97,8 @@ describe("ScheduleImportClinicPanel", () => {
     }} />);
 
     const section = screen.getByRole("region", { name: "Physical examination schedule review" });
-    expect(within(section).getByText("Validate the import to see validation totals and capacity results.")).toBeVisible();
+    expect(within(section).getByText("Validation totals are not available for this historical import.")).toBeVisible();
     expect(within(section).queryByText(/Review exceptions/)).not.toBeInTheDocument();
-    expect(within(section).getByText("Draft appointments will appear here after this import is generated.")).toBeVisible();
+    expect(within(section).getByText("No appointments are recorded for this clinic batch.")).toBeVisible();
   });
 });

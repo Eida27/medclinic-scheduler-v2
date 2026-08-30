@@ -26,7 +26,7 @@ vi.mock("@/server/repositories/reference-data.repository", () => ({
 }));
 vi.mock("@/server/repositories/audit.repository", () => ({ writeAudit }));
 
-import { removeReference } from "./reference-data.service";
+import { addReference, editReference, removeReference } from "./reference-data.service";
 
 const referenceId = "20000000-0000-4000-8000-000000000099";
 const actorUserId = "00000000-0000-4000-8000-000000000001";
@@ -66,7 +66,7 @@ describe("removeReference", () => {
   it("returns a structured not-found error and does not audit", async () => {
     deleteReference.mockResolvedValue(undefined);
 
-    await expect(removeReference("priorityGroup", { id: referenceId }, actorUserId))
+    await expect(removeReference("program", { id: referenceId }, actorUserId))
       .rejects.toEqual(expect.objectContaining({
         code: "REFERENCE_NOT_FOUND",
         message: "Reference value not found.",
@@ -74,6 +74,22 @@ describe("removeReference", () => {
       } satisfies Partial<AppError>));
 
     expect(writeAudit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["add", () => addReference("priorityGroup" as never, { name: "Regular", rankOrder: 1 }, actorUserId)],
+    ["edit", () => editReference("priorityGroup" as never, {
+      id: referenceId,
+      name: "Regular",
+      rankOrder: 1,
+      isActive: true,
+    }, actorUserId)],
+    ["remove", () => removeReference("priorityGroup" as never, { id: referenceId }, actorUserId)],
+  ])("rejects the retired priority-group type before %s persistence", async (_operation, invoke) => {
+    await expect(invoke()).rejects.toMatchObject({ name: "ZodError" });
+    expect(createReference).not.toHaveBeenCalled();
+    expect(updateReference).not.toHaveBeenCalled();
+    expect(transaction).not.toHaveBeenCalled();
   });
 
   it("maps a foreign-key violation to a conflict and does not audit", async () => {

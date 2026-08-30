@@ -98,15 +98,6 @@ describe("CPU reference catalog seed", () => {
     }
   });
 
-  it("removes Graduating and closes the remaining priority ranks", async () => {
-    const seed = await readFile(resolve("database/seeds/001_reference_and_users.sql"), "utf8");
-    const body = insertBody(seed, "priority_groups");
-    expect(body).not.toContain("Graduating");
-    expect(body.match(/\('30000000-/gu)).toHaveLength(3);
-    expect(body).toContain("'30000000-0000-4000-8000-000000000002', 'OJT', 1");
-    expect(body).toContain("'30000000-0000-4000-8000-000000000003', 'Tour', 2");
-    expect(body).toContain("'30000000-0000-4000-8000-000000000004', 'Regular', 3");
-  });
 });
 
 describe("CPU reference catalog migration", () => {
@@ -120,11 +111,6 @@ describe("CPU reference catalog migration", () => {
     expect(migration).toContain("npm run db:reference-catalog-cleanup -- apply");
     expect(migration).toContain("DELETE FROM programs");
     expect(migration).toContain("DELETE FROM colleges");
-    expect(migration).toMatch(/UPDATE coordinator_schedule_items[\s\S]+SET priority_group_id = NULL/u);
-    expect(migration).toMatch(/DELETE FROM priority_groups[\s\S]+Graduating/u);
-    expect(migration).toContain("'OJT', 1");
-    expect(migration).toContain("'Tour', 2");
-    expect(migration).toContain("'Regular', 3");
   });
 
   it("exposes the guarded cleanup command through npm", async () => {

@@ -12,7 +12,7 @@ vi.mock("@/server/auth/current-user", () => ({ requireUser }));
 vi.mock("@/server/repositories/appointments.repository", () => ({ getPublishedAppointment }));
 vi.mock("@/server/services/appointments.service", () => ({ updateAppointment }));
 
-import { GET, PATCH } from "./route";
+import { GET, PATCH, POST } from "./route";
 
 const appointmentId = "11111111-1111-4111-8111-111111111111";
 const context = { params: Promise.resolve({ appointmentId }) };
@@ -42,6 +42,30 @@ describe("/api/appointments/[appointmentId]", () => {
 
     expect(response.status).toBe(200);
     expect(getPublishedAppointment).toHaveBeenCalledWith(appointmentId);
+  });
+
+  it.each([
+    ["GET", GET],
+    ["PATCH", PATCH],
+    ["POST", POST],
+  ] as const)("returns 404 for a non-UUID dynamic segment on %s", async (method, handler) => {
+    const invalidContext = { params: Promise.resolve({ appointmentId: "generate" }) };
+    const response = await handler(new Request(
+      "http://localhost/api/appointments/generate",
+      {
+        method,
+        ...(method === "PATCH"
+          ? {
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ status: "COMPLETED" }),
+            }
+          : {}),
+      },
+    ), invalidContext);
+
+    expect(response.status).toBe(404);
+    expect(getPublishedAppointment).not.toHaveBeenCalled();
+    expect(updateAppointment).not.toHaveBeenCalled();
   });
 
   it("returns not found when the published-only detail path cannot see the ID", async () => {

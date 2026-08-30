@@ -70,38 +70,31 @@ describe("scheduling integrity Browser acceptance fixture", () => {
     expect(fixture.routes.studentPortal).toBe("/student");
   });
 
-  it("provides mutation-capable bodies for every retired scheduling request", () => {
+  it("lists representative removed scheduling routes for 404 acceptance", () => {
     const requests = new Map(
       SCHEDULING_INTEGRITY_FIXTURE.retiredRequests.map((request) => [
         `${request.method} ${request.path}`,
         request,
       ]),
     );
-    expect(requests.get("POST /api/coordinator-schedules")).toMatchObject({
-      body: {
-        batchName: expect.stringContaining(SCHEDULING_INTEGRITY_FIXTURE.marker),
-        items: [{
-          studentNumber: SCHEDULING_INTEGRITY_FIXTURE.students.legacySentinel.studentNumber,
-          scheduleType: "LABORATORY",
-          priorityGroupId: expect.any(String),
-          targetDate: expect.any(String),
-        }],
-      },
-    });
-    expect(requests.get("POST /api/coordinator-schedules/validate")?.body)
-      .toEqual({ batchId: SCHEDULING_INTEGRITY_FIXTURE.ids.scheduleBatch });
-    expect(requests.get(
-      `PATCH /api/coordinator-schedules/${SCHEDULING_INTEGRITY_FIXTURE.ids.scheduleBatch}`,
-    )?.body).toMatchObject({
-      batchName: expect.stringContaining(SCHEDULING_INTEGRITY_FIXTURE.marker),
-    });
-    expect(requests.get("POST /api/appointments/generate")?.body)
-      .toEqual({ batchId: SCHEDULING_INTEGRITY_FIXTURE.ids.generateBatch });
-    expect(requests.get("POST /api/appointments/publish")?.body)
-      .toEqual({
-        batchId: SCHEDULING_INTEGRITY_FIXTURE.ids.publishBatch,
-        confirm: true,
-      });
+    const requestBody = (key: string) => {
+      const request = requests.get(key);
+      return request && "body" in request ? request.body : undefined;
+    };
+    expect(requestBody("POST /api/coordinator-schedules")).toEqual({});
+    expect(requestBody("POST /api/coordinator-schedules/validate"))
+      .toEqual({});
+    expect(requestBody(
+      `PATCH /api/coordinator-schedules/${SCHEDULING_INTEGRITY_FIXTURE.ids.removedRouteTarget}`,
+    )).toEqual({});
+    expect(requestBody("POST /api/appointments/generate"))
+      .toEqual({});
+    expect(requestBody("POST /api/appointments/publish"))
+      .toEqual({});
+    expect(requests.has("GET /api/priority-groups")).toBe(true);
+    expect(requests.has(
+      `POST /api/schedule-imports/${SCHEDULING_INTEGRITY_FIXTURE.ids.removedRouteTarget}/publish`,
+    )).toBe(true);
   });
 
   it("rejects any credential field in status output", () => {
@@ -151,13 +144,13 @@ describe("scheduling integrity Browser acceptance fixture", () => {
   it("requires the complete deterministic prepared state", () => {
     const expected = {
       users: 2,
-      coreStudents: 5,
+      coreStudents: 4,
       capacityStudents: 150,
-      pairAppointments: 9,
+      pairAppointments: 8,
       capacityAppointments: 150,
       importGroups: 1,
-      scheduleBatches: 3,
-      scheduleItems: 3,
+      scheduleBatches: 0,
+      scheduleItems: 0,
       manualCases: 1,
       rescheduleEvents: 1,
       closureGroups: 1,

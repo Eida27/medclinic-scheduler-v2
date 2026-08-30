@@ -1,30 +1,16 @@
 import "server-only";
 import { z } from "zod";
 import { AppError } from "@/lib/errors";
-import { writeAudit } from "@/server/repositories/audit.repository";
-import { ensureBatchStudentAcademicSnapshotsWithClient } from "@/server/repositories/student-academic-snapshots.repository";
-import { queueAuthoritativeScheduleNotification } from "@/server/schedule/schedule-notification-hooks";
-import { buildInitialPublicationNotification } from "@/server/schedule/schedule-notifications";
 import {
   createScheduleImport,
-  deriveScheduleImportStatus,
   getScheduleImportGroup,
   listScheduleImportGroups,
-  touchScheduleImportGroup,
-  withLockedScheduleImport,
-  type LockedImportChild,
   type ScheduleImportDetail,
   type ScheduleImportListItem,
   type ScheduleImportResult,
 } from "@/server/repositories/schedule-imports.repository";
 import type { SessionUser } from "@/types/roles";
 import { isImportOperatorRole } from "@/types/roles";
-import { publishScheduleBatchWithClient } from "./appointments.service";
-import {
-  generateValidatedBatchAppointmentsWithClient,
-  validateBatchWithClient,
-  type BatchValidationResult,
-} from "./coordinator-schedules.service";
 import {
   parseStudentImportCsv,
   STUDENT_IMPORT_MAXIMUM_BYTES,
@@ -95,10 +81,6 @@ const importMetadataSchema = z.object({
     });
   }
 });
-const importIdSchema = z.string().uuid();
-const overrideReasonSchema = z.string().trim().max(500).optional()
-  .transform((value) => value || undefined);
-
 type CsvContents = string | ArrayBuffer | Uint8Array;
 
 function assertImportOperator(actor: SessionUser) {
@@ -210,28 +192,6 @@ export async function reviewFirstYearScheduleImport(
   });
 }
 
-export async function importStudentScheduleCsv(
-  raw: unknown,
-  actor: SessionUser,
-): Promise<ScheduleImportResult> {
-  assertImportOperator(actor);
-  const { file, metadata, rows } = prepareScheduleImportRequest(raw);
-  const result = await createScheduleImport({
-    ...metadata,
-    sourceFilename: file.fileName,
-    rows,
-  }, actor.userId);
-  if ("fields" in result) {
-    throw new AppError(
-      "CSV_IMPORT_INVALID",
-      "Please correct the CSV import errors.",
-      422,
-      result.fields,
-    );
-  }
-  return result;
-}
-
 export async function listScheduleImports(
   actor: SessionUser,
 ): Promise<ScheduleImportListItem[]> {
@@ -254,277 +214,6 @@ export async function getScheduleImport(
     );
   }
   return detail;
-}
-
-type ValidationClinicResult = {
-  batchId: string;
-  summary: unknown;
-  items: unknown;
-  preview: unknown;
-};
-
-export type ScheduleImportValidationResult = {
-  importId: string;
-  status: "VALIDATED";
-  totals: {
-    items: number;
-    valid: number;
-    conflicts: number;
-  };
-  clinics: {
-    laboratory?: ValidationClinicResult;
-    physicalExamination?: ValidationClinicResult;
-  };
-};
-
-export type ScheduleImportGenerationResult = {
-  importId: string;
-  status: "GENERATED";
-  batchIds: string[];
-  appointmentCount: number;
-};
-
-export type ScheduleImportPublicationResult = {
-  importId: string;
-  status: "PUBLISHED";
-  batchIds: string[];
-  publishedAppointmentCount: number;
-};
-
-function synchronizedChildStatus(children: LockedImportChild[]) {
-  const status = deriveScheduleImportStatus(children.map((child) => child.status));
-  if (status === "NEEDS_REVIEW") {
-    throw new AppError(
-      "SCHEDULE_IMPORT_NEEDS_REVIEW",
-      "Schedule import child batches are not synchronized.",
-      409,
-    );
-  }
-  return status;
-}
-
-function invalidImportStatus(message: string) {
-  return new AppError("SCHEDULE_IMPORT_INVALID_STATUS", message, 409);
-}
-
-function clinicResultKey(clinicCode: LockedImportChild["clinicCode"]) {
-  return clinicCode === "KABALAKA_CLINIC"
-    ? "laboratory" as const
-    : "physicalExamination" as const;
-}
-
-function scheduleImportNotFound() {
-  return new AppError(
-    "SCHEDULE_IMPORT_NOT_FOUND",
-    "Schedule import not found.",
-    404,
-  );
-}
-
-function assertGeneratedPairOrder(validations: BatchValidationResult[]) {
-  const datesByStudent = new Map<string, { laboratory?: string; physicalExam?: string }>();
-  for (const appointment of validations.flatMap((validation) => validation.preview.appointments)) {
-    const dates = datesByStudent.get(appointment.studentNumber) ?? {};
-    if (appointment.scheduleType === "LABORATORY") dates.laboratory = appointment.appointmentDate;
-    if (appointment.scheduleType === "PHYSICAL_EXAM") dates.physicalExam = appointment.appointmentDate;
-    datesByStudent.set(appointment.studentNumber, dates);
-  }
-  for (const dates of datesByStudent.values()) {
-    if (dates.laboratory && dates.physicalExam && dates.laboratory >= dates.physicalExam) {
-      throw new AppError(
-        "PAIR_ORDER_VIOLATION",
-        "Laboratory must be scheduled before Physical Examination.",
-        409,
-      );
-    }
-  }
-}
-
-export async function validateScheduleImport(
-  importId: string,
-  actor: SessionUser,
-): Promise<ScheduleImportValidationResult> {
-  assertImportOperator(actor);
-  const validImportId = importIdSchema.parse(importId);
-  const result = await withLockedScheduleImport(validImportId, async (client, children) => {
-    const status = synchronizedChildStatus(children);
-    if (status !== "DRAFT" && status !== "VALIDATED") {
-      throw invalidImportStatus("Only draft or validated schedule imports can be validated.");
-    }
-
-    const totals = { items: 0, valid: 0, conflicts: 0 };
-    const clinics: ScheduleImportValidationResult["clinics"] = {};
-    for (const child of children) {
-      const validation = await validateBatchWithClient(
-        child.id,
-        actor.userId,
-        client,
-        true,
-      );
-      totals.items += validation.summary.totalItems;
-      totals.valid += validation.summary.validCount;
-      totals.conflicts += validation.summary.conflictCount;
-      clinics[clinicResultKey(child.clinicCode)] = {
-        batchId: child.id,
-        summary: validation.summary,
-        items: validation.items,
-        preview: validation.preview,
-      };
-    }
-
-    const batchIds = children.map((child) => child.id);
-    await writeAudit(
-      actor.userId,
-      "SCHEDULE_IMPORT_VALIDATED",
-      "schedule_import_group",
-      validImportId,
-      { batchIds, totals },
-      client,
-    );
-    await touchScheduleImportGroup(validImportId, client);
-    return { importId: validImportId, status: "VALIDATED" as const, totals, clinics };
-  });
-  if (!result) throw scheduleImportNotFound();
-  return result;
-}
-
-export async function generateScheduleImport(
-  importId: string,
-  actor: SessionUser,
-  overrideReason?: string,
-): Promise<ScheduleImportGenerationResult> {
-  assertImportOperator(actor);
-  const validImportId = importIdSchema.parse(importId);
-  const validOverrideReason = overrideReasonSchema.parse(overrideReason);
-  const result = await withLockedScheduleImport(validImportId, async (client, children) => {
-    if (synchronizedChildStatus(children) !== "VALIDATED") {
-      throw invalidImportStatus("Only validated schedule imports can generate appointments.");
-    }
-
-    const validations: BatchValidationResult[] = [];
-    for (const child of children) {
-      validations.push(await validateBatchWithClient(
-        child.id,
-        actor.userId,
-        client,
-        true,
-      ));
-    }
-    assertGeneratedPairOrder(validations);
-
-    let appointmentCount = 0;
-    let appliedOverrideReason: string | null = null;
-    for (const [index, child] of children.entries()) {
-      const generated = await generateValidatedBatchAppointmentsWithClient(
-        child.id,
-        actor,
-        validations[index],
-        validOverrideReason,
-        client,
-      );
-      appointmentCount += generated.appointmentCount;
-      appliedOverrideReason ??= generated.appliedOverrideReason;
-    }
-
-    const batchIds = children.map((child) => child.id);
-    await writeAudit(
-      actor.userId,
-      "SCHEDULE_IMPORT_GENERATED",
-      "schedule_import_group",
-      validImportId,
-      { batchIds, appointmentCount, overrideReason: appliedOverrideReason },
-      client,
-    );
-    await touchScheduleImportGroup(validImportId, client);
-    return {
-      importId: validImportId,
-      status: "GENERATED" as const,
-      batchIds,
-      appointmentCount,
-    };
-  });
-  if (!result) throw scheduleImportNotFound();
-  return result;
-}
-
-export async function publishScheduleImport(
-  importId: string,
-  actor: SessionUser,
-): Promise<ScheduleImportPublicationResult> {
-  assertImportOperator(actor);
-  const validImportId = importIdSchema.parse(importId);
-  const result = await withLockedScheduleImport(validImportId, async (client, children) => {
-    if (synchronizedChildStatus(children) !== "GENERATED") {
-      throw invalidImportStatus("Only generated schedule imports can be published.");
-    }
-
-    const batchIds = children.map((child) => child.id);
-    const snapshots = await ensureBatchStudentAcademicSnapshotsWithClient(client, {
-      actorUserId: actor.userId,
-      batchIds,
-    });
-    if (snapshots.outcome === "CONFLICT") {
-      return { snapshotConflict: snapshots.conflicts } as const;
-    }
-    let publishedAppointmentCount = 0;
-    for (const child of children) {
-      const published = await publishScheduleBatchWithClient(
-        child.id,
-        actor.userId,
-        client,
-        true,
-        true,
-      );
-      if ("snapshotConflict" in published) {
-        throw new Error("Snapshot preflight invariant violated");
-      }
-      publishedAppointmentCount += published.count;
-    }
-    const publishedStudents = await client.query<{ student_number: string }>(
-      `SELECT DISTINCT student_number FROM appointments
-        WHERE batch_id=ANY($1::uuid[]) AND is_published=TRUE
-        ORDER BY student_number`,
-      [batchIds],
-    );
-    for (const student of publishedStudents.rows) {
-      await queueAuthoritativeScheduleNotification(
-        client,
-        student.student_number,
-        (state) => buildInitialPublicationNotification({
-          state,
-          sourceType: "SCHEDULE_IMPORT_GROUP",
-          sourceId: validImportId,
-        }),
-      );
-    }
-
-    await writeAudit(
-      actor.userId,
-      "SCHEDULE_IMPORT_PUBLISHED",
-      "schedule_import_group",
-      validImportId,
-      { batchIds, publishedAppointmentCount },
-      client,
-    );
-    await touchScheduleImportGroup(validImportId, client);
-    return {
-      importId: validImportId,
-      status: "PUBLISHED" as const,
-      batchIds,
-      publishedAppointmentCount,
-    };
-  });
-  if (!result) throw scheduleImportNotFound();
-  if ("snapshotConflict" in result && result.snapshotConflict) {
-    throw new AppError(
-      "SNAPSHOT_CONFLICT",
-      "Publication conflicts with immutable academic history.",
-      409,
-      undefined,
-      { conflicts: result.snapshotConflict },
-    );
-  }
-  return result;
 }
 
 export function importNameFromFileName(fileName: string): string {
@@ -568,5 +257,3 @@ export async function acceptAndScheduleImport(
   }
   return result;
 }
-
-export const importAndPublishStudentScheduleCsv = acceptAndScheduleImport;

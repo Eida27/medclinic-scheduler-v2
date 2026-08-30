@@ -35,7 +35,6 @@ describe("appointmentSummaryReport", () => {
       appointmentStatus: "PENDING",
       collegeId: "11111111-1111-1111-1111-111111111111",
       programId: "22222222-2222-2222-2222-222222222222",
-      priorityGroupId: "33333333-3333-3333-3333-333333333333",
       physicalExamStatus: "COMPLETED",
       laboratoryStatus: "UNSCHEDULED",
       overallStatus: "INCOMPLETE",
@@ -61,8 +60,9 @@ describe("appointmentSummaryReport", () => {
     expect(itemSql).toContain("current_effective_appointments");
     expect(itemSql).not.toContain("FROM exam_results result");
     expect(itemSql).not.toContain("FROM laboratory_results result");
-    expect(itemSql).toContain("item_appointment.is_published=TRUE");
-    expect(itemSql).toContain("summary_rows.\"overallStatus\"=$9");
+    expect(itemSql).not.toContain("priority_group");
+    expect(itemSql).not.toContain("coordinator_schedule_items");
+    expect(itemSql).toContain("summary_rows.\"overallStatus\"=$8");
     expect(itemSql).toContain(
       'ORDER BY summary_rows."lastName" DESC, summary_rows."firstName" DESC, summary_rows."studentNumber" DESC',
     );
@@ -72,7 +72,6 @@ describe("appointmentSummaryReport", () => {
       "PENDING",
       "11111111-1111-1111-1111-111111111111",
       "22222222-2222-2222-2222-222222222222",
-      "33333333-3333-3333-3333-333333333333",
       "COMPLETED",
       "UNSCHEDULED",
       "INCOMPLETE",

@@ -718,9 +718,9 @@ export async function publishFirstYearScheduleImport(
       ) => {
         await client.query(
           `INSERT INTO coordinator_schedule_items (
-             batch_id,clinic_id,student_number,schedule_type,priority_group_id,
+             batch_id,clinic_id,student_number,schedule_type,
              target_date,status,source_row_order,schedule_cycle_start
-           ) SELECT $1,$2,row.student_number,$3,NULL,row.target_date,'SCHEDULED',
+           ) SELECT $1,$2,row.student_number,$3,row.target_date,'SCHEDULED',
                     row.source_row_order,$4
                FROM UNNEST($5::varchar[],$6::date[],$7::integer[])
                  AS row(student_number,target_date,source_row_order)`,

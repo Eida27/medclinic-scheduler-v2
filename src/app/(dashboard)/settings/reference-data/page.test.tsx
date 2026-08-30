@@ -1,9 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { listColleges, listPriorityGroups, listPrograms } = vi.hoisted(() => ({
+const { listColleges, listPrograms } = vi.hoisted(() => ({
   listColleges: vi.fn(),
-  listPriorityGroups: vi.fn(),
   listPrograms: vi.fn(),
 }));
 
@@ -13,7 +12,6 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/server/repositories/reference-data.repository", () => ({
   listColleges,
-  listPriorityGroups,
   listPrograms,
 }));
 
@@ -40,12 +38,6 @@ describe("ReferenceDataPage", () => {
     vi.clearAllMocks();
     listColleges.mockResolvedValue(colleges);
     listPrograms.mockResolvedValue(programs);
-    listPriorityGroups.mockResolvedValue([{
-      id: "30000000-0000-4000-8000-000000000004",
-      name: "Regular",
-      rankOrder: 3,
-      isActive: true,
-    }]);
   });
 
   it("loads and renders only academic reference values used for student imports", async () => {
@@ -53,7 +45,6 @@ describe("ReferenceDataPage", () => {
 
     expect(listColleges).toHaveBeenCalledOnce();
     expect(listPrograms).toHaveBeenCalledOnce();
-    expect(listPriorityGroups).not.toHaveBeenCalled();
     expect(screen.getByText(
       "Manage colleges and academic programs used for student imports.",
     )).toBeVisible();

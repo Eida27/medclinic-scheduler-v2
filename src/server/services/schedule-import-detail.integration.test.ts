@@ -26,7 +26,7 @@ afterAll(async () => {
 });
 
 describe("published schedule import detail", () => {
-  it("returns compact published children with nullable category-driven priority", async () => {
+  it("returns compact published children without retired priority-group fields", async () => {
     const contents = [
       "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth",
       "99-9301-01,Reviewer,Draft,M.,,College of Computer Studies,BSIT,3,2003-05-06",
@@ -49,14 +49,11 @@ describe("published schedule import detail", () => {
         items: [expect.objectContaining({
           studentNumber: "99-9301-01",
           studentName: "Reviewer, Draft M.",
-          priorityGroupId: null,
-          priorityGroupName: null,
         })],
         appointments: [expect.objectContaining({
           studentNumber: "99-9301-01",
           studentName: "Reviewer, Draft M.",
           scheduleType: "LABORATORY",
-          priorityGroupName: null,
           status: "PENDING",
           isPublished: true,
         })],
@@ -67,5 +64,14 @@ describe("published schedule import detail", () => {
         items: [expect.objectContaining({ scheduleType: "PHYSICAL_EXAM" })],
       }),
     ]));
+    for (const batch of detail.childBatches) {
+      for (const item of batch.items) {
+        expect(item).not.toHaveProperty("priorityGroupId");
+        expect(item).not.toHaveProperty("priorityGroupName");
+      }
+      for (const appointment of batch.appointments) {
+        expect(appointment).not.toHaveProperty("priorityGroupName");
+      }
+    }
   });
 });

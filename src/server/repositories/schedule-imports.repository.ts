@@ -6,7 +6,6 @@ import type { AppointmentScheduleType, ClinicCode } from "@/server/clinics";
 import { query, transaction } from "@/server/db/pool";
 import { writeAudit } from "@/server/repositories/audit.repository";
 import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
-import { getScheduleBatch } from "@/server/repositories/coordinator-schedules.repository";
 import type { ImportedStudentRow } from "@/server/services/student-import-csv";
 import { resolveSchedulingWindow } from "@/server/services/scheduling-window";
 import { generatePairedSchedule } from "@/server/rule-engine/generate-paired-schedule";
@@ -122,7 +121,57 @@ export type ScheduleImportListItem = {
   };
 };
 
-type StoredImportChildBatch = NonNullable<Awaited<ReturnType<typeof getScheduleBatch>>>;
+export type ScheduleImportRequest = {
+  id: string;
+  clinicId: string;
+  clinicCode: ClinicCode;
+  clinicName: string;
+  studentNumber: string;
+  studentName: string;
+  scheduleType: AppointmentScheduleType;
+  targetDate: string | null;
+  targetWeekStart: string | null;
+  targetWeekEnd: string | null;
+  remarks: string | null;
+  status: string;
+  validationIssues: Array<{ code?: string; message: string; severity: string }>;
+};
+
+type ScheduleImportValidationSummary = {
+  totalItems: number;
+  validCount: number;
+  conflictCount: number;
+  capacityResults?: Array<{
+    clinicId: string;
+    date: string;
+    scheduleType: string;
+    count: number;
+    maxCapacity: number;
+    status: string;
+    message: string;
+  }>;
+};
+
+type StoredImportChildBatch = {
+  id: string;
+  batchName: string;
+  clinicId: string;
+  clinicCode: ClinicCode;
+  clinicName: string;
+  collegeId: string | null;
+  collegeName: string | null;
+  programId: string | null;
+  programName: string | null;
+  submittedByName: string | null;
+  description: string | null;
+  status: string;
+  validationSummary: ScheduleImportValidationSummary | null;
+  overrideReason: string | null;
+  importGroupId: string;
+  publishedAt: Date | null;
+  createdAt: Date;
+  items: ScheduleImportRequest[];
+};
 
 export type ScheduleImportAppointment = {
   id: string;
@@ -130,7 +179,6 @@ export type ScheduleImportAppointment = {
   studentNumber: string;
   studentName: string;
   scheduleType: AppointmentScheduleType;
-  priorityGroupName: string | null;
   appointmentDate: string;
   status: string;
   isPublished: boolean;
@@ -145,11 +193,58 @@ export type ScheduleImportDetail = ScheduleImportListItem & {
   childBatches: ImportChildBatch[];
 };
 
-export type LockedImportChild = {
-  id: string;
-  status: string;
-  clinicCode: ClinicCode;
-};
+async function readImportChildBatch(batchId: string, client?: PoolClient) {
+  const batchSql = `SELECT batch.id,
+                           batch.batch_name AS "batchName",
+                           batch.clinic_id AS "clinicId",
+                           clinic.code AS "clinicCode",
+                           clinic.name AS "clinicName",
+                           batch.college_id AS "collegeId",
+                           college.name AS "collegeName",
+                           batch.program_id AS "programId",
+                           program.name AS "programName",
+                           batch.submitted_by_name AS "submittedByName",
+                           batch.description,
+                           batch.status,
+                           batch.validation_summary AS "validationSummary",
+                           batch.override_reason AS "overrideReason",
+                           batch.import_group_id AS "importGroupId",
+                           batch.published_at AS "publishedAt",
+                           batch.created_at AS "createdAt"
+                      FROM schedule_batches batch
+                      JOIN clinics clinic ON clinic.id=batch.clinic_id
+                 LEFT JOIN colleges college ON college.id=batch.college_id
+                 LEFT JOIN programs program ON program.id=batch.program_id
+                     WHERE batch.id=$1`;
+  const batchResult = client
+    ? await client.query<Omit<StoredImportChildBatch, "items">>(batchSql, [batchId])
+    : await query<Omit<StoredImportChildBatch, "items">>(batchSql, [batchId]);
+  if (!batchResult.rows[0]) return null;
+
+  const itemsSql = `SELECT item.id,
+                           item.clinic_id AS "clinicId",
+                           clinic.code AS "clinicCode",
+                           clinic.name AS "clinicName",
+                           item.student_number AS "studentNumber",
+                           ${studentDisplayNameSql("student")} AS "studentName",
+                           item.schedule_type AS "scheduleType",
+                           item.target_date::text AS "targetDate",
+                           item.target_week_start::text AS "targetWeekStart",
+                           item.target_week_end::text AS "targetWeekEnd",
+                           item.remarks,
+                           item.status,
+                           item.validation_issues AS "validationIssues"
+                      FROM coordinator_schedule_items item
+                      JOIN students student ON student.student_number=item.student_number
+                      JOIN clinics clinic ON clinic.id=item.clinic_id
+                     WHERE item.batch_id=$1
+                  ORDER BY item.source_row_order NULLS LAST,
+                           student.last_name,student.first_name,student.student_number,item.id`;
+  const itemResult = client
+    ? await client.query<ScheduleImportRequest>(itemsSql, [batchId])
+    : await query<ScheduleImportRequest>(itemsSql, [batchId]);
+  return { ...batchResult.rows[0], items: itemResult.rows };
+}
 
 type CollegeReference = {
   id: string;
@@ -631,10 +726,10 @@ export async function createScheduleImport(
     ) => {
       await client.query(
         `INSERT INTO coordinator_schedule_items (
-           batch_id, clinic_id, student_number, schedule_type, priority_group_id,
+           batch_id, clinic_id, student_number, schedule_type,
            target_date, status, source_row_order, schedule_cycle_start
          )
-         SELECT $1, $2, fixture.student_number, $3, NULL,
+         SELECT $1, $2, fixture.student_number, $3,
                 fixture.target_date, 'SCHEDULED', fixture.source_row_order, $4
            FROM UNNEST($5::varchar[], $6::date[], $7::integer[])
              AS fixture(student_number, target_date, source_row_order)`,
@@ -940,52 +1035,6 @@ export async function listScheduleImportGroups(): Promise<ScheduleImportListItem
   return loadScheduleImportGroups();
 }
 
-export async function withLockedScheduleImport<T>(
-  importId: string,
-  callback: (client: PoolClient, children: LockedImportChild[]) => Promise<T>,
-): Promise<T | null> {
-  return transaction(async (client) => {
-    const group = await client.query(
-      "SELECT id FROM schedule_import_groups WHERE id=$1 FOR UPDATE",
-      [importId],
-    );
-    if (!group.rowCount) return null;
-
-    const children = await client.query<{
-      id: string;
-      status: string;
-      clinic_code: ClinicCode;
-    }>(
-      `SELECT batch.id, batch.status, clinic.code AS clinic_code
-         FROM schedule_batches batch
-         JOIN clinics clinic ON clinic.id=batch.clinic_id
-        WHERE batch.import_group_id=$1
-        ORDER BY CASE clinic.code
-          WHEN 'KABALAKA_CLINIC' THEN 1
-          WHEN 'CPU_CLINIC' THEN 2
-          ELSE 3
-        END, batch.id
-        FOR UPDATE OF batch`,
-      [importId],
-    );
-    return callback(client, children.rows.map((child) => ({
-      id: child.id,
-      status: child.status,
-      clinicCode: child.clinic_code,
-    })));
-  });
-}
-
-export async function touchScheduleImportGroup(
-  importId: string,
-  client: PoolClient,
-): Promise<void> {
-  await client.query(
-    "UPDATE schedule_import_groups SET updated_at=NOW() WHERE id=$1",
-    [importId],
-  );
-}
-
 export async function getImportChildBatches(
   importId: string,
   client?: PoolClient,
@@ -1007,7 +1056,6 @@ export async function getImportChildBatches(
                                   appointment.student_number AS "studentNumber",
                                   ${studentDisplayNameSql("student")} AS "studentName",
                                   appointment.schedule_type AS "scheduleType",
-                                  priority_group.name AS "priorityGroupName",
                                   appointment.appointment_date::text AS "appointmentDate",
                                   appointment.status,
                                   appointment.is_published AS "isPublished",
@@ -1017,11 +1065,10 @@ export async function getImportChildBatches(
                              JOIN students student ON student.student_number=appointment.student_number
                              LEFT JOIN coordinator_schedule_items schedule_item
                                ON schedule_item.id=appointment.schedule_item_id
-                             LEFT JOIN priority_groups priority_group
-                               ON priority_group.id=schedule_item.priority_group_id
                             WHERE batch.import_group_id=$1
-                            ORDER BY appointment.appointment_date,
-                                     student.last_name, student.first_name, appointment.id`;
+                            ORDER BY schedule_item.source_row_order NULLS LAST,
+                                     student.last_name,student.first_name,
+                                     student.student_number,appointment.id`;
   const appointmentResult = client
     ? await client.query<ScheduleImportAppointment>(appointmentsSql, [importId])
     : await query<ScheduleImportAppointment>(appointmentsSql, [importId]);
@@ -1034,7 +1081,7 @@ export async function getImportChildBatches(
   }
   const children: ImportChildBatch[] = [];
   for (const { id } of ids.rows) {
-    const child = await getScheduleBatch(id, client);
+    const child = await readImportChildBatch(id, client);
     if (child) {
       children.push({
         ...child,

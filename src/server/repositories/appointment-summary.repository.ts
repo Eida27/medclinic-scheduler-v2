@@ -40,7 +40,6 @@ export type AppointmentSummaryFilters = {
   legacyAppointmentStatus?: string;
   collegeId?: string;
   programId?: string;
-  priorityGroupId?: string;
   physicalExamStatus?: string;
   laboratoryStatus?: string;
   overallStatus?: OverallStatus;
@@ -68,7 +67,6 @@ const summaryRowsCte = `
       s.program_id AS "programId",
       c.name AS "collegeName",
       p.name AS "programName",
-      latest_item.priority_group_id AS "priorityGroupId",
       COALESCE(latest_appointment.status, 'UNSCHEDULED') AS "appointmentStatus",
       latest_appointment.clinic_code AS "latestAppointmentClinicCode",
       COALESCE(physical.status, 'UNSCHEDULED') AS "physicalExamStatus",
@@ -110,20 +108,6 @@ const summaryRowsCte = `
       ORDER BY resolved.appointment_date DESC, resolved.created_at DESC, resolved.id DESC
       LIMIT 1
     ) latest_appointment ON TRUE
-    LEFT JOIN LATERAL (
-      SELECT item.priority_group_id
-      FROM coordinator_schedule_items item
-      WHERE item.student_number=s.student_number
-        AND EXISTS (
-          SELECT 1
-          FROM appointments item_appointment
-          WHERE item_appointment.schedule_item_id=item.id
-            AND item_appointment.is_published=TRUE
-            AND item_appointment.id IN (physical.id, laboratory.id)
-        )
-      ORDER BY item.created_at DESC
-      LIMIT 1
-    ) latest_item ON TRUE
     WHERE s.is_active=TRUE
   )`;
 
@@ -196,7 +180,6 @@ export async function appointmentSummaryReport(filters: AppointmentSummaryFilter
   }
   if (filters.collegeId) add(`summary_rows."collegeId"=?::uuid`, filters.collegeId);
   if (filters.programId) add(`summary_rows."programId"=?::uuid`, filters.programId);
-  if (filters.priorityGroupId) add(`summary_rows."priorityGroupId"=?::uuid`, filters.priorityGroupId);
   if (filters.physicalExamStatus) {
     add(`summary_rows."physicalExamStatus"=?`, filters.physicalExamStatus);
   }

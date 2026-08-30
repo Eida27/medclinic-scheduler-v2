@@ -13,7 +13,7 @@ import {
   TEST_REFERENCE_IDS,
 } from "@/test/integration-fixtures";
 import type { SessionUser } from "@/types/roles";
-import { publishScheduleBatch, updateAppointment } from "./appointments.service";
+import { updateAppointment } from "./appointments.service";
 
 const admin = {
   userId: TEST_REFERENCE_IDS.adminUser,
@@ -152,7 +152,7 @@ describe("published-only appointment access", () => {
     });
   });
 
-  it("hides historical drafts everywhere normal, then exposes and operates them after publication", async () => {
+  it("keeps historical drafts hidden from every normal read and mutation surface", async () => {
     await insertTestStudent({
       studentNumber,
       firstName: "Ada Lynne",
@@ -239,45 +239,5 @@ describe("published-only appointment access", () => {
       appointments: [],
     });
 
-    await publishScheduleBatch(batch.rows[0].id, admin.userId);
-
-    const byCanonicalName = await listAppointments({
-      studentNumber: "Ada Lynne Santos Jr.",
-      isPublished: true,
-      page: 1,
-      limit: 20,
-      offset: 0,
-    });
-    expect(byCanonicalName.items).toHaveLength(2);
-    expect(byCanonicalName.items.every((item) => item.studentNumber === studentNumber)).toBe(true);
-    expect((await listAppointments({
-      studentNumber: "PUB-0001",
-      isPublished: true,
-      page: 1,
-      limit: 20,
-      offset: 0,
-    })).items).toHaveLength(2);
-    const publishedHistory = await studentHistory(studentNumber);
-    expect(publishedHistory.appointments).toHaveLength(2);
-    expect(publishedHistory.laboratoryResults).toEqual([
-      expect.objectContaining({ appointment_id: laboratoryDraft?.id }),
-    ]);
-    expect(await getStudentPortalSchedule(studentNumber)).toMatchObject({
-      appointments: expect.arrayContaining([
-        expect.objectContaining({ scheduleType: "LABORATORY" }),
-      ]),
-    });
-    await expect(getPublishedAppointment(draftId)).resolves.toMatchObject({
-      id: draftId,
-      isPublished: true,
-      status: "PENDING",
-    });
-
-    const completed = await updateAppointment(
-      draftId,
-      { status: "COMPLETED", notes: "Completed after grouped publication" },
-      admin,
-    );
-    expect(completed).toMatchObject({ id: draftId, status: "COMPLETED", isPublished: true });
   });
 });

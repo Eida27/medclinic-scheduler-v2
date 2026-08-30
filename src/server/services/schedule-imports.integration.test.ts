@@ -9,17 +9,12 @@ import {
 import type { SessionUser } from "@/types/roles";
 import {
   acceptAndScheduleImport,
-  generateScheduleImport,
-  importStudentScheduleCsv,
   preflightScheduleImport,
-  publishScheduleImport,
-  validateScheduleImport,
 } from "./schedule-imports.service";
-import { addScheduleBatch } from "./coordinator-schedules.service";
 
 const header = "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth";
 const studentPattern = "99-91%";
-const importPattern = "REGULAR % - TEST-AY%";
+const importPattern = "% - TEST-AY%";
 const sourceFilename = "TEST-AY-students.csv";
 
 const admin: SessionUser = {
@@ -80,139 +75,8 @@ afterAll(async () => {
 });
 
 describe("student scheduling imports", () => {
-  it("rejects legacy grouped generation when Laboratory and Physical Examination resolve to the same date", async () => {
-    const studentNumber = "99-9110-10";
-    await insertTestStudent({
-      studentNumber,
-      firstName: "Legacy",
-      middleName: "Maria",
-      lastName: "Pair",
-      yearLevel: 3,
-    });
-    const created = await addScheduleBatch({
-      batchName: "TEST-AY legacy same-day pair",
-      collegeId: TEST_REFERENCE_IDS.college,
-      programId: TEST_REFERENCE_IDS.program,
-      submittedByName: "Legacy Fixture",
-      description: "Grouped same-day pair fixture",
-      items: [{
-        studentNumber,
-        scheduleType: "BOTH",
-        priorityGroupId: TEST_REFERENCE_IDS.regularPriority,
-        targetDate: "2026-12-01",
-        targetWeekStart: null,
-        targetWeekEnd: null,
-        remarks: null,
-      }],
-    }, admin);
-    const importGroup = await pool.query<{ id: string }>(
-      `INSERT INTO schedule_import_groups (
-         import_name,source_filename,total_rows,created_by,student_category,
-         academic_year_start,accepted_at
-       ) VALUES (
-         'REGULAR 2026-2027 - TEST-AY-legacy-pair.csv',
-         'TEST-AY-legacy-pair.csv',1,$1,'REGULAR',2026,clock_timestamp()
-       ) RETURNING id::text`,
-      [TEST_REFERENCE_IDS.adminUser],
-    );
-    const importId = importGroup.rows[0].id;
-    await pool.query(
-      "UPDATE schedule_batches SET import_group_id=$1 WHERE id=ANY($2::uuid[])",
-      [importId, created!.batchIds],
-    );
-    await validateScheduleImport(importId, admin);
-    await expect(generateScheduleImport(importId, admin)).rejects.toMatchObject({
-      code: "PAIR_ORDER_VIOLATION",
-      status: 409,
-    });
-
-    const appointments = await pool.query(
-      "SELECT id FROM appointments WHERE batch_id=ANY($1::uuid[])",
-      [created!.batchIds],
-    );
-    expect(appointments.rowCount).toBe(0);
-  });
-
-  it("publishes one parent notification for grouped child batches", async () => {
-    const studentNumber = "99-9109-09";
-    await insertTestStudent({
-      studentNumber,
-      firstName: "Grouped",
-      middleName: "Maria",
-      lastName: "Publication",
-      yearLevel: 3,
-    });
-    await pool.query(
-      "UPDATE students SET email='grouped.publication@example.test',email_verified_at=NOW() WHERE student_number=$1",
-      [studentNumber],
-    );
-    const created = await addScheduleBatch({
-      batchName: "TEST-AY grouped parent notification",
-      collegeId: TEST_REFERENCE_IDS.college,
-      programId: TEST_REFERENCE_IDS.program,
-      submittedByName: "Grouped Fixture",
-      description: "Grouped notification fixture",
-      items: [{
-        studentNumber,
-        scheduleType: "BOTH",
-        priorityGroupId: TEST_REFERENCE_IDS.regularPriority,
-        targetDate: "2026-12-01",
-        targetWeekStart: null,
-        targetWeekEnd: null,
-        remarks: null,
-      }],
-    }, admin);
-    const importGroup = await pool.query<{ id: string }>(
-      `INSERT INTO schedule_import_groups (
-         import_name,source_filename,total_rows,created_by,student_category,
-         academic_year_start,accepted_at
-       ) VALUES (
-         'REGULAR 2026-2027 - TEST-AY-grouped-parent.csv',
-         'TEST-AY-grouped-parent.csv',1,$1,'REGULAR',2026,clock_timestamp()
-       ) RETURNING id::text`,
-      [TEST_REFERENCE_IDS.adminUser],
-    );
-    const importId = importGroup.rows[0].id;
-    await pool.query(
-      "UPDATE schedule_batches SET import_group_id=$1 WHERE id=ANY($2::uuid[])",
-      [importId, created!.batchIds],
-    );
-    await pool.query(
-      `UPDATE coordinator_schedule_items
-          SET target_date='2026-12-02'
-        WHERE batch_id=ANY($1::uuid[])
-          AND schedule_type='PHYSICAL_EXAM'`,
-      [created!.batchIds],
-    );
-
-    await validateScheduleImport(importId, admin);
-    await generateScheduleImport(importId, admin);
-    await publishScheduleImport(importId, admin);
-
-    const delivery = await pool.query(
-      `SELECT notification.notification_type,notification.event_key,
-              notification.metadata->>'sourceType' AS source_type,
-              notification.metadata->>'sourceId' AS source_id,
-              notification.metadata->>'scheduleFingerprint' AS fingerprint,
-              COUNT(outbox.id)::int AS outbox_count
-         FROM student_portal_notifications notification
-         LEFT JOIN email_outbox outbox ON outbox.portal_notification_id=notification.id
-        WHERE notification.student_number=$1
-        GROUP BY notification.id`,
-      [studentNumber],
-    );
-    expect(delivery.rows).toEqual([{
-      notification_type: "SCHEDULE_INITIAL_PUBLICATION",
-      event_key: `schedule:initial:SCHEDULE_IMPORT_GROUP:${importId}:${studentNumber}`,
-      source_type: "SCHEDULE_IMPORT_GROUP",
-      source_id: importId,
-      fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
-      outbox_count: 1,
-    }]);
-  });
-
   it("denies clinic staff before parsing input", async () => {
-    await expect(importStudentScheduleCsv(undefined, clinicStaff)).rejects.toMatchObject({
+    await expect(acceptAndScheduleImport(undefined, clinicStaff)).rejects.toMatchObject({
       code: "FORBIDDEN",
       status: 403,
     });
@@ -285,7 +149,7 @@ describe("student scheduling imports", () => {
       `${existingStudentNumber},Updated,Alex,Q.,Jr.,College of Computer Studies,BSIT,3,2003-05-06`,
       `${newStudentNumber},New,Bea,Rosa,,College of Computer Studies,BSIT,3,2004-07-08`,
     );
-    const created = await importStudentScheduleCsv(input(contents), admin);
+    const created = await acceptAndScheduleImport(input(contents), admin);
 
     expect(created).toEqual({
       importId: expect.any(String),
@@ -454,7 +318,7 @@ describe("student scheduling imports", () => {
         WHERE action='SNAPSHOT_CONFLICT_DETECTED' AND entity_id=$1`,
       [`${studentNumber}:2026`],
     );
-    await expect(importStudentScheduleCsv(input(csv(
+    await expect(acceptAndScheduleImport(input(csv(
       `${studentNumber},Changed,Student,Maria Angela,,College of Computer Studies,BSIT,3,2004-06-07`,
     )), admin)).rejects.toMatchObject({
       code: "SNAPSHOT_CONFLICT",
@@ -485,7 +349,7 @@ describe("student scheduling imports", () => {
 
   it("requires an academic year configuration before writing an import", async () => {
     const studentNumber = "99-9108-08";
-    await expect(importStudentScheduleCsv(input(csv(
+    await expect(acceptAndScheduleImport(input(csv(
       `${studentNumber},Missing,Year,Maria Angela,,College of Computer Studies,BSIT,3,2003-05-06`,
     ), { academicYearStart: 2099 }), admin)).rejects.toMatchObject({
       code: "ACADEMIC_YEAR_NOT_CONFIGURED",
@@ -506,7 +370,7 @@ describe("student scheduling imports", () => {
       `${studentNumber},Invalid,Reference,Maria Angela,,Unknown College,BSIT,3,2003-05-06`,
     );
 
-    await expect(importStudentScheduleCsv(input(contents), admin)).rejects.toMatchObject({
+    await expect(acceptAndScheduleImport(input(contents), admin)).rejects.toMatchObject({
       code: "CSV_IMPORT_INVALID",
       status: 422,
       fields: { "rows.2.College": expect.any(Array) },
@@ -520,17 +384,52 @@ describe("student scheduling imports", () => {
     expect(writes.rows[0]).toEqual({ students: 0, imports: 0 });
   });
 
-  it("requires preferred month only for priority categories", async () => {
+  it("requires preferred month only for OJT and Tour categories", async () => {
     const contents = csv(
       "99-9104-04,Priority,Student,Maria Angela,,College of Computer Studies,BSIT,3,2003-05-06",
     );
-    await expect(importStudentScheduleCsv(input(contents, {
+    await expect(acceptAndScheduleImport(input(contents, {
       studentCategory: "OJT",
       preferredMonth: null,
     }), admin)).rejects.toMatchObject({ name: "ZodError" });
-    await expect(importStudentScheduleCsv(input(contents, {
+    await expect(acceptAndScheduleImport(input(contents, {
       preferredMonth: 9,
     }), admin)).rejects.toMatchObject({ name: "ZodError" });
+  });
+
+  it.each([
+    { category: "OJT" as const, yearLevel: 4, preferredMonth: 9, studentNumber: "99-9106-06" },
+    { category: "TOUR" as const, yearLevel: 3, preferredMonth: 10, studentNumber: "99-9107-07" },
+  ])("publishes an atomic Standard $category import", async ({
+    category,
+    yearLevel,
+    preferredMonth,
+    studentNumber,
+  }) => {
+    const contents = csv(
+      `${studentNumber},${category},Student,Maria Angela,,College of Computer Studies,BSIT,${yearLevel},2003-05-06`,
+    );
+
+    await expect(acceptAndScheduleImport(input(contents, {
+      studentCategory: category,
+      preferredMonth,
+    }), admin)).resolves.toMatchObject({
+      outcome: "PUBLISHED",
+      status: "PUBLISHED",
+      publishedAppointmentCount: 2,
+    });
+    await expect(pool.query(
+      `SELECT schedule_type,scheduling_category,is_published
+         FROM appointments
+        WHERE student_number=$1
+        ORDER BY schedule_type`,
+      [studentNumber],
+    )).resolves.toMatchObject({
+      rows: [
+        { schedule_type: "LABORATORY", scheduling_category: category, is_published: true },
+        { schedule_type: "PHYSICAL_EXAM", scheduling_category: category, is_published: true },
+      ],
+    });
   });
 
   it("uses a soft-unblocked Laboratory date for import allocation", async () => {
@@ -549,7 +448,7 @@ describe("student scheduling imports", () => {
       [TEST_REFERENCE_IDS.adminUser],
     );
 
-    await importStudentScheduleCsv(input(csv(
+    await acceptAndScheduleImport(input(csv(
       `${studentNumber},Unblocked,Import,Maria Angela,,College of Computer Studies,BSIT,3,2003-05-06`,
     ), { academicYearStart: 2027 }), admin);
 
@@ -579,7 +478,7 @@ describe("student scheduling imports", () => {
       [TEST_REFERENCE_IDS.adminUser],
     );
 
-    await importStudentScheduleCsv(input(csv(
+    await acceptAndScheduleImport(input(csv(
       `${studentNumber},Blocked,Import,Maria Angela,,College of Computer Studies,BSIT,3,2003-05-06`,
     ), { academicYearStart: 2027 }), admin);
 

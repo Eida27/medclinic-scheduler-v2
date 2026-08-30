@@ -3,9 +3,8 @@ import type { PoolClient } from "pg";
 import type { AppointmentListSort } from "@/components/appointments/appointment-list-sort";
 import { AppError } from "@/lib/errors";
 import type { AutomaticNoShowLog } from "@/server/appointments/automatic-no-show";
-import { query, transaction } from "@/server/db/pool";
+import { query } from "@/server/db/pool";
 import type { ClinicCode } from "@/server/clinics";
-import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import {
   studentDisplayNameSql,
   studentLegacyDisplayNameSql,
@@ -555,32 +554,6 @@ export async function rescheduleAppointmentWithClient(
     [replacement.rows[0].id, notes, actorUserId],
   );
   return replacement.rows[0].id;
-}
-
-export async function publishBatch(batchId: string, actorUserId: string, client?: PoolClient) {
-  const publish = async (transactionClient: PoolClient) => {
-    const batch = await transactionClient.query<{ status: string }>("SELECT status FROM schedule_batches WHERE id=$1 FOR UPDATE", [batchId]);
-    if (!batch.rows[0]) return null;
-    if (batch.rows[0].status !== "GENERATED") return { invalidStatus: batch.rows[0].status };
-    const draftScopes = await transactionClient.query<{
-      studentNumber: string;
-      scheduleType: string;
-    }>(
-      `SELECT student_number AS "studentNumber", schedule_type AS "scheduleType"
-         FROM appointments
-        WHERE batch_id=$1 AND status='DRAFT'`,
-      [batchId],
-    );
-    await lockEffectiveAppointmentScopes(transactionClient, draftScopes.rows);
-    const appointments = await transactionClient.query("UPDATE appointments SET status='PENDING', is_published=TRUE, updated_by=$2 WHERE batch_id=$1 AND status='DRAFT' RETURNING id", [batchId, actorUserId]);
-    for (const appointment of appointments.rows) {
-      await transactionClient.query("INSERT INTO appointment_status_logs (appointment_id, old_status, new_status, changed_by) VALUES ($1,'DRAFT','PENDING',$2)", [appointment.id, actorUserId]);
-    }
-    await transactionClient.query("UPDATE schedule_batches SET status='PUBLISHED', published_by=$2, published_at=NOW() WHERE id=$1", [batchId, actorUserId]);
-    return { count: appointments.rowCount ?? 0 };
-  };
-  if (client) return publish(client);
-  return transaction(publish);
 }
 
 export async function getCapacitySettings() {

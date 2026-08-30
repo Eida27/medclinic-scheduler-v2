@@ -7,14 +7,16 @@ import { createReference, deleteReference, updateReference } from "@/server/repo
 
 const collegeSchema = z.object({ code: z.string().trim().min(2).max(30), name: z.string().trim().min(2).max(150) });
 const programSchema = collegeSchema.extend({ collegeId: z.string().uuid() });
-const prioritySchema = z.object({ name: z.string().trim().min(2).max(80), rankOrder: z.coerce.number().int().positive() });
 const deleteSchema = z.object({ id: z.string().uuid() });
+const referenceTypeSchema = z.enum(["college", "program"]);
+type ReferenceType = z.infer<typeof referenceTypeSchema>;
 
-function schemaFor(type: "college" | "program" | "priorityGroup") {
-  return type === "college" ? collegeSchema : type === "program" ? programSchema : prioritySchema;
+function schemaFor(type: ReferenceType) {
+  return type === "college" ? collegeSchema : programSchema;
 }
 
-export async function addReference(type: "college" | "program" | "priorityGroup", raw: unknown, actorUserId: string) {
+export async function addReference(rawType: ReferenceType, raw: unknown, actorUserId: string) {
+  const type = referenceTypeSchema.parse(rawType);
   const input = schemaFor(type).parse(raw);
   try {
     const result = await createReference(type, input);
@@ -26,7 +28,8 @@ export async function addReference(type: "college" | "program" | "priorityGroup"
   }
 }
 
-export async function editReference(type: "college" | "program" | "priorityGroup", raw: unknown, actorUserId: string) {
+export async function editReference(rawType: ReferenceType, raw: unknown, actorUserId: string) {
+  const type = referenceTypeSchema.parse(rawType);
   const input = schemaFor(type).extend({ id: z.string().uuid(), isActive: z.boolean() }).parse(raw);
   try {
     const result = await updateReference(type, input);
@@ -40,10 +43,11 @@ export async function editReference(type: "college" | "program" | "priorityGroup
 }
 
 export async function removeReference(
-  type: "college" | "program" | "priorityGroup",
+  rawType: ReferenceType,
   raw: unknown,
   actorUserId: string,
 ) {
+  const type = referenceTypeSchema.parse(rawType);
   const { id } = deleteSchema.parse(raw);
   return transaction(async (client) => {
     let result;

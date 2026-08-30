@@ -5,19 +5,11 @@ import JSZip from "jszip";
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { listPriorityGroups, requireUser, priorities } = vi.hoisted(() => ({
-  listPriorityGroups: vi.fn(),
+const { requireUser } = vi.hoisted(() => ({
   requireUser: vi.fn(),
-  priorities: [{
-    id: "30000000-0000-4000-8000-000000000004",
-    name: "Regular",
-    rankOrder: 4,
-    isActive: true,
-  }],
 }));
 
 vi.mock("@/server/auth/current-user", () => ({ requireUser }));
-vi.mock("@/server/repositories/reference-data.repository", () => ({ listPriorityGroups }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
 }));
@@ -53,14 +45,12 @@ describe("NewScheduleImportPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     requireUser.mockResolvedValue({ userId: "admin-user", role: "ADMIN" });
-    listPriorityGroups.mockResolvedValue(priorities);
   });
 
   it("allows administrators and coordinators and renders the academic-year importer", async () => {
     render(await NewScheduleImportPage());
 
     expect(requireUser).toHaveBeenCalledWith(["ADMIN", "COORDINATOR"]);
-    expect(listPriorityGroups).not.toHaveBeenCalled();
     expect(screen.getByRole("heading", { name: "Import schedule CSV" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Academic-year student CSV" })).toBeVisible();
     expect(screen.getByRole("option", { name: "Regular" })).toHaveValue("REGULAR");
@@ -68,11 +58,10 @@ describe("NewScheduleImportPage", () => {
     expect(screen.queryByText(/legacy coordinator importer/i)).not.toBeInTheDocument();
   });
 
-  it("does not load priority data when authorization fails", async () => {
+  it("does not render the import form when authorization fails", async () => {
     requireUser.mockRejectedValue(new Error("forbidden"));
 
     await expect(NewScheduleImportPage()).rejects.toThrow("forbidden");
-    expect(listPriorityGroups).not.toHaveBeenCalled();
   });
 
   it("ships an exact two-row, non-private BSIT Excel template", async () => {

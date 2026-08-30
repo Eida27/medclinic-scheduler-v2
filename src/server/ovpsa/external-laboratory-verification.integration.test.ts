@@ -6,18 +6,15 @@ import {
   completeAppointmentWithClient,
   updateAppointment,
 } from "@/server/services/appointments.service";
+import { acceptAndScheduleImport } from "@/server/services/schedule-imports.service";
 import { TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import type { SessionUser } from "@/types/roles";
-import {
-  createOvpsaFirstYearBatch,
-  publishOvpsaFirstYearBatch,
-  validateOvpsaFirstYearBatch,
-} from "./ovpsa-first-year.service";
 import { verifyOvpsaExternalLaboratory } from "./external-laboratory-verification.service";
 
 const cycleStart = 2095;
-const studentNumber = "OVP-VERIFY-01";
+const studentNumber = "95-8899-01";
 const cpuStaffUserId = "95000000-0000-4000-8000-000000000001";
+const sourceFilename = "TEST-OVPSA-EXTERNAL-LAB.csv";
 
 const admin: SessionUser = {
   userId: TEST_REFERENCE_IDS.adminUser,
@@ -40,8 +37,8 @@ const cpuStaff: SessionUser = {
 
 async function cleanup() {
   await pool.query(
-    "DELETE FROM audit_logs WHERE metadata->>'studentNumber'=$1 OR entity_id IN (SELECT id::text FROM ovpsa_first_year_batches WHERE schedule_cycle_start=$2) OR actor_user_id=$3",
-    [studentNumber, cycleStart, cpuStaffUserId],
+    "DELETE FROM audit_logs WHERE metadata->>'studentNumber'=$1 OR entity_id IN (SELECT id::text FROM ovpsa_first_year_batches WHERE schedule_cycle_start=$2) OR entity_id IN (SELECT id::text FROM schedule_import_groups WHERE source_filename=$4) OR actor_user_id=$3",
+    [studentNumber, cycleStart, cpuStaffUserId, sourceFilename],
   );
   await pool.query("DELETE FROM email_outbox WHERE student_number=$1", [
     studentNumber,
@@ -82,10 +79,6 @@ async function cleanup() {
     [studentNumber],
   );
   await pool.query(
-    "DELETE FROM ovpsa_first_year_service_reservations WHERE batch_id IN (SELECT id FROM ovpsa_first_year_batches WHERE schedule_cycle_start=$1)",
-    [cycleStart],
-  );
-  await pool.query(
     "ALTER TABLE ovpsa_first_year_membership_snapshots DISABLE TRIGGER ovpsa_first_year_membership_snapshots_immutable",
   );
   await pool.query(
@@ -94,6 +87,10 @@ async function cleanup() {
   );
   await pool.query(
     "ALTER TABLE ovpsa_first_year_membership_snapshots ENABLE TRIGGER ovpsa_first_year_membership_snapshots_immutable",
+  );
+  await pool.query(
+    "DELETE FROM ovpsa_first_year_service_reservations WHERE batch_id IN (SELECT id FROM ovpsa_first_year_batches WHERE schedule_cycle_start=$1)",
+    [cycleStart],
   );
   await pool.query(
     "UPDATE ovpsa_first_year_batches SET current_revision_id=NULL WHERE schedule_cycle_start=$1",
@@ -107,6 +104,15 @@ async function cleanup() {
     "DELETE FROM ovpsa_first_year_batches WHERE schedule_cycle_start=$1",
     [cycleStart],
   );
+  await pool.query(
+    "DELETE FROM coordinator_schedule_items WHERE batch_id IN (SELECT id FROM schedule_batches WHERE import_group_id IN (SELECT id FROM schedule_import_groups WHERE source_filename=$1))",
+    [sourceFilename],
+  );
+  await pool.query(
+    "DELETE FROM schedule_batches WHERE import_group_id IN (SELECT id FROM schedule_import_groups WHERE source_filename=$1)",
+    [sourceFilename],
+  );
+  await pool.query("DELETE FROM schedule_import_groups WHERE source_filename=$1", [sourceFilename]);
   await pool.query(
     "ALTER TABLE student_academic_snapshots DISABLE TRIGGER student_academic_snapshots_immutable",
   );
@@ -147,38 +153,30 @@ async function publishFixture() {
      VALUES ($1,'2096-07-31',$2,$2)`,
     [cycleStart, TEST_REFERENCE_IDS.adminUser],
   );
-  await pool.query(
-    `INSERT INTO students (
-       student_number,first_name,middle_name,last_name,college_id,program_id,year_level
-     ) VALUES ($1,'External','Maria','Laboratory',$2,$3,1)`,
-    [studentNumber, TEST_REFERENCE_IDS.college, TEST_REFERENCE_IDS.program],
-  );
-  const created = await createOvpsaFirstYearBatch(
-    {
-      scheduleCycleStart: cycleStart,
-      collegeId: TEST_REFERENCE_IDS.college,
-      laboratoryDate: "2095-09-01",
-      physicalExamDateOverride: null,
-      physicalExamExceptionReason: null,
-    },
-    TEST_REFERENCE_IDS.adminUser,
-  );
-  const validated = await validateOvpsaFirstYearBatch(
-    created.batchId,
-    { optimisticToken: created.optimisticToken },
-    TEST_REFERENCE_IDS.adminUser,
-  );
-  await publishOvpsaFirstYearBatch(
-    created.batchId,
-    { optimisticToken: validated.optimisticToken },
-    TEST_REFERENCE_IDS.adminUser,
+  const contents = [
+    "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth",
+    `${studentNumber},Laboratory,External,Maria,,College of Computer Studies,BSIT,1,2006-01-01`,
+  ].join("\n");
+  const published = await acceptAndScheduleImport({
+    fileName: sourceFilename,
+    fileSize: Buffer.byteLength(contents),
+    contents,
+    importMode: "FIRST_YEAR_OVPSA",
+    studentCategory: "REGULAR",
+    academicYearStart: cycleStart,
+    preferredMonth: null,
+    firstYearLaboratoryDate: "2095-09-01",
+  }, admin);
+  const batch = await pool.query<{ id: string }>(
+    "SELECT id::text FROM ovpsa_first_year_batches WHERE source_import_group_id=$1",
+    [published.importId],
   );
   const appointments = await pool.query<{
     id: string;
     schedule_type: "LABORATORY" | "PHYSICAL_EXAM";
   }>(
     "SELECT id::text,schedule_type FROM appointments WHERE ovpsa_batch_id=$1 ORDER BY schedule_type",
-    [created.batchId],
+    [batch.rows[0].id],
   );
   const byService = new Map(
     appointments.rows.map((appointment) => [
@@ -187,7 +185,7 @@ async function publishFixture() {
     ]),
   );
   return {
-    batchId: created.batchId,
+    batchId: batch.rows[0].id,
     laboratoryId: byService.get("LABORATORY")!,
     physicalExamId: byService.get("PHYSICAL_EXAM")!,
   };

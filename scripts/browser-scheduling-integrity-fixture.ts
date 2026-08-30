@@ -16,7 +16,6 @@ const STORAGE_ROOT = resolve(
 );
 const LABORATORY_CLINIC_ID = "60000000-0000-4000-8000-000000000001";
 const PHYSICAL_EXAM_CLINIC_ID = "60000000-0000-4000-8000-000000000002";
-const PRIORITY_GROUP_ID = "30000000-0000-4000-8000-000000000002";
 const CAPACITY_STUDENT_COUNT = 150;
 
 // Acceptance-only credentials. They are intentionally excluded from every
@@ -32,8 +31,7 @@ const FIXED_IDS = {
   college: "5a260826-0000-4000-8000-000000000003",
   program: "5a260826-0000-4000-8000-000000000004",
   importGroup: "5a260826-0000-4000-8000-000000000005",
-  scheduleBatch: "5a260826-0000-4000-8000-000000000006",
-  scheduleItem: "5a260826-0000-4000-8000-000000000007",
+  removedRouteTarget: "5a260826-0000-4000-8000-000000000006",
   closureGroup: "5a260826-0000-4000-8000-000000000008",
   unavailableDate: "5a260826-0000-4000-8000-000000000009",
   ovpsaBatch: "5a260826-0000-4000-8000-00000000000a",
@@ -41,10 +39,6 @@ const FIXED_IDS = {
   reservation: "5a260826-0000-4000-8000-00000000000c",
   manualCase: "5a260826-0000-4000-8000-00000000000d",
   rescheduleEvent: "5a260826-0000-4000-8000-00000000000e",
-  generateBatch: "5a260826-0000-4000-8000-00000000000f",
-  generateItem: "5a260826-0000-4000-8000-000000000010",
-  publishBatch: "5a260826-0000-4000-8000-000000000019",
-  publishItem: "5a260826-0000-4000-8000-00000000001a",
 } as const;
 
 const APPOINTMENT_IDS = {
@@ -56,7 +50,6 @@ const APPOINTMENT_IDS = {
   displacementPhysicalExam: "5a260826-0000-4000-8000-000000000016",
   portalLaboratory: "5a260826-0000-4000-8000-000000000017",
   portalPhysicalExam: "5a260826-0000-4000-8000-000000000018",
-  retiredPublish: "5a260826-0000-4000-8000-00000000001b",
 } as const;
 
 const PAIR_IDS = {
@@ -81,8 +74,6 @@ const DATES = {
   exclusiveReservation: "2027-04-27",
   displacementReplacementPhysicalExam: "2027-04-28",
   capacityFull: "2027-04-29",
-  retiredGenerate: "2027-04-22",
-  retiredPublish: "2027-04-23",
 } as const;
 
 const CORE_STUDENTS = {
@@ -90,7 +81,6 @@ const CORE_STUDENTS = {
   manual: { studentNumber: "B-SIH-MANUAL" },
   displacement: { studentNumber: "B-SIH-DISPLACE" },
   portal: { studentNumber: "B-SIH-PORTAL" },
-  legacySentinel: { studentNumber: "B-SIH-LEGACY" },
 } as const;
 
 function capacityStudentNumber(position: number) {
@@ -123,7 +113,6 @@ export const SCHEDULING_INTEGRITY_FIXTURE = {
   pairIds: PAIR_IDS,
   dates: DATES,
   capacityStudentCount: CAPACITY_STUDENT_COUNT,
-  priorityGroupId: PRIORITY_GROUP_ID,
   ids: FIXED_IDS,
   routes: {
     homepage: "/",
@@ -139,50 +128,46 @@ export const SCHEDULING_INTEGRITY_FIXTURE = {
     {
       method: "POST",
       path: "/api/coordinator-schedules",
-      body: {
-        clinicCode: "KABALAKA_CLINIC",
-        batchName: `${MARKER}-RETIRED-POST`,
-        collegeId: FIXED_IDS.college,
-        programId: FIXED_IDS.program,
-        submittedByName: "Browser Scheduling Integrity",
-        description: MARKER,
-        items: [{
-          studentNumber: CORE_STUDENTS.legacySentinel.studentNumber,
-          scheduleType: "LABORATORY",
-          priorityGroupId: PRIORITY_GROUP_ID,
-          targetDate: DATES.retiredGenerate,
-          targetWeekStart: null,
-          targetWeekEnd: null,
-          remarks: MARKER,
-        }],
-      },
+      body: {},
     },
     {
       method: "POST",
       path: "/api/coordinator-schedules/validate",
-      body: { batchId: FIXED_IDS.scheduleBatch },
+      body: {},
     },
     {
       method: "PATCH",
-      path: `/api/coordinator-schedules/${FIXED_IDS.scheduleBatch}`,
-      body: {
-        clinicCode: "KABALAKA_CLINIC",
-        batchName: `${MARKER}-RETIRED-PATCH`,
-        collegeId: FIXED_IDS.college,
-        programId: FIXED_IDS.program,
-        submittedByName: "Browser Scheduling Integrity",
-        description: MARKER,
-      },
+      path: `/api/coordinator-schedules/${FIXED_IDS.removedRouteTarget}`,
+      body: {},
     },
     {
       method: "POST",
       path: "/api/appointments/generate",
-      body: { batchId: FIXED_IDS.generateBatch },
+      body: {},
     },
     {
       method: "POST",
       path: "/api/appointments/publish",
-      body: { batchId: FIXED_IDS.publishBatch, confirm: true },
+      body: {},
+    },
+    {
+      method: "GET",
+      path: "/api/priority-groups",
+    },
+    {
+      method: "POST",
+      path: `/api/schedule-imports/${FIXED_IDS.removedRouteTarget}/validate`,
+      body: {},
+    },
+    {
+      method: "POST",
+      path: `/api/schedule-imports/${FIXED_IDS.removedRouteTarget}/generate`,
+      body: {},
+    },
+    {
+      method: "POST",
+      path: `/api/schedule-imports/${FIXED_IDS.removedRouteTarget}/publish`,
+      body: {},
     },
   ],
   publicLookupRequests: [
@@ -264,13 +249,13 @@ export type SchedulingIntegrityPreparedCounts = {
 
 const EXPECTED_PREPARED_COUNTS: SchedulingIntegrityPreparedCounts = {
   users: 2,
-  coreStudents: 5,
+  coreStudents: 4,
   capacityStudents: CAPACITY_STUDENT_COUNT,
-  pairAppointments: 9,
+  pairAppointments: 8,
   capacityAppointments: CAPACITY_STUDENT_COUNT,
   importGroups: 1,
-  scheduleBatches: 3,
-  scheduleItems: 3,
+  scheduleBatches: 0,
+  scheduleItems: 0,
   manualCases: 1,
   rescheduleEvents: 1,
   closureGroups: 1,
@@ -443,16 +428,8 @@ export function assertSafeSchedulingIntegrityStatus<T>(value: T): T {
 function emptyManifest(): OwnedManifest {
   return {
     importGroupIds: [FIXED_IDS.importGroup],
-    scheduleBatchIds: [
-      FIXED_IDS.scheduleBatch,
-      FIXED_IDS.generateBatch,
-      FIXED_IDS.publishBatch,
-    ],
-    scheduleItemIds: [
-      FIXED_IDS.scheduleItem,
-      FIXED_IDS.generateItem,
-      FIXED_IDS.publishItem,
-    ],
+    scheduleBatchIds: [],
+    scheduleItemIds: [],
     appointmentIds: Object.values(APPOINTMENT_IDS),
     statusLogIds: [],
     laboratoryResultIds: [],
@@ -550,7 +527,7 @@ async function discoverRetiredRouteOwnedIds(
          )
       ORDER BY id`,
     [
-      [FIXED_IDS.scheduleBatch, FIXED_IDS.generateBatch, FIXED_IDS.publishBatch],
+      [],
       importGroupIds,
       FIXED_IDS.adminUser,
       preparedAt,
@@ -563,7 +540,7 @@ async function discoverRetiredRouteOwnedIds(
       WHERE id=ANY($1::uuid[]) OR batch_id=ANY($2::uuid[])
       ORDER BY id`,
     [
-      [FIXED_IDS.scheduleItem, FIXED_IDS.generateItem, FIXED_IDS.publishItem],
+      [],
       scheduleBatchIds,
     ],
   );
@@ -658,8 +635,8 @@ async function preparedCounts(
       CAPACITY_STUDENT_NUMBERS,
       Object.values(APPOINTMENT_IDS),
       [FIXED_IDS.importGroup],
-      [FIXED_IDS.scheduleBatch, FIXED_IDS.generateBatch, FIXED_IDS.publishBatch],
-      [FIXED_IDS.scheduleItem, FIXED_IDS.generateItem, FIXED_IDS.publishItem],
+      [],
+      [],
       FIXED_IDS.manualCase,
       FIXED_IDS.rescheduleEvent,
       FIXED_IDS.closureGroup,
@@ -1074,14 +1051,6 @@ async function setup(
         date_of_birth: SCHEDULING_INTEGRITY_PORTAL_DATE_OF_BIRTH,
         email: "browser-sih-portal@example.test",
       },
-      {
-        student_number: CORE_STUDENTS.legacySentinel.studentNumber,
-        first_name: "Legacy",
-        middle_name: "Integrity",
-        last_name: "Browser",
-        date_of_birth: "2004-05-07",
-        email: "browser-sih-legacy@example.test",
-      },
     ];
     await client.query(
       `INSERT INTO students (
@@ -1121,75 +1090,6 @@ async function setup(
                  '2026-08-26T00:00:00.000Z','STANDARD')`,
       [FIXED_IDS.importGroup, MARKER, FIXED_IDS.adminUser],
     );
-    await client.query(
-      `INSERT INTO schedule_batches (
-         id,clinic_id,batch_name,college_id,program_id,status,created_by,description
-       ) VALUES ($1,$2,$3::varchar,$4,$5,'DRAFT',$6,$3::text)`,
-      [
-        FIXED_IDS.scheduleBatch,
-        LABORATORY_CLINIC_ID,
-        MARKER,
-        FIXED_IDS.college,
-        FIXED_IDS.program,
-        FIXED_IDS.adminUser,
-      ],
-    );
-    await client.query(
-      `INSERT INTO coordinator_schedule_items (
-         id,batch_id,clinic_id,student_number,schedule_type,priority_group_id,target_date,
-         remarks,status,source_row_order,schedule_cycle_start
-       ) VALUES ($1,$2,$3,$4,'LABORATORY',$5,$6,$7,'PENDING',2,2026)`,
-      [
-        FIXED_IDS.scheduleItem,
-        FIXED_IDS.scheduleBatch,
-        LABORATORY_CLINIC_ID,
-        CORE_STUDENTS.legacySentinel.studentNumber,
-        PRIORITY_GROUP_ID,
-        DATES.retiredGenerate,
-        MARKER,
-      ],
-    );
-    await client.query(
-      `INSERT INTO schedule_batches (
-         id,clinic_id,batch_name,college_id,program_id,status,validation_summary,
-         validated_by,validated_at,created_by,description
-       ) VALUES
-         ($1,$2,$3::varchar,$4,$5,'VALIDATED','{}'::jsonb,$6,clock_timestamp(),$6,$3::text),
-         ($7,$8,$9::varchar,$4,$5,'GENERATED','{}'::jsonb,$6,clock_timestamp(),$6,$9::text)`,
-      [
-        FIXED_IDS.generateBatch,
-        LABORATORY_CLINIC_ID,
-        `${MARKER}-GENERATE`,
-        FIXED_IDS.college,
-        FIXED_IDS.program,
-        FIXED_IDS.adminUser,
-        FIXED_IDS.publishBatch,
-        PHYSICAL_EXAM_CLINIC_ID,
-        `${MARKER}-PUBLISH`,
-      ],
-    );
-    await client.query(
-      `INSERT INTO coordinator_schedule_items (
-         id,batch_id,clinic_id,student_number,schedule_type,priority_group_id,target_date,
-         remarks,status,validation_issues,source_row_order,schedule_cycle_start
-       ) VALUES
-         ($1,$2,$3,$4,'LABORATORY',$5,$6,$7,'VALID','[]'::jsonb,3,2026),
-         ($8,$9,$10,$4,'PHYSICAL_EXAM',$5,$11,$7,'SCHEDULED','[]'::jsonb,4,2026)`,
-      [
-        FIXED_IDS.generateItem,
-        FIXED_IDS.generateBatch,
-        LABORATORY_CLINIC_ID,
-        CORE_STUDENTS.legacySentinel.studentNumber,
-        PRIORITY_GROUP_ID,
-        DATES.retiredGenerate,
-        MARKER,
-        FIXED_IDS.publishItem,
-        FIXED_IDS.publishBatch,
-        PHYSICAL_EXAM_CLINIC_ID,
-        DATES.retiredPublish,
-      ],
-    );
-
     const pairAppointments = [
       {
         id: APPOINTMENT_IDS.lifecycleLaboratory,
@@ -1270,19 +1170,6 @@ async function setup(
         status: "PENDING",
         pair_id: PAIR_IDS.portal,
         source_order: 4,
-      },
-      {
-        id: APPOINTMENT_IDS.retiredPublish,
-        clinic_id: PHYSICAL_EXAM_CLINIC_ID,
-        student_number: CORE_STUDENTS.legacySentinel.studentNumber,
-        schedule_type: "PHYSICAL_EXAM",
-        appointment_date: DATES.retiredPublish,
-        status: "DRAFT",
-        pair_id: null,
-        source_order: 5,
-        batch_id: FIXED_IDS.publishBatch,
-        schedule_item_id: FIXED_IDS.publishItem,
-        is_published: false,
       },
     ];
     await client.query(
@@ -1416,9 +1303,9 @@ async function setup(
   assertRetiredRouteSentinelUnchanged({
     ...retiredRouteSentinel,
     importGroups: 1,
-    batches: 3,
-    items: 3,
-    appointments: 1,
+    batches: 0,
+    items: 0,
+    appointments: 0,
   }, retiredRouteSentinel);
   const counts = assertSchedulingIntegrityPreparedCounts(await preparedCounts(client));
   state = {

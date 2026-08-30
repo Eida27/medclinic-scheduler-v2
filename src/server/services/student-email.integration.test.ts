@@ -19,7 +19,6 @@ import {
   requestStudentEmailVerification,
   verifyStudentEmail,
 } from "./student-email.service";
-import { publishScheduleBatchWithClient } from "./appointments.service";
 import { decryptVerificationEmailBody } from "@/server/email/verification-body-encryption";
 import { queueFirstVerificationCurrentStateCatchUp } from "./student-verification-catch-up.service";
 
@@ -49,23 +48,6 @@ async function waitForStudentLockWaiters(expected: number) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   throw new Error(`Expected ${expected} student-row lock waiter(s).`);
-}
-
-async function waitForBackendLockWaiter(pid: number, taskSettled: () => boolean) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const result = await pool.query<{ waiting: boolean }>(
-      `SELECT state='active' AND wait_event_type='Lock' AS waiting
-         FROM pg_stat_activity
-        WHERE pid=$1`,
-      [pid],
-    );
-    if (result.rows[0]?.waiting) return;
-    if (taskSettled()) {
-      throw new Error("Schedule publication completed before waiting on verification serialization.");
-    }
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  throw new Error("Timed out waiting for schedule publication to block on verification serialization.");
 }
 
 beforeAll(async () => {
@@ -689,112 +671,6 @@ describe("student notifications and optional email", () => {
         WHERE student_number=$1 AND notification_type='SCHEDULE_CURRENT_STATE'`,
       [studentNumber],
     )).resolves.toMatchObject({ rows: [expect.objectContaining({ id: expect.any(String) })] });
-  });
-
-  it("serializes first verification with concurrent publication so the latest schedule email cannot be missed", async () => {
-    const studentNumber = "99-9529-29";
-    await insertTestStudent({
-      studentNumber,
-      firstName: "Concurrent",
-      lastName: "Publication",
-      yearLevel: 3,
-    });
-    const batch = await pool.query<{ id: string }>(
-      `INSERT INTO schedule_batches (clinic_id,batch_name,status,created_by)
-       VALUES ($1,'TEST-STUDENT-EMAIL-CONCURRENT-PUBLICATION','GENERATED',$2)
-       RETURNING id::text`,
-      [TEST_REFERENCE_IDS.laboratoryClinic, TEST_REFERENCE_IDS.adminUser],
-    );
-    await pool.query(
-      `INSERT INTO appointments (
-         batch_id,clinic_id,student_number,schedule_type,appointment_date,status,
-         is_published,schedule_cycle_start,created_by,updated_by
-       ) VALUES ($1,$2,$3,'LABORATORY','2091-10-07','DRAFT',FALSE,2091,$4,$4)`,
-      [
-        batch.rows[0].id,
-        TEST_REFERENCE_IDS.laboratoryClinic,
-        studentNumber,
-        TEST_REFERENCE_IDS.adminUser,
-      ],
-    );
-    const request = await requestStudentEmailVerification(
-      studentNumber,
-      "concurrent-publication@example.test",
-    );
-
-    let catchUpReached!: () => void;
-    const atCatchUp = new Promise<void>((resolve) => { catchUpReached = resolve; });
-    let releaseCatchUp!: () => void;
-    const catchUpMayContinue = new Promise<void>((resolve) => { releaseCatchUp = resolve; });
-    let publicationSettled = false;
-    const publicationClient = await pool.connect();
-    let publicationTransactionOpen = false;
-    let publicationTask: Promise<void> | null = null;
-    const verificationTask = verifyStudentEmail(request.token, {
-      queueCurrentStateCatchUp: async (client, currentStudentNumber) => {
-        catchUpReached();
-        await catchUpMayContinue;
-        return queueFirstVerificationCurrentStateCatchUp(client, currentStudentNumber);
-      },
-    });
-
-    try {
-      await atCatchUp;
-      await publicationClient.query("BEGIN");
-      publicationTransactionOpen = true;
-      await publicationClient.query("SET LOCAL deadlock_timeout='100ms'");
-      const publicationBackend = await publicationClient.query<{ pid: number }>(
-        "SELECT pg_backend_pid() AS pid",
-      );
-      publicationTask = (async () => {
-        await publicationClient.query(
-          "SELECT pg_advisory_xact_lock(hashtext('medclinic:schedule-import-queue'))",
-        );
-        await publishScheduleBatchWithClient(
-          batch.rows[0].id,
-          TEST_REFERENCE_IDS.adminUser,
-          publicationClient,
-          false,
-          true,
-        );
-        await publicationClient.query("COMMIT");
-        publicationTransactionOpen = false;
-      })().finally(() => { publicationSettled = true; });
-      await waitForBackendLockWaiter(publicationBackend.rows[0].pid, () => publicationSettled);
-
-      releaseCatchUp();
-      await expect(verificationTask).resolves.toMatchObject({
-        email: "concurrent-publication@example.test",
-        firstVerification: true,
-      });
-      await expect(publicationTask).resolves.toBeUndefined();
-
-      const scheduleEmails = await pool.query<{
-        notificationType: string;
-        textBody: string;
-      }>(
-        `SELECT notification_type AS "notificationType",text_body AS "textBody"
-           FROM email_outbox
-          WHERE student_number=$1 AND message_kind='SCHEDULE'`,
-        [studentNumber],
-      );
-      expect(scheduleEmails.rows).toEqual([
-        expect.objectContaining({
-          notificationType: "SCHEDULE_INITIAL_PUBLICATION",
-          textBody: expect.stringContaining("2091-10-07"),
-        }),
-      ]);
-    } finally {
-      releaseCatchUp();
-      await Promise.allSettled([
-        verificationTask,
-        ...(publicationTask ? [publicationTask] : []),
-      ]);
-      if (publicationTransactionOpen) {
-        await publicationClient.query("ROLLBACK").catch(() => undefined);
-      }
-      publicationClient.release();
-    }
   });
 
   it("uses the database clock for cooldown retry timing despite application clock skew", async () => {

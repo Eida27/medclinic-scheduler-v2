@@ -407,7 +407,7 @@ describe("database constraints", () => {
     }
   });
 
-  it("seeds required reference, user, priority, program, and capacity data", async () => {
+  it("seeds required reference, user, program, and capacity data", async () => {
     const clinics = await pool.query<{ code: string; name: string }>(
       `SELECT code, name FROM clinics
         WHERE id IN (
@@ -487,22 +487,6 @@ describe("database constraints", () => {
       { college_code: "CBA", program_name: "Bachelor of Science in Accountancy" },
     ]);
 
-    const priorities = await pool.query<{ name: string; rank_order: number }>(
-      `SELECT name, rank_order FROM priority_groups
-         WHERE id IN (
-           '30000000-0000-4000-8000-000000000002',
-           '30000000-0000-4000-8000-000000000003',
-          '30000000-0000-4000-8000-000000000004'
-        )
-        ORDER BY rank_order`,
-    );
-    expect(priorities.rows).toEqual([
-      { name: "OJT", rank_order: 1 },
-      { name: "Tour", rank_order: 2 },
-      { name: "Regular", rank_order: 3 },
-    ]);
-    await expect(pool.query("SELECT 1 FROM priority_groups WHERE name='Graduating'"))
-      .resolves.toMatchObject({ rowCount: 0 });
   });
 
   it("keeps coordinator accounts global at the database boundary", async () => {
@@ -529,12 +513,11 @@ describe("database constraints", () => {
         );
         await client.query(
           `INSERT INTO coordinator_schedule_items (
-            batch_id, student_number, schedule_type, priority_group_id, clinic_id, target_date
-          ) VALUES ($1, $2, 'BOTH', $3, $4, DATE '2026-09-01')`,
+            batch_id, student_number, schedule_type, clinic_id, target_date
+          ) VALUES ($1, $2, 'BOTH', $3, DATE '2026-09-01')`,
           [
             batch.rows[0].id,
             studentNumber,
-            "30000000-0000-4000-8000-000000000004",
             "60000000-0000-4000-8000-000000000001",
           ],
         );

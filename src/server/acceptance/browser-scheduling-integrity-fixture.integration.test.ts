@@ -32,13 +32,13 @@ describe.sequential("scheduling integrity guarded fixture workflow", () => {
       phase: "PREPARED",
       preparedCounts: {
         users: 2,
-        coreStudents: 5,
+        coreStudents: 4,
         capacityStudents: 150,
-        pairAppointments: 9,
+        pairAppointments: 8,
         capacityAppointments: 150,
         importGroups: 1,
-        scheduleBatches: 3,
-        scheduleItems: 3,
+        scheduleBatches: 0,
+        scheduleItems: 0,
       },
     });
     expect(() => assertSafeSchedulingIntegrityStatus(setup)).not.toThrow();
@@ -52,8 +52,6 @@ describe.sequential("scheduling integrity guarded fixture workflow", () => {
     expect(() => assertSafeSchedulingIntegrityStatus(initialStatus)).not.toThrow();
 
     const dynamicImportGroupId = randomUUID();
-    const dynamicBatchId = randomUUID();
-    const dynamicItemId = randomUUID();
     const unrelatedImportGroupId = randomUUID();
     const pool = new Pool({ connectionString: databaseUrl });
     try {
@@ -82,36 +80,6 @@ describe.sequential("scheduling integrity guarded fixture workflow", () => {
             unrelatedActor.rows[0].id,
           ],
         );
-        await client.query(
-          `INSERT INTO schedule_batches (
-             id,clinic_id,batch_name,college_id,program_id,status,created_by,import_group_id,
-             description
-           ) VALUES ($1,$2,$3::varchar,$4,$5,'DRAFT',$6,$7,$3::text)`,
-          [
-            dynamicBatchId,
-            "60000000-0000-4000-8000-000000000001",
-            `${SCHEDULING_INTEGRITY_FIXTURE.marker}-DYNAMIC`,
-            SCHEDULING_INTEGRITY_FIXTURE.ids.college,
-            SCHEDULING_INTEGRITY_FIXTURE.ids.program,
-            SCHEDULING_INTEGRITY_FIXTURE.admin.id,
-            dynamicImportGroupId,
-          ],
-        );
-        await client.query(
-          `INSERT INTO coordinator_schedule_items (
-             id,batch_id,clinic_id,student_number,schedule_type,priority_group_id,
-             target_date,remarks,status,source_row_order,schedule_cycle_start
-           ) VALUES ($1,$2,$3,$4,'LABORATORY',$5,$6,$7,'PENDING',2,2026)`,
-          [
-            dynamicItemId,
-            dynamicBatchId,
-            "60000000-0000-4000-8000-000000000001",
-            SCHEDULING_INTEGRITY_FIXTURE.students.legacySentinel.studentNumber,
-            SCHEDULING_INTEGRITY_FIXTURE.priorityGroupId,
-            "2027-04-22",
-            SCHEDULING_INTEGRITY_FIXTURE.marker,
-          ],
-        );
         await client.query("COMMIT");
       } catch (error) {
         await client.query("ROLLBACK");
@@ -131,13 +99,10 @@ describe.sequential("scheduling integrity guarded fixture workflow", () => {
       });
       expect(Object.values(cleanup.residue).every((count) => count === 0)).toBe(true);
       const remaining = await pool.query<{ owned_count: number; unrelated_count: number }>(
-        `SELECT (
-           (SELECT COUNT(*) FROM schedule_import_groups WHERE id=$1)
-           + (SELECT COUNT(*) FROM schedule_batches WHERE id=$2)
-           + (SELECT COUNT(*) FROM coordinator_schedule_items WHERE id=$3)
-         )::int AS owned_count,
-         (SELECT COUNT(*)::int FROM schedule_import_groups WHERE id=$4) AS unrelated_count`,
-        [dynamicImportGroupId, dynamicBatchId, dynamicItemId, unrelatedImportGroupId],
+        `SELECT
+           (SELECT COUNT(*)::int FROM schedule_import_groups WHERE id=$1) AS owned_count,
+           (SELECT COUNT(*)::int FROM schedule_import_groups WHERE id=$2) AS unrelated_count`,
+        [dynamicImportGroupId, unrelatedImportGroupId],
       );
       expect(remaining.rows[0]).toEqual({ owned_count: 0, unrelated_count: 1 });
     } finally {

@@ -6,7 +6,6 @@ const {
   addReference,
   editReference,
   listColleges,
-  listPriorityGroups,
   listPrograms,
   removeReference,
   requireUser,
@@ -14,7 +13,6 @@ const {
   addReference: vi.fn(),
   editReference: vi.fn(),
   listColleges: vi.fn(),
-  listPriorityGroups: vi.fn(),
   listPrograms: vi.fn(),
   removeReference: vi.fn(),
   requireUser: vi.fn(),
@@ -23,7 +21,6 @@ const {
 vi.mock("@/server/auth/current-user", () => ({ requireUser }));
 vi.mock("@/server/repositories/reference-data.repository", () => ({
   listColleges,
-  listPriorityGroups,
   listPrograms,
 }));
 vi.mock("@/server/services/reference-data.service", () => ({
@@ -33,7 +30,6 @@ vi.mock("@/server/services/reference-data.service", () => ({
 }));
 
 import { DELETE as deleteCollege } from "./colleges/route";
-import { DELETE as deletePriorityGroup } from "./priority-groups/route";
 import { DELETE as deleteProgram } from "./programs/route";
 
 const actor = { userId: "00000000-0000-4000-8000-000000000001", role: "ADMIN" as const };
@@ -50,7 +46,6 @@ function deleteRequest(path: string) {
 const routeCases = [
   ["college", "/api/colleges", deleteCollege],
   ["program", "/api/programs", deleteProgram],
-  ["priorityGroup", "/api/priority-groups", deletePriorityGroup],
 ] as const;
 
 describe("reference data DELETE routes", () => {

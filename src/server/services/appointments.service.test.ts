@@ -13,7 +13,6 @@ const {
   getAppointmentMutationScope,
   getManualRescheduleDestinationState,
   getPublishedAppointment,
-  publishBatch,
   resolveEffectiveAppointmentPair,
   rescheduleAppointmentWithClient,
   setAppointmentManualLockWithClient,
@@ -30,7 +29,6 @@ const {
   getAppointmentMutationScope: vi.fn(),
   getManualRescheduleDestinationState: vi.fn(),
   getPublishedAppointment: vi.fn(),
-  publishBatch: vi.fn(),
   resolveEffectiveAppointmentPair: vi.fn(),
   rescheduleAppointmentWithClient: vi.fn(),
   setAppointmentManualLockWithClient: vi.fn(),
@@ -48,13 +46,9 @@ vi.mock("@/server/repositories/appointments.repository", () => ({
   getAppointmentMutationScope,
   getManualRescheduleDestinationState,
   getPublishedAppointment,
-  publishBatch,
   rescheduleAppointmentWithClient,
   setAppointmentManualLockWithClient,
   updateCapacitySetting,
-}));
-vi.mock("@/server/repositories/coordinator-schedules.repository", () => ({
-  getScheduleBatch: vi.fn(),
 }));
 vi.mock("@/server/repositories/effective-appointment-pair.repository", () => ({
   resolveEffectiveAppointmentPair,

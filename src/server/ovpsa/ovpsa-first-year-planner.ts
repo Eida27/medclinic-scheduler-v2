@@ -49,7 +49,7 @@ export type OvpsaBatchBlocker = {
 
 export type OvpsaBatchPreview = {
   scheduleCycleStart: number;
-  collegeId: string;
+  collegeId: string | null;
   members: OvpsaPlanningStudent[];
   memberCount: number;
   laboratory: {
@@ -77,7 +77,7 @@ type OvpsaBatchPlanningInput = {
   scheduleCycleStart: number;
   cycleStartDate: string;
   cycleEndDate: string;
-  collegeId: string;
+  collegeId: string | null;
   laboratoryDate: string;
   physicalExamDateOverride: string | null;
   physicalExamExceptionReason: string | null;
@@ -119,7 +119,7 @@ export function buildOvpsaBatchPreview(
     .filter((student) => (
       student.isActive
       && student.yearLevel === 1
-      && student.collegeId === input.collegeId
+      && (input.collegeId === null || student.collegeId === input.collegeId)
     ))
     .sort((left, right) => (
       left.studentName.localeCompare(right.studentName)

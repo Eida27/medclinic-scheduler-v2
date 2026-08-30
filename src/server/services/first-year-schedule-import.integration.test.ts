@@ -6,6 +6,12 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { pool } from "@/server/db/pool";
 import { TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import type { SessionUser } from "@/types/roles";
+import {
+  cancelOvpsaFirstYearBatch,
+  getOvpsaFirstYearBatch,
+  listOvpsaFirstYearBatches,
+  rescheduleOvpsaFirstYearBatch,
+} from "../ovpsa/ovpsa-first-year.service";
 import { updateAppointment } from "./appointments.service";
 import {
   acceptAndScheduleImport,
@@ -99,6 +105,7 @@ async function cleanup() {
     await client.query("DELETE FROM ovpsa_first_year_membership_snapshots WHERE batch_id IN (SELECT id FROM first_year_test_batches)");
     await client.query("ALTER TABLE ovpsa_first_year_membership_snapshots ENABLE TRIGGER ovpsa_first_year_membership_snapshots_immutable");
     await client.query("DELETE FROM ovpsa_first_year_service_reservations WHERE batch_id IN (SELECT id FROM first_year_test_batches)");
+    await client.query("DELETE FROM clinic_closure_groups WHERE reason='TEST First Year lifecycle closure'");
     await client.query("UPDATE ovpsa_first_year_batches SET current_revision_id=NULL WHERE id IN (SELECT id FROM first_year_test_batches)");
     await client.query("DELETE FROM ovpsa_first_year_batch_revisions WHERE batch_id IN (SELECT id FROM first_year_test_batches)");
     await client.query("DELETE FROM ovpsa_first_year_batches WHERE id IN (SELECT id FROM first_year_test_batches)");
@@ -318,5 +325,207 @@ describe("First Year schedule imports", () => {
       [sourceFilename, studentPattern],
     );
     expect(residue.rows[0]).toEqual({ imports: 1, batches: 1, appointments: 8 });
+  });
+
+  it("reschedules and cancels a published atomic First Year import with complete history", async () => {
+    const contents = [
+      header,
+      "95-8101-01,Alpha,Ana,Maria,,College of Computer Studies,BSIT,1,2006-01-01",
+    ].join("\n");
+    const published = await acceptAndScheduleImport(input(contents), admin);
+    const original = await pool.query<{
+      batch_id: string;
+      revision_id: string;
+      optimistic_token: string;
+      laboratory_reservation_id: string;
+    }>(
+      `SELECT batch.id::text AS batch_id,
+              batch.current_revision_id::text AS revision_id,
+              batch.optimistic_token::text,
+              reservation.id::text AS laboratory_reservation_id
+         FROM ovpsa_first_year_batches batch
+         JOIN ovpsa_first_year_service_reservations reservation
+           ON reservation.batch_id=batch.id
+          AND reservation.revision_id=batch.current_revision_id
+          AND reservation.schedule_type='LABORATORY'
+          AND reservation.status='ACTIVE'
+        WHERE batch.source_import_group_id=$1`,
+      [published.importId],
+    );
+    expect(original.rowCount).toBe(1);
+    const batchId = original.rows[0].batch_id;
+
+    const closure = await pool.query<{ id: string }>(
+      `INSERT INTO clinic_closure_groups (
+         start_date,end_date,category,reason,created_by,creation_batch_id,
+         recovery_mode,policy_effective_date
+       ) VALUES ('2095-09-22','2095-09-22','CLOSURE',$1,$2,gen_random_uuid(),
+                 'AUTO_ELIGIBLE','2095-09-01')
+       RETURNING id::text`,
+      ["TEST First Year lifecycle closure", TEST_REFERENCE_IDS.adminUser],
+    );
+    await pool.query(
+      `UPDATE ovpsa_first_year_service_reservations
+          SET status='INVALIDATED',invalidated_by_closure_group_id=$2,
+              invalidated_at=clock_timestamp()
+        WHERE id=$1`,
+      [original.rows[0].laboratory_reservation_id, closure.rows[0].id],
+    );
+    await pool.query(
+      `UPDATE appointments
+          SET status='AWAITING_RESCHEDULE'
+        WHERE ovpsa_batch_id=$1 AND schedule_type='LABORATORY'
+          AND status='PENDING' AND is_published=TRUE`,
+      [batchId],
+    );
+    await pool.query(
+      `UPDATE ovpsa_first_year_batches
+          SET status='RESCHEDULE_REQUIRED',optimistic_token=gen_random_uuid(),
+              updated_by=$2
+        WHERE id=$1`,
+      [batchId, TEST_REFERENCE_IDS.adminUser],
+    );
+
+    const invalidated = await getOvpsaFirstYearBatch(batchId);
+    expect(invalidated).toMatchObject({
+      batchId,
+      status: "RESCHEDULE_REQUIRED",
+      revisionNumber: 1,
+      revisionStatus: "PUBLISHED",
+      laboratoryDate: "2095-09-22",
+      physicalExamDate: "2095-09-29",
+    });
+
+    const replacement = await rescheduleOvpsaFirstYearBatch(
+      batchId,
+      {
+        optimisticToken: invalidated.optimisticToken,
+        laboratoryDate: "2095-10-06",
+        physicalExamDateOverride: null,
+        physicalExamExceptionReason: null,
+        reason: "Official Laboratory closure replacement",
+      },
+      TEST_REFERENCE_IDS.adminUser,
+    );
+    expect(replacement).toMatchObject({
+      batchId,
+      revisionNumber: 2,
+      status: "PUBLISHED",
+      memberCount: 1,
+    });
+
+    const afterReplacement = await pool.query<{
+      revision_statuses: string[];
+      appointment_states: string[];
+      active_memberships: number;
+      active_reservations: number;
+      reschedule_events: number;
+      reschedule_notifications: number;
+      reschedule_audits: number;
+    }>(
+      `SELECT
+         (SELECT ARRAY_AGG(revision.status ORDER BY revision.revision_number)
+            FROM ovpsa_first_year_batch_revisions revision
+           WHERE revision.batch_id=$1) AS revision_statuses,
+         (SELECT ARRAY_AGG(
+                   appointment.schedule_type || ':' || appointment.status || ':' ||
+                   appointment.is_published::text || ':' || appointment.appointment_date::text
+                   ORDER BY appointment.created_at,appointment.schedule_type
+                 )
+            FROM appointments appointment WHERE appointment.ovpsa_batch_id=$1) AS appointment_states,
+         (SELECT COUNT(*)::int FROM ovpsa_first_year_active_memberships membership
+           WHERE membership.batch_id=$1 AND membership.released_at IS NULL) AS active_memberships,
+         (SELECT COUNT(*)::int FROM ovpsa_first_year_service_reservations reservation
+           WHERE reservation.batch_id=$1 AND reservation.status='ACTIVE') AS active_reservations,
+         (SELECT COUNT(*)::int FROM appointment_reschedule_events event
+           WHERE event.ovpsa_batch_id=$1 AND event.cause='OVPSA_RESCHEDULE') AS reschedule_events,
+         (SELECT COUNT(*)::int FROM student_portal_notifications notification
+           WHERE notification.student_number='95-8101-01'
+             AND notification.notification_type='SCHEDULE_ADMINISTRATOR_RESCHEDULED') AS reschedule_notifications,
+         (SELECT COUNT(*)::int FROM audit_logs audit
+           WHERE audit.entity_id=$1::text
+             AND audit.action='OVPSA_FIRST_YEAR_BATCH_RESCHEDULED') AS reschedule_audits`,
+      [batchId],
+    );
+    expect(afterReplacement.rows[0]).toEqual({
+      revision_statuses: ["SUPERSEDED", "PUBLISHED"],
+      appointment_states: [
+        "LABORATORY:RESCHEDULED:false:2095-09-22",
+        "PHYSICAL_EXAM:RESCHEDULED:false:2095-09-29",
+        "LABORATORY:PENDING:true:2095-10-06",
+        "PHYSICAL_EXAM:PENDING:true:2095-10-13",
+      ],
+      active_memberships: 1,
+      active_reservations: 2,
+      reschedule_events: 1,
+      reschedule_notifications: 1,
+      reschedule_audits: 1,
+    });
+
+    const cancelled = await cancelOvpsaFirstYearBatch(
+      batchId,
+      {
+        optimisticToken: replacement.optimisticToken,
+        reason: "OVPSA cancelled the replacement batch",
+      },
+      TEST_REFERENCE_IDS.adminUser,
+    );
+    expect(cancelled).toMatchObject({
+      batchId,
+      status: "CANCELLED",
+      cancelledAppointmentCount: 2,
+    });
+
+    const detail = await getOvpsaFirstYearBatch(batchId);
+    expect(detail).toMatchObject({
+      batchId,
+      status: "CANCELLED",
+      revisionNumber: 2,
+      revisionStatus: "CANCELLED",
+      cancellationReason: "OVPSA cancelled the replacement batch",
+    });
+    const listed = await listOvpsaFirstYearBatches();
+    expect(listed.items).toContainEqual(expect.objectContaining({
+      batchId,
+      status: "CANCELLED",
+      revisionNumber: 2,
+      revisionStatus: "CANCELLED",
+    }));
+
+    const finalState = await pool.query<{
+      appointment_states: string[];
+      active_memberships: number;
+      unreleased_reservations: number;
+      cancellation_notifications: number;
+      cancellation_audits: number;
+    }>(
+      `SELECT
+         (SELECT ARRAY_AGG(appointment.status ORDER BY appointment.created_at,appointment.schedule_type)
+            FROM appointments appointment WHERE appointment.ovpsa_batch_id=$1) AS appointment_states,
+         (SELECT COUNT(*)::int FROM ovpsa_first_year_active_memberships membership
+           WHERE membership.batch_id=$1 AND membership.released_at IS NULL) AS active_memberships,
+         (SELECT COUNT(*)::int FROM ovpsa_first_year_service_reservations reservation
+           WHERE reservation.batch_id=$1 AND reservation.status<>'RELEASED') AS unreleased_reservations,
+         (SELECT COUNT(*)::int FROM student_portal_notifications notification
+           WHERE notification.student_number='95-8101-01'
+             AND notification.notification_type='SCHEDULE_CANCELLED') AS cancellation_notifications,
+         (SELECT COUNT(*)::int FROM audit_logs audit
+           WHERE audit.entity_id=$1::text
+             AND audit.action='OVPSA_FIRST_YEAR_BATCH_CANCELLED') AS cancellation_audits`,
+      [batchId],
+    );
+    expect(finalState.rows[0]).toEqual({
+      appointment_states: [
+        "RESCHEDULED",
+        "RESCHEDULED",
+        "CANCELLED",
+        "CANCELLED",
+      ],
+      active_memberships: 0,
+      unreleased_reservations: 0,
+      cancellation_notifications: 1,
+      cancellation_audits: 1,
+    });
+
   });
 });

@@ -4,7 +4,7 @@ import { query } from "@/server/db/pool";
 
 export type College = { id: string; code: string; name: string; isActive: boolean };
 export type Program = { id: string; collegeId: string; collegeName: string; code: string; name: string; isActive: boolean };
-export type PriorityGroup = { id: string; name: string; rankOrder: number; isActive: boolean };
+type ReferenceType = "college" | "program";
 
 export async function listColleges() {
   const result = await query<College>("SELECT id, code, name, is_active AS \"isActive\" FROM colleges ORDER BY name");
@@ -22,16 +22,8 @@ export async function listPrograms(collegeId?: string) {
   return result.rows;
 }
 
-export async function listPriorityGroups() {
-  const result = await query<PriorityGroup>(
-    `SELECT id, name, rank_order AS "rankOrder", is_active AS "isActive"
-     FROM priority_groups ORDER BY rank_order`,
-  );
-  return result.rows;
-}
-
 export async function createReference(
-  type: "college" | "program" | "priorityGroup",
+  type: ReferenceType,
   input: Record<string, unknown>,
 ) {
   if (type === "college") {
@@ -41,22 +33,15 @@ export async function createReference(
       [input.code, input.name],
     )).rows[0];
   }
-  if (type === "program") {
-    return (await query(
-      `INSERT INTO programs (college_id, code, name) VALUES ($1, $2, $3)
-       RETURNING id, college_id AS "collegeId", code, name, is_active AS "isActive"`,
-      [input.collegeId, input.code, input.name],
-    )).rows[0];
-  }
   return (await query(
-    `INSERT INTO priority_groups (name, rank_order) VALUES ($1, $2)
-     RETURNING id, name, rank_order AS "rankOrder", is_active AS "isActive"`,
-    [input.name, input.rankOrder],
+    `INSERT INTO programs (college_id, code, name) VALUES ($1, $2, $3)
+     RETURNING id, college_id AS "collegeId", code, name, is_active AS "isActive"`,
+    [input.collegeId, input.code, input.name],
   )).rows[0];
 }
 
 export async function updateReference(
-  type: "college" | "program" | "priorityGroup",
+  type: ReferenceType,
   input: Record<string, unknown>,
 ) {
   if (type === "college") {
@@ -66,30 +51,19 @@ export async function updateReference(
       [input.id, input.code, input.name, input.isActive],
     )).rows[0];
   }
-  if (type === "program") {
-    return (await query(
-      `UPDATE programs SET college_id=$2, code=$3, name=$4, is_active=$5 WHERE id=$1
-       RETURNING id, college_id AS "collegeId", code, name, is_active AS "isActive"`,
-      [input.id, input.collegeId, input.code, input.name, input.isActive],
-    )).rows[0];
-  }
   return (await query(
-    `UPDATE priority_groups SET name=$2, rank_order=$3, is_active=$4 WHERE id=$1
-     RETURNING id, name, rank_order AS "rankOrder", is_active AS "isActive"`,
-    [input.id, input.name, input.rankOrder, input.isActive],
+    `UPDATE programs SET college_id=$2, code=$3, name=$4, is_active=$5 WHERE id=$1
+     RETURNING id, college_id AS "collegeId", code, name, is_active AS "isActive"`,
+    [input.id, input.collegeId, input.code, input.name, input.isActive],
   )).rows[0];
 }
 
 export async function deleteReference(
-  type: "college" | "program" | "priorityGroup",
+  type: ReferenceType,
   id: string,
   client?: PoolClient,
 ) {
-  const table = type === "college"
-    ? "colleges"
-    : type === "program"
-      ? "programs"
-      : "priority_groups";
+  const table = type === "college" ? "colleges" : "programs";
   const sql = `DELETE FROM ${table} WHERE id=$1 RETURNING id`;
   const result = client
     ? await client.query<{ id: string }>(sql, [id])
