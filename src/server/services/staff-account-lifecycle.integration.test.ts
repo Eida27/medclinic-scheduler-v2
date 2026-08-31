@@ -27,6 +27,13 @@ import { TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 
 const fixtureDomain = "@staff-lifecycle.test";
 const adminId = TEST_REFERENCE_IDS.adminUser;
+const authenticationIpAddresses = {
+  temporaryPassword: "198.51.100.201",
+  changedPassword: "198.51.100.202",
+  recoveredPassword: "198.51.100.203",
+  administratorActions: "198.51.100.204",
+  deletedAccount: "198.51.100.205",
+} as const;
 
 async function fixtureUserIds() {
   const result = await pool.query<{ id: string }>(
@@ -37,6 +44,12 @@ async function fixtureUserIds() {
 }
 
 async function cleanup() {
+  await pool.query(
+    `DELETE FROM staff_login_failures
+      WHERE (scope='EMAIL' AND bucket_key LIKE $1)
+         OR (scope='IP' AND bucket_key=ANY($2::varchar[]))`,
+    [`%${fixtureDomain}`, Object.values(authenticationIpAddresses)],
+  );
   const ids = await fixtureUserIds();
   if (!ids.length) return;
   await pool.query(
@@ -161,7 +174,11 @@ describe("staff account security lifecycle", () => {
 
   it("requires verified email and current temporary password, then revokes the old session", async () => {
     const created = await newCoordinator("Replace");
-    const restrictedSession = await authenticate(created.email, "Temporary123!");
+    const restrictedSession = await authenticate(
+      created.email,
+      "Temporary123!",
+      authenticationIpAddresses.temporaryPassword,
+    );
     await expect(replaceStaffTemporaryPassword(created.id, {
       currentPassword: "Temporary123!",
       newPassword: "Operational123!",
@@ -175,7 +192,13 @@ describe("staff account security lifecycle", () => {
     });
     expect(replaced).toMatchObject({ status: "ACTIVE", credentialVersion: 2 });
     await expect(authorizeAuthenticatedStaff(restrictedSession)).rejects.toMatchObject({ code: "SESSION_EXPIRED" });
-    await expect(authenticate(created.email, "Operational123!")).resolves.toMatchObject({ status: "ACTIVE" });
+    await expect(
+      authenticate(
+        created.email,
+        "Operational123!",
+        authenticationIpAddresses.temporaryPassword,
+      ),
+    ).resolves.toMatchObject({ status: "ACTIVE" });
   });
 
   it("changes an operational password while returning a fresh credential version", async () => {
@@ -186,7 +209,13 @@ describe("staff account security lifecycle", () => {
       confirmPassword: "ChangedPassword123!",
     });
     expect(changed.credentialVersion).toBe(replaced.credentialVersion + 1);
-    await expect(authenticate(user.email, "ChangedPassword123!")).resolves.toMatchObject({ status: "ACTIVE" });
+    await expect(
+      authenticate(
+        user.email,
+        "ChangedPassword123!",
+        authenticationIpAddresses.changedPassword,
+      ),
+    ).resolves.toMatchObject({ status: "ACTIVE" });
     await expect(getStaffAccountSummary(user.id)).resolves.toMatchObject({
       email: user.email,
       role: "COORDINATOR",
@@ -211,17 +240,31 @@ describe("staff account security lifecycle", () => {
       newPassword: "AnotherPassword123!",
       confirmPassword: "AnotherPassword123!",
     })).rejects.toMatchObject({ code: "STAFF_PASSWORD_RESET_INVALID", status: 422 });
-    await expect(authenticate(user.email, "RecoveredPassword123!")).resolves.toMatchObject({ status: "ACTIVE" });
+    await expect(
+      authenticate(
+        user.email,
+        "RecoveredPassword123!",
+        authenticationIpAddresses.recoveredPassword,
+      ),
+    ).resolves.toMatchObject({ status: "ACTIVE" });
   });
 
   it("corrects email with re-verification and Admin-resets a temporary password while revoking sessions", async () => {
     const { user } = await onboard("AdminActions");
-    const oldSession = await authenticate(user.email, "Operational123!");
+    const oldSession = await authenticate(
+      user.email,
+      "Operational123!",
+      authenticationIpAddresses.administratorActions,
+    );
     const changed = await changeStaffEmail(adminId, user.id, `${"corrected"}${fixtureDomain}`);
     expect(changed).toMatchObject({ status: "PENDING_VERIFICATION", credentialVersion: 3 });
     await expect(authorizeAuthenticatedStaff(oldSession)).rejects.toMatchObject({ code: "SESSION_EXPIRED" });
     await confirmStaffEmail(await securityToken(user.id, "STAFF_EMAIL_VERIFICATION"));
-    const verifiedSession = await authenticate(`corrected${fixtureDomain}`, "Operational123!");
+    const verifiedSession = await authenticate(
+      `corrected${fixtureDomain}`,
+      "Operational123!",
+      authenticationIpAddresses.administratorActions,
+    );
     const reset = await resetStaffTemporaryPassword(adminId, user.id, {
       temporaryPassword: "FallbackPassword123!",
       confirmTemporaryPassword: "FallbackPassword123!",
@@ -259,14 +302,24 @@ describe("staff account security lifecycle", () => {
 
   it("permanently tombstones a user, releases email, and preserves historical identity", async () => {
     const { user } = await onboard("Delete");
-    const oldSession = await authenticate(user.email, "Operational123!");
+    const oldSession = await authenticate(
+      user.email,
+      "Operational123!",
+      authenticationIpAddresses.deletedAccount,
+    );
     await requestStaffPasswordReset(user.email);
     await pool.query(
       "INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id) VALUES ($1,'TEST_HISTORICAL_ACTOR','test_history','fixture')",
       [user.id],
     );
     await deleteStaffUser(adminId, user.id);
-    await expect(authenticate(user.email, "Operational123!")).rejects.toMatchObject({ code: "INVALID_CREDENTIALS" });
+    await expect(
+      authenticate(
+        user.email,
+        "Operational123!",
+        authenticationIpAddresses.deletedAccount,
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_CREDENTIALS" });
     await expect(authorizeAuthenticatedStaff(oldSession)).rejects.toMatchObject({ code: "SESSION_EXPIRED" });
     expect((await listStaffUsers()).some((item) => item.id === user.id)).toBe(false);
     const tombstone = await pool.query(

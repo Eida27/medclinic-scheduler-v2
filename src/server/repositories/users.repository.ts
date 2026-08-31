@@ -52,15 +52,18 @@ function mapUser(row: UserRow): UserRecord {
   };
 }
 
-export async function findUserByEmail(email: string): Promise<UserRecord | null> {
-  const result = await query<UserRow>(
-    `SELECT u.id,u.full_name,u.email,u.password_hash,u.role,u.clinic_id,
-            c.code AS clinic_code,c.name AS clinic_name,u.email_verified_at,
-            u.must_change_password,u.credential_version
-       FROM users u LEFT JOIN clinics c ON c.id=u.clinic_id
-      WHERE u.email=LOWER(BTRIM($1)) AND u.deleted_at IS NULL`,
-    [email],
-  );
+export async function findUserByEmail(
+  email: string,
+  client?: PoolClient,
+): Promise<UserRecord | null> {
+  const sql = `SELECT u.id,u.full_name,u.email,u.password_hash,u.role,u.clinic_id,
+                      c.code AS clinic_code,c.name AS clinic_name,u.email_verified_at,
+                      u.must_change_password,u.credential_version
+                 FROM users u LEFT JOIN clinics c ON c.id=u.clinic_id
+                WHERE u.email=LOWER(BTRIM($1)) AND u.deleted_at IS NULL`;
+  const result = client
+    ? await client.query<UserRow>(sql, [email])
+    : await query<UserRow>(sql, [email]);
   return result.rows[0] ? mapUser(result.rows[0]) : null;
 }
 

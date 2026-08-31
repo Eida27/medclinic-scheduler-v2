@@ -1,8 +1,27 @@
 import "server-only";
 import bcrypt from "bcryptjs";
 import { AppError } from "@/lib/errors";
-import { findUserByEmail, findUserById } from "@/server/repositories/users.repository";
+import { transaction } from "@/server/db/pool";
+import {
+  clearStaffEmailFailures,
+  getStaffLoginThrottle,
+  lockStaffLoginBuckets,
+  pruneExpiredStaffLoginFailures,
+  recordStaffLoginFailure,
+} from "@/server/repositories/staff-login-throttle.repository";
+import {
+  findUserByEmail,
+  findUserById,
+  type UserRecord,
+} from "@/server/repositories/users.repository";
 import type { SessionUser, UserRole } from "@/types/roles";
+
+const DUMMY_PASSWORD_HASH = "$2b$12$4a9hawc1BbRSN/DBTfpEGe0NNOV3car3dSWB8ULKlJx4k8QqG8JX.";
+
+type AuthenticationOutcome =
+  | { type: "success"; user: UserRecord }
+  | { type: "invalid" }
+  | { type: "throttled"; retryAfterSeconds: number };
 
 export type AuthenticatedStaff = SessionUser & {
   emailVerifiedAt: string | null;
@@ -29,13 +48,56 @@ function sessionUser(user: Awaited<ReturnType<typeof findUserById>>): Authentica
   };
 }
 
-export async function authenticate(email: string, password: string): Promise<AuthenticatedStaff> {
-  const user = await findUserByEmail(email.trim().toLowerCase());
-  const valid = user ? await bcrypt.compare(password, user.passwordHash) : false;
-  if (!user || !valid) {
+export async function authenticate(
+  email: string,
+  password: string,
+  ipAddress: string,
+): Promise<AuthenticatedStaff> {
+  const normalizedEmail = email.trim().toLowerCase();
+  const normalizedIpAddress = ipAddress.trim();
+  if (!normalizedIpAddress) {
+    throw new AppError("VALIDATION_ERROR", "IP address is required.", 422);
+  }
+
+  const outcome = await transaction<AuthenticationOutcome>(async (client) => {
+    await lockStaffLoginBuckets(client, normalizedEmail, normalizedIpAddress);
+    await pruneExpiredStaffLoginFailures(client);
+
+    let throttle = await getStaffLoginThrottle(client, normalizedEmail, normalizedIpAddress);
+    if (throttle.throttled) {
+      return { type: "throttled", retryAfterSeconds: throttle.retryAfterSeconds };
+    }
+
+    const user = await findUserByEmail(normalizedEmail, client);
+    const valid = await bcrypt.compare(
+      password,
+      user?.passwordHash ?? DUMMY_PASSWORD_HASH,
+    );
+    if (!user || !valid) {
+      await recordStaffLoginFailure(client, normalizedEmail, normalizedIpAddress);
+      throttle = await getStaffLoginThrottle(client, normalizedEmail, normalizedIpAddress);
+      return throttle.throttled
+        ? { type: "throttled", retryAfterSeconds: throttle.retryAfterSeconds }
+        : { type: "invalid" };
+    }
+
+    await clearStaffEmailFailures(client, normalizedEmail);
+    return { type: "success", user };
+  });
+
+  if (outcome.type === "throttled") {
+    throw new AppError(
+      "STAFF_LOGIN_THROTTLED",
+      "Too many sign-in attempts. Try again later.",
+      429,
+      undefined,
+      { retryAfterSeconds: outcome.retryAfterSeconds },
+    );
+  }
+  if (outcome.type === "invalid") {
     throw new AppError("INVALID_CREDENTIALS", "Invalid email or password.", 401);
   }
-  return sessionUser(user);
+  return sessionUser(outcome.user);
 }
 
 export async function authorizeAuthenticatedStaff(
