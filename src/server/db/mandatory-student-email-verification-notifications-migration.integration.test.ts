@@ -10,6 +10,10 @@ const migrationPath = join(
   process.cwd(),
   "database/migrations/023_mandatory_student_email_verification_notifications.sql",
 );
+const latestStaffSecurityMigrationPath = join(
+  process.cwd(),
+  "database/migrations/024_staff_account_security_onboarding_deletion.sql",
+);
 const studentPattern = "99-23%";
 
 async function cleanup() {
@@ -26,7 +30,11 @@ beforeAll(async () => {
 afterEach(cleanup);
 afterAll(async () => {
   await cleanup();
-  await pool.end();
+  try {
+    await pool.query(await readFile(latestStaffSecurityMigrationPath, "utf8"));
+  } finally {
+    await pool.end();
+  }
 });
 
 describe("mandatory student email verification notifications migration", () => {

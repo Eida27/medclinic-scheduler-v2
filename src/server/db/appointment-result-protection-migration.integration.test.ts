@@ -8,6 +8,10 @@ import { pool } from "./pool";
 import { insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 
 const studentNumber = "MIG-015-LOCK";
+const latestSchedulingMigrationPath = join(
+  process.cwd(),
+  "database/migrations/025_scheduling_integrity_hardening.sql",
+);
 
 async function cleanup() {
   await pool.query(
@@ -29,7 +33,11 @@ async function cleanup() {
 afterEach(cleanup);
 afterAll(async () => {
   await cleanup();
-  await pool.end();
+  try {
+    await pool.query(await readFile(latestSchedulingMigrationPath, "utf8"));
+  } finally {
+    await pool.end();
+  }
 });
 
 describe("appointment result protection migration", () => {

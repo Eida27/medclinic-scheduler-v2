@@ -10,9 +10,17 @@ const migrationPath = join(
   process.cwd(),
   "database/migrations/021_clinic_closure_recovery_policy.sql",
 );
+const latestSchedulingMigrationPath = join(
+  process.cwd(),
+  "database/migrations/025_scheduling_integrity_hardening.sql",
+);
 
 afterAll(async () => {
-  await pool.end();
+  try {
+    await pool.query(await readFile(latestSchedulingMigrationPath, "utf8"));
+  } finally {
+    await pool.end();
+  }
 });
 
 describe("clinic closure recovery policy migration", () => {
