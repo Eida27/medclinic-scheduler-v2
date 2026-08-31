@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import bcrypt from "bcryptjs";
 import { pool } from "@/server/db/pool";
 import { authenticate, authorizeAuthenticatedStaff, authorizeSession } from "./auth.service";
@@ -8,6 +8,7 @@ const fixtureEmail = "restricted-auth@staff-security.test";
 const unknownEmail = "unknown-auth@staff-security.test";
 const normalizedEmail = "normalized-auth@staff-security.test";
 const expiryEmail = "expiry-auth@staff-security.test";
+const oversizedEmail = `${"a".repeat(308)}@example.test`;
 const globalIpEmails = Array.from(
   { length: 26 },
   (_, index) => `global-ip-${index + 1}@staff-security.test`,
@@ -28,6 +29,7 @@ const ipAddresses = {
   successClearsEmail: "192.0.2.112",
   expiry: "192.0.2.113",
   concurrency: "192.0.2.114",
+  oversizedEmail: "192.0.2.115",
 } as const;
 
 const throttleBucketKeys = [
@@ -37,6 +39,7 @@ const throttleBucketKeys = [
   unknownEmail,
   normalizedEmail,
   expiryEmail,
+  oversizedEmail,
   ...globalIpEmails,
   ...Object.values(ipAddresses),
 ];
@@ -368,5 +371,33 @@ describe("authenticate", () => {
       code: "VALIDATION_ERROR",
       status: 422,
     });
+  });
+
+  it("rejects an email longer than 254 characters before bcrypt or failure persistence", async () => {
+    expect(oversizedEmail).toHaveLength(321);
+    const compare = vi.spyOn(bcrypt, "compare");
+
+    try {
+      const error = await authenticationError(
+        oversizedEmail,
+        "wrong-password",
+        ipAddresses.oversizedEmail,
+      );
+
+      const failures = await pool.query<{ count: number }>(
+        `SELECT COUNT(*)::integer AS count
+           FROM staff_login_failures
+          WHERE bucket_key=ANY($1::varchar[])`,
+        [[oversizedEmail, ipAddresses.oversizedEmail]],
+      );
+      expect(compare).not.toHaveBeenCalled();
+      expect(failures.rows[0].count).toBe(0);
+      expect(error).toMatchObject({
+        code: "VALIDATION_ERROR",
+        status: 422,
+      });
+    } finally {
+      compare.mockRestore();
+    }
   });
 });

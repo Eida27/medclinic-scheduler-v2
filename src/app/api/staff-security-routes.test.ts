@@ -63,6 +63,8 @@ const session = {
   clinicName: null,
 };
 
+const oversizedEmail = `${"a".repeat(308)}@example.test`;
+
 beforeEach(() => {
   vi.clearAllMocks();
   requireUser.mockResolvedValue(session);
@@ -115,6 +117,29 @@ describe("staff security API contracts", () => {
         details: { retryAfterSeconds: 417 },
       },
     });
+    expect(setCookie).not.toHaveBeenCalled();
+  });
+
+  it("rejects a staff email longer than 254 characters before authentication", async () => {
+    expect(oversizedEmail).toHaveLength(321);
+    authenticate.mockResolvedValue({
+      ...session,
+      emailVerifiedAt: "2026-08-31T00:00:00.000Z",
+      mustChangePassword: false,
+      status: "ACTIVE",
+      onboardingRequired: false,
+    });
+
+    const response = await staffLogin(new Request("http://localhost/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ email: oversizedEmail, password: "Admin123!" }),
+    }));
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "VALIDATION_ERROR" },
+    });
+    expect(authenticate).not.toHaveBeenCalled();
     expect(setCookie).not.toHaveBeenCalled();
   });
 

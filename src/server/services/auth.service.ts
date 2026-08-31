@@ -54,6 +54,9 @@ export async function authenticate(
   ipAddress: string,
 ): Promise<AuthenticatedStaff> {
   const normalizedEmail = email.trim().toLowerCase();
+  if (normalizedEmail.length > 254) {
+    throw new AppError("VALIDATION_ERROR", "Email must be 254 characters or fewer.", 422);
+  }
   const normalizedIpAddress = ipAddress.trim();
   if (!normalizedIpAddress) {
     throw new AppError("VALIDATION_ERROR", "IP address is required.", 422);

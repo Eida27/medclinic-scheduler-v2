@@ -11,7 +11,7 @@ import {
 } from "@/server/auth/session";
 
 const loginSchema = z.object({
-  email: z.string().email(),
+  email: z.string().email().max(254),
   password: z.string().min(1),
 });
 

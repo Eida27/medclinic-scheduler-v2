@@ -18,6 +18,8 @@ const ipAddress = "198.51.100.20";
 const independentIpAddress = "198.51.100.21";
 const retentionEmail = "staff-throttle-retention@security.test";
 const retentionIpAddress = "198.51.100.22";
+const staggeredEmail = "staff-throttle-staggered@security.test";
+const staggeredIpAddress = "198.51.100.23";
 const bucketKeys = [
   normalizedEmail,
   "other-staff-throttle@security.test",
@@ -25,6 +27,8 @@ const bucketKeys = [
   independentIpAddress,
   retentionEmail,
   retentionIpAddress,
+  staggeredEmail,
+  staggeredIpAddress,
   ...Array.from({ length: 25 }, (_, index) => `staff-throttle-ip-${index}@security.test`),
 ];
 
@@ -136,6 +140,41 @@ describe("staff-login throttle repository", () => {
       ipFailureCount: 25,
       throttled: true,
     });
+  });
+
+  it("uses the later threshold-drop time when both buckets are exceeded", async () => {
+    await pool.query(
+      `INSERT INTO staff_login_failures (scope,bucket_key,occurred_at)
+       SELECT 'EMAIL',$1,clock_timestamp()-INTERVAL '10 minutes'
+         FROM generate_series(1,5)
+       UNION ALL
+       SELECT 'IP',$2,clock_timestamp()-INTERVAL '2 minutes'
+         FROM generate_series(1,25)`,
+      [staggeredEmail, staggeredIpAddress],
+    );
+
+    const emailOnly = await getStaffLoginThrottle(
+      pool,
+      staggeredEmail,
+      independentIpAddress,
+    );
+    const ipOnly = await getStaffLoginThrottle(
+      pool,
+      "other-staff-throttle@security.test",
+      staggeredIpAddress,
+    );
+    const both = await getStaffLoginThrottle(pool, staggeredEmail, staggeredIpAddress);
+
+    expect(emailOnly.retryAfterSeconds).toBeGreaterThan(0);
+    expect(ipOnly.retryAfterSeconds).toBeGreaterThan(emailOnly.retryAfterSeconds + 400);
+    expect(both).toMatchObject({
+      emailFailureCount: 5,
+      ipFailureCount: 25,
+      throttled: true,
+    });
+    expect(both.retryAfterSeconds).toBeGreaterThan(emailOnly.retryAfterSeconds);
+    expect(both.retryAfterSeconds).toBeGreaterThanOrEqual(ipOnly.retryAfterSeconds - 1);
+    expect(both.retryAfterSeconds).toBeLessThanOrEqual(ipOnly.retryAfterSeconds);
   });
 
   it("ignores failures older than fifteen minutes", async () => {
