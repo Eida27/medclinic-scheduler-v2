@@ -1,5 +1,3 @@
-BEGIN;
-
 ALTER TABLE clinic_closure_manual_cases
   ADD COLUMN IF NOT EXISTS case_source VARCHAR(40);
 
@@ -53,7 +51,6 @@ ALTER TABLE clinic_closure_manual_cases
       'ASSIGN_REPLACEMENT','KEEP_CURRENT_REPLACEMENT','RESTORE_ORIGINAL'
     )
   );
-
 ALTER TABLE appointment_reschedule_events
   DROP CONSTRAINT IF EXISTS appointment_reschedule_events_policy_reason_check;
 ALTER TABLE appointment_reschedule_events
@@ -74,5 +71,3 @@ ALTER TABLE appointment_reschedule_events
       'UNSAFE_RESTORATION'
     )
   );
-
-COMMIT;

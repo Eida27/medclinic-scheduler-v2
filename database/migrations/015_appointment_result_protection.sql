@@ -1,5 +1,3 @@
-BEGIN;
-
 ALTER TABLE clinic_closure_manual_cases
   DROP CONSTRAINT clinic_closure_manual_cases_reason_code_check,
   ADD CONSTRAINT clinic_closure_manual_cases_reason_code_check CHECK (reason_code IN (
@@ -12,5 +10,3 @@ ALTER TABLE clinic_closure_manual_cases
     'CONCURRENT_APPOINTMENT_CHANGE',
     'UNSAFE_RESTORATION'
   ));
-
-COMMIT;

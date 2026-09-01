@@ -1,5 +1,3 @@
-BEGIN;
-
 CREATE INDEX IF NOT EXISTS appointments_current_service_lookup_idx
   ON appointments (
     student_number,
@@ -19,5 +17,3 @@ CREATE INDEX IF NOT EXISTS student_result_submissions_admin_profile_idx
     id DESC
   )
   WHERE status IN ('FINALIZED', 'INVALIDATED');
-
-COMMIT;

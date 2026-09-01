@@ -1,5 +1,3 @@
-BEGIN;
-
 ALTER TABLE clinic_closure_groups
   ADD COLUMN IF NOT EXISTS recovery_mode VARCHAR(30),
   ADD COLUMN IF NOT EXISTS policy_effective_date DATE;
@@ -44,7 +42,6 @@ BEGIN
   RETURN NEW;
 END;
 $$;
-
 ALTER TABLE clinic_closure_manual_cases
   ADD COLUMN IF NOT EXISTS policy_metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
 
@@ -149,5 +146,3 @@ BEGIN
   RETURN NEW;
 END;
 $$;
-
-COMMIT;
