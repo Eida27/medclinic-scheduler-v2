@@ -10,6 +10,7 @@
     "lint": "eslint",
     "test": "node --env-file=.env.local ./node_modules/vitest/vitest.mjs run",
     "test:watch": "node --env-file=.env.local ./node_modules/vitest/vitest.mjs",
+    "test:migrations:empty": "tsx --env-file=.env.local scripts/db-migration-empty-database-test.ts",
     "db:migrate": "tsx --env-file=.env.local scripts/db-migrate.ts",
     "db:seed": "tsx --env-file=.env.local scripts/db-seed.ts",
     "db:reset": "tsx --env-file=.env.local scripts/db-reset.ts",
