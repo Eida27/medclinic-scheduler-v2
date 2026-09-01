@@ -5,8 +5,9 @@ import { Client } from "pg";
 import { databaseUrl, projectPath, sqlFiles } from "./db-common";
 import { applyMigration } from "./db-migration-runner";
 
-const databaseName = `medclinic_migration_test_${process.pid}_${randomUUID().replaceAll("-", "")}`;
+const databaseName = `medclinic_migration_test_${process.pid}_${randomUUID().replaceAll("-", "").slice(0, 24)}`;
 assert.match(databaseName, /^[a-z0-9_]+$/);
+assert.ok(databaseName.length <= 63);
 
 function adminDatabaseUrl() {
   const explicit = process.env.MIGRATION_TEST_ADMIN_DATABASE_URL?.trim();
@@ -203,15 +204,18 @@ try {
       const admin = new Client({ connectionString: adminUrl });
       await admin.connect();
       try {
-        await admin.query(
-          `
-            SELECT pg_terminate_backend(pid)
-            FROM pg_stat_activity
-            WHERE datname=$1 AND pid<>pg_backend_pid()
-          `,
-          [databaseName],
-        );
-        await admin.query(`DROP DATABASE IF EXISTS ${databaseName}`);
+        try {
+          await admin.query(
+            `
+              SELECT pg_terminate_backend(pid)
+              FROM pg_stat_activity
+              WHERE datname=$1 AND pid<>pg_backend_pid()
+            `,
+            [databaseName],
+          );
+        } finally {
+          await admin.query(`DROP DATABASE IF EXISTS ${databaseName}`);
+        }
         console.log(`Dropped disposable migration database ${databaseName}.`);
       } finally {
         await admin.end();
