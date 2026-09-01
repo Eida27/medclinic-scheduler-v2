@@ -10,26 +10,26 @@ const migrationPath = join(
   process.cwd(),
   "database/migrations/021_clinic_closure_recovery_policy.sql",
 );
-const latestSchedulingMigrationPath = join(
-  process.cwd(),
-  "database/migrations/025_scheduling_integrity_hardening.sql",
-);
+const migrationReplayLockKey = 15021023;
 
-afterAll(async () => {
-  try {
-    await pool.query(await readFile(latestSchedulingMigrationPath, "utf8"));
-  } finally {
-    await pool.end();
-  }
-});
+afterAll(() => pool.end());
 
 describe("clinic closure recovery policy migration", () => {
   it("adds policy context, warning metadata, and recovery reservation kinds", async () => {
     const migration = await readFile(migrationPath, "utf8");
-    await expect(pool.query(migration)).resolves.toBeDefined();
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock($1)", [
+        migrationReplayLockKey,
+      ]);
+      await expect(client.query(migration)).resolves.toBeDefined();
 
-    const columns = await pool.query<{ table_name: string; column_name: string }>(
-      `SELECT table_name,column_name
+      const columns = await client.query<{
+        table_name: string;
+        column_name: string;
+      }>(
+        `SELECT table_name,column_name
          FROM information_schema.columns
         WHERE table_schema=current_schema()
           AND (table_name,column_name) IN (
@@ -40,16 +40,22 @@ describe("clinic closure recovery policy migration", () => {
             ('ovpsa_first_year_service_reservations','reservation_kind')
           )
         ORDER BY table_name,column_name`,
-    );
+      );
 
-    expect(columns.rows).toHaveLength(5);
-    await expect(pool.query(
-      `SELECT 1
-         FROM clinic_closure_groups
-        WHERE recovery_mode<>'AUTO_ELIGIBLE'
-           OR policy_effective_date<>(created_at AT TIME ZONE 'Asia/Manila')::date
-        LIMIT 1`,
-    )).resolves.toMatchObject({ rowCount: 0 });
+      expect(columns.rows).toHaveLength(5);
+      await expect(
+        client.query(
+          `SELECT 1
+           FROM clinic_closure_groups
+          WHERE recovery_mode<>'AUTO_ELIGIBLE'
+             OR policy_effective_date<>(created_at AT TIME ZONE 'Asia/Manila')::date
+          LIMIT 1`,
+        ),
+      ).resolves.toMatchObject({ rowCount: 0 });
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
   });
 
   it("makes the persisted closure policy context immutable", async () => {
@@ -72,12 +78,14 @@ describe("clinic closure recovery policy migration", () => {
         [actorId, randomUUID()],
       );
 
-      await expect(client.query(
-        `UPDATE clinic_closure_groups
+      await expect(
+        client.query(
+          `UPDATE clinic_closure_groups
             SET recovery_mode='MANUAL_ALL'
           WHERE id=$1`,
-        [group.rows[0].id],
-      )).rejects.toMatchObject({ code: "23514" });
+          [group.rows[0].id],
+        ),
+      ).rejects.toMatchObject({ code: "23514" });
     } finally {
       await client.query("ROLLBACK");
       client.release();

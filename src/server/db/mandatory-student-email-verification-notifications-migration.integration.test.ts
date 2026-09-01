@@ -1,46 +1,47 @@
 // @vitest-environment node
-import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { pool } from "./pool";
-import { cleanupTestFixtures, insertTestStudent } from "@/test/integration-fixtures";
+import {
+  cleanupTestFixtures,
+  insertTestStudent,
+} from "@/test/integration-fixtures";
 
 const migrationPath = join(
   process.cwd(),
   "database/migrations/023_mandatory_student_email_verification_notifications.sql",
 );
-const latestStaffSecurityMigrationPath = join(
-  process.cwd(),
-  "database/migrations/024_staff_account_security_onboarding_deletion.sql",
-);
+const migrationReplayLockKey = 15021023;
 const studentPattern = "99-23%";
 
 async function cleanup() {
-  await cleanupTestFixtures(studentPattern, "TEST-MIGRATION-023%", "TEST-MIGRATION-023%");
+  await cleanupTestFixtures(
+    studentPattern,
+    "TEST-MIGRATION-023%",
+    "TEST-MIGRATION-023%",
+  );
 }
 
-beforeAll(async () => {
-  await cleanup();
-  if (!existsSync(migrationPath)) {
-    throw new Error(`Required migration 023 is missing or misnamed: ${migrationPath}`);
-  }
-  await pool.query(await readFile(migrationPath, "utf8"));
-});
 afterEach(cleanup);
 afterAll(async () => {
   await cleanup();
-  try {
-    await pool.query(await readFile(latestStaffSecurityMigrationPath, "utf8"));
-  } finally {
-    await pool.end();
-  }
+  await pool.end();
 });
 
 describe("mandatory student email verification notifications migration", () => {
   it("adds the outbox lifecycle and notification context contract", async () => {
-    const columns = await pool.query<{ column_name: string }>(
-      `SELECT column_name
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock($1)", [
+        migrationReplayLockKey,
+      ]);
+      await expect(
+        client.query(await readFile(migrationPath, "utf8")),
+      ).resolves.toBeDefined();
+      const columns = await client.query<{ column_name: string }>(
+        `SELECT column_name
          FROM information_schema.columns
         WHERE table_schema=current_schema() AND table_name='email_outbox'
           AND column_name IN (
@@ -49,47 +50,72 @@ describe("mandatory student email verification notifications migration", () => {
             'verification_body_encrypted','last_attempt_at','last_attempt_status'
           )
         ORDER BY column_name`,
-    );
-    expect(columns.rows.map((row) => row.column_name)).toEqual([
-      "last_attempt_at",
-      "last_attempt_status",
-      "message_kind",
-      "notification_type",
-      "portal_notification_id",
-      "schedule_fingerprint",
-      "source_id",
-      "source_type",
-      "verification_body_encrypted",
-    ]);
+      );
+      expect(columns.rows.map((row) => row.column_name)).toEqual([
+        "last_attempt_at",
+        "last_attempt_status",
+        "message_kind",
+        "notification_type",
+        "portal_notification_id",
+        "schedule_fingerprint",
+        "source_id",
+        "source_type",
+        "verification_body_encrypted",
+      ]);
 
-    const constraints = await pool.query<{ definition: string }>(
-      `SELECT pg_get_constraintdef(oid) AS definition
+      const constraints = await client.query<{ definition: string }>(
+        `SELECT pg_get_constraintdef(oid) AS definition
          FROM pg_constraint
         WHERE conrelid='email_outbox'::regclass AND contype='c'`,
-    );
-    expect(constraints.rows.some((row) => row.definition.includes("'OBSOLETE'"))).toBe(true);
+      );
+      expect(
+        constraints.rows.some((row) => row.definition.includes("'OBSOLETE'")),
+      ).toBe(true);
 
-    const indexes = await pool.query<{ indexname: string; indexdef: string }>(
-      `SELECT indexname,indexdef FROM pg_indexes
+      const indexes = await client.query<{
+        indexname: string;
+        indexdef: string;
+      }>(
+        `SELECT indexname,indexdef FROM pg_indexes
         WHERE schemaname=current_schema()
           AND indexname IN (
             'students_active_verified_email_unique_idx',
             'email_outbox_actionable_failure_idx'
           )
         ORDER BY indexname`,
-    );
-    expect(indexes.rows).toHaveLength(2);
-    expect(indexes.rows.find((row) => row.indexname === "students_active_verified_email_unique_idx")?.indexdef)
-      .toContain("lower(btrim((email)::text))");
-    expect(indexes.rows.find((row) => row.indexname === "students_active_verified_email_unique_idx")?.indexdef)
-      .toContain("((email_verified_at IS NOT NULL) AND (is_active = true))");
-    expect(indexes.rows.find((row) => row.indexname === "email_outbox_actionable_failure_idx")?.indexdef)
-      .toContain("PERMANENT_FAILURE");
+      );
+      expect(indexes.rows).toHaveLength(2);
+      expect(
+        indexes.rows.find(
+          (row) =>
+            row.indexname === "students_active_verified_email_unique_idx",
+        )?.indexdef,
+      ).toContain("lower(btrim((email)::text))");
+      expect(
+        indexes.rows.find(
+          (row) =>
+            row.indexname === "students_active_verified_email_unique_idx",
+        )?.indexdef,
+      ).toContain("((email_verified_at IS NOT NULL) AND (is_active = true))");
+      expect(
+        indexes.rows.find(
+          (row) => row.indexname === "email_outbox_actionable_failure_idx",
+        )?.indexdef,
+      ).toContain("PERMANENT_FAILURE");
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
   });
 
   it("lets only one concurrent active student claim a normalized verified email", async () => {
     for (const studentNumber of ["99-2301-01", "99-2302-02"]) {
-      await insertTestStudent({ studentNumber, firstName: "Concurrent", lastName: "Owner", yearLevel: 3 });
+      await insertTestStudent({
+        studentNumber,
+        firstName: "Concurrent",
+        lastName: "Owner",
+        yearLevel: 3,
+      });
     }
     const first = await pool.connect();
     const second = await pool.connect();
@@ -123,7 +149,12 @@ describe("mandatory student email verification notifications migration", () => {
 
   it("rejects reactivation when another active student owns the normalized verified email", async () => {
     for (const studentNumber of ["99-2303-03", "99-2304-04"]) {
-      await insertTestStudent({ studentNumber, firstName: "Reactivate", lastName: "Owner", yearLevel: 3 });
+      await insertTestStudent({
+        studentNumber,
+        firstName: "Reactivate",
+        lastName: "Owner",
+        yearLevel: 3,
+      });
     }
     await pool.query(
       `UPDATE students
@@ -135,9 +166,11 @@ describe("mandatory student email verification notifications migration", () => {
           SET email=' REACTIVATE@example.test ',email_verified_at=clock_timestamp()
         WHERE student_number='99-2304-04'`,
     );
-    await expect(pool.query(
-      "UPDATE students SET is_active=TRUE WHERE student_number='99-2303-03'",
-    )).rejects.toMatchObject({ code: "23505" });
+    await expect(
+      pool.query(
+        "UPDATE students SET is_active=TRUE WHERE student_number='99-2303-03'",
+      ),
+    ).rejects.toMatchObject({ code: "23505" });
   });
 
   it("keeps schedule bodies plaintext and verification bodies encrypted", async () => {
@@ -147,20 +180,24 @@ describe("mandatory student email verification notifications migration", () => {
       lastName: "Boundary",
       yearLevel: 3,
     });
-    await expect(pool.query(
-      `INSERT INTO email_outbox (
+    await expect(
+      pool.query(
+        `INSERT INTO email_outbox (
          student_number,to_email,subject,text_body,message_kind,verification_body_encrypted
        ) VALUES (
          '99-2305-05','body@example.test','Schedule','Plain schedule body','SCHEDULE','ciphertext'
        )`,
-    )).rejects.toMatchObject({ code: "23514" });
-    await expect(pool.query(
-      `INSERT INTO email_outbox (
+      ),
+    ).rejects.toMatchObject({ code: "23514" });
+    await expect(
+      pool.query(
+        `INSERT INTO email_outbox (
          student_number,to_email,subject,text_body,message_kind,verification_body_encrypted
        ) VALUES (
          '99-2305-05','body@example.test','Verify','Raw token URL','VERIFICATION','ciphertext'
        )`,
-    )).rejects.toMatchObject({ code: "23514" });
+      ),
+    ).rejects.toMatchObject({ code: "23514" });
 
     const general = await pool.query<{ message_kind: string }>(
       `INSERT INTO email_outbox (
