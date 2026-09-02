@@ -140,6 +140,9 @@ describe("first-year OVPSA priority scheduling migration", () => {
     const migration = await readFile(migrationPath, "utf8");
     expect(migration).toContain("ovpsa_first_year_revision_published_fields_immutable");
     expect(migration).toContain("ovpsa_first_year_membership_snapshots_immutable");
+    expect(migration).not.toContain("student_academic_snapshots_source_type_check");
+    expect(migration).not.toMatch(/ALTER TABLE student_academic_snapshots/);
+    expect(migration).toContain("appointment_reschedule_events_cause_check");
     expect(migration).toContain("OVPSA_PUBLICATION");
     const appointmentStatus = await pool.query<{ definition: string }>(
       `SELECT pg_get_constraintdef(oid) AS definition

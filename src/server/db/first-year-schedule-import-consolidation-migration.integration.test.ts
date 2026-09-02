@@ -71,11 +71,20 @@ describe("first-year schedule import consolidation migration", () => {
          ON CONFLICT (start_year) DO NOTHING`,
         [actorId],
       );
+      const importGroup = await client.query<{ id: string }>(
+        `INSERT INTO schedule_import_groups (
+           import_name,source_filename,total_rows,created_by,student_category,
+           academic_year_start,accepted_at,import_mode,first_year_laboratory_date
+         ) VALUES ('First Year migration fixture','fixture.csv',1,$1,'REGULAR',2096,
+                   clock_timestamp(),'FIRST_YEAR_OVPSA','2096-09-22')
+         RETURNING id::text`,
+        [actorId],
+      );
       const snapshot = await client.query<{ id: string }>(
         `INSERT INTO student_academic_snapshots (
            student_number,academic_year_start,student_name,college_id,college_name,
-           program_id,program_code,program_name,year_level,source_type
-         ) VALUES ($1,2096,$2,$3,$4,$5,$6,$7,1,'OVPSA_PUBLICATION')
+           program_id,program_code,program_name,year_level,source_import_group_id
+         ) VALUES ($1,2096,$2,$3,$4,$5,$6,$7,1,$8)
          RETURNING id::text`,
         [
           studentNumber,
@@ -85,16 +94,8 @@ describe("first-year schedule import consolidation migration", () => {
           programId,
           "MIG",
           `Migration Program ${actorId}`,
+          importGroup.rows[0].id,
         ],
-      );
-      const importGroup = await client.query<{ id: string }>(
-        `INSERT INTO schedule_import_groups (
-           import_name,source_filename,total_rows,created_by,student_category,
-           academic_year_start,accepted_at,import_mode,first_year_laboratory_date
-         ) VALUES ('First Year migration fixture','fixture.csv',1,$1,'REGULAR',2096,
-                   clock_timestamp(),'FIRST_YEAR_OVPSA','2096-09-22')
-         RETURNING id::text`,
-        [actorId],
       );
       const batch = await client.query<{ id: string }>(
         `INSERT INTO ovpsa_first_year_batches (

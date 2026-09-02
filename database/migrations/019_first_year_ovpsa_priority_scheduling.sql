@@ -257,15 +257,6 @@ CREATE INDEX IF NOT EXISTS appointment_reschedule_events_ovpsa_reservation_idx
 CREATE INDEX IF NOT EXISTS appointment_reschedule_events_ovpsa_target_revision_idx
   ON appointment_reschedule_events(ovpsa_target_revision_id);
 
-ALTER TABLE student_academic_snapshots
-  DROP CONSTRAINT IF EXISTS student_academic_snapshots_source_type_check;
-ALTER TABLE student_academic_snapshots
-  ADD CONSTRAINT student_academic_snapshots_source_type_check CHECK (
-    source_type IN (
-      'VERIFIED_HISTORICAL','RECOVERED_HISTORICAL','MIGRATED_INCOMPLETE','OVPSA_PUBLICATION'
-    )
-  );
-
 CREATE TABLE IF NOT EXISTS ovpsa_external_laboratory_verifications (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   appointment_id UUID NOT NULL UNIQUE REFERENCES appointments(id),
