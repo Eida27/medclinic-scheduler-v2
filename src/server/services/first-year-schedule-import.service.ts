@@ -537,12 +537,6 @@ export async function publishFirstYearScheduleImport(
           programName: row.resolvedProgramName,
           yearLevel: 1,
           sourceImportGroupId: importId,
-          sourceType: "OVPSA_PUBLICATION" as const,
-          sourceMetadata: {
-            importMode: "FIRST_YEAR_OVPSA",
-            sourceFilename: input.sourceFilename,
-            sourceRowNumber: row.rowNumber,
-          },
         })),
       });
       if (snapshotResult.outcome === "CONFLICT") {

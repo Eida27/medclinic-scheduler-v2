@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { pool } from "@/server/db/pool";
 import { TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
@@ -6,7 +7,7 @@ import { ensureStudentAcademicSnapshotsWithClient } from "./student-academic-sna
 
 const actorUserId = TEST_REFERENCE_IDS.adminUser;
 
-function candidate(overrides: Record<string, unknown> = {}) {
+function candidate(sourceImportGroupId: string, overrides: Record<string, unknown> = {}) {
   return {
     studentNumber: "91-0001-01",
     academicYearStart: 2091,
@@ -17,11 +18,21 @@ function candidate(overrides: Record<string, unknown> = {}) {
     programCode: "BSIT",
     programName: "Bachelor of Science in Information Technology",
     yearLevel: 3,
-    sourceImportGroupId: null,
-    sourceType: "VERIFIED_HISTORICAL" as const,
-    sourceMetadata: { source: "gateway-test" },
+    sourceImportGroupId,
     ...overrides,
   };
+}
+
+async function createImportGroup(client: Awaited<ReturnType<typeof pool.connect>>) {
+  const id = randomUUID();
+  await client.query(
+    `INSERT INTO schedule_import_groups (
+       id,import_name,source_filename,total_rows,created_by,student_category,
+       academic_year_start,accepted_at
+     ) VALUES ($1,$2,$3,1,$4,'REGULAR',2091,clock_timestamp())`,
+    [id, `Snapshot gateway ${id}`, `${id}.csv`, actorUserId],
+  );
+  return id;
 }
 
 afterAll(async () => {
@@ -29,21 +40,22 @@ afterAll(async () => {
 });
 
 describe("student academic snapshot gateway", () => {
-  it("inserts once, accepts identical data, and rejects a conflicting bulk set atomically", async () => {
+  it("creates an immutable snapshot, preserves first-import provenance, and reports historical conflicts", async () => {
     const client = await pool.connect();
     await client.query("BEGIN");
     try {
       await client.query(
-        `INSERT INTO academic_years (
-           start_year,closing_date,created_by,updated_by
-         ) VALUES (2091,'2092-07-31',$1,$1)
+        `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+         VALUES (2091,'2092-07-31',$1,$1)
          ON CONFLICT (start_year) DO NOTHING`,
         [actorUserId],
       );
+      const firstImportId = await createImportGroup(client);
+      const laterImportId = await createImportGroup(client);
 
       const inserted = await ensureStudentAcademicSnapshotsWithClient(client, {
         actorUserId,
-        candidates: [candidate()],
+        candidates: [candidate(firstImportId)],
       });
       expect(inserted).toEqual({
         outcome: "CREATED_OR_IDENTICAL",
@@ -53,10 +65,7 @@ describe("student academic snapshot gateway", () => {
 
       const identical = await ensureStudentAcademicSnapshotsWithClient(client, {
         actorUserId,
-        candidates: [candidate({
-          sourceImportGroupId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-          sourceMetadata: { source: "later-identical-import" },
-        })],
+        candidates: [candidate(laterImportId)],
       });
       expect(identical).toEqual({
         outcome: "CREATED_OR_IDENTICAL",
@@ -64,15 +73,34 @@ describe("student academic snapshot gateway", () => {
         identicalCount: 1,
       });
 
+      const stored = await client.query(
+        `SELECT student_number,college_name,source_import_group_id::text
+           FROM student_academic_snapshots
+          WHERE academic_year_start=2091`,
+      );
+      expect(stored.rows).toEqual([{
+        student_number: "91-0001-01",
+        college_name: "College of Computer Studies",
+        source_import_group_id: firstImportId,
+      }]);
+
+      await client.query("SAVEPOINT immutable_update");
+      await expect(client.query(
+        `UPDATE student_academic_snapshots
+            SET college_name='Changed College'
+          WHERE student_number='91-0001-01' AND academic_year_start=2091`,
+      )).rejects.toThrow(/immutable/i);
+      await client.query("ROLLBACK TO SAVEPOINT immutable_update");
+      await client.query("SAVEPOINT immutable_delete");
+      await expect(client.query(
+        `DELETE FROM student_academic_snapshots
+          WHERE student_number='91-0001-01' AND academic_year_start=2091`,
+      )).rejects.toThrow(/immutable/i);
+      await client.query("ROLLBACK TO SAVEPOINT immutable_delete");
+
       const conflict = await ensureStudentAcademicSnapshotsWithClient(client, {
         actorUserId,
-        candidates: [
-          candidate({ collegeName: "Changed College" }),
-          candidate({
-            studentNumber: "91-0002-02",
-            studentName: "Would Insert, Student",
-          }),
-        ],
+        candidates: [candidate(laterImportId, { collegeName: "Changed College" })],
       });
       expect(conflict).toMatchObject({
         outcome: "CONFLICT",
@@ -82,33 +110,20 @@ describe("student academic snapshot gateway", () => {
           fields: ["collegeName"],
         }],
       });
-
-      const stored = await client.query(
-        `SELECT student_number,college_name,source_metadata
-           FROM student_academic_snapshots
-          WHERE academic_year_start=2091 ORDER BY student_number`,
-      );
-      expect(stored.rows).toEqual([{
-        student_number: "91-0001-01",
-        college_name: "College of Computer Studies",
-        source_metadata: { source: "gateway-test" },
-      }]);
-      const audits = await client.query(
-        `SELECT action,metadata FROM audit_logs
-          WHERE action='SNAPSHOT_CONFLICT_DETECTED'
-            AND metadata->>'academicYearStart'='2091'`,
-      );
-      expect(audits.rows).toEqual([{
-        action: "SNAPSHOT_CONFLICT_DETECTED",
-        metadata: expect.objectContaining({
-          academicYearStart: 2091,
-          conflictCount: 1,
-        }),
-      }]);
     } finally {
       await client.query("ROLLBACK");
       client.release();
     }
   });
 
+  it("stores no legacy source columns", async () => {
+    const columns = await pool.query<{ column_name: string }>(
+      `SELECT column_name
+         FROM information_schema.columns
+        WHERE table_schema=current_schema()
+          AND table_name='student_academic_snapshots'
+          AND column_name IN ('source_type','source_metadata')`,
+    );
+    expect(columns.rows).toEqual([]);
+  });
 });

@@ -51,6 +51,9 @@ function input(contents: string, overrides: Record<string, unknown> = {}) {
 }
 
 async function cleanup() {
+  await pool.query("ALTER TABLE student_academic_snapshots DISABLE TRIGGER student_academic_snapshots_immutable");
+  await pool.query("DELETE FROM student_academic_snapshots WHERE student_number LIKE $1", [studentPattern]);
+  await pool.query("ALTER TABLE student_academic_snapshots ENABLE TRIGGER student_academic_snapshots_immutable");
   await cleanupTestFixtures(studentPattern, importPattern, importPattern);
   await pool.query(
     `DELETE FROM clinic_unavailable_dates
@@ -288,7 +291,7 @@ describe("student scheduling imports", () => {
     expect(publishedPair.rows[0].appointment_date < publishedPair.rows[1].appointment_date).toBe(true);
     const snapshots = await pool.query(
       `SELECT student_number,student_name,college_name,program_code,program_name,
-              year_level,source_type
+              year_level,source_import_group_id::text
          FROM student_academic_snapshots
         WHERE student_number=ANY($1::varchar[]) AND academic_year_start=2026
         ORDER BY student_number`,
@@ -302,7 +305,7 @@ describe("student scheduling imports", () => {
         program_code: "BSIT",
         program_name: "Bachelor of Science in Information Technology",
         year_level: 3,
-        source_type: "VERIFIED_HISTORICAL",
+        source_import_group_id: created.importId,
       },
       {
         student_number: newStudentNumber,
@@ -311,9 +314,25 @@ describe("student scheduling imports", () => {
         program_code: "BSIT",
         program_name: "Bachelor of Science in Information Technology",
         year_level: 3,
-        source_type: "VERIFIED_HISTORICAL",
+        source_import_group_id: created.importId,
       },
     ]);
+    await pool.query(
+      `UPDATE students SET college_id=$2,program_id=$3,year_level=4
+        WHERE student_number=$1`,
+      [newStudentNumber, TEST_REFERENCE_IDS.college, TEST_REFERENCE_IDS.program],
+    );
+    const historicalAfterProfileEdit = await pool.query(
+      `SELECT student_name,college_name,program_code,year_level
+         FROM student_academic_snapshots WHERE student_number=$1 AND academic_year_start=2026`,
+      [newStudentNumber],
+    );
+    expect(historicalAfterProfileEdit.rows).toEqual([{
+      student_name: "New, Bea Rosa",
+      college_name: "College of Computer Studies",
+      program_code: "BSIT",
+      year_level: 3,
+    }]);
   });
 
   it("commits a snapshot-conflict audit without changing the profile or appointments", async () => {
@@ -327,16 +346,24 @@ describe("student scheduling imports", () => {
       yearLevel: 2,
       dateOfBirth: "2003-05-06",
     });
+    const fixtureImport = await pool.query<{ id: string }>(
+      `INSERT INTO schedule_import_groups (
+         import_name,source_filename,total_rows,created_by,student_category,
+         academic_year_start,accepted_at
+       ) VALUES ('REGULAR 2026-2027 - TEST-AY snapshot conflict.csv',
+                 'TEST-AY-snapshot-conflict.csv',1,$1,'REGULAR',2026,clock_timestamp())
+       RETURNING id::text`,
+      [TEST_REFERENCE_IDS.adminUser],
+    );
     await pool.query(
       `INSERT INTO student_academic_snapshots (
          student_number,academic_year_start,student_name,college_id,college_name,
-         program_id,program_code,program_name,year_level,source_type,source_metadata
+         program_id,program_code,program_name,year_level,source_import_group_id
        ) VALUES (
          $1,2026,'Profile, Original Maria',$2,'College of Computer Studies',
-         $3,'BSIT','Bachelor of Science in Information Technology',2,
-         'VERIFIED_HISTORICAL','{"fixture":true}'::jsonb
+         $3,'BSIT','Bachelor of Science in Information Technology',2,$4
        ) ON CONFLICT (student_number,academic_year_start) DO NOTHING`,
-      [studentNumber, TEST_REFERENCE_IDS.college, TEST_REFERENCE_IDS.program],
+      [studentNumber, TEST_REFERENCE_IDS.college, TEST_REFERENCE_IDS.program, fixtureImport.rows[0].id],
     );
 
     const auditBefore = await pool.query<{ count: number }>(

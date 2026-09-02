@@ -413,30 +413,6 @@ export async function createScheduleImport(
       `${input.studentCategory} ${input.academicYearStart}-${input.academicYearStart + 1} - ${input.sourceFilename}`,
     ).slice(0, 150).join("");
     const importId = randomUUID();
-    const snapshotResult = await ensureStudentAcademicSnapshotsWithClient(client, {
-      actorUserId,
-      candidates: resolvedRows.map((row) => ({
-        studentNumber: row.studentNumber,
-        academicYearStart: input.academicYearStart,
-        studentName: importedStudentName(row),
-        collegeId: row.collegeId,
-        collegeName: row.resolvedCollegeName,
-        programId: row.programId,
-        programCode: row.resolvedProgramCode,
-        programName: row.resolvedProgramName,
-        yearLevel: row.yearLevel,
-        sourceImportGroupId: importId,
-        sourceType: "VERIFIED_HISTORICAL" as const,
-        sourceMetadata: {
-          sourceFilename: input.sourceFilename,
-          sourceRowNumber: row.rowNumber,
-          studentCategory: input.studentCategory,
-        },
-      })),
-    });
-    if (snapshotResult.outcome === "CONFLICT") {
-      return { snapshotConflict: snapshotResult.conflicts } as const;
-    }
     await client.query(
       `INSERT INTO schedule_import_groups (
          id, import_name, source_filename, total_rows, created_student_count,
@@ -457,6 +433,25 @@ export async function createScheduleImport(
         accepted.rows[0].acceptedAt,
       ],
     );
+    const snapshotResult = await ensureStudentAcademicSnapshotsWithClient(client, {
+      actorUserId,
+      candidates: resolvedRows.map((row) => ({
+        studentNumber: row.studentNumber,
+        academicYearStart: input.academicYearStart,
+        studentName: importedStudentName(row),
+        collegeId: row.collegeId,
+        collegeName: row.resolvedCollegeName,
+        programId: row.programId,
+        programCode: row.resolvedProgramCode,
+        programName: row.resolvedProgramName,
+        yearLevel: row.yearLevel,
+        sourceImportGroupId: importId,
+      })),
+    });
+    if (snapshotResult.outcome === "CONFLICT") {
+      await client.query("DELETE FROM schedule_import_groups WHERE id=$1", [importId]);
+      return { snapshotConflict: snapshotResult.conflicts } as const;
+    }
 
     await client.query(
       `INSERT INTO students (

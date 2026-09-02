@@ -119,10 +119,10 @@ async function cleanup() {
            OR metadata->>'studentNumber' LIKE $1`,
       [studentPattern],
     );
-    await client.query("DELETE FROM schedule_import_groups WHERE id IN (SELECT id FROM first_year_test_imports)");
     await client.query("ALTER TABLE student_academic_snapshots DISABLE TRIGGER student_academic_snapshots_immutable");
     await client.query("DELETE FROM student_academic_snapshots WHERE student_number LIKE $1", [studentPattern]);
     await client.query("ALTER TABLE student_academic_snapshots ENABLE TRIGGER student_academic_snapshots_immutable");
+    await client.query("DELETE FROM schedule_import_groups WHERE id IN (SELECT id FROM first_year_test_imports)");
     await client.query("DELETE FROM students WHERE student_number LIKE $1", [studentPattern]);
     await client.query("COMMIT");
   } catch (error) {
@@ -222,7 +222,10 @@ describe("First Year schedule imports", () => {
                 WHERE snapshot.batch_id=batch.id) AS ordered_members,
               (SELECT COUNT(DISTINCT snapshot.college_id)::int
                  FROM ovpsa_first_year_membership_snapshots snapshot
-                WHERE snapshot.batch_id=batch.id) AS membership_colleges
+                WHERE snapshot.batch_id=batch.id) AS membership_colleges,
+              (SELECT COUNT(*)::int FROM student_academic_snapshots snapshot
+                WHERE snapshot.academic_year_start=import_group.academic_year_start
+                  AND snapshot.source_import_group_id=import_group.id) AS canonical_snapshot_count
          FROM schedule_import_groups import_group
          JOIN ovpsa_first_year_batches batch ON batch.source_import_group_id=import_group.id
          JOIN ovpsa_first_year_batch_revisions revision ON revision.id=batch.current_revision_id
@@ -239,6 +242,7 @@ describe("First Year schedule imports", () => {
       pe_reservations: 2,
       ordered_members: ["95-8101-01", "95-8102-01", "95-8103-01", "95-8104-01"],
       membership_colleges: 2,
+      canonical_snapshot_count: 4,
     }]);
 
     const detail = await getScheduleImport(published.importId, admin);

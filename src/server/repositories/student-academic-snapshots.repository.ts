@@ -2,27 +2,18 @@ import "server-only";
 import type { PoolClient } from "pg";
 import { AppError } from "@/lib/errors";
 import { writeAudit } from "@/server/repositories/audit.repository";
-import { studentDisplayNameSql } from "@/server/students/student-display-name";
-
-export type StudentAcademicSnapshotSource =
-  | "VERIFIED_HISTORICAL"
-  | "RECOVERED_HISTORICAL"
-  | "MIGRATED_INCOMPLETE"
-  | "OVPSA_PUBLICATION";
 
 export type StudentAcademicSnapshotCandidate = {
   studentNumber: string;
   academicYearStart: number;
   studentName: string;
-  collegeId: string | null;
+  collegeId: string;
   collegeName: string;
-  programId: string | null;
-  programCode: string | null;
+  programId: string;
+  programCode: string;
   programName: string;
-  yearLevel: number | null;
-  sourceImportGroupId: string | null;
-  sourceType: StudentAcademicSnapshotSource;
-  sourceMetadata: Record<string, unknown>;
+  yearLevel: number;
+  sourceImportGroupId: string;
 };
 
 const academicFields = [
@@ -146,94 +137,8 @@ export async function ensureStudentAcademicSnapshotsWithClient(
         program_name: candidate.programName,
         year_level: candidate.yearLevel,
         source_import_group_id: candidate.sourceImportGroupId,
-        source_type: candidate.sourceType,
-        source_metadata: candidate.sourceMetadata,
       }))),
     ],
   );
   return gateway.rows[0].result;
-}
-
-type BatchSnapshotRow = {
-  student_number: string;
-  academic_year_start: number;
-  student_name: string;
-  college_id: string;
-  college_name: string;
-  program_id: string;
-  program_code: string;
-  program_name: string;
-  year_level: number | null;
-  source_import_group_id: string | null;
-  source_type: StudentAcademicSnapshotSource;
-  evidence_time: Date | null;
-};
-
-export async function ensureBatchStudentAcademicSnapshotsWithClient(
-  client: PoolClient,
-  input: { actorUserId: string; batchIds: string[] },
-) {
-  const rows = await client.query<BatchSnapshotRow>(
-    `SELECT DISTINCT appointment.student_number,
-            appointment.schedule_cycle_start AS academic_year_start,
-            ${studentDisplayNameSql("student")} AS student_name,
-            student.college_id,college.name AS college_name,
-            student.program_id,program.code AS program_code,program.name AS program_name,
-            student.year_level,
-            CASE WHEN import_group.academic_year_start=appointment.schedule_cycle_start
-              THEN import_group.id ELSE NULL END AS source_import_group_id,
-            CASE
-              WHEN import_group.academic_year_start=appointment.schedule_cycle_start
-               AND college.updated_at <= import_group.accepted_at
-               AND program.updated_at <= import_group.accepted_at
-               AND NOT EXISTS (
-                 SELECT 1
-                   FROM audit_logs audit
-                  WHERE audit.entity_type='student'
-                    AND audit.entity_id=appointment.student_number
-                    AND audit.created_at > import_group.accepted_at
-                    AND NOT (
-                      audit.action='STUDENT_PROFILE_UPDATED_BY_IMPORT'
-                      AND audit.metadata->>'importId'=import_group.id::text
-                    )
-               )
-                THEN 'RECOVERED_HISTORICAL'
-              ELSE 'MIGRATED_INCOMPLETE'
-            END AS source_type,
-            CASE WHEN import_group.academic_year_start=appointment.schedule_cycle_start
-              THEN import_group.accepted_at ELSE NULL END AS evidence_time
-       FROM appointments appointment
-       JOIN students student ON student.student_number=appointment.student_number
-       JOIN colleges college ON college.id=student.college_id
-       JOIN programs program ON program.id=student.program_id
-       JOIN schedule_batches batch ON batch.id=appointment.batch_id
-       LEFT JOIN schedule_import_groups import_group ON import_group.id=batch.import_group_id
-      WHERE appointment.batch_id=ANY($1::uuid[])
-        AND appointment.status='DRAFT'`,
-    [input.batchIds],
-  );
-  return ensureStudentAcademicSnapshotsWithClient(client, {
-    actorUserId: input.actorUserId,
-    candidates: rows.rows.map((row) => ({
-      studentNumber: row.student_number,
-      academicYearStart: row.academic_year_start,
-      studentName: row.student_name,
-      collegeId: row.college_id,
-      collegeName: row.college_name,
-      programId: row.program_id,
-      programCode: row.program_code,
-      programName: row.program_name,
-      yearLevel: row.year_level,
-      sourceImportGroupId: row.source_import_group_id,
-      sourceType: row.source_type,
-      sourceMetadata: {
-        provenance: row.source_type === "RECOVERED_HISTORICAL"
-          ? "ACCEPTED_IMPORT_GROUP_RECOVERY"
-          : "CURRENT_PROFILE_AT_LEGACY_PUBLICATION",
-        historicalEvidenceComplete: row.source_type === "RECOVERED_HISTORICAL",
-        evidenceTime: row.evidence_time?.toISOString() ?? null,
-        publicationBatchIds: input.batchIds,
-      },
-    })),
-  });
 }
