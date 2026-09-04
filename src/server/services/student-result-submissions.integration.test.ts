@@ -45,6 +45,7 @@ import { cleanupExpiredResultDrafts } from "@/server/workers/result-draft-cleanu
 const studentPattern = "99-94%";
 let storageRoot = "";
 let storage: LocalResultStorage;
+let ownsAcademicYear = false;
 
 const admin: SessionUser = {
   userId: TEST_REFERENCE_IDS.adminUser,
@@ -310,10 +311,21 @@ beforeAll(async () => {
   storageRoot = await mkdtemp(join(tmpdir(), "medclinic-result-drafts-"));
   storage = new LocalResultStorage(storageRoot);
   await cleanup();
+  const academicYear = await pool.query(
+    `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+     VALUES (2027,'2028-07-31',$1,$1)
+     ON CONFLICT (start_year) DO NOTHING
+     RETURNING start_year`,
+    [TEST_REFERENCE_IDS.adminUser],
+  );
+  ownsAcademicYear = academicYear.rowCount === 1;
 });
 afterEach(cleanup);
 afterAll(async () => {
   await cleanupTestFixtures(studentPattern, "TEST-RESULT-DRAFT%", "TEST-RESULT-DRAFT%");
+  if (ownsAcademicYear) {
+    await pool.query("DELETE FROM academic_years WHERE start_year=2027");
+  }
   await rm(storageRoot, { recursive: true, force: true });
   await pool.end();
 });

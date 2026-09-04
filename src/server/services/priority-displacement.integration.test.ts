@@ -19,6 +19,7 @@ import { publishDisplacedRegularReplacements } from "./priority-displacement.ser
 const studentPattern = "99-94%";
 const importPattern = "TEST-DISPLACE-UNIFIED%";
 let capacityFixture: CapacityFixtureLock | null = null;
+let ownsAcademicYear = false;
 
 async function cleanup() {
   await pool.query(
@@ -250,6 +251,14 @@ async function publish(studentNumber: string) {
 
 beforeAll(async () => {
   capacityFixture = await setupCapacityFixtureLock(pool, cleanup);
+  const academicYear = await pool.query(
+    `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+     VALUES (2027,'2028-07-31',$1,$1)
+     ON CONFLICT (start_year) DO NOTHING
+     RETURNING start_year`,
+    [TEST_REFERENCE_IDS.adminUser],
+  );
+  ownsAcademicYear = academicYear.rowCount === 1;
 });
 afterEach(async () => {
   if (!capacityFixture) return;
@@ -257,6 +266,10 @@ afterEach(async () => {
 });
 afterAll(async () => {
   if (!capacityFixture) return;
+  if (ownsAcademicYear) {
+    await cleanup();
+    await pool.query("DELETE FROM academic_years WHERE start_year=2027");
+  }
   await teardownCapacityFixtureLock(pool, capacityFixture, cleanup);
 });
 
