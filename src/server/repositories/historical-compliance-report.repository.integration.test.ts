@@ -177,13 +177,13 @@ beforeAll(async () => {
     studentNumber: "RPT-CORE-0001", name: "Stable, Historical Student",
     collegeId: colleges.alpha, collegeName: "Historic Alpha College",
     programId: programs.alpha, programCode: "ALPHA", programName: "Alpha Program",
-    yearLevel: 2, sourceType: "RECOVERED_HISTORICAL",
+    yearLevel: 2,
   });
   await insertSnapshot({
     studentNumber: "RPT-CORE-0002", name: "Inactive, Historical Student",
     collegeId: colleges.beta, collegeName: "Historic Beta College",
     programId: programs.beta, programCode: "BETA", programName: "Beta Program",
-    yearLevel: 3, sourceType: "MIGRATED_INCOMPLETE",
+    yearLevel: 3,
   });
   await insertSnapshot({
     studentNumber: "RPT-YEAR-0001", name: "Yearly, First Snapshot",
