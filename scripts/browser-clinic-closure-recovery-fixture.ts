@@ -15,6 +15,7 @@ const OVPSA_REVISION_ID = "cc210000-0000-4000-8000-000000000004";
 const OVPSA_SNAPSHOT_ID = "cc210000-0000-4000-8000-000000000005";
 const OVPSA_LAB_RESERVATION_ID = "cc210000-0000-4000-8000-000000000006";
 const OVPSA_PE_RESERVATION_ID = "cc210000-0000-4000-8000-000000000007";
+const OVPSA_IMPORT_GROUP_ID = "cc210000-0000-4000-8000-000000000008";
 const WARNING_FUNCTION = "browser_clinic_closure_recovery_fail_outbox";
 const WARNING_TRIGGER = "browser_clinic_closure_recovery_fail_outbox_trigger";
 const STUDENTS = [
@@ -74,6 +75,7 @@ async function residue(client: pg.Client) {
     events: number;
     notifications: number;
     outbox: number;
+    importGroups: number;
     triggers: number;
   }>(
     `SELECT
@@ -86,8 +88,9 @@ async function residue(client: pg.Client) {
        (SELECT COUNT(*)::int FROM appointment_reschedule_events WHERE student_number=ANY($1::varchar[])) AS events,
        (SELECT COUNT(*)::int FROM student_portal_notifications WHERE student_number=ANY($1::varchar[])) AS notifications,
        (SELECT COUNT(*)::int FROM email_outbox WHERE student_number=ANY($1::varchar[])) AS outbox,
+       (SELECT COUNT(*)::int FROM schedule_import_groups WHERE id=$6) AS "importGroups",
        (SELECT COUNT(*)::int FROM pg_trigger WHERE tgname=$5 AND NOT tgisinternal) AS triggers`,
-    [STUDENTS, COLLEGE_ID, OVPSA_BATCH_ID, `${MARKER}%`, WARNING_TRIGGER],
+    [STUDENTS, COLLEGE_ID, OVPSA_BATCH_ID, `${MARKER}%`, WARNING_TRIGGER, OVPSA_IMPORT_GROUP_ID],
   );
   return result.rows[0];
 }
@@ -201,12 +204,21 @@ async function setup(client: pg.Client, identity: string) {
     );
 
     await client.query(
+      `INSERT INTO schedule_import_groups (
+         id,import_name,source_filename,total_rows,matched_student_count,description,
+         created_by,student_category,academic_year_start,preferred_month,accepted_at,
+         import_mode,first_year_laboratory_date
+       ) VALUES ($1,$2,$2,1,0,$2,$3,'REGULAR',2026,NULL,'2026-08-01T00:00:00.000Z',
+                 'FIRST_YEAR_OVPSA','2026-10-05')`,
+      [OVPSA_IMPORT_GROUP_ID, `${MARKER} First-Year import`, ADMIN_ID],
+    );
+    await client.query(
       `INSERT INTO student_academic_snapshots (
          id,student_number,academic_year_start,student_name,college_id,college_name,
-         program_id,program_code,program_name,year_level,source_type,source_metadata
+         program_id,program_code,program_name,year_level,source_import_group_id
        ) VALUES ($1,$2,2026,'Recovery D Browser',$3,'Browser Closure Recovery College',
-                 $4,'BCCR','Browser Closure Recovery Program',1,'VERIFIED_HISTORICAL',$5::jsonb)`,
-      [OVPSA_SNAPSHOT_ID, STUDENTS[3], COLLEGE_ID, PROGRAM_ID, JSON.stringify({ marker: MARKER })],
+                 $4,'BCCR','Browser Closure Recovery Program',1,$5)`,
+      [OVPSA_SNAPSHOT_ID, STUDENTS[3], COLLEGE_ID, PROGRAM_ID, OVPSA_IMPORT_GROUP_ID],
     );
     await client.query(
       `INSERT INTO ovpsa_first_year_batches (
@@ -433,6 +445,7 @@ async function cleanup(client: pg.Client) {
     await client.query("ALTER TABLE student_academic_snapshots DISABLE TRIGGER student_academic_snapshots_immutable");
     await client.query("DELETE FROM student_academic_snapshots WHERE student_number=ANY($1::varchar[])", [STUDENTS]);
     await client.query("ALTER TABLE student_academic_snapshots ENABLE TRIGGER student_academic_snapshots_immutable");
+    await client.query("DELETE FROM schedule_import_groups WHERE id=$1", [OVPSA_IMPORT_GROUP_ID]);
     await client.query("DELETE FROM students WHERE student_number=ANY($1::varchar[])", [STUDENTS]);
     await client.query("DELETE FROM programs WHERE id=$1", [PROGRAM_ID]);
     await client.query("DELETE FROM colleges WHERE id=$1", [COLLEGE_ID]);

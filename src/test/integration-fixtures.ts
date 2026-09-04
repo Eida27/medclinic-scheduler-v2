@@ -1,3 +1,4 @@
+import type { PoolClient } from "pg";
 import { pool, transaction } from "@/server/db/pool";
 
 export const TEST_REFERENCE_IDS = {
@@ -9,6 +10,49 @@ export const TEST_REFERENCE_IDS = {
   laboratoryClinic: "60000000-0000-4000-8000-000000000001",
   physicalExamClinic: "60000000-0000-4000-8000-000000000002",
 } as const;
+
+type TestScheduleImportGroup = {
+  name: string;
+  sourceFilename?: string;
+  filename?: string;
+  academicYearStart: number;
+  importMode: "STANDARD" | "FIRST_YEAR_OVPSA";
+  id?: string;
+  acceptedAt?: string | Date;
+  actor: string;
+};
+
+export async function insertTestScheduleImportGroup(
+  client: PoolClient,
+  input: TestScheduleImportGroup,
+) {
+  const sourceFilename = input.sourceFilename ?? input.filename;
+  if (!sourceFilename) {
+    throw new Error("A test schedule import group requires sourceFilename.");
+  }
+  const result = await client.query<{ id: string }>(
+    `INSERT INTO schedule_import_groups (
+       id,import_name,source_filename,total_rows,matched_student_count,description,
+       created_by,student_category,academic_year_start,preferred_month,accepted_at,
+       import_mode,first_year_laboratory_date
+     ) VALUES (
+       COALESCE($1::uuid,gen_random_uuid()),$2,$3,1,0,$4,$5,'REGULAR',$6,NULL,
+       COALESCE($7::timestamptz,clock_timestamp()),$8::varchar,
+       CASE WHEN $8::varchar='FIRST_YEAR_OVPSA' THEN make_date($6,9,1) ELSE NULL END
+     ) RETURNING id::text AS id`,
+    [
+      input.id ?? null,
+      input.name,
+      sourceFilename,
+      `Integration fixture import group: ${input.name}`,
+      input.actor,
+      input.academicYearStart,
+      input.acceptedAt ?? null,
+      input.importMode,
+    ],
+  );
+  return result.rows[0].id;
+}
 
 type TestStudent = {
   studentNumber: string;
@@ -201,7 +245,6 @@ export async function cleanupTestFixtures(
            OR student_number IN (SELECT student_number FROM test_fixture_students)`,
     );
     await client.query("DELETE FROM schedule_batches WHERE id IN (SELECT id FROM test_fixture_batches)");
-    await client.query("DELETE FROM schedule_import_groups WHERE id IN (SELECT id FROM test_fixture_import_groups)");
     await client.query(
       "ALTER TABLE student_academic_snapshots DISABLE TRIGGER student_academic_snapshots_immutable",
     );
@@ -212,6 +255,7 @@ export async function cleanupTestFixtures(
     await client.query(
       "ALTER TABLE student_academic_snapshots ENABLE TRIGGER student_academic_snapshots_immutable",
     );
+    await client.query("DELETE FROM schedule_import_groups WHERE id IN (SELECT id FROM test_fixture_import_groups)");
     await client.query("DELETE FROM students WHERE student_number IN (SELECT student_number FROM test_fixture_students)");
   });
 }

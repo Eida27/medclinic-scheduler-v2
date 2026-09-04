@@ -112,7 +112,6 @@ async function cleanup() {
     "DELETE FROM schedule_batches WHERE import_group_id IN (SELECT id FROM schedule_import_groups WHERE source_filename=$1)",
     [sourceFilename],
   );
-  await pool.query("DELETE FROM schedule_import_groups WHERE source_filename=$1", [sourceFilename]);
   await pool.query(
     "ALTER TABLE student_academic_snapshots DISABLE TRIGGER student_academic_snapshots_immutable",
   );
@@ -123,6 +122,7 @@ async function cleanup() {
   await pool.query(
     "ALTER TABLE student_academic_snapshots ENABLE TRIGGER student_academic_snapshots_immutable",
   );
+  await pool.query("DELETE FROM schedule_import_groups WHERE source_filename=$1", [sourceFilename]);
   await pool.query("DELETE FROM students WHERE student_number=$1", [
     studentNumber,
   ]);

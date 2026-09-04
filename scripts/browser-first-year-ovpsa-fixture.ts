@@ -411,10 +411,10 @@ async function deleteFixture(client: PoolClient, state: State | null) {
            OR entity_id IN (SELECT id::text FROM acceptance_appointments)`,
       [FIXTURE_STUDENT_NUMBERS],
     );
-    await client.query("DELETE FROM schedule_import_groups WHERE id IN (SELECT id FROM acceptance_imports)");
     await client.query("ALTER TABLE student_academic_snapshots DISABLE TRIGGER student_academic_snapshots_immutable");
     await client.query("DELETE FROM student_academic_snapshots WHERE student_number=ANY($1::varchar[])", [FIXTURE_STUDENT_NUMBERS]);
     await client.query("ALTER TABLE student_academic_snapshots ENABLE TRIGGER student_academic_snapshots_immutable");
+    await client.query("DELETE FROM schedule_import_groups WHERE id IN (SELECT id FROM acceptance_imports)");
     await client.query("DELETE FROM students WHERE student_number=ANY($1::varchar[])", [FIXTURE_STUDENT_NUMBERS]);
     if (state) {
       await client.query(

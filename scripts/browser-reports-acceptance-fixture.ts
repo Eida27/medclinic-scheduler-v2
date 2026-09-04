@@ -28,6 +28,44 @@ const appointmentIds = Array.from({ length: 165 }, (_, index) =>
   `b8300000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`);
 const snapshotIds = Array.from({ length: 157 }, (_, index) =>
   `b8400000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`);
+const importGroups = [
+  {
+    id: "b8000000-0000-4000-8000-000000000001",
+    name: "Browser Reports 2020 Standard",
+    sourceFilename: "browser-reports-2020-standard.csv",
+    academicYearStart: 2020,
+    importMode: "STANDARD",
+    acceptedAt: "2020-08-01T00:00:00.000Z",
+    firstYearLaboratoryDate: null,
+  },
+  {
+    id: "b8000000-0000-4000-8000-000000000002",
+    name: "Browser Reports 2020 First-Year",
+    sourceFilename: "browser-reports-2020-first-year.csv",
+    academicYearStart: 2020,
+    importMode: "FIRST_YEAR_OVPSA",
+    acceptedAt: "2020-08-02T00:00:00.000Z",
+    firstYearLaboratoryDate: "2020-09-01",
+  },
+  {
+    id: "b8000000-0000-4000-8000-000000000003",
+    name: "Browser Reports 2098 Standard",
+    sourceFilename: "browser-reports-2098-standard.csv",
+    academicYearStart: 2098,
+    importMode: "STANDARD",
+    acceptedAt: "2098-08-01T00:00:00.000Z",
+    firstYearLaboratoryDate: null,
+  },
+  {
+    id: "b8000000-0000-4000-8000-000000000004",
+    name: "Browser Reports 2098 First-Year",
+    sourceFilename: "browser-reports-2098-first-year.csv",
+    academicYearStart: 2098,
+    importMode: "FIRST_YEAR_OVPSA",
+    acceptedAt: "2098-08-02T00:00:00.000Z",
+    firstYearLaboratoryDate: "2098-09-01",
+  },
+] as const;
 
 export const REPORTS_ACCEPTANCE_FIXTURE = {
   marker: "BROWSER-REPORTS-ACCEPTANCE-V1",
@@ -35,6 +73,7 @@ export const REPORTS_ACCEPTANCE_FIXTURE = {
   studentNumbers,
   appointmentIds,
   snapshotIds,
+  importGroups,
   paginationCount: 153,
   years: {
     closed: { startYear: 2020, label: "2020–2021", closingDate: "2021-07-31" },
@@ -46,7 +85,7 @@ export const REPORTS_ACCEPTANCE_FIXTURE = {
       studentNumber: "B-RPT-0001",
       classification: "COMPLIED",
       laboratoryStatus: "COMPLETED",
-      dataQuality: "VERIFIED_HISTORICAL",
+      importMode: "STANDARD",
     },
     historicalDivergence: {
       studentNumber: "B-RPT-0002",
@@ -55,22 +94,15 @@ export const REPORTS_ACCEPTANCE_FIXTURE = {
       historicalCollege: "Archived College of Health Sciences",
       historicalProgram: "Archived Clinical Sciences",
       classification: "DID_NOT_COMPLY_BOTH",
-      dataQuality: "RECOVERED_HISTORICAL",
-    },
-    migratedIncomplete: {
-      studentNumber: "B-RPT-0003",
-      classification: "DID_NOT_COMPLY_PHYSICAL_EXAM",
-      dataQuality: "MIGRATED_INCOMPLETE",
+      importMode: "FIRST_YEAR_OVPSA",
     },
     laboratoryOnly: {
       studentNumber: "B-RPT-0004",
       classification: "DID_NOT_COMPLY_LABORATORY",
-      dataQuality: "VERIFIED_HISTORICAL",
     },
     completed: {
       studentNumber: "B-RPT-0005",
       classification: "COMPLIED",
-      dataQuality: "RECOVERED_HISTORICAL",
     },
   },
 } as const;
@@ -86,6 +118,7 @@ export type ReportsAcceptanceResidue = {
   students: number;
   snapshots: number;
   appointments: number;
+  importGroups: number;
   academicYears: number;
   crudScratchYears: number;
   auditLogs: number;
@@ -144,7 +177,7 @@ type SnapshotSeed = {
   program_code: string;
   program_name: string;
   year_level: number;
-  source_type: "VERIFIED_HISTORICAL" | "RECOVERED_HISTORICAL" | "MIGRATED_INCOMPLETE";
+  source_import_group_id: string;
 };
 
 type AppointmentSeed = {
@@ -300,13 +333,11 @@ async function writeState(state: FixtureState) {
   await rename(STATE_TEMP_FILE, STATE_FILE);
 }
 
-function sourceType(index: number): SnapshotSeed["source_type"] {
-  if (index === 1) return "VERIFIED_HISTORICAL";
-  if (index === 2) return "RECOVERED_HISTORICAL";
-  if (index === 3) return "MIGRATED_INCOMPLETE";
-  return ["VERIFIED_HISTORICAL", "RECOVERED_HISTORICAL", "MIGRATED_INCOMPLETE"][
-    (index - 1) % 3
-  ] as SnapshotSeed["source_type"];
+function importGroupId(academicYearStart: number, importMode: "STANDARD" | "FIRST_YEAR_OVPSA") {
+  const group = importGroups.find((candidate) => candidate.academicYearStart === academicYearStart
+    && candidate.importMode === importMode);
+  if (!group) throw new Error("Reports fixture import-group contract drifted.");
+  return group.id;
 }
 
 function students(): StudentSeed[] {
@@ -361,7 +392,10 @@ function snapshots(): SnapshotSeed[] {
       program_code: labels.programCode,
       program_name: labels.programName,
       year_level: ((index - 1) % 4) + 1,
-      source_type: sourceType(index),
+      source_import_group_id: importGroupId(
+        REPORTS_ACCEPTANCE_FIXTURE.years.closed.startYear,
+        index % 2 === 1 ? "STANDARD" : "FIRST_YEAR_OVPSA",
+      ),
     };
   });
   const open = studentNumbers.slice(0, 4).map((studentNumber, offset) => {
@@ -378,7 +412,10 @@ function snapshots(): SnapshotSeed[] {
       program_code: labels.programCode,
       program_name: labels.programName,
       year_level: index,
-      source_type: sourceType(index),
+      source_import_group_id: importGroupId(
+        REPORTS_ACCEPTANCE_FIXTURE.years.open.startYear,
+        index % 2 === 1 ? "STANDARD" : "FIRST_YEAR_OVPSA",
+      ),
     };
   });
   return [...closed, ...open];
@@ -484,6 +521,7 @@ function setupMarkerMetadata() {
     studentCount: REPORTS_ACCEPTANCE_FIXTURE.studentNumbers.length,
     snapshotCount: REPORTS_ACCEPTANCE_FIXTURE.snapshotIds.length,
     appointmentCount: REPORTS_ACCEPTANCE_FIXTURE.appointmentIds.length,
+    importGroupCount: REPORTS_ACCEPTANCE_FIXTURE.importGroups.length,
     paginationCount: REPORTS_ACCEPTANCE_FIXTURE.paginationCount,
   };
 }
@@ -597,11 +635,14 @@ function exactOwnedAuditCandidates(candidates: AuditCandidate[], notBefore?: Dat
 }
 
 async function assertRequiredSchemaAndReferences(client: PoolClient) {
-  const schema = await client.query<{ academicYears: string | null; snapshots: string | null }>(
+  const schema = await client.query<{
+    academicYears: string | null; snapshots: string | null; importGroups: string | null;
+  }>(
     `SELECT to_regclass('academic_years')::text AS "academicYears",
-            to_regclass('student_academic_snapshots')::text AS snapshots`,
+            to_regclass('student_academic_snapshots')::text AS snapshots,
+            to_regclass('schedule_import_groups')::text AS "importGroups"`,
   );
-  if (!schema.rows[0]?.academicYears || !schema.rows[0]?.snapshots) {
+  if (!schema.rows[0]?.academicYears || !schema.rows[0]?.snapshots || !schema.rows[0]?.importGroups) {
     throw new Error("Migration 016 must be applied to the local acceptance database before setup.");
   }
   const admin = await client.query<{ role: string; active: boolean }>(
@@ -658,14 +699,21 @@ async function assertReservedScopeAvailable(client: PoolClient) {
     REPORTS_ACCEPTANCE_FIXTURE.crudScratch.startYear,
   ];
   const collision = await client.query<{
-    years: number; students: number; snapshots: number; appointments: number;
+    years: number; students: number; snapshots: number; appointments: number; importGroups: number;
   }>(
     `SELECT
        (SELECT COUNT(*)::int FROM academic_years WHERE start_year=ANY($1::int[])) AS years,
        (SELECT COUNT(*)::int FROM students WHERE student_number LIKE $2) AS students,
        (SELECT COUNT(*)::int FROM student_academic_snapshots WHERE id=ANY($3::uuid[])) AS snapshots,
-       (SELECT COUNT(*)::int FROM appointments WHERE id=ANY($4::uuid[])) AS appointments`,
-    [reservedYears, `${REPORTS_ACCEPTANCE_FIXTURE.studentPrefix}%`, snapshotIds, appointmentIds],
+       (SELECT COUNT(*)::int FROM appointments WHERE id=ANY($4::uuid[])) AS appointments,
+       (SELECT COUNT(*)::int FROM schedule_import_groups WHERE id=ANY($5::uuid[])) AS "importGroups"`,
+    [
+      reservedYears,
+      `${REPORTS_ACCEPTANCE_FIXTURE.studentPrefix}%`,
+      snapshotIds,
+      appointmentIds,
+      importGroups.map((group) => group.id),
+    ],
   );
   const ownedAuditCollisions = exactOwnedAuditCandidates(await auditCandidates(client));
   if (Object.values(collision.rows[0]).some((count) => count !== 0)
@@ -699,21 +747,46 @@ async function insertFixtureRows(client: PoolClient) {
     [JSON.stringify(students()), CURRENT_COLLEGE_ID, CURRENT_PROGRAM_ID],
   );
   await client.query(
+    `INSERT INTO schedule_import_groups (
+       id,import_name,source_filename,total_rows,matched_student_count,description,
+       created_by,student_category,academic_year_start,preferred_month,accepted_at,
+       import_mode,first_year_laboratory_date
+     ) SELECT row.id,row.name,row.source_filename,1,0,$2,$3,'REGULAR',
+              row.academic_year_start,NULL,row.accepted_at::timestamptz,row.import_mode,
+              row.first_year_laboratory_date::date
+         FROM jsonb_to_recordset($1::jsonb) AS row(
+           id uuid,name text,source_filename text,academic_year_start int,import_mode text,
+           accepted_at text,first_year_laboratory_date text
+         )
+     ON CONFLICT (id) DO NOTHING`,
+    [
+      JSON.stringify(importGroups.map((group) => ({
+        id: group.id,
+        name: group.name,
+        source_filename: group.sourceFilename,
+        academic_year_start: group.academicYearStart,
+        import_mode: group.importMode,
+        accepted_at: group.acceptedAt,
+        first_year_laboratory_date: group.firstYearLaboratoryDate,
+      }))),
+      REPORTS_ACCEPTANCE_FIXTURE.marker,
+      ADMIN_USER_ID,
+    ],
+  );
+  await client.query(
     `INSERT INTO student_academic_snapshots (
        id,student_number,academic_year_start,student_name,college_id,college_name,
-       program_id,program_code,program_name,year_level,source_type,source_metadata
+       program_id,program_code,program_name,year_level,source_import_group_id
      ) SELECT row.id,row.student_number,row.academic_year_start,row.student_name,
               row.college_id,row.college_name,row.program_id,row.program_code,row.program_name,
-              row.year_level,row.source_type,
-              jsonb_build_object('fixtureMarker',$2::text,'historicalEvidenceComplete',
-                row.source_type<>'MIGRATED_INCOMPLETE')
+              row.year_level,row.source_import_group_id
          FROM jsonb_to_recordset($1::jsonb) AS row(
            id uuid,student_number text,academic_year_start int,student_name text,
            college_id uuid,college_name text,program_id uuid,program_code text,
-           program_name text,year_level int,source_type text
+           program_name text,year_level int,source_import_group_id uuid
          )
      ON CONFLICT (student_number,academic_year_start) DO NOTHING`,
-    [JSON.stringify(snapshots()), REPORTS_ACCEPTANCE_FIXTURE.marker],
+    [JSON.stringify(snapshots())],
   );
   await client.query(
     `INSERT INTO appointments (
@@ -749,6 +822,7 @@ async function databaseCounts(client: PoolClient) {
     students: studentNumbers.length,
     snapshots: snapshotIds.length,
     appointments: appointmentIds.length,
+    importGroups: importGroups.length,
     academicYears: 2,
     auditLogs: marker.kind === "exact" ? 1 : 0,
   };
@@ -800,19 +874,44 @@ async function assertFixtureReady(client: PoolClient) {
     throw new Error("Reports fixture readiness detected current-student or fixture-prefix drift.");
   }
 
+  const importGroupRows = await client.query<{
+    id: string; name: string; sourceFilename: string; academicYearStart: number;
+    importMode: string; acceptedAt: Date; firstYearLaboratoryDate: string | null;
+  }>(
+    `SELECT id::text AS id,import_name AS name,source_filename AS "sourceFilename",
+            academic_year_start AS "academicYearStart",import_mode AS "importMode",
+            accepted_at AS "acceptedAt",first_year_laboratory_date::text AS "firstYearLaboratoryDate"
+       FROM schedule_import_groups WHERE id=ANY($1::uuid[]) ORDER BY id`,
+    [importGroups.map((group) => group.id)],
+  );
+  const expectedImportGroups = importGroups.map((group) => ({
+    id: group.id,
+    name: group.name,
+    sourceFilename: group.sourceFilename,
+    academicYearStart: group.academicYearStart,
+    importMode: group.importMode,
+    acceptedAt: new Date(group.acceptedAt).toISOString(),
+    firstYearLaboratoryDate: group.firstYearLaboratoryDate,
+  }));
+  const actualImportGroups = importGroupRows.rows.map((group) => ({
+    ...group,
+    acceptedAt: group.acceptedAt.toISOString(),
+  }));
+  if (canonicalJson(actualImportGroups) !== canonicalJson(expectedImportGroups)) {
+    throw new Error("Reports fixture readiness detected import-group provenance drift or extra fixture groups.");
+  }
+
   const snapshotRows = await client.query<{
     id: string; studentNumber: string; academicYearStart: number; studentName: string;
     collegeId: string; collegeName: string; programId: string; programCode: string;
-    programName: string; yearLevel: number; sourceImportGroupId: string | null;
-    sourceType: string; sourceMetadata: unknown;
+    programName: string; yearLevel: number; sourceImportGroupId: string;
   }>(
     `SELECT id::text AS id,student_number AS "studentNumber",
             academic_year_start AS "academicYearStart",student_name AS "studentName",
             college_id::text AS "collegeId",college_name AS "collegeName",
             program_id::text AS "programId",program_code AS "programCode",
             program_name AS "programName",year_level AS "yearLevel",
-            source_import_group_id::text AS "sourceImportGroupId",source_type AS "sourceType",
-            source_metadata AS "sourceMetadata"
+            source_import_group_id::text AS "sourceImportGroupId"
        FROM student_academic_snapshots
       WHERE student_number LIKE $1 OR id=ANY($2::uuid[]) ORDER BY id`,
     [`${REPORTS_ACCEPTANCE_FIXTURE.studentPrefix}%`, snapshotIds],
@@ -823,11 +922,7 @@ async function assertFixtureReady(client: PoolClient) {
     collegeId: snapshot.college_id, collegeName: snapshot.college_name,
     programId: snapshot.program_id, programCode: snapshot.program_code,
     programName: snapshot.program_name, yearLevel: snapshot.year_level,
-    sourceImportGroupId: null, sourceType: snapshot.source_type,
-    sourceMetadata: {
-      fixtureMarker: REPORTS_ACCEPTANCE_FIXTURE.marker,
-      historicalEvidenceComplete: snapshot.source_type !== "MIGRATED_INCOMPLETE",
-    },
+    sourceImportGroupId: snapshot.source_import_group_id,
   })).sort((left, right) => left.id.localeCompare(right.id));
   if (canonicalJson(snapshotRows.rows) !== canonicalJson(expectedSnapshots)) {
     throw new Error("Reports fixture readiness detected immutable snapshot drift or extra snapshot rows.");
@@ -936,6 +1031,7 @@ export async function getReportsAcceptanceFixtureStatus(
         students: counts.students,
         snapshots: counts.snapshots,
         appointments: counts.appointments,
+        importGroups: counts.importGroups,
         academicYears: counts.academicYears,
       },
       stateFile: true,
@@ -954,9 +1050,10 @@ async function residueCounts(client: PoolClient): Promise<Omit<ReportsAcceptance
          WHERE id=ANY($2::uuid[]) OR student_number=ANY($1::varchar[])) AS snapshots,
        (SELECT COUNT(*)::int FROM appointments
          WHERE id=ANY($3::uuid[]) OR student_number=ANY($1::varchar[])) AS appointments,
-       (SELECT COUNT(*)::int FROM academic_years WHERE start_year=ANY($4::int[])) AS "academicYears",
-       (SELECT COUNT(*)::int FROM academic_years WHERE start_year=$5) AS "crudScratchYears"`,
-    [studentNumbers, snapshotIds, appointmentIds, years,
+       (SELECT COUNT(*)::int FROM schedule_import_groups WHERE id=ANY($4::uuid[])) AS "importGroups",
+       (SELECT COUNT(*)::int FROM academic_years WHERE start_year=ANY($5::int[])) AS "academicYears",
+       (SELECT COUNT(*)::int FROM academic_years WHERE start_year=$6) AS "crudScratchYears"`,
+    [studentNumbers, snapshotIds, appointmentIds, importGroups.map((group) => group.id), years,
       REPORTS_ACCEPTANCE_FIXTURE.crudScratch.startYear],
   );
   const marker = await getSetupMarker(client);
@@ -1003,6 +1100,9 @@ export async function cleanupReportsAcceptanceFixture(
         [snapshotIds, studentNumbers],
       );
       await client.query("ALTER TABLE student_academic_snapshots ENABLE TRIGGER student_academic_snapshots_immutable");
+      await client.query("DELETE FROM schedule_import_groups WHERE id=ANY($1::uuid[])", [
+        importGroups.map((group) => group.id),
+      ]);
       await client.query("DELETE FROM students WHERE student_number=ANY($1::varchar[])", [studentNumbers]);
       await client.query(
         "DELETE FROM academic_years WHERE start_year=ANY($1::int[])",

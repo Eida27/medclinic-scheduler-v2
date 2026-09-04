@@ -7,10 +7,14 @@ import {
   getHistoricalComplianceExportData,
   getHistoricalComplianceReport,
 } from "@/server/services/historical-compliance-report.service";
-import { TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
+import { insertTestScheduleImportGroup, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 
 const YEAR = 2088;
 const NEXT_YEAR = 2089;
+const importGroups = {
+  current: "b8800000-0000-4000-8000-000000000001",
+  next: "b8800000-0000-4000-8000-000000000002",
+};
 const colleges = {
   alpha: "71000000-0000-4000-8000-000000000001",
   beta: "71000000-0000-4000-8000-000000000002",
@@ -72,7 +76,7 @@ async function insertSnapshot(input: {
   await client.query(
     `INSERT INTO student_academic_snapshots (
        student_number,academic_year_start,student_name,college_id,college_name,
-       program_id,program_code,program_name,year_level,source_type
+       program_id,program_code,program_name,year_level,source_import_group_id
      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
     [
       input.studentNumber,
@@ -84,7 +88,7 @@ async function insertSnapshot(input: {
       input.programCode,
       input.programName,
       input.yearLevel,
-      input.sourceType ?? "VERIFIED_HISTORICAL",
+      (input.cycle ?? YEAR) === NEXT_YEAR ? importGroups.next : importGroups.current,
     ],
   );
 }
@@ -97,6 +101,22 @@ beforeAll(async () => {
      VALUES ($1,'2089-07-31',$3,$3),($2,'2090-07-31',$3,$3)`,
     [YEAR, NEXT_YEAR, TEST_REFERENCE_IDS.adminUser],
   );
+  await insertTestScheduleImportGroup(client, {
+    id: importGroups.current,
+    name: "Historical compliance report fixture Standard",
+    sourceFilename: "historical-compliance-report-standard.csv",
+    academicYearStart: YEAR,
+    importMode: "STANDARD",
+    actor: TEST_REFERENCE_IDS.adminUser,
+  });
+  await insertTestScheduleImportGroup(client, {
+    id: importGroups.next,
+    name: "Historical compliance report fixture First-Year",
+    sourceFilename: "historical-compliance-report-first-year.csv",
+    academicYearStart: NEXT_YEAR,
+    importMode: "FIRST_YEAR_OVPSA",
+    actor: TEST_REFERENCE_IDS.adminUser,
+  });
   await client.query(
     `INSERT INTO colleges (id,code,name) VALUES
        ($1,'RPT-A','Historic Alpha College'),
@@ -276,11 +296,11 @@ beforeAll(async () => {
   await client.query(
     `INSERT INTO student_academic_snapshots (
        student_number,academic_year_start,student_name,college_id,college_name,
-       program_id,program_code,program_name,year_level,source_type
+       program_id,program_code,program_name,year_level,source_import_group_id
      ) SELECT student_number,$1,'Tied Page, Student',$2,'Historic Alpha College',
-              $3,'ALPHA','Alpha Program',4,'VERIFIED_HISTORICAL'
+              $3,'ALPHA','Alpha Program',4,$4
          FROM students WHERE student_number LIKE 'RPT-PAGE-%'`,
-    [YEAR, colleges.alpha, programs.alpha],
+    [YEAR, colleges.alpha, programs.alpha, importGroups.current],
   );
   await client.query(
     `INSERT INTO appointments (

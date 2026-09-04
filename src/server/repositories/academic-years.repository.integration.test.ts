@@ -3,7 +3,7 @@ import type { PoolClient } from "pg";
 import { afterAll, describe, expect, it } from "vitest";
 import { deleteAcademicYear } from "@/server/services/academic-years.service";
 import { pool } from "@/server/db/pool";
-import { TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
+import { insertTestScheduleImportGroup, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import { ensureStudentAcademicSnapshotsWithClient } from "./student-academic-snapshots.repository";
 import {
   createAcademicYearWithClient,
@@ -21,6 +21,8 @@ afterAll(async () => {
 const concurrentYear = 2096;
 const reverseConcurrentYear = 2095;
 const shareLockYear = 2094;
+const concurrentImportGroupId = "b8600000-0000-4000-8000-000000000001";
+const reverseImportGroupId = "b8600000-0000-4000-8000-000000000002";
 
 async function waitForAcademicYearOperationToBlock(
   observer: PoolClient,
@@ -71,6 +73,7 @@ async function cleanupConcurrentYear() {
     await client.query(
       "ALTER TABLE student_academic_snapshots ENABLE TRIGGER student_academic_snapshots_immutable",
     );
+    await client.query("DELETE FROM schedule_import_groups WHERE id=$1", [concurrentImportGroupId]);
     await client.query(
       `DELETE FROM audit_logs
         WHERE entity_type='academic_year' AND entity_id=$1`,
@@ -101,6 +104,7 @@ async function cleanupReverseConcurrentYear() {
     await client.query(
       "ALTER TABLE student_academic_snapshots ENABLE TRIGGER student_academic_snapshots_immutable",
     );
+    await client.query("DELETE FROM schedule_import_groups WHERE id=$1", [reverseImportGroupId]);
     await client.query(
       `DELETE FROM audit_logs
         WHERE entity_type IN ('academic_year','student_academic_snapshot')
@@ -144,6 +148,19 @@ describe("academic-years repository", () => {
        VALUES ($1,'2096-07-31',$2,$2)`,
       [reverseConcurrentYear, TEST_REFERENCE_IDS.adminUser],
     );
+    const importGroupClient = await pool.connect();
+    try {
+      await insertTestScheduleImportGroup(importGroupClient, {
+        id: reverseImportGroupId,
+        name: "Academic-year reverse-delete fixture",
+        sourceFilename: "academic-year-reverse-delete.csv",
+        academicYearStart: reverseConcurrentYear,
+        importMode: "STANDARD",
+        actor: TEST_REFERENCE_IDS.adminUser,
+      });
+    } finally {
+      importGroupClient.release();
+    }
     const deleter = await pool.connect();
     const importer = await pool.connect();
     let deleterCommitted = false;
@@ -171,9 +188,7 @@ describe("academic-years repository", () => {
           programCode: null,
           programName: "Historical Program",
           yearLevel: 3,
-          sourceImportGroupId: null,
-          sourceType: "MIGRATED_INCOMPLETE",
-          sourceMetadata: { fixture: "reverse-year-delete" },
+          sourceImportGroupId: reverseImportGroupId,
         }],
       }).then(
         async (value) => {
@@ -263,13 +278,21 @@ describe("academic-years repository", () => {
         inserter,
         blocker.rows[0].transaction_id,
       );
+      await insertTestScheduleImportGroup(inserter, {
+        id: concurrentImportGroupId,
+        name: "Academic-year concurrent-delete fixture",
+        sourceFilename: "academic-year-concurrent-delete.csv",
+        academicYearStart: concurrentYear,
+        importMode: "STANDARD",
+        actor: TEST_REFERENCE_IDS.adminUser,
+      });
       await inserter.query(
         `INSERT INTO student_academic_snapshots (
            student_number,academic_year_start,student_name,college_name,
-           program_name,source_type
+           program_name,source_import_group_id
          ) VALUES ('96-0001-01',$1,'Racing, Student','Historical College',
-                   'Historical Program','VERIFIED_HISTORICAL')`,
-        [concurrentYear],
+                   'Historical Program',$2)`,
+        [concurrentYear, concurrentImportGroupId],
       );
       await inserter.query("COMMIT");
       inserterCommitted = true;
@@ -367,9 +390,16 @@ describe("academic-years repository", () => {
       await client.query(
         `INSERT INTO student_academic_snapshots (
            student_number,academic_year_start,student_name,college_name,
-           program_name,source_type
+           program_name,source_import_group_id
          ) VALUES ('97-0001-01',2097,'Historical, Student','Historical College',
-                   'Historical Program','VERIFIED_HISTORICAL')`,
+                   'Historical Program',$1)`,
+        [await insertTestScheduleImportGroup(client, {
+          name: "Academic-year linked-count fixture",
+          sourceFilename: "academic-year-linked-count.csv",
+          academicYearStart: 2097,
+          importMode: "STANDARD",
+          actor: TEST_REFERENCE_IDS.adminUser,
+        })],
       );
 
       const listed = await listAcademicYearRecords(client);

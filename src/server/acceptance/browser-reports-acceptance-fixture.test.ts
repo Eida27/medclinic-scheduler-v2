@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import { getHistoricalComplianceReport } from "@/server/services/historical-compliance-report.service";
+import { insertTestScheduleImportGroup } from "@/test/integration-fixtures";
 import {
   REPORTS_ACCEPTANCE_FIXTURE,
   assertMatchingReportsAcceptanceDatabaseIdentity,
@@ -100,11 +101,29 @@ describe("reports Browser acceptance fixture guards", () => {
     expect(new Set(REPORTS_ACCEPTANCE_FIXTURE.studentNumbers).size).toBe(153);
     expect(new Set(REPORTS_ACCEPTANCE_FIXTURE.appointmentIds).size)
       .toBe(REPORTS_ACCEPTANCE_FIXTURE.appointmentIds.length);
+    expect(REPORTS_ACCEPTANCE_FIXTURE.importGroups).toEqual([
+      expect.objectContaining({
+        academicYearStart: 2020,
+        importMode: "STANDARD",
+      }),
+      expect.objectContaining({
+        academicYearStart: 2020,
+        importMode: "FIRST_YEAR_OVPSA",
+      }),
+      expect.objectContaining({
+        academicYearStart: 2098,
+        importMode: "STANDARD",
+      }),
+      expect.objectContaining({
+        academicYearStart: 2098,
+        importMode: "FIRST_YEAR_OVPSA",
+      }),
+    ]);
   });
 
   it("requires every fixture-owned database and state count to be zero", () => {
     const zero = {
-      students: 0, snapshots: 0, appointments: 0, academicYears: 0,
+      students: 0, snapshots: 0, appointments: 0, importGroups: 0, academicYears: 0,
       crudScratchYears: 0, auditLogs: 0, stateFiles: 0,
     };
     expect(assertZeroReportsAcceptanceResidue(zero)).toBe(zero);
@@ -164,6 +183,46 @@ describe.runIf(exclusive)("reports Browser acceptance fixture lifecycle", () => 
     }
   });
 
+  it("creates schema-valid Standard and First-Year import groups for snapshot fixtures", async () => {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const standardId = await insertTestScheduleImportGroup(client, {
+        id: "b8700000-0000-4000-8000-000000000001",
+        name: "BROWSER reports helper Standard",
+        sourceFilename: "browser-reports-helper-standard.csv",
+        academicYearStart: 2020,
+        importMode: "STANDARD",
+        acceptedAt: "2020-08-01T00:00:00.000Z",
+        actor: ADMIN_USER_ID,
+      });
+      const firstYearId = await insertTestScheduleImportGroup(client, {
+        id: "b8700000-0000-4000-8000-000000000002",
+        name: "BROWSER reports helper First-Year",
+        filename: "browser-reports-helper-first-year.csv",
+        academicYearStart: 2098,
+        importMode: "FIRST_YEAR_OVPSA",
+        acceptedAt: "2098-08-01T00:00:00.000Z",
+        actor: ADMIN_USER_ID,
+      });
+      const groups = await client.query<{
+        id: string; importMode: string; academicYearStart: number; laboratoryDate: string | null;
+      }>(
+        `SELECT id::text AS id,import_mode AS "importMode",academic_year_start AS "academicYearStart",
+                first_year_laboratory_date::text AS "laboratoryDate"
+           FROM schedule_import_groups WHERE id=ANY($1::uuid[]) ORDER BY id`,
+        [[standardId, firstYearId]],
+      );
+      expect(groups.rows).toEqual([
+        { id: standardId, importMode: "STANDARD", academicYearStart: 2020, laboratoryDate: null },
+        { id: firstYearId, importMode: "FIRST_YEAR_OVPSA", academicYearStart: 2098, laboratoryDate: "2098-09-01" },
+      ]);
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
+  });
+
   it("sets up idempotently and exposes exact status without secrets", async () => {
     await setupReportsAcceptanceFixture(pool, identity);
     await setupReportsAcceptanceFixture(pool, identity);
@@ -176,11 +235,11 @@ describe.runIf(exclusive)("reports Browser acceptance fixture lifecycle", () => 
         open: { startYear: 2098, label: "2098–2099", state: "OPEN" },
       },
       paginationCount: 153,
-      counts: { students: 153, snapshots: 157, appointments: 165, academicYears: 2 },
+      counts: { students: 153, snapshots: 157, appointments: 165, importGroups: 4, academicYears: 2 },
       expected: {
         replacement: {
           studentNumber: "B-RPT-0001", classification: "COMPLIED",
-          laboratoryStatus: "COMPLETED", dataQuality: "VERIFIED_HISTORICAL",
+          laboratoryStatus: "COMPLETED", importMode: "STANDARD",
         },
         historicalDivergence: {
           studentNumber: "B-RPT-0002",
@@ -189,12 +248,7 @@ describe.runIf(exclusive)("reports Browser acceptance fixture lifecycle", () => 
           historicalCollege: "Archived College of Health Sciences",
           historicalProgram: "Archived Clinical Sciences",
           classification: "DID_NOT_COMPLY_BOTH",
-          dataQuality: "RECOVERED_HISTORICAL",
-        },
-        migratedIncomplete: {
-          studentNumber: "B-RPT-0003",
-          classification: "DID_NOT_COMPLY_PHYSICAL_EXAM",
-          dataQuality: "MIGRATED_INCOMPLETE",
+          importMode: "FIRST_YEAR_OVPSA",
         },
       },
     });
@@ -227,17 +281,17 @@ describe.runIf(exclusive)("reports Browser acceptance fixture lifecycle", () => 
       .map((row) => [row.studentNumber, row]));
     expect(byNumber["B-RPT-0001"]).toMatchObject({
       laboratoryStatus: "COMPLETED", physicalExamStatus: "COMPLETED",
-      overallStatus: "COMPLIED", dataQuality: "VERIFIED_HISTORICAL",
+      overallStatus: "COMPLIED",
     });
     expect(byNumber["B-RPT-0002"]).toMatchObject({
       collegeName: "Archived College of Health Sciences",
       programName: "Archived Clinical Sciences",
       laboratoryStatus: "NO_SHOW", physicalExamStatus: "UNSCHEDULED",
-      overallStatus: "DID_NOT_COMPLY_BOTH", dataQuality: "RECOVERED_HISTORICAL",
+      overallStatus: "DID_NOT_COMPLY_BOTH",
     });
     expect(byNumber["B-RPT-0003"]).toMatchObject({
       laboratoryStatus: "COMPLETED", physicalExamStatus: "NO_SHOW",
-      overallStatus: "DID_NOT_COMPLY_PHYSICAL_EXAM", dataQuality: "MIGRATED_INCOMPLETE",
+      overallStatus: "DID_NOT_COMPLY_PHYSICAL_EXAM",
     });
     expect(byNumber["B-RPT-0004"]).toMatchObject({
       laboratoryStatus: "NO_SHOW", physicalExamStatus: "COMPLETED",
@@ -285,16 +339,16 @@ describe.runIf(exclusive)("reports Browser acceptance fixture lifecycle", () => 
   it("cleans partial and complete setups repeatedly with no residue", async () => {
     await pool.query("DELETE FROM appointments WHERE id=$1", [REPORTS_ACCEPTANCE_FIXTURE.appointmentIds.at(-1)]);
     expect(await cleanupReportsAcceptanceFixture(pool, identity)).toMatchObject({
-      students: 0, snapshots: 0, appointments: 0, academicYears: 0,
+      students: 0, snapshots: 0, appointments: 0, importGroups: 0, academicYears: 0,
       crudScratchYears: 0, auditLogs: 0, stateFiles: 0,
     });
     await setupReportsAcceptanceFixture(pool, identity);
     expect(await cleanupReportsAcceptanceFixture(pool, identity)).toMatchObject({
-      students: 0, snapshots: 0, appointments: 0, academicYears: 0,
+      students: 0, snapshots: 0, appointments: 0, importGroups: 0, academicYears: 0,
       crudScratchYears: 0, auditLogs: 0, stateFiles: 0,
     });
     expect(await cleanupReportsAcceptanceFixture(pool, identity)).toMatchObject({
-      students: 0, snapshots: 0, appointments: 0, academicYears: 0,
+      students: 0, snapshots: 0, appointments: 0, importGroups: 0, academicYears: 0,
       crudScratchYears: 0, auditLogs: 0, stateFiles: 0,
     });
   });
@@ -338,19 +392,34 @@ describe.runIf(exclusive)("reports Browser acceptance fixture lifecycle", () => 
        VALUES (2096,'2097-07-31',$1,$1)`,
       [ADMIN_USER_ID],
     );
+    const collisionClient = await pool.connect();
+    let collisionImportGroupId: string;
+    try {
+      collisionImportGroupId = await insertTestScheduleImportGroup(collisionClient, {
+        id: "b8700000-0000-4000-8000-000000000003",
+        name: "BROWSER reports snapshot-collision import",
+        sourceFilename: "browser-reports-snapshot-collision.csv",
+        academicYearStart: 2096,
+        importMode: "STANDARD",
+        actor: ADMIN_USER_ID,
+      });
+    } finally {
+      collisionClient.release();
+    }
     await pool.query(
       `INSERT INTO student_academic_snapshots (
          id,student_number,academic_year_start,student_name,college_name,program_code,
-         program_name,year_level,source_type
+         program_name,year_level,source_import_group_id
        ) VALUES ($1,'RPT-COLL-SNAP',2096,'Collision, Snapshot','Collision College',
-         'COLL','Collision Program',1,'VERIFIED_HISTORICAL')`,
-      [REPORTS_ACCEPTANCE_FIXTURE.snapshotIds[0]],
+         'COLL','Collision Program',1,$2)`,
+      [REPORTS_ACCEPTANCE_FIXTURE.snapshotIds[0], collisionImportGroupId!],
     );
     await expect(setupReportsAcceptanceFixture(pool, identity)).rejects.toThrow(/reserved/i);
     expect((await pool.query("SELECT student_number FROM student_academic_snapshots WHERE id=$1", [
       REPORTS_ACCEPTANCE_FIXTURE.snapshotIds[0],
     ])).rows[0].student_number).toBe("RPT-COLL-SNAP");
     await deleteSnapshotById(REPORTS_ACCEPTANCE_FIXTURE.snapshotIds[0]);
+    await pool.query("DELETE FROM schedule_import_groups WHERE id=$1", [collisionImportGroupId!]);
     await pool.query("DELETE FROM students WHERE student_number='RPT-COLL-SNAP'");
     await pool.query("DELETE FROM academic_years WHERE start_year=2096");
   });
@@ -385,7 +454,7 @@ describe.runIf(exclusive)("reports Browser acceptance fixture lifecycle", () => 
     await setupReportsAcceptanceFixture(pool, identity);
     await writeFile(STATE_FILE, "{malformed", "utf8");
     await expect(cleanupReportsAcceptanceFixture(pool, identity)).resolves.toMatchObject({
-      students: 0, snapshots: 0, appointments: 0, academicYears: 0,
+      students: 0, snapshots: 0, appointments: 0, importGroups: 0, academicYears: 0,
       crudScratchYears: 0, auditLogs: 0, stateFiles: 0,
     });
   });
@@ -563,11 +632,11 @@ describe.runIf(exclusive)("reports Browser acceptance fixture lifecycle", () => 
     await pool.query("DELETE FROM appointments WHERE id=$1", [REPORTS_ACCEPTANCE_FIXTURE.appointmentIds.at(-1)]);
     await deleteSnapshotById(REPORTS_ACCEPTANCE_FIXTURE.snapshotIds.at(-1)!);
     await expect(cleanupReportsAcceptanceFixture(pool, identity)).resolves.toMatchObject({
-      students: 0, snapshots: 0, appointments: 0, academicYears: 0,
+      students: 0, snapshots: 0, appointments: 0, importGroups: 0, academicYears: 0,
       crudScratchYears: 0, auditLogs: 0, stateFiles: 0,
     });
     await expect(cleanupReportsAcceptanceFixture(pool, identity)).resolves.toMatchObject({
-      students: 0, snapshots: 0, appointments: 0, academicYears: 0,
+      students: 0, snapshots: 0, appointments: 0, importGroups: 0, academicYears: 0,
       crudScratchYears: 0, auditLogs: 0, stateFiles: 0,
     });
   });
