@@ -560,6 +560,32 @@ describe.runIf(exclusive)("reports Browser acceptance fixture lifecycle", () => 
     await pool.query("DELETE FROM audit_logs WHERE id=$1", [unrelated.rows[0].id]);
   });
 
+  it("cleans a fixture-owned zero-row PDF export audit and proves zero residue", async () => {
+    await setupReportsAcceptanceFixture(pool, identity);
+    const zeroRowAudit = await pool.query<{ id: string }>(
+      `INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,metadata)
+       VALUES ($1,'HISTORICAL_COMPLIANCE_PDF_EXPORTED','academic_year','2020',$2::jsonb)
+       RETURNING id::text AS id`,
+      [ADMIN_USER_ID, JSON.stringify({
+        academicYearStart: 2020,
+        academicYearLabel: REPORTS_ACCEPTANCE_FIXTURE.years.closed.label,
+        filters: {},
+        sort: "name_asc",
+        rowCount: 0,
+        generatedAt: new Date().toISOString(),
+        generationDurationMs: 0,
+      })],
+    );
+
+    await expect(cleanupReportsAcceptanceFixture(pool, identity)).resolves.toMatchObject({
+      students: 0, snapshots: 0, appointments: 0, importGroups: 0,
+      academicYears: 0, crudScratchYears: 0, auditLogs: 0, stateFiles: 0,
+    });
+    expect((await pool.query("SELECT COUNT(*)::int AS count FROM audit_logs WHERE id=$1", [
+      zeroRowAudit.rows[0].id,
+    ])).rows[0].count).toBe(0);
+  });
+
   it("status and repeated setup refuse drifted academic-year ownership and dates", async () => {
     await setupReportsAcceptanceFixture(pool, identity);
     await pool.query(

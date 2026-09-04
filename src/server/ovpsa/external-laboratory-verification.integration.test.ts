@@ -36,99 +36,64 @@ const cpuStaff: SessionUser = {
 };
 
 async function cleanup() {
-  await pool.query(
-    "DELETE FROM audit_logs WHERE metadata->>'studentNumber'=$1 OR entity_id IN (SELECT id::text FROM ovpsa_first_year_batches WHERE schedule_cycle_start=$2) OR entity_id IN (SELECT id::text FROM schedule_import_groups WHERE source_filename=$4) OR actor_user_id=$3",
-    [studentNumber, cycleStart, cpuStaffUserId, sourceFilename],
-  );
-  await pool.query("DELETE FROM email_outbox WHERE student_number=$1", [
-    studentNumber,
-  ]);
-  await pool.query(
-    "DELETE FROM student_portal_notifications WHERE student_number=$1",
-    [studentNumber],
-  );
-  await pool.query(
-    "ALTER TABLE ovpsa_external_laboratory_verifications DISABLE TRIGGER ovpsa_external_laboratory_verifications_immutable",
-  );
-  await pool.query(
-    "DELETE FROM ovpsa_external_laboratory_verifications WHERE appointment_id IN (SELECT id FROM appointments WHERE student_number=$1)",
-    [studentNumber],
-  );
-  await pool.query(
-    "ALTER TABLE ovpsa_external_laboratory_verifications ENABLE TRIGGER ovpsa_external_laboratory_verifications_immutable",
-  );
-  await pool.query(
-    "DELETE FROM appointment_reschedule_events WHERE student_number=$1",
-    [studentNumber],
-  );
-  await pool.query("DELETE FROM laboratory_results WHERE student_number=$1", [
-    studentNumber,
-  ]);
-  await pool.query("DELETE FROM exam_results WHERE student_number=$1", [
-    studentNumber,
-  ]);
-  await pool.query(
-    "DELETE FROM appointment_status_logs WHERE appointment_id IN (SELECT id FROM appointments WHERE student_number=$1)",
-    [studentNumber],
-  );
-  await pool.query("DELETE FROM appointments WHERE student_number=$1", [
-    studentNumber,
-  ]);
-  await pool.query(
-    "DELETE FROM ovpsa_first_year_active_memberships WHERE student_number=$1",
-    [studentNumber],
-  );
-  await pool.query(
-    "ALTER TABLE ovpsa_first_year_membership_snapshots DISABLE TRIGGER ovpsa_first_year_membership_snapshots_immutable",
-  );
-  await pool.query(
-    "DELETE FROM ovpsa_first_year_membership_snapshots WHERE student_number=$1",
-    [studentNumber],
-  );
-  await pool.query(
-    "ALTER TABLE ovpsa_first_year_membership_snapshots ENABLE TRIGGER ovpsa_first_year_membership_snapshots_immutable",
-  );
-  await pool.query(
-    "DELETE FROM ovpsa_first_year_service_reservations WHERE batch_id IN (SELECT id FROM ovpsa_first_year_batches WHERE schedule_cycle_start=$1)",
-    [cycleStart],
-  );
-  await pool.query(
-    "UPDATE ovpsa_first_year_batches SET current_revision_id=NULL WHERE schedule_cycle_start=$1",
-    [cycleStart],
-  );
-  await pool.query(
-    "DELETE FROM ovpsa_first_year_batch_revisions WHERE batch_id IN (SELECT id FROM ovpsa_first_year_batches WHERE schedule_cycle_start=$1)",
-    [cycleStart],
-  );
-  await pool.query(
-    "DELETE FROM ovpsa_first_year_batches WHERE schedule_cycle_start=$1",
-    [cycleStart],
-  );
-  await pool.query(
-    "DELETE FROM coordinator_schedule_items WHERE batch_id IN (SELECT id FROM schedule_batches WHERE import_group_id IN (SELECT id FROM schedule_import_groups WHERE source_filename=$1))",
-    [sourceFilename],
-  );
-  await pool.query(
-    "DELETE FROM schedule_batches WHERE import_group_id IN (SELECT id FROM schedule_import_groups WHERE source_filename=$1)",
-    [sourceFilename],
-  );
-  await pool.query(
-    "ALTER TABLE student_academic_snapshots DISABLE TRIGGER student_academic_snapshots_immutable",
-  );
-  await pool.query(
-    "DELETE FROM student_academic_snapshots WHERE student_number=$1",
-    [studentNumber],
-  );
-  await pool.query(
-    "ALTER TABLE student_academic_snapshots ENABLE TRIGGER student_academic_snapshots_immutable",
-  );
-  await pool.query("DELETE FROM schedule_import_groups WHERE source_filename=$1", [sourceFilename]);
-  await pool.query("DELETE FROM students WHERE student_number=$1", [
-    studentNumber,
-  ]);
-  await pool.query("DELETE FROM academic_years WHERE start_year=$1", [
-    cycleStart,
-  ]);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      "DELETE FROM audit_logs WHERE metadata->>'studentNumber'=$1 OR entity_id IN (SELECT id::text FROM ovpsa_first_year_batches WHERE schedule_cycle_start=$2) OR entity_id IN (SELECT id::text FROM schedule_import_groups WHERE source_filename=$4) OR actor_user_id=$3",
+      [studentNumber, cycleStart, cpuStaffUserId, sourceFilename],
+    );
+    await client.query("DELETE FROM email_outbox WHERE student_number=$1", [studentNumber]);
+    await client.query("DELETE FROM student_portal_notifications WHERE student_number=$1", [studentNumber]);
+    await client.query("ALTER TABLE ovpsa_external_laboratory_verifications DISABLE TRIGGER ovpsa_external_laboratory_verifications_immutable");
+    await client.query(
+      "DELETE FROM ovpsa_external_laboratory_verifications WHERE appointment_id IN (SELECT id FROM appointments WHERE student_number=$1)",
+      [studentNumber],
+    );
+    await client.query("ALTER TABLE ovpsa_external_laboratory_verifications ENABLE TRIGGER ovpsa_external_laboratory_verifications_immutable");
+    await client.query("DELETE FROM appointment_reschedule_events WHERE student_number=$1", [studentNumber]);
+    await client.query("DELETE FROM laboratory_results WHERE student_number=$1", [studentNumber]);
+    await client.query("DELETE FROM exam_results WHERE student_number=$1", [studentNumber]);
+    await client.query(
+      "DELETE FROM appointment_status_logs WHERE appointment_id IN (SELECT id FROM appointments WHERE student_number=$1)",
+      [studentNumber],
+    );
+    await client.query("DELETE FROM appointments WHERE student_number=$1", [studentNumber]);
+    await client.query("DELETE FROM ovpsa_first_year_active_memberships WHERE student_number=$1", [studentNumber]);
+    await client.query("ALTER TABLE ovpsa_first_year_membership_snapshots DISABLE TRIGGER ovpsa_first_year_membership_snapshots_immutable");
+    await client.query("DELETE FROM ovpsa_first_year_membership_snapshots WHERE student_number=$1", [studentNumber]);
+    await client.query("ALTER TABLE ovpsa_first_year_membership_snapshots ENABLE TRIGGER ovpsa_first_year_membership_snapshots_immutable");
+    await client.query(
+      "DELETE FROM ovpsa_first_year_service_reservations WHERE batch_id IN (SELECT id FROM ovpsa_first_year_batches WHERE schedule_cycle_start=$1)",
+      [cycleStart],
+    );
+    await client.query("UPDATE ovpsa_first_year_batches SET current_revision_id=NULL WHERE schedule_cycle_start=$1", [cycleStart]);
+    await client.query(
+      "DELETE FROM ovpsa_first_year_batch_revisions WHERE batch_id IN (SELECT id FROM ovpsa_first_year_batches WHERE schedule_cycle_start=$1)",
+      [cycleStart],
+    );
+    await client.query("DELETE FROM ovpsa_first_year_batches WHERE schedule_cycle_start=$1", [cycleStart]);
+    await client.query(
+      "DELETE FROM coordinator_schedule_items WHERE batch_id IN (SELECT id FROM schedule_batches WHERE import_group_id IN (SELECT id FROM schedule_import_groups WHERE source_filename=$1))",
+      [sourceFilename],
+    );
+    await client.query(
+      "DELETE FROM schedule_batches WHERE import_group_id IN (SELECT id FROM schedule_import_groups WHERE source_filename=$1)",
+      [sourceFilename],
+    );
+    await client.query("ALTER TABLE student_academic_snapshots DISABLE TRIGGER student_academic_snapshots_immutable");
+    await client.query("DELETE FROM student_academic_snapshots WHERE student_number=$1", [studentNumber]);
+    await client.query("ALTER TABLE student_academic_snapshots ENABLE TRIGGER student_academic_snapshots_immutable");
+    await client.query("DELETE FROM schedule_import_groups WHERE source_filename=$1", [sourceFilename]);
+    await client.query("DELETE FROM students WHERE student_number=$1", [studentNumber]);
+    await client.query("DELETE FROM academic_years WHERE start_year=$1", [cycleStart]);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 beforeAll(async () => {

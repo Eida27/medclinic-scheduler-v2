@@ -377,7 +377,7 @@ function snapshots(): SnapshotSeed[] {
     const specialNames: Record<number, string> = {
       1: "Acceptance, Replacement Student",
       2: "Historical, Graduated Student",
-      3: "Migration, Incomplete Student",
+      3: "Compliance, Physical Examination Student",
       4: "Laboratory, Incomplete Student",
       5: "Acceptance, Completed Student",
     };
@@ -597,7 +597,7 @@ function isExactPdfAudit(candidate: AuditCandidate) {
   const metadata = candidate.metadata;
   return metadata.academicYearStart === year.startYear && metadata.academicYearLabel === year.label
     && isRecord(metadata.filters) && typeof metadata.sort === "string" && REPORT_SORTS.has(metadata.sort)
-    && Number.isInteger(metadata.rowCount) && (metadata.rowCount as number) > 0
+    && Number.isInteger(metadata.rowCount) && (metadata.rowCount as number) >= 0
     && (metadata.rowCount as number) <= 10_000 && isIsoTimestamp(metadata.generatedAt)
     && Number.isInteger(metadata.generationDurationMs) && (metadata.generationDurationMs as number) >= 0;
 }
