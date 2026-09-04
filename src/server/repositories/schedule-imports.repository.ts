@@ -264,8 +264,8 @@ type ExistingStudent = {
 };
 
 type ResolvedRow = ImportedStudentRow & {
-  collegeId: string | null;
-  programId: string | null;
+  collegeId: string;
+  programId: string;
   resolvedCollegeName: string;
   resolvedProgramCode: string;
   resolvedProgramName: string;
@@ -328,7 +328,8 @@ export async function createScheduleImport(
       programs.rows,
       (program) => `${program.college_id}:${normalizeComparable(program.code)}`,
     );
-    const validatedRows = input.rows.map((row) => {
+    const validatedRows: ResolvedRow[] = [];
+    for (const row of input.rows) {
       const college = collegeByName.get(normalizeComparable(row.collegeName));
       if (!college) {
         addFieldError(
@@ -336,29 +337,31 @@ export async function createScheduleImport(
           `rows.${row.rowNumber}.College`,
           "College must match an active college name.",
         );
+        continue;
       }
-      const program = college
-        ? programByCollegeAndCode.get(`${college.id}:${normalizeComparable(row.courseCode)}`)
-        : null;
-      if (college && !program) {
+      const program = programByCollegeAndCode.get(
+        `${college.id}:${normalizeComparable(row.courseCode)}`,
+      );
+      if (!program) {
         addFieldError(
           fields,
           `rows.${row.rowNumber}.Course`,
           "Course must match an active code in the selected college.",
         );
+        continue;
       }
 
-      return {
+      validatedRows.push({
         ...row,
-        collegeId: college?.id ?? null,
-        programId: program?.id ?? null,
-        resolvedCollegeName: college?.name ?? row.collegeName,
-        resolvedProgramCode: program?.code ?? row.courseCode,
-        resolvedProgramName: program?.name ?? row.courseCode,
+        collegeId: college.id,
+        programId: program.id,
+        resolvedCollegeName: college.name,
+        resolvedProgramCode: program.code,
+        resolvedProgramName: program.name,
         existedBeforeImport: false,
         alreadyScheduledForCycle: false,
-      };
-    });
+      });
+    }
 
     if (Object.keys(fields).length) return { fields };
 

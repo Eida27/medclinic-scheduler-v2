@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { randomUUID } from "node:crypto";
+import type { PoolClient } from "pg";
 import { afterAll, describe, expect, it } from "vitest";
 import { pool } from "@/server/db/pool";
 import { TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
@@ -23,7 +24,7 @@ function candidate(sourceImportGroupId: string, overrides: Record<string, unknow
   };
 }
 
-async function createImportGroup(client: Awaited<ReturnType<typeof pool.connect>>) {
+async function createImportGroup(client: PoolClient) {
   const id = randomUUID();
   await client.query(
     `INSERT INTO schedule_import_groups (

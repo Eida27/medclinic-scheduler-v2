@@ -1,5 +1,7 @@
 # Reports and Historical Compliance Implementation Plan
 
+> **Superseded:** This plan is replaced by the [2026-09-01 Reports Data-Quality and Historical-Migration Cleanup design](../specs/2026-09-01-reports-data-quality-cleanup-design.md) and its [2026-09-02 implementation plan](./2026-09-02-reports-data-quality-cleanup.md). The current architecture removes pre-deployment historical recovery and user-facing Data Quality, uses schedule import groups as the only snapshot provenance, and retains immutable historical academic snapshots.
+
 **Goal:** Replace the administrator Appointments summary with an immutable, academic-year-scoped historical compliance report and filtered PDF export while preserving all operational appointment workflows.
 
 **Source design:** `docs/superpowers/specs/2026-08-02-reports-historical-compliance-design.md`
