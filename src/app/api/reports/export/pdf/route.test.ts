@@ -48,7 +48,6 @@ function report(items = [
     physicalExamAppointmentDate: "2026-07-02",
     physicalExamStatus: "COMPLETED" as const,
     overallStatus: "COMPLIED" as const,
-    dataQuality: "VERIFIED_HISTORICAL" as const,
   },
   {
     studentNumber: "2025-00151",
@@ -66,7 +65,6 @@ function report(items = [
     physicalExamAppointmentDate: "2026-07-02",
     physicalExamStatus: "COMPLETED" as const,
     overallStatus: "DID_NOT_COMPLY_LABORATORY" as const,
-    dataQuality: "MIGRATED_INCOMPLETE" as const,
   },
 ]) {
   return {
@@ -91,7 +89,6 @@ function report(items = [
       laboratoryIncomplete: 1,
       physicalExamIncomplete: 0,
       bothIncomplete: 0,
-      migratedIncomplete: 1,
     },
     breakdowns: { colleges: [], programs: [], yearLevels: [] },
     dimensions: { colleges: [], programs: [], yearLevels: [] },
@@ -138,6 +135,8 @@ describe("GET /api/reports/export/pdf", () => {
       "Alpha, Ana\n2025-00001",
       "Zulu, Zoe\n2025-00151",
     ]);
+    expect(model.appliedFilters.map((filter: { label: string }) => filter.label)).not.toContain("Data Quality");
+    expect(model.details.every((row: object) => !("dataQuality" in row))).toBe(true);
   });
 
   it("audits a successful finalized export with actor, normalized filters, sort, count, and timing", async () => {

@@ -28,7 +28,6 @@ function source(rowCount: number): HistoricalCompliancePdfSource {
     physicalExamAppointmentDate: "2026-07-02",
     physicalExamStatus: "COMPLETED" as const,
     overallStatus: index % 2 ? "COMPLIED" as const : "DID_NOT_COMPLY_LABORATORY" as const,
-    dataQuality: index % 3 ? "VERIFIED_HISTORICAL" as const : "MIGRATED_INCOMPLETE" as const,
   }));
   return {
     academicYear: {
@@ -55,7 +54,6 @@ function source(rowCount: number): HistoricalCompliancePdfSource {
       laboratoryIncomplete: Math.ceil(rowCount / 2),
       physicalExamIncomplete: 0,
       bothIncomplete: 0,
-      migratedIncomplete: Math.ceil(rowCount / 3),
     },
     breakdowns: {
       colleges: [{ collegeId: null, collegeName: "College of Engineering", totalStudents: rowCount, fullyComplied: Math.floor(rowCount / 2), attentionStudents: Math.ceil(rowCount / 2), complianceRate: 50 }],
@@ -123,6 +121,30 @@ describe("historical compliance PDF renderer", () => {
     expect(raw.trimEnd().endsWith("%%EOF")).toBe(true);
   });
 
+  it("uses the seven-column 724-point provenance-free detail layout", async () => {
+    const model = buildHistoricalCompliancePdfModel(
+      source(2),
+      { userId: "admin-1", fullName: "Ada Administrator" },
+      new Date("2026-08-02T02:03:04.000Z"),
+    );
+    const { events, pdf } = await renderWithEvents(model);
+    const detailHeaders = events.filter(({ kind }) => kind === "detail-header");
+
+    expect(detailHeaders.slice(0, 7).map(({ text, width }) => ({ text, width: width + 6 }))).toEqual([
+      { text: "Student", width: 132 },
+      { text: "College", width: 98 },
+      { text: "Program", width: 154 },
+      { text: "Year", width: 40 },
+      { text: "Laboratory", width: 92 },
+      { text: "Physical Examination", width: 92 },
+      { text: "Overall", width: 116 },
+    ]);
+    expect(detailHeaders.slice(0, 7).reduce((total, { width }) => total + width + 6, 0)).toBe(724);
+    expect(await extractedPdfText(pdf)).not.toMatch(
+      /Data Quality|Verified Historical|Recovered Historical|Migrated - Incomplete Historical Data|Migrated\/incomplete history/,
+    );
+  });
+
   it("draws every student identifier and exactly one detail header on each detail page", async () => {
     const report = source(120);
     const model = buildHistoricalCompliancePdfModel(
@@ -133,7 +155,7 @@ describe("historical compliance PDF renderer", () => {
     const { events, raw } = await renderWithEvents(model);
     const pageCount = raw.split("/Type /Page\n").length - 1;
     const studentDraws = events.filter(({ kind }) => kind === "detail-student");
-    const detailHeaders = events.filter(({ kind }) => kind === "detail-header");
+    const detailHeaders = events.filter(({ kind, text }) => kind === "detail-header" && text === "Student");
     const detailPages = new Set(studentDraws.map(({ page }) => page));
 
     expect(studentDraws).toHaveLength(report.items.length);

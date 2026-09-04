@@ -19,7 +19,6 @@ const report = {
     collegeId: "10000000-0000-4000-8000-000000000001",
     programId: "20000000-0000-4000-8000-000000000001",
     yearLevel: 4,
-    dataQuality: "MIGRATED_INCOMPLETE" as const,
     sort: "name_asc" as const,
     page: 3,
     limit: 150 as const,
@@ -35,7 +34,6 @@ const report = {
     laboratoryIncomplete: 1,
     physicalExamIncomplete: 0,
     bothIncomplete: 0,
-    migratedIncomplete: 1,
   },
   breakdowns: {
     colleges: [{
@@ -91,7 +89,6 @@ const report = {
     physicalExamAppointmentDate: "2026-07-02",
     physicalExamStatus: "COMPLETED" as const,
     overallStatus: "DID_NOT_COMPLY_LABORATORY" as const,
-    dataQuality: "MIGRATED_INCOMPLETE" as const,
   }],
 };
 
@@ -111,7 +108,7 @@ describe("historical compliance PDF document model", () => {
     })).toBe("cpu-medclinic-compliance-report-2025-2026-2026-08-02.pdf");
   });
 
-  it("derives provenance, normalized filter labels, all breakdowns, and every detail field", () => {
+  it("derives normalized filter labels, all breakdowns, and provenance-free detail fields", () => {
     const model = buildHistoricalCompliancePdfModel(
       report,
       { userId: "admin-1", fullName: "Adá Administrator" },
@@ -138,7 +135,6 @@ describe("historical compliance PDF document model", () => {
       { label: "College", value: "College of Engineering" },
       { label: "Program", value: "BSChE - Bachelor of Science in Chemical Engineering" },
       { label: "Year Level", value: "4" },
-      { label: "Data Quality", value: "Migrated - Incomplete Historical Data" },
       { label: "Sort", value: "Student name (A-Z)" },
     ]);
     expect(model.summary).toEqual(report.summary);
@@ -155,8 +151,12 @@ describe("historical compliance PDF document model", () => {
       laboratory: "July 1, 2026\nNo Show",
       physicalExam: "July 2, 2026\nCompleted",
       overall: "Did Not Comply - Laboratory",
-      dataQuality: "Migrated - Incomplete Historical Data",
     })]);
+    expect(model.appliedFilters.map(({ label }) => label)).not.toContain("Data Quality");
+    expect(model.details[0]).not.toHaveProperty("dataQuality");
+    expect(JSON.stringify(model)).not.toMatch(
+      /Data Quality|Verified Historical|Recovered Historical|Migrated - Incomplete Historical Data|Migrated\/incomplete history/,
+    );
   });
 
   it("labels a reassigned program from the selected historical college tuple", () => {

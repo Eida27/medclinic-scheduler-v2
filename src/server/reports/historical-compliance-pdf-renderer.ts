@@ -258,7 +258,6 @@ function drawSummary(
     `Laboratory incomplete: ${model.summary.laboratoryIncomplete}`,
     `Physical Examination incomplete: ${model.summary.physicalExamIncomplete}`,
     `Both incomplete: ${model.summary.bothIncomplete}`,
-    `Migrated/incomplete history: ${model.summary.migratedIncomplete}`,
   ];
   doc.fillColor(MUTED).font(REGULAR_FONT).fontSize(7)
     .text(secondary.join("   |   "), PAGE.left, y + 47, { width: pageWidth(), align: "center" });
@@ -348,14 +347,13 @@ function drawBreakdowns(
 }
 
 const detailColumns = [
-  { key: "student", label: "Student", width: 104 },
-  { key: "college", label: "College", width: 87 },
-  { key: "program", label: "Program", width: 111 },
-  { key: "yearLevel", label: "Year", width: 34 },
-  { key: "laboratory", label: "Laboratory", width: 82 },
-  { key: "physicalExam", label: "Physical Examination", width: 82 },
-  { key: "overall", label: "Overall", width: 104 },
-  { key: "dataQuality", label: "Data Quality", width: 120 },
+  { key: "student", label: "Student", width: 132 },
+  { key: "college", label: "College", width: 98 },
+  { key: "program", label: "Program", width: 154 },
+  { key: "yearLevel", label: "Year", width: 40 },
+  { key: "laboratory", label: "Laboratory", width: 92 },
+  { key: "physicalExam", label: "Physical Examination", width: 92 },
+  { key: "overall", label: "Overall", width: 116 },
 ] as const;
 
 function drawDetailHeading(
@@ -382,18 +380,14 @@ function drawDetailHeading(
       lineBreak: false,
       ellipsis: true,
     } satisfies PDFKit.Mixins.TextOptions;
-    if (column.key === "student") {
-      drawObservedText(doc, observer, {
-        kind: "detail-header",
-        text: column.label,
-        x: x + 3,
-        y: y + 6,
-        width: column.width - 6,
-        height: 22,
-      }, textOptions);
-    } else {
-      doc.text(column.label, x + 3, y + 6, textOptions);
-    }
+    drawObservedText(doc, observer, {
+      kind: "detail-header",
+      text: column.label,
+      x: x + 3,
+      y: y + 6,
+      width: column.width - 6,
+      height: 22,
+    }, textOptions);
     x += column.width;
   }
   doc.y = y + 22;

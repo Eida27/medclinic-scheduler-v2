@@ -1,8 +1,6 @@
 import { manilaCalendarDate, type AcademicYearState } from "./academic-year";
 import {
   historicalComplianceLabel,
-  historicalDataQualityLabel,
-  type HistoricalDataQuality,
   type HistoricalReportFilters,
   type HistoricalRequirementStatus,
 } from "./historical-compliance-report";
@@ -203,7 +201,6 @@ export function buildHistoricalCompliancePdfModel(
       { label: "College", value: collegeLabel },
       { label: "Program", value: programLabel },
       { label: "Year Level", value: report.filters.yearLevel?.toString() ?? "All" },
-      { label: "Data Quality", value: report.filters.dataQuality ? historicalDataQualityLabel(report.filters.dataQuality) : "All" },
       { label: "Sort", value: sortLabels[report.filters.sort] },
     ],
     summary: { ...report.summary },
@@ -232,7 +229,6 @@ export function buildHistoricalCompliancePdfModel(
       laboratory: appointmentLabel(row.laboratoryAppointmentDate, row.laboratoryStatus),
       physicalExam: appointmentLabel(row.physicalExamAppointmentDate, row.physicalExamStatus),
       overall: historicalComplianceLabel(row.overallStatus),
-      dataQuality: historicalDataQualityLabel(row.dataQuality as HistoricalDataQuality),
     })),
   };
 }
