@@ -4,7 +4,6 @@ import { Badge } from "@/components/ui/Badge";
 import { Card, CardTitle } from "@/components/ui/Card";
 import {
   historicalComplianceLabel,
-  historicalDataQualityLabel,
 } from "@/lib/historical-compliance-report";
 import type { HistoricalComplianceReportItem } from "@/server/repositories/historical-compliance-report.repository";
 
@@ -29,7 +28,7 @@ export function ReportRecordsTable({ items }: { items: HistoricalComplianceRepor
     <Card className="overflow-hidden p-0">
       <div className="px-5 pt-5"><CardTitle>Detailed records</CardTitle></div>
       <div className="overflow-x-auto">
-        <table className="mt-3 w-full min-w-[72rem] text-left text-sm" aria-label="Detailed historical compliance records">
+        <table className="mt-3 w-full min-w-[64rem] text-left text-sm" aria-label="Detailed historical compliance records">
           <thead className="bg-cpu-navy-soft/70">
             <tr>
               <th className="px-5 py-3">Student</th>
@@ -39,7 +38,6 @@ export function ReportRecordsTable({ items }: { items: HistoricalComplianceRepor
               <th className="px-5 py-3">Laboratory</th>
               <th className="px-5 py-3">Physical Examination</th>
               <th className="px-5 py-3">Overall</th>
-              <th className="px-5 py-3">Data quality</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-line">
@@ -67,11 +65,6 @@ export function ReportRecordsTable({ items }: { items: HistoricalComplianceRepor
                 </td>
                 <td className="px-5 py-4">
                   <Badge tone={overallTone(item.overallStatus)}>{historicalComplianceLabel(item.overallStatus)}</Badge>
-                </td>
-                <td className="px-5 py-4">
-                  <Badge tone={item.dataQuality === "MIGRATED_INCOMPLETE" ? "warning" : "info"}>
-                    {historicalDataQualityLabel(item.dataQuality)}
-                  </Badge>
                 </td>
               </tr>
             ))}

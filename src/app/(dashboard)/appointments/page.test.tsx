@@ -30,7 +30,7 @@ describe("AppointmentsPage legacy redirect", () => {
     });
 
     expect(redirect).toHaveBeenCalledWith(
-      "/reports?academicYearStart=2025&search=Aaron+Abad&overallStatus=COMPLIED&laboratoryStatus=NO_SHOW&physicalExamStatus=COMPLETED&collegeId=11111111-1111-4111-8111-111111111111&programId=22222222-2222-4222-8222-222222222222&yearLevel=4&dataQuality=RECOVERED_HISTORICAL&sort=name_desc&page=2",
+      "/reports?academicYearStart=2025&search=Aaron+Abad&overallStatus=COMPLIED&laboratoryStatus=NO_SHOW&physicalExamStatus=COMPLETED&collegeId=11111111-1111-4111-8111-111111111111&programId=22222222-2222-4222-8222-222222222222&yearLevel=4&sort=name_desc&page=2",
     );
   });
 

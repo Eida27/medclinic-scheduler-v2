@@ -1,6 +1,5 @@
 import {
   historicalReportSorts,
-  type HistoricalDataQuality,
   type HistoricalOverallStatusFilter,
   type HistoricalReportSort,
   type HistoricalRequirementStatus,
@@ -22,11 +21,6 @@ const overallStatuses = new Set<HistoricalOverallStatusFilter>([
   "COMPLIED",
   "PENDING_COMPLIANCE",
   "DID_NOT_COMPLY",
-]);
-const dataQualities = new Set<HistoricalDataQuality>([
-  "VERIFIED_HISTORICAL",
-  "RECOVERED_HISTORICAL",
-  "MIGRATED_INCOMPLETE",
 ]);
 const sorts = new Set<HistoricalReportSort>(historicalReportSorts);
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -80,8 +74,6 @@ export function historicalReportRedirectTarget(
 
   const yearLevel = positiveInteger(first(params.yearLevel), 1, 6);
   if (yearLevel) query.set("yearLevel", yearLevel);
-  const dataQuality = member(first(params.dataQuality), dataQualities);
-  if (dataQuality) query.set("dataQuality", dataQuality);
   const sort = member(first(params.sort), sorts);
   if (sort) query.set("sort", sort);
   const page = positiveInteger(first(params.page), 1, Number.MAX_SAFE_INTEGER);

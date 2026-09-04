@@ -3,7 +3,6 @@ import {
   REPORT_PAGE_SIZE,
   classifyHistoricalCompliance,
   historicalComplianceLabel,
-  historicalDataQualityLabel,
   parseHistoricalReportQuery,
 } from "./historical-compliance-report";
 
@@ -30,12 +29,24 @@ describe("historical report query parser", () => {
       collegeId: "10000000-0000-4000-8000-000000000003",
       programId: "20000000-0000-4000-8000-000000000003",
       yearLevel: 4,
-      dataQuality: "RECOVERED_HISTORICAL",
       sort: "program_desc",
       page: 3,
       limit: REPORT_PAGE_SIZE,
       offset: 300,
     });
+  });
+
+  it("silently ignores valid and stale data-quality query values", () => {
+    for (const dataQuality of ["RECOVERED_HISTORICAL", "MIGRATED_INCOMPLETE", "stale-value"]) {
+      expect(parseHistoricalReportQuery({ academicYearStart: "2025", dataQuality }))
+        .toEqual({
+          academicYearStart: 2025,
+          sort: "college_asc",
+          page: 1,
+          limit: REPORT_PAGE_SIZE,
+          offset: 0,
+        });
+    }
   });
 
   it("safely defaults invalid optional values and preserves a missing required year", () => {
@@ -90,11 +101,4 @@ describe("historical report labels", () => {
     expect(historicalComplianceLabel(value)).toBe(label);
   });
 
-  it.each([
-    ["VERIFIED_HISTORICAL", "Verified Historical"],
-    ["RECOVERED_HISTORICAL", "Recovered Historical"],
-    ["MIGRATED_INCOMPLETE", "Migrated - Incomplete Historical Data"],
-  ] as const)("labels data quality %s", (value, label) => {
-    expect(historicalDataQualityLabel(value)).toBe(label);
-  });
 });

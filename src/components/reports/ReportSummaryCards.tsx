@@ -22,7 +22,6 @@ export function ReportSummaryCards({
     ["Laboratory incomplete", summary.laboratoryIncomplete],
     ["Physical Examination incomplete", summary.physicalExamIncomplete],
     ["Both incomplete", summary.bothIncomplete],
-    ["Migrated or incomplete historical", summary.migratedIncomplete],
   ];
 
   return (

@@ -32,11 +32,6 @@ export type HistoricalComplianceClassification =
   | "DID_NOT_COMPLY_PHYSICAL_EXAM"
   | "DID_NOT_COMPLY_BOTH";
 
-export type HistoricalDataQuality =
-  | "VERIFIED_HISTORICAL"
-  | "RECOVERED_HISTORICAL"
-  | "MIGRATED_INCOMPLETE";
-
 export type HistoricalOverallStatusFilter =
   | "COMPLIED"
   | "PENDING_COMPLIANCE"
@@ -51,7 +46,6 @@ export type HistoricalReportFilters = {
   collegeId?: string;
   programId?: string;
   yearLevel?: number;
-  dataQuality?: HistoricalDataQuality;
   sort: HistoricalReportSort;
   page: number;
   limit: typeof REPORT_PAGE_SIZE;
@@ -71,11 +65,6 @@ const overallStatuses = new Set<HistoricalOverallStatusFilter>([
   "COMPLIED",
   "PENDING_COMPLIANCE",
   "DID_NOT_COMPLY",
-]);
-const dataQualities = new Set<HistoricalDataQuality>([
-  "VERIFIED_HISTORICAL",
-  "RECOVERED_HISTORICAL",
-  "MIGRATED_INCOMPLETE",
 ]);
 const sorts = new Set<HistoricalReportSort>(historicalReportSorts);
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -125,9 +114,6 @@ export function parseHistoricalReportQuery(input: Record<string, unknown>): Hist
     ...(collegeId && { collegeId }),
     ...(programId && { programId }),
     ...(yearLevel && { yearLevel }),
-    ...(member(input.dataQuality, dataQualities) && {
-      dataQuality: member(input.dataQuality, dataQualities),
-    }),
     sort: member(input.sort, sorts) ?? "college_asc",
     page,
     limit: REPORT_PAGE_SIZE,
@@ -156,13 +142,5 @@ export function historicalComplianceLabel(value: HistoricalComplianceClassificat
     DID_NOT_COMPLY_LABORATORY: "Did Not Comply - Laboratory",
     DID_NOT_COMPLY_PHYSICAL_EXAM: "Did Not Comply - Physical Examination",
     DID_NOT_COMPLY_BOTH: "Did Not Comply - Both Requirements",
-  }[value];
-}
-
-export function historicalDataQualityLabel(value: HistoricalDataQuality) {
-  return {
-    VERIFIED_HISTORICAL: "Verified Historical",
-    RECOVERED_HISTORICAL: "Recovered Historical",
-    MIGRATED_INCOMPLETE: "Migrated - Incomplete Historical Data",
   }[value];
 }

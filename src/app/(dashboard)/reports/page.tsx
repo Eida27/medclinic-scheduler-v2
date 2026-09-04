@@ -122,11 +122,6 @@ export default async function ReportsPage({
         </Badge>
       </Card>
       <ReportSummaryCards state={yearState} summary={report.summary} />
-      {report.summary.migratedIncomplete > 0 ? (
-        <Card role="status" className="border-amber-300 bg-amber-50 text-sm text-amber-950">
-          <span className="font-bold">Historical data notice:</span> {report.summary.migratedIncomplete} records use migrated or incomplete historical data. Review the data-quality label in the detailed table.
-        </Card>
-      ) : null}
       <ReportBreakdowns
         breakdowns={report.breakdowns}
         filters={report.filters}

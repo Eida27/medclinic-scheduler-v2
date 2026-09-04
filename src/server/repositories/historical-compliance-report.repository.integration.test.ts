@@ -71,7 +71,6 @@ async function insertSnapshot(input: {
   programCode: string;
   programName: string;
   yearLevel: number;
-  sourceType?: string;
 }) {
   await client.query(
     `INSERT INTO student_academic_snapshots (
@@ -513,16 +512,17 @@ describe("historical compliance report service", () => {
     });
   });
 
-  it("applies snapshot dimensions, data quality, and overall noncompliance filters", async () => {
+  it("applies snapshot dimensions and overall noncompliance filters without provenance", async () => {
     const report = await getHistoricalComplianceReport({
       academicYearStart: String(YEAR),
       collegeId: colleges.beta,
       programId: programs.beta,
       yearLevel: "3",
-      dataQuality: "MIGRATED_INCOMPLETE",
       overallStatus: "DID_NOT_COMPLY",
     }, closedNow, client);
     expect(report.items.map((row) => row.studentNumber)).toEqual(["RPT-CORE-0002"]);
+    expect(report.items[0]).not.toHaveProperty("dataQuality");
+    expect(report.summary).not.toHaveProperty("migratedIncomplete");
   });
 
   it("keeps every historical college-program tuple when one program ID was reassigned", async () => {

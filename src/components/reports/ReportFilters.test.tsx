@@ -29,6 +29,17 @@ const dimensions = {
 };
 
 describe("ReportFilters", () => {
+  it("does not render a data-quality control", () => {
+    render(<ReportFilters
+      years={[{ startYear: 2025, label: "2025–2026" }]}
+      filters={filters}
+      dimensions={dimensions}
+    />);
+
+    expect(screen.queryByRole("combobox", { name: /data quality/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/verified historical|recovered historical|migrated/i)).not.toBeInTheDocument();
+  });
+
   it("preserves a compatible program-only filter and clears it when college becomes incompatible", async () => {
     render(<ReportFilters
       years={[{ startYear: 2025, label: "2025–2026" }]}

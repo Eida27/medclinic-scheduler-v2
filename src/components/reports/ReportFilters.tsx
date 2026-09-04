@@ -8,7 +8,6 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import {
   historicalReportSorts,
-  type HistoricalDataQuality,
   type HistoricalOverallStatusFilter,
   type HistoricalReportFilters,
   type HistoricalRequirementStatus,
@@ -93,11 +92,6 @@ const overallStatuses: Array<[HistoricalOverallStatusFilter, string]> = [
   ["COMPLIED", "Complied"],
   ["PENDING_COMPLIANCE", "Pending Compliance"],
   ["DID_NOT_COMPLY", "Did Not Comply"],
-];
-const dataQualities: Array<[HistoricalDataQuality, string]> = [
-  ["VERIFIED_HISTORICAL", "Verified Historical"],
-  ["RECOVERED_HISTORICAL", "Recovered Historical"],
-  ["MIGRATED_INCOMPLETE", "Migrated - Incomplete Historical Data"],
 ];
 const sortLabels: Record<typeof historicalReportSorts[number], string> = {
   college_asc: "College: A-Z",
@@ -217,12 +211,6 @@ export function ReportFilters({
             {dimensions.yearLevels.map((yearLevel) => (
               <option key={yearLevel} value={yearLevel}>Year {yearLevel}</option>
             ))}
-          </Select>
-        </Field>
-        <Field label="Data quality">
-          <Select name="dataQuality" defaultValue={filters.dataQuality ?? ""}>
-            <option value="">Any data quality</option>
-            {dataQualities.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </Select>
         </Field>
         <Field label="Sort">

@@ -52,7 +52,6 @@ const report = {
     collegeId,
     programId,
     yearLevel: 4,
-    dataQuality: "MIGRATED_INCOMPLETE",
     sort: "name_desc",
     page: 2,
     limit: 150,
@@ -74,7 +73,6 @@ const report = {
     physicalExamAppointmentDate: "2026-07-21",
     physicalExamStatus: "COMPLETED",
     overallStatus: "DID_NOT_COMPLY_LABORATORY",
-    dataQuality: "MIGRATED_INCOMPLETE",
   }],
   total: 301,
   summary: {
@@ -86,7 +84,6 @@ const report = {
     laboratoryIncomplete: 80,
     physicalExamIncomplete: 70,
     bothIncomplete: 29,
-    migratedIncomplete: 11,
   },
   breakdowns: {
     colleges: [{
@@ -222,7 +219,7 @@ describe("ReportsPage", () => {
     })).rejects.toThrow("NEXT_REDIRECT");
 
     expect(redirect).toHaveBeenCalledWith(
-      `/reports?academicYearStart=2025&search=Aaron&overallStatus=DID_NOT_COMPLY&laboratoryStatus=NO_SHOW&physicalExamStatus=COMPLETED&collegeId=${collegeId}&yearLevel=4&dataQuality=MIGRATED_INCOMPLETE&sort=name_desc`,
+      `/reports?academicYearStart=2025&search=Aaron&overallStatus=DID_NOT_COMPLY&laboratoryStatus=NO_SHOW&physicalExamStatus=COMPLETED&collegeId=${collegeId}&yearLevel=4&sort=name_desc`,
     );
   });
 
@@ -287,7 +284,7 @@ describe("ReportsPage", () => {
     })).rejects.toThrow("NEXT_REDIRECT");
 
     expect(redirect).toHaveBeenCalledWith(
-      `/reports?academicYearStart=2025&search=Aaron&overallStatus=DID_NOT_COMPLY&laboratoryStatus=NO_SHOW&physicalExamStatus=COMPLETED&collegeId=${collegeId}&programId=${programId}&yearLevel=4&dataQuality=MIGRATED_INCOMPLETE&sort=name_desc&page=3`,
+      `/reports?academicYearStart=2025&search=Aaron&overallStatus=DID_NOT_COMPLY&laboratoryStatus=NO_SHOW&physicalExamStatus=COMPLETED&collegeId=${collegeId}&programId=${programId}&yearLevel=4&sort=name_desc&page=3`,
     );
   });
 
@@ -333,12 +330,11 @@ describe("ReportsPage", () => {
       ["Laboratory incomplete", "80"],
       ["Physical Examination incomplete", "70"],
       ["Both incomplete", "29"],
-      ["Migrated or incomplete historical", "11"],
     ]) {
       const metric = within(secondaryMetrics).getByText(label).closest("div");
       expect(metric).toHaveTextContent(value);
     }
-    expect(screen.getByRole("status")).toHaveTextContent("11 records use migrated or incomplete historical data");
+    expect(screen.queryByText(/migrated or incomplete historical/i)).not.toBeInTheDocument();
 
     const filterForm = screen.getByRole("form", { name: "Report filters" });
     expect(filterForm).toHaveAttribute("method", "get");
@@ -346,6 +342,7 @@ describe("ReportsPage", () => {
     expect(screen.getByRole("textbox", { name: "Student name or number" })).toHaveValue("Aaron");
     expect(screen.getByRole("combobox", { name: "Overall compliance" })).toHaveValue("DID_NOT_COMPLY");
     expect(screen.getByRole("combobox", { name: "Sort" })).toHaveValue("name_desc");
+    expect(screen.queryByRole("combobox", { name: /data quality/i })).not.toBeInTheDocument();
     expect(within(screen.getByRole("combobox", { name: "Program" })).getAllByRole("option").map((option) => option.textContent)).toEqual([
       "Any program",
       "BSCS — Computer Science",
@@ -371,8 +368,12 @@ describe("ReportsPage", () => {
     expect(within(row).getByText("No-show")).toBeVisible();
     expect(within(row).getByText("Completed")).toBeVisible();
     expect(within(row).getByText("Did Not Comply - Laboratory")).toBeVisible();
-    expect(within(row).getByText("Migrated - Incomplete Historical Data")).toBeVisible();
-    expect(screen.getByRole("table", { name: "Detailed historical compliance records" }).parentElement).toHaveClass("overflow-x-auto");
+    expect(within(row).getAllByRole("cell")).toHaveLength(7);
+    expect([...screen.getByRole("table", { name: "Detailed historical compliance records" }).querySelectorAll("th")]
+      .map((header) => header.textContent)).toEqual([
+        "Student", "Historical college", "Historical program", "Year", "Laboratory", "Physical Examination", "Overall",
+      ]);
+    expect(screen.getByRole("table", { name: "Detailed historical compliance records" })).toHaveClass("min-w-[64rem]");
 
     expect(screen.getByText("Page 2 of 3")).toBeVisible();
     const nextUrl = new URL(screen.getByRole("link", { name: "Next page" }).getAttribute("href")!, "http://localhost");
@@ -397,7 +398,6 @@ describe("ReportsPage", () => {
         laboratoryIncomplete: 0,
         physicalExamIncomplete: 0,
         bothIncomplete: 0,
-        migratedIncomplete: 0,
       },
       breakdowns: { colleges: [], programs: [], yearLevels: [] },
     });

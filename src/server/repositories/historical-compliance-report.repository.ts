@@ -2,7 +2,6 @@ import "server-only";
 import type { AcademicYearState } from "@/lib/academic-year";
 import type {
   HistoricalComplianceClassification,
-  HistoricalDataQuality,
   HistoricalReportFilters,
   HistoricalRequirementStatus,
 } from "@/lib/historical-compliance-report";
@@ -29,7 +28,6 @@ export type HistoricalComplianceReportItem = {
   physicalExamAppointmentDate: string | null;
   physicalExamStatus: HistoricalRequirementStatus;
   overallStatus: HistoricalComplianceClassification;
-  dataQuality: HistoricalDataQuality;
 };
 
 export type HistoricalComplianceSummary = {
@@ -41,7 +39,6 @@ export type HistoricalComplianceSummary = {
   laboratoryIncomplete: number;
   physicalExamIncomplete: number;
   bothIncomplete: number;
-  migratedIncomplete: number;
 };
 
 type BreakdownMetrics = {
@@ -129,7 +126,6 @@ export async function historicalComplianceReportRepository(
   if (filters.collegeId) add(`row."collegeId"=?::uuid`, filters.collegeId);
   if (filters.programId) add(`row."programId"=?::uuid`, filters.programId);
   if (filters.yearLevel) add(`row."yearLevel"=?`, filters.yearLevel);
-  if (filters.dataQuality) add(`row."dataQuality"=?`, filters.dataQuality);
 
   values.push(options.limit ?? filters.limit, options.offset ?? filters.offset);
   const limitParameter = `$${values.length - 1}`;
@@ -183,7 +179,6 @@ export async function historicalComplianceReportRepository(
               snapshot.program_code AS "programCode",
               snapshot.program_name AS "programName",
               snapshot.year_level AS "yearLevel",
-              snapshot.source_type AS "dataQuality",
               laboratory.id AS "laboratoryAppointmentId",
               laboratory.appointment_date::text AS "laboratoryAppointmentDate",
               COALESCE(laboratory.status,'UNSCHEDULED') AS "laboratoryStatus",
@@ -232,7 +227,7 @@ export async function historicalComplianceReportRepository(
                       'physicalExamAppointmentId',row."physicalExamAppointmentId",
                       'physicalExamAppointmentDate',row."physicalExamAppointmentDate",
                       'physicalExamStatus',row."physicalExamStatus",
-                      'overallStatus',row."overallStatus",'dataQuality',row."dataQuality"
+                      'overallStatus',row."overallStatus"
                     ) AS item,
                     ROW_NUMBER() OVER (ORDER BY ${ordering}) AS row_order
                FROM filtered_rows row
@@ -254,8 +249,7 @@ export async function historicalComplianceReportRepository(
            'physicalExamIncomplete',COUNT(*) FILTER (WHERE row."physicalExamStatus"<>'COMPLETED')::integer,
            'bothIncomplete',COUNT(*) FILTER (
              WHERE row."laboratoryStatus"<>'COMPLETED' AND row."physicalExamStatus"<>'COMPLETED'
-           )::integer,
-           'migratedIncomplete',COUNT(*) FILTER (WHERE row."dataQuality"='MIGRATED_INCOMPLETE')::integer
+           )::integer
          ) FROM filtered_rows row
        ),
        'breakdowns',jsonb_build_object(

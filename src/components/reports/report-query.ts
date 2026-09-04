@@ -18,7 +18,6 @@ export function buildReportSearchParams(
   if (next.collegeId) query.set("collegeId", next.collegeId);
   if (next.programId) query.set("programId", next.programId);
   if (next.yearLevel) query.set("yearLevel", String(next.yearLevel));
-  if (next.dataQuality) query.set("dataQuality", next.dataQuality);
   query.set("sort", next.sort);
   if (next.page > 1) query.set("page", String(next.page));
   return query;
