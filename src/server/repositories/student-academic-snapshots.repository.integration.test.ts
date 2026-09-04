@@ -100,7 +100,13 @@ describe("student academic snapshot gateway", () => {
 
       const conflict = await ensureStudentAcademicSnapshotsWithClient(client, {
         actorUserId,
-        candidates: [candidate(laterImportId, { collegeName: "Changed College" })],
+        candidates: [
+          candidate(laterImportId, { collegeName: "Changed College" }),
+          candidate(laterImportId, {
+            studentNumber: "91-0002-02",
+            studentName: "Would Insert, Student",
+          }),
+        ],
       });
       expect(conflict).toMatchObject({
         outcome: "CONFLICT",
@@ -110,6 +116,11 @@ describe("student academic snapshot gateway", () => {
           fields: ["collegeName"],
         }],
       });
+      const mixedSetResidue = await client.query(
+        `SELECT student_number FROM student_academic_snapshots
+          WHERE student_number='91-0002-02' AND academic_year_start=2091`,
+      );
+      expect(mixedSetResidue.rows).toEqual([]);
     } finally {
       await client.query("ROLLBACK");
       client.release();

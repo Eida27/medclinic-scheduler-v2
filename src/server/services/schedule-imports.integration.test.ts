@@ -371,6 +371,11 @@ describe("student scheduling imports", () => {
         WHERE action='SNAPSHOT_CONFLICT_DETECTED' AND entity_id=$1`,
       [`${studentNumber}:2026`],
     );
+    const attemptedImportCountBefore = await pool.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM schedule_import_groups
+        WHERE source_filename=$1 AND academic_year_start=2026`,
+      [sourceFilename],
+    );
     await expect(acceptAndScheduleImport(input(csv(
       `${studentNumber},Changed,Student,Maria Angela,,College of Computer Studies,BSIT,3,2004-06-07`,
     )), admin)).rejects.toMatchObject({
@@ -398,6 +403,12 @@ describe("student scheduling imports", () => {
       [`${studentNumber}:2026`],
     );
     expect(auditAfter.rows[0].count).toBe(auditBefore.rows[0].count + 1);
+    const attemptedImportCountAfter = await pool.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM schedule_import_groups
+        WHERE source_filename=$1 AND academic_year_start=2026`,
+      [sourceFilename],
+    );
+    expect(attemptedImportCountAfter.rows).toEqual(attemptedImportCountBefore.rows);
   });
 
   it("requires an academic year configuration before writing an import", async () => {
