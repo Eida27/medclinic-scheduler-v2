@@ -121,51 +121,48 @@ describe("historical compliance PDF renderer", () => {
     expect(raw.trimEnd().endsWith("%%EOF")).toBe(true);
   });
 
-  it("uses the seven-column 724-point provenance-free detail layout", async () => {
-    const model = buildHistoricalCompliancePdfModel(
-      source(2),
-      { userId: "admin-1", fullName: "Ada Administrator" },
-      new Date("2026-08-02T02:03:04.000Z"),
-    );
-    const { events, pdf } = await renderWithEvents(model);
-    const detailHeaders = events.filter(({ kind }) => kind === "detail-header");
-
-    expect(detailHeaders.slice(0, 7).map(({ text, width }) => ({ text, width: width + 6 }))).toEqual([
-      { text: "Student", width: 132 },
-      { text: "College", width: 98 },
-      { text: "Program", width: 154 },
-      { text: "Year", width: 40 },
-      { text: "Laboratory", width: 92 },
-      { text: "Physical Examination", width: 92 },
-      { text: "Overall", width: 116 },
-    ]);
-    expect(detailHeaders.slice(0, 7).reduce((total, { width }) => total + width + 6, 0)).toBe(724);
-    expect(await extractedPdfText(pdf)).not.toMatch(
-      /Data Quality|Verified Historical|Recovered Historical|Migrated - Incomplete Historical Data|Migrated\/incomplete history/,
-    );
-  });
-
-  it("draws every student identifier and exactly one detail header on each detail page", async () => {
+  it("draws every student identifier and all seven ordered detail headers on each detail page", async () => {
     const report = source(120);
     const model = buildHistoricalCompliancePdfModel(
       report,
       { userId: "admin-1", fullName: "Ada Administrator" },
       new Date("2026-08-02T02:03:04.000Z"),
     );
-    const { events, raw } = await renderWithEvents(model);
+    const { events, pdf, raw } = await renderWithEvents(model);
     const pageCount = raw.split("/Type /Page\n").length - 1;
     const studentDraws = events.filter(({ kind }) => kind === "detail-student");
-    const detailHeaders = events.filter(({ kind, text }) => kind === "detail-header" && text === "Student");
+    const detailHeaders = events.filter(({ kind }) => kind === "detail-header");
     const detailPages = new Set(studentDraws.map(({ page }) => page));
+    const detailHeadersByPage = new Map<number, HistoricalCompliancePdfDrawEvent[]>();
+    for (const header of detailHeaders) {
+      detailHeadersByPage.set(header.page, [
+        ...(detailHeadersByPage.get(header.page) ?? []),
+        header,
+      ]);
+    }
 
     expect(studentDraws).toHaveLength(report.items.length);
     for (const { studentNumber } of report.items) {
       expect(studentDraws.filter(({ text }) => text.includes(studentNumber))).toHaveLength(1);
     }
-    expect(new Set(detailHeaders.map(({ page }) => page))).toEqual(detailPages);
+    expect(new Set(detailHeadersByPage.keys())).toEqual(detailPages);
     for (const page of detailPages) {
-      expect(detailHeaders.filter((event) => event.page === page)).toHaveLength(1);
+      const headers = detailHeadersByPage.get(page)!;
+      expect(headers).toHaveLength(7);
+      expect(headers.map(({ text, width }) => ({ text, width: width + 6 }))).toEqual([
+        { text: "Student", width: 132 },
+        { text: "College", width: 98 },
+        { text: "Program", width: 154 },
+        { text: "Year", width: 40 },
+        { text: "Laboratory", width: 92 },
+        { text: "Physical Examination", width: 92 },
+        { text: "Overall", width: 116 },
+      ]);
+      expect(headers.reduce((total, { width }) => total + width + 6, 0)).toBe(724);
     }
+    expect(await extractedPdfText(pdf)).not.toMatch(
+      /Data Quality|Verified Historical|Recovered Historical|Migrated - Incomplete Historical Data|Migrated\/incomplete history/,
+    );
     expect(pageCount).toBeGreaterThan(2);
     const footers = events.filter(({ kind }) => kind === "footer");
     expect(footers).toHaveLength(pageCount);
