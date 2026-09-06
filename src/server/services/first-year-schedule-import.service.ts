@@ -11,7 +11,10 @@ import { loadCpuPhysicalExamMaximumCapacity, loadOvpsaClinicIds, type StoredOvps
 import { writeAudit } from "@/server/repositories/audit.repository";
 import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import { loadSchedulingBlockedDates } from "@/server/repositories/scheduling-blocked-dates.repository";
-import { ensureStudentAcademicSnapshotsWithClient } from "@/server/repositories/student-academic-snapshots.repository";
+import {
+  ensureStudentAcademicSnapshotsWithClient,
+  writeStudentAcademicSnapshotConflictAuditWithClient,
+} from "@/server/repositories/student-academic-snapshots.repository";
 import { queueAuthoritativeScheduleNotification } from "@/server/schedule/schedule-notification-hooks";
 import { buildInitialPublicationNotification } from "@/server/schedule/schedule-notifications";
 import type { ImportedStudentRow } from "@/server/services/student-import-csv";
@@ -441,7 +444,7 @@ export async function publishFirstYearScheduleImport(
   actorUserId: string,
 ) {
   try {
-    return await transaction(async (client) => {
+    const publication = await transaction(async (client) => {
       await client.query("SELECT pg_advisory_xact_lock(hashtext('medclinic:schedule-import-queue'))");
       const preflight = await prepareFirstYearImport(client, input, false);
       if (!preflight.plan.canPublish || !preflight.displacement) {
@@ -503,6 +506,7 @@ export async function publishFirstYearScheduleImport(
       const importName = Array.from(
         `First Year ${input.academicYearStart}-${input.academicYearStart + 1} - ${input.sourceFilename}`,
       ).slice(0, 150).join("");
+      await client.query("SAVEPOINT first_year_publication");
       const counts = await insertStudentProfiles(client, prepared.rows);
       await client.query(
         `INSERT INTO schedule_import_groups (
@@ -540,13 +544,16 @@ export async function publishFirstYearScheduleImport(
         })),
       });
       if (snapshotResult.outcome === "CONFLICT") {
-        throw new AppError(
-          "SNAPSHOT_CONFLICT",
-          "Publication conflicts with immutable academic history.",
-          409,
-          undefined,
-          { conflicts: snapshotResult.conflicts },
-        );
+        await client.query("ROLLBACK TO SAVEPOINT first_year_publication");
+        await writeStudentAcademicSnapshotConflictAuditWithClient(client, {
+          actorUserId,
+          conflicts: snapshotResult.conflicts,
+        });
+        await client.query("RELEASE SAVEPOINT first_year_publication");
+        return {
+          outcome: "SNAPSHOT_CONFLICT" as const,
+          conflicts: snapshotResult.conflicts,
+        };
       }
       const snapshotRows = await client.query<{ id: string; student_number: string }>(
         `SELECT id::text,student_number FROM student_academic_snapshots
@@ -841,6 +848,7 @@ export async function publishFirstYearScheduleImport(
           WHERE id=$1`,
         [batchId, revisionId, actorUserId, acceptedAt],
       );
+      await client.query("RELEASE SAVEPOINT first_year_publication");
       return {
         importId,
         outcome: "PUBLISHED" as const,
@@ -870,6 +878,16 @@ export async function publishFirstYearScheduleImport(
         },
       };
     });
+    if (publication.outcome === "SNAPSHOT_CONFLICT") {
+      throw new AppError(
+        "SNAPSHOT_CONFLICT",
+        "Publication conflicts with immutable academic history.",
+        409,
+        undefined,
+        { conflicts: publication.conflicts },
+      );
+    }
+    return publication;
   } catch (error) {
     if (isPostgresUniqueViolation(error)) {
       throw new AppError(

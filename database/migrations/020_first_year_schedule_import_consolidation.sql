@@ -30,6 +30,28 @@ ALTER TABLE schedule_import_groups
     )
   );
 
+CREATE OR REPLACE FUNCTION preserve_schedule_import_provenance_identity()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF NEW.academic_year_start IS DISTINCT FROM OLD.academic_year_start
+     OR NEW.import_mode IS DISTINCT FROM OLD.import_mode
+     OR NEW.first_year_laboratory_date IS DISTINCT FROM OLD.first_year_laboratory_date THEN
+    RAISE EXCEPTION 'schedule import provenance identity is immutable'
+      USING ERRCODE='23514';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS schedule_import_groups_provenance_identity_immutable
+  ON schedule_import_groups;
+CREATE TRIGGER schedule_import_groups_provenance_identity_immutable
+  BEFORE UPDATE OF academic_year_start,import_mode,first_year_laboratory_date
+  ON schedule_import_groups
+  FOR EACH ROW EXECUTE FUNCTION preserve_schedule_import_provenance_identity();
+
 ALTER TABLE ovpsa_first_year_batches
   ALTER COLUMN college_id DROP NOT NULL,
   ADD COLUMN IF NOT EXISTS source_import_group_id UUID

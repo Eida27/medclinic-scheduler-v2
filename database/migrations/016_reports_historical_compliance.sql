@@ -18,6 +18,21 @@ CREATE TRIGGER academic_years_updated_at
   BEFORE UPDATE ON academic_years
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+      FROM pg_constraint
+     WHERE conrelid='schedule_import_groups'::regclass
+       AND conname='schedule_import_groups_id_academic_year_key'
+  ) THEN
+    ALTER TABLE schedule_import_groups
+      ADD CONSTRAINT schedule_import_groups_id_academic_year_key
+      UNIQUE (id, academic_year_start);
+  END IF;
+END;
+$$;
+
 CREATE TABLE IF NOT EXISTS student_academic_snapshots (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   student_number VARCHAR(20) NOT NULL,
@@ -29,10 +44,12 @@ CREATE TABLE IF NOT EXISTS student_academic_snapshots (
   program_code VARCHAR(30),
   program_name VARCHAR(150) NOT NULL,
   year_level INTEGER CHECK (year_level BETWEEN 1 AND 6),
-  source_import_group_id UUID NOT NULL
-    REFERENCES schedule_import_groups(id)
-    ON DELETE RESTRICT,
+  source_import_group_id UUID NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT student_academic_snapshots_source_import_group_academic_year_fk
+    FOREIGN KEY (source_import_group_id, academic_year_start)
+    REFERENCES schedule_import_groups(id, academic_year_start)
+    ON DELETE RESTRICT,
   CONSTRAINT student_academic_snapshots_student_year_key
     UNIQUE (student_number, academic_year_start)
 );
@@ -78,8 +95,6 @@ DECLARE
   conflicts JSONB;
   candidate_count INTEGER;
   inserted_count INTEGER;
-  conflict_year INTEGER;
-  conflict_entity_id TEXT;
 BEGIN
   IF jsonb_typeof(candidates) IS DISTINCT FROM 'array' THEN
     RAISE EXCEPTION 'snapshot candidates must be a JSON array'
@@ -147,31 +162,6 @@ BEGIN
       OR snapshot.year_level IS DISTINCT FROM candidate.year_level;
 
   IF conflicts IS NOT NULL THEN
-    SELECT CASE WHEN COUNT(DISTINCT value->>'academicYearStart')=1
-                THEN MIN((value->>'academicYearStart')::integer) END
-      INTO conflict_year
-      FROM jsonb_array_elements(conflicts);
-    conflict_entity_id := CASE WHEN jsonb_array_length(conflicts)=1
-      THEN (conflicts->0->>'studentNumber') || ':' || (conflicts->0->>'academicYearStart')
-      ELSE NULL END;
-    INSERT INTO audit_logs (
-      actor_user_id,action,entity_type,entity_id,metadata
-    ) VALUES (
-      actor_user_id,'SNAPSHOT_CONFLICT_DETECTED','student_academic_snapshot',
-      conflict_entity_id,
-      jsonb_build_object(
-        'academicYearStart',conflict_year,
-        'academicYearStarts',(
-          SELECT jsonb_agg(year ORDER BY year)
-            FROM (
-              SELECT DISTINCT (value->>'academicYearStart')::integer AS year
-                FROM jsonb_array_elements(conflicts)
-            ) years
-        ),
-        'conflictCount',jsonb_array_length(conflicts),
-        'conflicts',conflicts
-      )
-    );
     RETURN jsonb_build_object('outcome','CONFLICT','conflicts',conflicts);
   END IF;
 

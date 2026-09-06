@@ -19,6 +19,7 @@ describe("first-year schedule import consolidation migration", () => {
   it("adds compatible import metadata and multi-date First Year allocation persistence", async () => {
     const migration = await readFile(migrationPath, "utf8");
     await expect(pool.query(migration)).resolves.toBeDefined();
+    await expect(pool.query(migration)).resolves.toBeDefined();
 
     const columns = await pool.query<{ table_name: string; column_name: string }>(
       `SELECT table_name,column_name
@@ -36,6 +37,92 @@ describe("first-year schedule import consolidation migration", () => {
     );
 
     expect(columns.rows).toHaveLength(6);
+  });
+
+  it("keeps import provenance identity immutable without freezing unrelated fields", async () => {
+    const client = await pool.connect();
+    await client.query("BEGIN");
+    try {
+      const actorId = randomUUID();
+      await client.query(
+        `INSERT INTO users (id,full_name,email,password_hash,role)
+         VALUES ($1,'Provenance Actor',$2,'provenance-hash','ADMIN')`,
+        [actorId, `provenance-${actorId}@example.test`],
+      );
+      const standardGroup = await client.query<{ id: string }>(
+        `INSERT INTO schedule_import_groups (
+           import_name,source_filename,total_rows,created_by,student_category,
+           academic_year_start,accepted_at,import_mode,first_year_laboratory_date,
+           description
+         ) VALUES ('Provenance standard','provenance-standard.csv',1,$1,'REGULAR',2096,
+                   clock_timestamp(),'STANDARD',NULL,'Original description')
+         RETURNING id::text`,
+        [actorId],
+      );
+      const firstYearGroup = await client.query<{ id: string }>(
+        `INSERT INTO schedule_import_groups (
+           import_name,source_filename,total_rows,created_by,student_category,
+           academic_year_start,accepted_at,import_mode,first_year_laboratory_date
+         ) VALUES ('Provenance First Year','provenance-first-year.csv',1,$1,'REGULAR',2096,
+                   clock_timestamp(),'FIRST_YEAR_OVPSA','2096-09-22')
+         RETURNING id::text`,
+        [actorId],
+      );
+
+      const expectImmutable = async (savepoint: string, sql: string, values: unknown[]) => {
+        await client.query(`SAVEPOINT ${savepoint}`);
+        await expect(client.query(sql, values)).rejects.toMatchObject({
+          code: "23514",
+          message: "schedule import provenance identity is immutable",
+        });
+        await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+      };
+      await expectImmutable(
+        "immutable_academic_year",
+        "UPDATE schedule_import_groups SET academic_year_start=2097 WHERE id=$1",
+        [standardGroup.rows[0].id],
+      );
+      await expectImmutable(
+        "immutable_import_mode",
+        `UPDATE schedule_import_groups
+            SET import_mode='STANDARD',first_year_laboratory_date=NULL
+          WHERE id=$1`,
+        [firstYearGroup.rows[0].id],
+      );
+      await expectImmutable(
+        "immutable_laboratory_date",
+        `UPDATE schedule_import_groups
+            SET first_year_laboratory_date='2096-09-23'
+          WHERE id=$1`,
+        [firstYearGroup.rows[0].id],
+      );
+
+      await expect(client.query(
+        `UPDATE schedule_import_groups
+            SET academic_year_start=academic_year_start,
+                import_mode=import_mode,
+                first_year_laboratory_date=first_year_laboratory_date
+          WHERE id=$1`,
+        [firstYearGroup.rows[0].id],
+      )).resolves.toBeDefined();
+      await expect(client.query(
+        "UPDATE schedule_import_groups SET description='Updated description' WHERE id=$1",
+        [standardGroup.rows[0].id],
+      )).resolves.toBeDefined();
+
+      await client.query("SAVEPOINT immutable_accepted_at");
+      await expect(client.query(
+        "UPDATE schedule_import_groups SET accepted_at=accepted_at + interval '1 second' WHERE id=$1",
+        [standardGroup.rows[0].id],
+      )).rejects.toMatchObject({
+        code: "23514",
+        message: "schedule import accepted_at is immutable",
+      });
+      await client.query("ROLLBACK TO SAVEPOINT immutable_accepted_at");
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
   });
 
   it("allows multiple PE dates while retaining one Laboratory reservation per revision", async () => {

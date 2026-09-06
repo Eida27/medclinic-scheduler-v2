@@ -116,7 +116,15 @@ async function cleanup() {
         WHERE entity_id IN (SELECT id::text FROM first_year_test_imports)
            OR entity_id IN (SELECT id::text FROM first_year_test_batches)
            OR metadata->>'importId' IN (SELECT id::text FROM first_year_test_imports)
-           OR metadata->>'studentNumber' LIKE $1`,
+           OR metadata->>'studentNumber' LIKE $1
+           OR (
+             action='SNAPSHOT_CONFLICT_DETECTED'
+             AND EXISTS (
+               SELECT 1
+                 FROM jsonb_array_elements(COALESCE(metadata->'conflicts','[]'::jsonb)) conflict
+                WHERE conflict->>'studentNumber' LIKE $1
+             )
+           )`,
       [studentPattern],
     );
     await client.query("ALTER TABLE student_academic_snapshots DISABLE TRIGGER student_academic_snapshots_immutable");
@@ -329,6 +337,169 @@ describe("First Year schedule imports", () => {
       [sourceFilename, studentPattern],
     );
     expect(residue.rows[0]).toEqual({ imports: 1, batches: 1, appointments: 8 });
+  });
+
+  it("commits one conflict audit while rolling back every attempted First Year publication write", async () => {
+    const existingStudentNumber = "95-8101-01";
+    const fixtureImport = await pool.query<{ id: string }>(
+      `INSERT INTO schedule_import_groups (
+         import_name,source_filename,total_rows,created_by,student_category,
+         academic_year_start,accepted_at,import_mode,first_year_laboratory_date
+       ) VALUES ('First Year immutable snapshot fixture',$1,1,$2,'REGULAR',2095,
+                 clock_timestamp(),'FIRST_YEAR_OVPSA','2095-09-22')
+       RETURNING id::text`,
+      [sourceFilename, TEST_REFERENCE_IDS.adminUser],
+    );
+    await pool.query(
+      `INSERT INTO students (
+         student_number,first_name,middle_name,last_name,college_id,program_id,
+         year_level,date_of_birth
+       ) VALUES ($1,'Ivy','Original','Immutable',$2,$3,1,'2005-12-31')`,
+      [existingStudentNumber, TEST_REFERENCE_IDS.college, TEST_REFERENCE_IDS.program],
+    );
+    await pool.query(
+      `INSERT INTO student_academic_snapshots (
+         student_number,academic_year_start,student_name,college_id,college_name,
+         program_id,program_code,program_name,year_level,source_import_group_id
+       ) VALUES ($1,2095,'Immutable, Ivy Original',$2,'College of Computer Studies',
+                 $3,'BSIT','Bachelor of Science in Information Technology',1,$4)`,
+      [
+        existingStudentNumber,
+        TEST_REFERENCE_IDS.college,
+        TEST_REFERENCE_IDS.program,
+        fixtureImport.rows[0].id,
+      ],
+    );
+    const originalProfiles = await pool.query(
+      `SELECT * FROM students
+        WHERE student_number LIKE $1
+        ORDER BY student_number`,
+      [studentPattern],
+    );
+    const originalSnapshots = await pool.query(
+      `SELECT * FROM student_academic_snapshots
+        WHERE student_number LIKE $1
+        ORDER BY student_number,academic_year_start,id`,
+      [studentPattern],
+    );
+    const originalImports = await pool.query(
+      `SELECT * FROM schedule_import_groups
+        WHERE source_filename=$1
+        ORDER BY id`,
+      [sourceFilename],
+    );
+    const auditBefore = await pool.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM audit_logs
+        WHERE action='SNAPSHOT_CONFLICT_DETECTED' AND entity_id=$1`,
+      [`${existingStudentNumber}:2095`],
+    );
+
+    await expect(acceptAndScheduleImport(input(), admin)).rejects.toMatchObject({
+      code: "SNAPSHOT_CONFLICT",
+      status: 409,
+    });
+
+    const profiles = await pool.query(
+      `SELECT * FROM students
+        WHERE student_number LIKE $1
+        ORDER BY student_number`,
+      [studentPattern],
+    );
+    expect(profiles.rows).toEqual(originalProfiles.rows);
+    const snapshots = await pool.query(
+      `SELECT * FROM student_academic_snapshots
+        WHERE student_number LIKE $1
+        ORDER BY student_number,academic_year_start,id`,
+      [studentPattern],
+    );
+    expect(snapshots.rows).toEqual(originalSnapshots.rows);
+    const imports = await pool.query(
+      `SELECT * FROM schedule_import_groups
+        WHERE source_filename=$1
+        ORDER BY id`,
+      [sourceFilename],
+    );
+    expect(imports.rows).toEqual(originalImports.rows);
+
+    const residue = await pool.query<{
+      imports: number;
+      ovpsa_batches: number;
+      ovpsa_revisions: number;
+      ovpsa_reservations: number;
+      ovpsa_memberships: number;
+      active_memberships: number;
+      schedule_batches: number;
+      schedule_items: number;
+      appointments: number;
+      notifications: number;
+      outbox: number;
+    }>(
+      `SELECT
+         (SELECT COUNT(*)::int FROM schedule_import_groups WHERE source_filename=$1) AS imports,
+         (SELECT COUNT(*)::int FROM ovpsa_first_year_batches batch
+           JOIN schedule_import_groups import_group ON import_group.id=batch.source_import_group_id
+          WHERE import_group.source_filename=$1) AS ovpsa_batches,
+         (SELECT COUNT(*)::int FROM ovpsa_first_year_batch_revisions revision
+           JOIN ovpsa_first_year_batches batch ON batch.id=revision.batch_id
+           JOIN schedule_import_groups import_group ON import_group.id=batch.source_import_group_id
+          WHERE import_group.source_filename=$1) AS ovpsa_revisions,
+         (SELECT COUNT(*)::int FROM ovpsa_first_year_service_reservations reservation
+           JOIN ovpsa_first_year_batches batch ON batch.id=reservation.batch_id
+           JOIN schedule_import_groups import_group ON import_group.id=batch.source_import_group_id
+          WHERE import_group.source_filename=$1) AS ovpsa_reservations,
+         (SELECT COUNT(*)::int FROM ovpsa_first_year_membership_snapshots membership
+          WHERE membership.student_number LIKE $2) AS ovpsa_memberships,
+         (SELECT COUNT(*)::int FROM ovpsa_first_year_active_memberships membership
+          WHERE membership.student_number LIKE $2) AS active_memberships,
+         (SELECT COUNT(*)::int FROM schedule_batches batch
+           JOIN schedule_import_groups import_group ON import_group.id=batch.import_group_id
+          WHERE import_group.source_filename=$1) AS schedule_batches,
+         (SELECT COUNT(*)::int FROM coordinator_schedule_items item
+          WHERE item.student_number LIKE $2) AS schedule_items,
+         (SELECT COUNT(*)::int FROM appointments appointment
+          WHERE appointment.student_number LIKE $2) AS appointments,
+         (SELECT COUNT(*)::int FROM student_portal_notifications notification
+          WHERE notification.student_number LIKE $2) AS notifications,
+         (SELECT COUNT(*)::int FROM email_outbox message
+          WHERE message.student_number LIKE $2) AS outbox`,
+      [sourceFilename, studentPattern],
+    );
+    expect(residue.rows[0]).toEqual({
+      imports: 1,
+      ovpsa_batches: 0,
+      ovpsa_revisions: 0,
+      ovpsa_reservations: 0,
+      ovpsa_memberships: 0,
+      active_memberships: 0,
+      schedule_batches: 0,
+      schedule_items: 0,
+      appointments: 0,
+      notifications: 0,
+      outbox: 0,
+    });
+
+    const auditAfter = await pool.query(
+      `SELECT action,entity_type,entity_id,metadata FROM audit_logs
+        WHERE action='SNAPSHOT_CONFLICT_DETECTED' AND entity_id=$1
+        ORDER BY created_at`,
+      [`${existingStudentNumber}:2095`],
+    );
+    expect(auditAfter.rows).toHaveLength(auditBefore.rows[0].count + 1);
+    expect(auditAfter.rows.at(-1)).toEqual({
+      action: "SNAPSHOT_CONFLICT_DETECTED",
+      entity_type: "student_academic_snapshot",
+      entity_id: `${existingStudentNumber}:2095`,
+      metadata: {
+        academicYearStart: 2095,
+        academicYearStarts: [2095],
+        conflictCount: 1,
+        conflicts: [{
+          studentNumber: existingStudentNumber,
+          academicYearStart: 2095,
+          fields: ["studentName"],
+        }],
+      },
+    });
   });
 
   it("reschedules and cancels a published atomic First Year import with complete history", async () => {

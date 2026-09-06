@@ -50,6 +50,33 @@ export type StudentAcademicSnapshotGatewayResult =
       conflicts: StudentAcademicSnapshotConflict[];
     };
 
+export async function writeStudentAcademicSnapshotConflictAuditWithClient(
+  client: PoolClient,
+  input: {
+    actorUserId: string;
+    conflicts: StudentAcademicSnapshotConflict[];
+  },
+): Promise<void> {
+  const years = [...new Set(
+    input.conflicts.map((conflict) => conflict.academicYearStart),
+  )].sort((left, right) => left - right);
+  await writeAudit(
+    input.actorUserId,
+    "SNAPSHOT_CONFLICT_DETECTED",
+    "student_academic_snapshot",
+    input.conflicts.length === 1
+      ? `${input.conflicts[0].studentNumber}:${input.conflicts[0].academicYearStart}`
+      : null,
+    {
+      academicYearStart: years.length === 1 ? years[0] : null,
+      academicYearStarts: years,
+      conflictCount: input.conflicts.length,
+      conflicts: input.conflicts,
+    },
+    client,
+  );
+}
+
 export async function ensureStudentAcademicSnapshotsWithClient(
   client: PoolClient,
   input: {
@@ -104,22 +131,10 @@ export async function ensureStudentAcademicSnapshotsWithClient(
   }
 
   if (conflicts.length) {
-    const years = [...new Set(conflicts.map((conflict) => conflict.academicYearStart))];
-    await writeAudit(
-      input.actorUserId,
-      "SNAPSHOT_CONFLICT_DETECTED",
-      "student_academic_snapshot",
-      conflicts.length === 1
-        ? `${conflicts[0].studentNumber}:${conflicts[0].academicYearStart}`
-        : null,
-      {
-        academicYearStart: years.length === 1 ? years[0] : null,
-        academicYearStarts: years,
-        conflictCount: conflicts.length,
-        conflicts,
-      },
-      client,
-    );
+    await writeStudentAcademicSnapshotConflictAuditWithClient(client, {
+      actorUserId: input.actorUserId,
+      conflicts,
+    });
     return { outcome: "CONFLICT", conflicts };
   }
   const gateway = await client.query<{ result: StudentAcademicSnapshotGatewayResult }>(
@@ -140,5 +155,12 @@ export async function ensureStudentAcademicSnapshotsWithClient(
       }))),
     ],
   );
-  return gateway.rows[0].result;
+  const result = gateway.rows[0].result;
+  if (result.outcome === "CONFLICT") {
+    await writeStudentAcademicSnapshotConflictAuditWithClient(client, {
+      actorUserId: input.actorUserId,
+      conflicts: result.conflicts,
+    });
+  }
+  return result;
 }

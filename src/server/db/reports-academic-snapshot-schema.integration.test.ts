@@ -95,7 +95,10 @@ async function createAcademicYearAndImportGroup(client: PoolClient) {
      VALUES (2097,'2098-07-31',$1,$1)`,
     [actorId],
   );
-  await client.query("INSERT INTO schedule_import_groups (id) VALUES ($1)", [importGroupId]);
+  await client.query(
+    "INSERT INTO schedule_import_groups (id,academic_year_start) VALUES ($1,2097)",
+    [importGroupId],
+  );
   return { actorId, importGroupId };
 }
 
@@ -163,6 +166,23 @@ describe("reports academic snapshot schema migration", () => {
         delete_rule: "RESTRICT",
       }]);
 
+      const provenanceConstraint = await client.query<{
+        constraint_name: string;
+        definition: string;
+      }>(
+        `SELECT constraint_row.conname AS constraint_name,
+                pg_get_constraintdef(constraint_row.oid) AS definition
+           FROM pg_constraint constraint_row
+          WHERE constraint_row.conrelid='student_academic_snapshots'::regclass
+            AND constraint_row.conname='student_academic_snapshots_source_import_group_academic_year_fk'`,
+      );
+      expect(provenanceConstraint.rows).toEqual([{
+        constraint_name: "student_academic_snapshots_source_import_group_academic_year_fk",
+        definition: expect.stringMatching(
+          /FOREIGN KEY \(source_import_group_id, academic_year_start\) REFERENCES schedule_import_groups\(id, academic_year_start\) ON DELETE RESTRICT/,
+        ),
+      }]);
+
       const indexes = await client.query<{ indexname: string }>(
         `SELECT indexname FROM pg_indexes
           WHERE schemaname=current_schema()
@@ -193,10 +213,28 @@ describe("reports academic snapshot schema migration", () => {
            'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
          )`,
       )).rejects.toMatchObject({ code: "23503" });
+      const otherYearImportGroupId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+      await client.query(
+        "INSERT INTO schedule_import_groups (id,academic_year_start) VALUES ($1,2096)",
+        [otherYearImportGroupId],
+      );
+      await expect(client.query(
+        `INSERT INTO student_academic_snapshots (
+           student_number,academic_year_start,student_name,college_name,program_name,
+           source_import_group_id
+         ) VALUES ('97-0005-05',2097,'Wrong Year, Import','College','Program',$1)`,
+        [otherYearImportGroupId],
+      )).rejects.toMatchObject({ code: "23503" });
       await expect(client.query(
         "DELETE FROM schedule_import_groups WHERE id=$1",
         [importGroupId],
       )).rejects.toMatchObject({ code: "23001" });
+
+      const nullableImportGroupId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+      await expect(client.query(
+        "INSERT INTO schedule_import_groups (id,academic_year_start) VALUES ($1,NULL)",
+        [nullableImportGroupId],
+      )).resolves.toBeDefined();
 
       const gatewayResult = await client.query<{ result: { insertedCount: number } }>(
         `SELECT ensure_student_academic_snapshots($1,$2::jsonb) AS result`,

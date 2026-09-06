@@ -4,7 +4,10 @@ import type { PoolClient } from "pg";
 import { afterAll, describe, expect, it } from "vitest";
 import { pool } from "@/server/db/pool";
 import { TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
-import { ensureStudentAcademicSnapshotsWithClient } from "./student-academic-snapshots.repository";
+import {
+  ensureStudentAcademicSnapshotsWithClient,
+  writeStudentAcademicSnapshotConflictAuditWithClient,
+} from "./student-academic-snapshots.repository";
 
 const actorUserId = TEST_REFERENCE_IDS.adminUser;
 
@@ -24,14 +27,14 @@ function candidate(sourceImportGroupId: string, overrides: Record<string, unknow
   };
 }
 
-async function createImportGroup(client: PoolClient) {
+async function createImportGroup(client: PoolClient, academicYearStart = 2091) {
   const id = randomUUID();
   await client.query(
     `INSERT INTO schedule_import_groups (
        id,import_name,source_filename,total_rows,created_by,student_category,
        academic_year_start,accepted_at
-     ) VALUES ($1,$2,$3,1,$4,'REGULAR',2091,clock_timestamp())`,
-    [id, `Snapshot gateway ${id}`, `${id}.csv`, actorUserId],
+     ) VALUES ($1,$2,$3,1,$4,'REGULAR',$5,clock_timestamp())`,
+    [id, `Snapshot gateway ${id}`, `${id}.csv`, actorUserId, academicYearStart],
   );
   return id;
 }
@@ -41,6 +44,142 @@ afterAll(async () => {
 });
 
 describe("student academic snapshot gateway", () => {
+  it("formats multi-year conflict audit metadata once with years in ascending order", async () => {
+    const client = await pool.connect();
+    await client.query("BEGIN");
+    try {
+      await writeStudentAcademicSnapshotConflictAuditWithClient(client, {
+        actorUserId,
+        conflicts: [
+          { studentNumber: "91-0002-02", academicYearStart: 2091, fields: ["programName"] },
+          { studentNumber: "90-0001-01", academicYearStart: 2090, fields: ["collegeName"] },
+        ],
+      });
+
+      const audits = await client.query(
+        `SELECT action,entity_type,entity_id,metadata
+           FROM audit_logs
+          WHERE action='SNAPSHOT_CONFLICT_DETECTED'
+            AND metadata->'conflicts' @> $1::jsonb`,
+        [JSON.stringify([{ studentNumber: "91-0002-02" }])],
+      );
+      expect(audits.rows).toEqual([{
+        action: "SNAPSHOT_CONFLICT_DETECTED",
+        entity_type: "student_academic_snapshot",
+        entity_id: null,
+        metadata: {
+          academicYearStart: null,
+          academicYearStarts: [2090, 2091],
+          conflictCount: 2,
+          conflicts: [
+            { studentNumber: "91-0002-02", academicYearStart: 2091, fields: ["programName"] },
+            { studentNumber: "90-0001-01", academicYearStart: 2090, fields: ["collegeName"] },
+          ],
+        },
+      }]);
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
+  });
+
+  it("writes exactly one single-conflict audit for duplicate input", async () => {
+    const client = await pool.connect();
+    await client.query("BEGIN");
+    try {
+      await client.query(
+        `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+         VALUES (2091,'2092-07-31',$1,$1)
+         ON CONFLICT (start_year) DO NOTHING`,
+        [actorUserId],
+      );
+      const importId = await createImportGroup(client);
+      const result = await ensureStudentAcademicSnapshotsWithClient(client, {
+        actorUserId,
+        candidates: [
+          candidate(importId),
+          candidate(importId, { collegeName: "Conflicting Duplicate College" }),
+        ],
+      });
+      expect(result).toMatchObject({ outcome: "CONFLICT" });
+
+      const audits = await client.query(
+        `SELECT entity_id,metadata FROM audit_logs
+          WHERE action='SNAPSHOT_CONFLICT_DETECTED'
+            AND entity_id='91-0001-01:2091'`,
+      );
+      expect(audits.rows).toEqual([{
+        entity_id: "91-0001-01:2091",
+        metadata: {
+          academicYearStart: 2091,
+          academicYearStarts: [2091],
+          conflictCount: 1,
+          conflicts: [{
+            studentNumber: "91-0001-01",
+            academicYearStart: 2091,
+            fields: ["collegeName"],
+          }],
+        },
+      }]);
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
+  });
+
+  it("writes exactly one audit for conflicts returned by the SQL gateway", async () => {
+    const client = await pool.connect();
+    await client.query("BEGIN");
+    try {
+      await client.query(
+        `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+         VALUES (2090,'2091-07-31',$1,$1),(2091,'2092-07-31',$1,$1)
+         ON CONFLICT (start_year) DO NOTHING`,
+        [actorUserId],
+      );
+      const import2090 = await createImportGroup(client, 2090);
+      const import2091 = await createImportGroup(client, 2091);
+      await ensureStudentAcademicSnapshotsWithClient(client, {
+        actorUserId,
+        candidates: [
+          candidate(import2090, { studentNumber: "90-0001-01", academicYearStart: 2090 }),
+          candidate(import2091),
+        ],
+      });
+
+      const result = await ensureStudentAcademicSnapshotsWithClient(client, {
+        actorUserId,
+        candidates: [
+          candidate(import2091, { collegeName: "Changed 2091 College" }),
+          candidate(import2090, {
+            studentNumber: "90-0001-01",
+            academicYearStart: 2090,
+            programName: "Changed 2090 Program",
+          }),
+        ],
+      });
+      expect(result).toMatchObject({ outcome: "CONFLICT" });
+
+      const audits = await client.query(
+        `SELECT entity_id,metadata FROM audit_logs
+          WHERE action='SNAPSHOT_CONFLICT_DETECTED'
+            AND metadata->>'conflictCount'='2'`,
+      );
+      expect(audits.rows).toHaveLength(1);
+      expect(audits.rows[0]).toMatchObject({
+        entity_id: null,
+        metadata: {
+          academicYearStart: null,
+          academicYearStarts: [2090, 2091],
+          conflictCount: 2,
+        },
+      });
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
+  });
+
   it("creates an immutable snapshot, preserves first-import provenance, and reports historical conflicts", async () => {
     const client = await pool.connect();
     await client.query("BEGIN");
@@ -137,5 +276,33 @@ describe("student academic snapshot gateway", () => {
           AND column_name IN ('source_type','source_metadata')`,
     );
     expect(columns.rows).toEqual([]);
+  });
+
+  it("rejects snapshot provenance from an import group in another academic year", async () => {
+    const client = await pool.connect();
+    await client.query("BEGIN");
+    try {
+      await client.query(
+        `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+         VALUES (2090,'2091-07-31',$1,$1),(2091,'2092-07-31',$1,$1)
+         ON CONFLICT (start_year) DO NOTHING`,
+        [actorUserId],
+      );
+      const wrongYearImportId = await createImportGroup(client, 2090);
+      await client.query("SAVEPOINT wrong_year_provenance");
+      await expect(ensureStudentAcademicSnapshotsWithClient(client, {
+        actorUserId,
+        candidates: [candidate(wrongYearImportId)],
+      })).rejects.toMatchObject({ code: "23503" });
+      await client.query("ROLLBACK TO SAVEPOINT wrong_year_provenance");
+      const residue = await client.query(
+        `SELECT student_number FROM student_academic_snapshots
+          WHERE student_number='91-0001-01' AND academic_year_start=2091`,
+      );
+      expect(residue.rows).toEqual([]);
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
   });
 });
