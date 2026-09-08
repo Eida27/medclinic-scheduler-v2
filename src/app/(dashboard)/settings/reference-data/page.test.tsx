@@ -1,10 +1,17 @@
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { listColleges, listPrograms } = vi.hoisted(() => ({
+const { connection, events, listColleges, listPrograms, requireUser } = vi.hoisted(() => ({
+  connection: vi.fn(),
+  events: [] as string[],
   listColleges: vi.fn(),
   listPrograms: vi.fn(),
+  requireUser: vi.fn(),
 }));
+
+vi.mock("next/server", () => ({ connection }));
+
+vi.mock("@/server/auth/current-user", () => ({ requireUser }));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn() }),
@@ -36,13 +43,28 @@ const programs = [{
 describe("ReferenceDataPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    listColleges.mockResolvedValue(colleges);
-    listPrograms.mockResolvedValue(programs);
+    events.length = 0;
+    connection.mockImplementation(async () => { events.push("connection"); });
+    requireUser.mockImplementation(async () => {
+      events.push("authorization");
+      return { userId: "admin", role: "ADMIN" };
+    });
+    listColleges.mockImplementation(async () => {
+      events.push("colleges");
+      return colleges;
+    });
+    listPrograms.mockImplementation(async () => {
+      events.push("programs");
+      return programs;
+    });
   });
 
-  it("loads and renders only academic reference values used for student imports", async () => {
+  it("enters request time and authorizes an Administrator before reference-data reads", async () => {
     render(await ReferenceDataPage());
 
+    expect(events).toEqual(["connection", "authorization", "colleges", "programs"]);
+    expect(connection).toHaveBeenCalledOnce();
+    expect(requireUser).toHaveBeenCalledWith(["ADMIN"]);
     expect(listColleges).toHaveBeenCalledOnce();
     expect(listPrograms).toHaveBeenCalledOnce();
     expect(screen.getByText(
@@ -51,5 +73,15 @@ describe("ReferenceDataPage", () => {
     expect(screen.getByRole("heading", { name: "Colleges" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Programs" })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "Priority groups" })).not.toBeInTheDocument();
+  });
+
+  it("does not read reference data when Administrator authorization fails", async () => {
+    requireUser.mockRejectedValueOnce(new Error("denied"));
+
+    await expect(ReferenceDataPage()).rejects.toThrow("denied");
+
+    expect(connection).toHaveBeenCalledOnce();
+    expect(listColleges).not.toHaveBeenCalled();
+    expect(listPrograms).not.toHaveBeenCalled();
   });
 });

@@ -12,7 +12,7 @@ Academic-year Laboratory and Physical Examination scheduling, clinic operations,
 - Future clinic unavailable dates: CPU Clinic moves PE only; KABALAKA Clinic replaces the pair
 - Administrator appointment locks that automatic moves cannot override
 - Published clinic schedules, next-midnight automatic no-shows, corrections, filters, and server-side sorting
-- Student schedules, notifications, optional verified email alerts, and private result uploads
+- Student schedules, mandatory email verification, notifications, and private result uploads
 - Administrator-only cross-student document/ZIP access and invalidation
 - Raw PostgreSQL migrations, reference seeds, targeted test cleanup, and privacy-conscious audits
 
@@ -20,61 +20,25 @@ Doctor scheduling, QR check-in, student self-rescheduling, and cloud document st
 
 ## Requirements
 
-- Node.js 20 or later
+- Node.js 20.9 or later
 - PostgreSQL 15 or later with permission to create the `pgcrypto` extension
 - npm
 
-## Local Setup
+## First installation
 
-1. Install dependencies:
+Follow the complete [first-installation guide](docs/installation.md). It is the operator checklist for an empty database and has seven required steps:
 
-   ```powershell
-   npm install
-   ```
+1. Install a compatible Node.js and PostgreSQL runtime, then install the locked dependencies.
+2. Configure the database, separate secrets, public URL, Manila timezone, durable private storage, and working SMTP; run `npm run install:preflight`.
+3. Apply migrations and seed reference data only. No staff member, student, or known test account is seeded.
+4. Bootstrap the first Administrator, run the persistent application worker, receive the verification message, verify the account, and replace the temporary password.
+5. Create the intended academic year and closing date, then review capacity and reference data.
+6. Onboard the Coordinator and both clinic staffs, import a valid CSV, and confirm publication in both clinic views.
+7. Prove the student journey: mandatory email verification, schedule, attendance, result upload/finalization/edit, private download, and notifications.
 
-2. Create the database:
+Do not bootstrap before preflight passes. Bootstrap is serialized, refuses to run after a non-deleted Administrator exists, and queues the new Administrator's verification message. Keep `EMAIL_OUTBOX_ENCRYPTION_KEY` unchanged while encrypted pending messages exist.
 
-   ```powershell
-   createdb -U postgres medclinic_scheduler
-   ```
-
-3. Create `.env.local` from `.env.example`. At minimum, set:
-
-   ```env
-   DATABASE_URL=postgresql://postgres:your-password@localhost:5432/medclinic_scheduler
-   APP_URL=http://localhost:3000
-   JWT_SECRET=replace-with-at-least-32-random-characters
-   APP_TIMEZONE=Asia/Manila
-   EMAIL_OUTBOX_ENCRYPTION_KEY=replace-with-a-dedicated-base64-encoded-32-byte-key
-   RESULT_UPLOAD_ROOT=.data/private-result-uploads
-   ```
-
-4. Apply schema and reference data:
-
-   ```powershell
-   npm run db:migrate
-   npm run db:seed
-   ```
-
-   The reference seed contains no human staff credentials. Bootstrap the first Administrator once by setting the values only for that process:
-
-   ```powershell
-   $env:BOOTSTRAP_ADMIN_FULL_NAME = "First Administrator"
-   $env:BOOTSTRAP_ADMIN_EMAIL = "administrator@example.edu"
-   $env:BOOTSTRAP_ADMIN_TEMPORARY_PASSWORD = "replace-with-a-unique-temporary-password"
-   npm run admin:bootstrap
-   Remove-Item Env:BOOTSTRAP_ADMIN_FULL_NAME, Env:BOOTSTRAP_ADMIN_EMAIL, Env:BOOTSTRAP_ADMIN_TEMPORARY_PASSWORD
-   ```
-
-   Bootstrap is serialized, refuses to run after a non-deleted Administrator exists, and queues the new Administrator's verification message. Keep the existing `EMAIL_OUTBOX_ENCRYPTION_KEY` unchanged while pending encrypted messages exist.
-
-5. Start the application and open `http://localhost:3000`:
-
-   ```powershell
-   npm run dev
-   ```
-
-Administrators create Coordinator and Clinic Staff accounts from Users. Every new staff member must verify their email and replace the temporary password before operational access is granted. Students sign in separately with Student Number, Date of Birth, and their complete Middle Name; imported students receive the DOB and Middle Name from the CSV. Middle Name matching ignores capitalization only, so spacing and punctuation must exactly match the stored value. Existing students whose DOB or Middle Name is null remain readable but cannot sign in until updated.
+Administrators create Coordinator and Clinic Staff accounts from Users. Every staff member must verify their email and replace the temporary password before operational access is granted. Students sign in separately with Student Number, Date of Birth, and their complete Middle Name; imported students receive the DOB and Middle Name from the CSV. Middle Name matching ignores capitalization only, so spacing and punctuation must exactly match the stored value.
 
 ## Academic-Year Student CSV
 
@@ -107,8 +71,9 @@ Administrators manage future holidays, closures, maintenance, and staff-unavaila
 
 - CPU Clinic blocks move only active PE appointments; the paired Laboratory date stays unchanged.
 - KABALAKA Clinic blocks replace both active appointments as a new pair.
-- Completed, manually locked, or result-protected appointments stop the operation with HTTP 409 and unresolved details. The block is not saved.
+- Eligible appointments are recovered automatically; protected or exhausted cases are retained in the Manual Resolution Required queue without discarding unrelated calendar changes.
 - Historical `RESCHEDULED` and `CANCELLED` rows remain visible but do not block later closure calculations.
+- Reopening a date makes it available for future scheduling and does not restore appointments automatically.
 - Appointments expose only a date. No time-slot field is accepted or displayed.
 
 Automatic no-shows run at the next local midnight after the appointment date. The Node worker performs startup catch-up, schedules the next Manila midnight, and retries a failed sweep after five minutes. Manual no-show assignment is rejected.
@@ -121,7 +86,7 @@ Every student query is constrained to the session Student Number and revalidates
 
 - Published date-only schedule and reschedule history
 - Portal notifications with read state
-- Optional email verification
+- Mandatory email verification before portal access
 - Laboratory and PE result drafts/downloads
 - Logout
 
@@ -138,19 +103,19 @@ npm run acceptance:student-auth -- cleanup
 
 `cleanup` removes the synthetic student and login attempts, verifies that no matching student or import remains, and removes the temporary CSV and state file.
 
-Schedule changes and result invalidations always create a portal notification in the business transaction. A verified email also creates an outbox item. Email configuration is optional; missing or failing SMTP never blocks schedules, portal notices, or uploads.
+Schedule changes and result invalidations create portal notifications in the business transaction. A verified email also creates an outbox item. Working SMTP is an installation prerequisite because staff and student verification is mandatory. After installation, a temporary delivery outage leaves mail queued for retry and does not roll back unrelated schedules, portal notices, or uploads.
 
 To enable delivery, set:
 
 ```env
 SMTP_HOST=smtp.example.edu
 SMTP_PORT=587
-SMTP_USER=optional-user
-SMTP_PASS=optional-password
+SMTP_USER=
+SMTP_PASS=
 SMTP_FROM=clinic@example.edu
 ```
 
-`EMAIL_OUTBOX_ENCRYPTION_KEY` is required even when SMTP is disabled. It must be a dedicated Base64 encoding of exactly
+Set both SMTP credentials when the provider requires authentication, or leave both empty. `EMAIL_OUTBOX_ENCRYPTION_KEY` must be a dedicated Base64 encoding of exactly
 32 random bytes and must not reuse `JWT_SECRET`. Verification links use 32 random bytes, store only a SHA-256 token hash
 in the verification table, and expire after 30 minutes. A previous verified address remains active until its replacement
 is verified. The email worker polls every minute, uses `FOR UPDATE SKIP LOCKED`, retries up to ten attempts, and caps
@@ -163,12 +128,13 @@ Completing an appointment creates the matching `PENDING_UPLOAD` result if none e
 - Allowed: PDF, JPG/JPEG, and PNG with matching extension, declared MIME, and file signature
 - Maximum 20 MB per file, 10 files per submission, and 50 MB combined
 - Drafts support add, remove, and resume; inactive drafts expire after seven days
-- Final submission locks student mutation and completes the result using the Manila date with no staff encoder
+- Final submission creates the official revision and completes the result using the Manila date with no staff encoder
+- A student may create an edit draft, retain or replace files, and submit a new official revision; previous official history remains available to authorized administrators
 - Students can download only their own finalized files
 - Only administrators can list other students' submissions, download individual documents/ZIPs, or invalidate a submission
 - Invalidation keeps the appointment completed, resets the result to `PENDING_UPLOAD`, revokes prior metadata access, notifies the student, and opens a replacement draft
 
-Files are stored beneath `RESULT_UPLOAD_ROOT` using generated submission/file IDs, never original names. Temporary files are atomically promoted, SHA-256 checksums are verified on download, and deletion failures remain retryable. `.data/private-result-uploads` is ignored by Git. Restrict this directory to the operating-system account that runs the application; do not place it under a public/static directory or shared network folder. The current adapter is local storage only.
+Files are stored beneath `RESULT_UPLOAD_ROOT` using generated submission/file IDs, never original names. Temporary files are atomically promoted, SHA-256 checksums are verified on download, and deletion failures remain retryable. Use an absolute path on durable private storage, restrict it to the application operating-system account, and never place it under `public/`. Every application/worker instance must see the same file state. The current adapter is a filesystem adapter and is not cloud object storage.
 
 ## Database Commands
 
@@ -335,4 +301,4 @@ npm run build
 npm start -- --hostname 0.0.0.0
 ```
 
-Use HTTPS, set `APP_URL` accordingly, restrict PostgreSQL to the application host, and back up both PostgreSQL and the private upload root together.
+Use HTTPS, set `APP_URL` accordingly, restrict PostgreSQL to the application host, and run the Node process under a supervisor that restarts it after failures and releases. The in-process email, no-show, and result-cleanup workers perform startup catch-up and require a persistent Node runtime. Back up and restore PostgreSQL and the private upload root as one coordinated recovery point. See the [deployment runtime contract](docs/installation.md#deployment-runtime-and-recovery-contract).

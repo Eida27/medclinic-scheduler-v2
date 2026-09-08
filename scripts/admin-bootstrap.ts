@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { bootstrapFirstAdministrator } from "../src/server/services/staff-bootstrap.service";
+import { runInstallationPreflight } from "./installation-preflight";
 
 const environment = z.object({
   BOOTSTRAP_ADMIN_FULL_NAME: z.string().min(1),
@@ -7,6 +7,10 @@ const environment = z.object({
   BOOTSTRAP_ADMIN_TEMPORARY_PASSWORD: z.string().min(1),
 }).parse(process.env);
 
+await runInstallationPreflight();
+const { bootstrapFirstAdministrator } = await import(
+  "../src/server/services/staff-bootstrap.service"
+);
 const administrator = await bootstrapFirstAdministrator({
   fullName: environment.BOOTSTRAP_ADMIN_FULL_NAME,
   email: environment.BOOTSTRAP_ADMIN_EMAIL,

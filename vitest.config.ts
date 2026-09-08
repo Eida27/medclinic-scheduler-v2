@@ -18,7 +18,7 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: ["./src/test/unit-database-guard.ts", "./vitest.setup.ts"],
-    include: ["src/**/*.test.{ts,tsx}", "scripts/browser-student-result-editing-fixture.test.ts"],
+    include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.ts"],
     exclude: ["**/*.integration.test.{ts,tsx}"],
     coverage: { reporter: ["text", "html"] },
   },
