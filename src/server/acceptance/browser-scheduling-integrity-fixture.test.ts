@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   SCHEDULING_INTEGRITY_FIXTURE,
@@ -168,15 +169,15 @@ describe("scheduling integrity Browser acceptance fixture", () => {
 
   it("contains storage cleanup within the configured private-results root", () => {
     expect(assertSchedulingIntegrityStorageTarget(
-      "C:\\fixture\\private-results",
+      path.resolve("fixture", "private-results"),
       "student-results/submission/file.pdf",
-    )).toBe("C:\\fixture\\private-results\\student-results\\submission\\file.pdf");
+    )).toBe(path.resolve("fixture", "private-results", "student-results", "submission", "file.pdf"));
     expect(() => assertSchedulingIntegrityStorageTarget(
-      "C:\\fixture\\private-results",
+      path.resolve("fixture", "private-results"),
       "../outside.pdf",
     )).toThrow(/storage key/i);
     expect(() => assertSchedulingIntegrityStorageTarget(
-      "C:\\fixture\\private-results",
+      path.resolve("fixture", "private-results"),
       "C:\\outside.pdf",
     )).toThrow(/storage key/i);
   });

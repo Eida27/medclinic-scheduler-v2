@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   assertMatchingCleanupIdentity,
@@ -13,7 +14,7 @@ const identity = {
   host: "localhost",
   port: "5432",
   database: "medclinic_catalog_test",
-  storageRoot: "C:\\private-results",
+  storageRoot: path.resolve("private-results"),
 };
 
 const manifest: CatalogCleanupManifest = {
@@ -33,21 +34,21 @@ describe("reference catalog cleanup guard", () => {
   it("requires an exclusive database assertion and exact destructive confirmation", () => {
     expect(() => assertSafeCleanupRequest({
       databaseUrl: "postgresql://user:pass@localhost:5432/medclinic_catalog_test",
-      storageRoot: "C:\\private-results",
+      storageRoot: path.resolve("private-results"),
       exclusiveDatabase: undefined,
       confirmation: undefined,
     })).toThrow(/EXCLUSIVE_DATABASE=1/u);
 
     expect(() => assertSafeCleanupRequest({
       databaseUrl: "postgresql://user:pass@localhost:5432/medclinic_catalog_test",
-      storageRoot: "C:\\private-results",
+      storageRoot: path.resolve("private-results"),
       exclusiveDatabase: "1",
       confirmation: "wrong",
     })).toThrow(/DELETE_NON_WORKBOOK_REFERENCE_DATA/u);
 
     expect(assertSafeCleanupRequest({
       databaseUrl: "postgresql://user:pass@localhost:5432/medclinic_catalog_test",
-      storageRoot: "C:\\private-results",
+      storageRoot: path.resolve("private-results"),
       exclusiveDatabase: "1",
       confirmation: "DELETE_NON_WORKBOOK_REFERENCE_DATA",
     })).toEqual(identity);
@@ -56,7 +57,7 @@ describe("reference catalog cleanup guard", () => {
   it("rejects URL destination overrides and persisted identity changes", () => {
     expect(() => assertSafeCleanupRequest({
       databaseUrl: "postgresql://user:pass@localhost/medclinic_catalog_test?host=elsewhere",
-      storageRoot: "C:\\private-results",
+      storageRoot: path.resolve("private-results"),
       exclusiveDatabase: "1",
       confirmation: "DELETE_NON_WORKBOOK_REFERENCE_DATA",
     })).toThrow(/host or port query parameters/u);

@@ -214,7 +214,23 @@ npm run lint
 npm run build
 ```
 
-Tests cover schema/backfills, the exact nine-column CSV, 3,000-row atomic imports, scheduling windows/capacity/concurrency, displacement, closure rollback, manual locks, date-only no-shows, separate sessions/throttling, strict ownership, file signatures/limits, finalization, ZIP access, invalidation, cleanup, outbox retry, and the full cross-feature scenario.
+`npm test` and `npm run test:watch` run database-free unit/component tests with public synthetic configuration. They do not load `.env.local`, and unexpected database access fails immediately.
+
+Database tests require a local PostgreSQL role with `CREATEDB` and an explicit, **new** database name beginning with `medclinic_test_`:
+
+```powershell
+$env:TEST_DATABASE_URL = "postgresql://test_role:your_local_password@127.0.0.1:5432/medclinic_test_integration"
+$env:TEST_DATABASE_DISPOSABLE = "1"
+npm run test:integration
+
+# Uses a separate fresh target and the real production migration CLI:
+$env:TEST_DATABASE_URL = "postgresql://test_role:your_local_password@127.0.0.1:5432/medclinic_test_migrations"
+npm run test:migrations:empty
+```
+
+Both commands reject application names, remote destinations, URL overrides, and existing databases before fixtures. They create and verify their owned target, report cleanup, and drop it afterward. Integration tests apply migrations and reference seeds, then run staff fixtures and database tests serially. Child processes inherit that explicit target and synthetic application configuration. The migration-only proof checks exactly 27 migrations, a second zero-migration run, atomic rollback, and target removal. Neither command falls back to the application `DATABASE_URL`.
+
+Together, the unit and integration suites cover schema/backfills, the exact nine-column CSV, 3,000-row atomic imports, scheduling windows/capacity/concurrency, displacement, closure rollback, manual locks, date-only no-shows, separate sessions/throttling, strict ownership, file signatures/limits, finalization, ZIP access, invalidation, cleanup, outbox retry, and the full cross-feature scenario. Database-free CI runs on Windows and Linux.
 
 ### Staff account security Browser acceptance fixture
 

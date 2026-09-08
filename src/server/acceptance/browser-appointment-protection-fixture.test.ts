@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   APPOINTMENT_PROTECTION_FIXTURE,
@@ -41,13 +42,13 @@ describe("appointment protection Browser acceptance fixture", () => {
 
   it("contains private-file cleanup within the configured storage root", () => {
     expect(assertAppointmentProtectionStorageTarget(
-      "C:\\fixture\\private-results", "student-results/submission/file.pdf",
-    )).toBe("C:\\fixture\\private-results\\student-results\\submission\\file.pdf");
+      path.resolve("fixture", "private-results"), "student-results/submission/file.pdf",
+    )).toBe(path.resolve("fixture", "private-results", "student-results", "submission", "file.pdf"));
     expect(() => assertAppointmentProtectionStorageTarget(
-      "C:\\fixture\\private-results", "../outside.pdf",
+      path.resolve("fixture", "private-results"), "../outside.pdf",
     )).toThrow(/storage key/i);
     expect(() => assertAppointmentProtectionStorageTarget(
-      "C:\\fixture\\private-results", "C:\\outside.pdf",
+      path.resolve("fixture", "private-results"), "C:\\outside.pdf",
     )).toThrow(/storage key/i);
   });
 

@@ -8,9 +8,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --env-file=.env.local ./node_modules/vitest/vitest.mjs run",
-    "test:watch": "node --env-file=.env.local ./node_modules/vitest/vitest.mjs",
-    "test:migrations:empty": "tsx --env-file=.env.local scripts/db-migration-empty-database-test.ts",
+    "test": "node ./node_modules/vitest/vitest.mjs run",
+    "test:watch": "node ./node_modules/vitest/vitest.mjs",
+    "test:migrations:empty": "tsx scripts/db-migration-empty-database-test.ts",
     "db:migrate": "tsx --env-file=.env.local scripts/db-migrate.ts",
     "db:seed": "tsx --env-file=.env.local scripts/db-seed.ts",
     "db:reset": "tsx --env-file=.env.local scripts/db-reset.ts",
@@ -42,7 +42,8 @@
     "acceptance:staff-account-security:cleanup": "node --conditions=react-server --import tsx --env-file=.env.local scripts/browser-staff-account-security-fixture.ts cleanup",
     "acceptance:scheduling-integrity:setup": "tsx --env-file=.env.local scripts/browser-scheduling-integrity-fixture.ts setup",
     "acceptance:scheduling-integrity:status": "tsx --env-file=.env.local scripts/browser-scheduling-integrity-fixture.ts status",
-    "acceptance:scheduling-integrity:cleanup": "tsx --env-file=.env.local scripts/browser-scheduling-integrity-fixture.ts cleanup"
+    "acceptance:scheduling-integrity:cleanup": "tsx --env-file=.env.local scripts/browser-scheduling-integrity-fixture.ts cleanup",
+    "test:integration": "tsx scripts/test-integration.ts"
   },
   "dependencies": {
     "archiver": "^8.0.0",
