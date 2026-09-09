@@ -23,10 +23,10 @@ export async function lockEligibleRegularPairs(
     scheduleCycleStart: number;
     windowStart: string;
     windowEnd: string;
-    limit: number;
+    limit?: number;
   },
 ): Promise<DisplacementCandidate[]> {
-  if (input.limit <= 0) return [];
+  if (input.limit !== undefined && input.limit <= 0) return [];
   const result = await client.query<{
     student_number: string;
     schedule_pair_id: string;
@@ -73,8 +73,16 @@ export async function lockEligibleRegularPairs(
          ON laboratory_item.id=laboratory.schedule_item_id
       WHERE laboratory.schedule_type='LABORATORY'
         AND import_group.student_category='REGULAR'
+        AND import_group.import_mode='STANDARD'
+        AND laboratory.ovpsa_batch_id IS NULL
+        AND laboratory.ovpsa_revision_id IS NULL
+        AND laboratory.ovpsa_service_reservation_id IS NULL
+        AND physical.ovpsa_batch_id IS NULL
+        AND physical.ovpsa_revision_id IS NULL
+        AND physical.ovpsa_service_reservation_id IS NULL
         AND laboratory.schedule_cycle_start=$1
-        AND laboratory.appointment_date BETWEEN $2::date AND $3::date
+        AND (laboratory.appointment_date BETWEEN $2::date AND $3::date
+          OR physical.appointment_date BETWEEN $2::date AND $3::date)
         AND laboratory.appointment_date > (NOW() AT TIME ZONE 'Asia/Manila')::date
         AND physical.appointment_date > (NOW() AT TIME ZONE 'Asia/Manila')::date
         AND laboratory.status='PENDING' AND physical.status='PENDING'
@@ -112,7 +120,7 @@ export async function lockEligibleRegularPairs(
                laboratory.student_number DESC
       LIMIT $4
       FOR UPDATE OF laboratory, physical SKIP LOCKED`,
-    [input.scheduleCycleStart, input.windowStart, input.windowEnd, input.limit],
+    [input.scheduleCycleStart, input.windowStart, input.windowEnd, input.limit ?? null],
   );
   return result.rows.map((row) => ({
     displacementType: "PAIR",
@@ -138,11 +146,11 @@ export async function lockEligibleRegularPhysicalExams(
     scheduleCycleStart: number;
     windowStart: string;
     windowEnd: string;
-    limit: number;
+    limit?: number;
     excludedPhysicalExamIds?: string[];
   },
 ): Promise<DisplacementCandidate[]> {
-  if (input.limit <= 0) return [];
+  if (input.limit !== undefined && input.limit <= 0) return [];
   const result = await client.query<{
     student_number: string;
     schedule_pair_id: string;
@@ -190,6 +198,13 @@ export async function lockEligibleRegularPhysicalExams(
          ON physical_item.id=physical.schedule_item_id
       WHERE physical.schedule_type='PHYSICAL_EXAM'
         AND import_group.student_category='REGULAR'
+        AND import_group.import_mode='STANDARD'
+        AND laboratory.ovpsa_batch_id IS NULL
+        AND laboratory.ovpsa_revision_id IS NULL
+        AND laboratory.ovpsa_service_reservation_id IS NULL
+        AND physical.ovpsa_batch_id IS NULL
+        AND physical.ovpsa_revision_id IS NULL
+        AND physical.ovpsa_service_reservation_id IS NULL
         AND physical.schedule_cycle_start=$1
         AND physical.appointment_date BETWEEN $2::date AND $3::date
         AND physical.appointment_date > (NOW() AT TIME ZONE 'Asia/Manila')::date
@@ -227,7 +242,7 @@ export async function lockEligibleRegularPhysicalExams(
       input.scheduleCycleStart,
       input.windowStart,
       input.windowEnd,
-      input.limit,
+      input.limit ?? null,
       input.excludedPhysicalExamIds ?? [],
     ],
   );

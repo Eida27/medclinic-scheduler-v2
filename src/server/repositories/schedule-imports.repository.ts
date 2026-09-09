@@ -10,9 +10,8 @@ import type { ImportedStudentRow } from "@/server/services/student-import-csv";
 import { resolveSchedulingWindow } from "@/server/services/scheduling-window";
 import { generatePairedSchedule } from "@/server/rule-engine/generate-paired-schedule";
 import {
-  nextDateAfter,
   planCapacityForPriorityBatch,
-  planPhysicalExamCapacityForPriorityBatch,
+  preferredWindowOverflow,
   priorityDisplacementScopes,
   publishDisplacedRegularReplacementsWithLockedScopes,
 } from "@/server/services/priority-displacement.service";
@@ -598,76 +597,13 @@ export async function createScheduleImport(
       blockedPhysicalExamDates: blockedDates.physicalExamDates,
       searchEndDate,
     });
-    let assignments = generatePairedSchedule(allocationInput());
-    const initialOverflowCount = assignments.assignments.filter(
-      (assignment) => assignment.laboratoryDate > preferredWindowEnd,
-    ).length;
-    const displacedPairCandidates = input.studentCategory === "REGULAR"
-      ? []
+    const { assignments, candidates: displacedCandidates } = input.studentCategory === "REGULAR"
+      ? { assignments: generatePairedSchedule(allocationInput()), candidates: [] }
       : await planCapacityForPriorityBatch({
           scheduleCycleStart: input.academicYearStart,
-          windowStart,
-          windowEnd: preferredWindowEnd,
-          neededPairCount: initialOverflowCount,
+          preferredWindowEnd,
+          allocation: allocationInput(),
         }, client);
-    for (const candidate of displacedPairCandidates) {
-      laboratoryLoad[candidate.laboratoryDate] = Math.max(
-        0,
-        (laboratoryLoad[candidate.laboratoryDate] ?? 0) - 1,
-      );
-      physicalExamLoad[candidate.physicalExamDate] = Math.max(
-        0,
-        (physicalExamLoad[candidate.physicalExamDate] ?? 0) - 1,
-      );
-    }
-    if (displacedPairCandidates.length) assignments = generatePairedSchedule(allocationInput());
-    const physicalExamOnlyOverflow = assignments.assignments.filter(
-      (assignment) => (
-        assignment.laboratoryDate <= preferredWindowEnd
-        && assignment.physicalExamDate > preferredWindowEnd
-      ),
-    );
-    const displacedPhysicalExamCandidates = input.studentCategory === "REGULAR"
-      ? []
-      : await planPhysicalExamCapacityForPriorityBatch({
-          scheduleCycleStart: input.academicYearStart,
-          windowEnd: preferredWindowEnd,
-          physicalExamNotBeforeDates: physicalExamOnlyOverflow.map(
-            (assignment) => nextDateAfter(assignment.laboratoryDate),
-          ),
-          excludedPhysicalExamIds: displacedPairCandidates.map(
-            (candidate) => candidate.physicalExamAppointmentId,
-          ),
-        }, client);
-    for (const candidate of displacedPhysicalExamCandidates) {
-      physicalExamLoad[candidate.physicalExamDate] = Math.max(
-        0,
-        (physicalExamLoad[candidate.physicalExamDate] ?? 0) - 1,
-      );
-    }
-    if (displacedPhysicalExamCandidates.length) {
-      assignments = generatePairedSchedule(allocationInput());
-      const remainingPhysicalExamOnlyOverflowCount = assignments.assignments.filter(
-        (assignment) => (
-          assignment.laboratoryDate <= preferredWindowEnd
-          && assignment.physicalExamDate > preferredWindowEnd
-        ),
-      ).length;
-      if (
-        remainingPhysicalExamOnlyOverflowCount
-        > physicalExamOnlyOverflow.length - displacedPhysicalExamCandidates.length
-      ) {
-        throw new AppError(
-          "PRIORITY_DISPLACEMENT_UNRESOLVED",
-          "Regular appointments could not be moved without preserving the priority scheduling window.",
-          409,
-        );
-      }
-    }
-    const displacedCandidates = [
-      ...displacedPairCandidates,
-      ...displacedPhysicalExamCandidates,
-    ];
     if (assignments.unscheduledRequestIds.length) {
       throw new AppError(
         "SCHEDULE_CAPACITY_EXHAUSTED",
@@ -854,9 +790,7 @@ export async function createScheduleImport(
     const generatedRange = allDates.length
       ? { startDate: allDates[0], endDate: allDates.at(-1)! }
       : null;
-    const pairCountBeyondPreferredWindow = assignments.assignments.filter(
-      (assignment) => assignment.laboratoryDate > preferredWindowEnd,
-    ).length;
+    const pairCountBeyondPreferredWindow = preferredWindowOverflow(assignments, preferredWindowEnd);
     const metadata = {
       sourceFilename: input.sourceFilename,
       batchIds,

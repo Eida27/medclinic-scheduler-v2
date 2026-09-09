@@ -1,5 +1,9 @@
 import type { PoolClient } from "pg";
 import { AppError } from "@/lib/errors";
+import type {
+  GeneratePairedScheduleInput,
+  GeneratePairedScheduleOutput,
+} from "@/server/rule-engine/types";
 import { generatePairedSchedule } from "@/server/rule-engine/generate-paired-schedule";
 import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import {
@@ -28,50 +32,108 @@ export function priorityDisplacementScopes(candidates: DisplacementCandidate[]) 
   ));
 }
 
+function compareAcceptance(left: DisplacementCandidate, right: DisplacementCandidate) {
+  return left.acceptedAt.getTime() - right.acceptedAt.getTime()
+    || left.sourceRowOrder - right.sourceRowOrder
+    || left.studentNumber.localeCompare(right.studentNumber);
+}
+
+export function preferredWindowOverflow(result: GeneratePairedScheduleOutput, windowEnd: string) {
+  return result.assignments.filter(assignment => (
+    assignment.laboratoryDate > windowEnd || assignment.physicalExamDate > windowEnd
+  )).length;
+}
+
 export async function planCapacityForPriorityBatch(
   input: {
     scheduleCycleStart: number;
-    windowStart: string;
-    windowEnd: string;
-    neededPairCount: number;
+    preferredWindowEnd: string;
+    allocation: GeneratePairedScheduleInput;
   },
   client: PoolClient,
 ) {
-  return lockEligibleRegularPairs(client, {
-    scheduleCycleStart: input.scheduleCycleStart,
-    windowStart: input.windowStart,
-    windowEnd: input.windowEnd,
-    limit: input.neededPairCount,
-  });
-}
-
-export async function planPhysicalExamCapacityForPriorityBatch(
-  input: {
-    scheduleCycleStart: number;
-    windowEnd: string;
-    physicalExamNotBeforeDates: string[];
-    excludedPhysicalExamIds?: string[];
-  },
-  client: PoolClient,
-) {
-  const candidates: DisplacementCandidate[] = [];
-  const latestLaboratoryConstraintsFirst = [...input.physicalExamNotBeforeDates]
-    .sort((left, right) => right.localeCompare(left));
-  for (const windowStart of latestLaboratoryConstraintsFirst) {
-    const [candidate] = await lockEligibleRegularPhysicalExams(client, {
-      scheduleCycleStart: input.scheduleCycleStart,
-      windowStart,
-      windowEnd: input.windowEnd,
-      limit: 1,
-      excludedPhysicalExamIds: [
-        ...(input.excludedPhysicalExamIds ?? []),
-        ...candidates.map((candidate) => candidate.physicalExamAppointmentId),
-      ],
-    });
-    if (!candidate) continue;
-    candidates.push(candidate);
+  const initial = generatePairedSchedule(input.allocation);
+  const score = (result: GeneratePairedScheduleOutput) => [
+    result.unscheduledRequestIds.length,
+    preferredWindowOverflow(result, input.preferredWindowEnd),
+  ];
+  const compare = (left: GeneratePairedScheduleOutput, right: GeneratePairedScheduleOutput) => {
+    const a = score(left);
+    const b = score(right);
+    return a[0] - b[0] || a[1] - b[1];
+  };
+  if (
+    !initial.unscheduledRequestIds.length
+    && !preferredWindowOverflow(initial, input.preferredWindowEnd)
+  ) {
+    return { assignments: initial, candidates: [] as DisplacementCandidate[] };
   }
-  return candidates;
+  const windowStart = input.allocation.requests.map(request => request.windowStart).sort()[0];
+  const windowEnd = initial.unscheduledRequestIds.length
+    ? input.allocation.searchEndDate
+    : input.preferredWindowEnd;
+  const scope = { scheduleCycleStart: input.scheduleCycleStart, windowStart, windowEnd };
+  const pairs = await lockEligibleRegularPairs(client, scope);
+  const physicalOnly = await lockEligibleRegularPhysicalExams(client, scope);
+  const physicalById = new Map(
+    physicalOnly.map(candidate => [candidate.physicalExamAppointmentId, candidate]),
+  );
+  // A full pair is the maximal release; its PE-only alternative is considered after pruning.
+  // Each physical appointment (and each released Lab) belongs to at most one candidate.
+  const releasedIds = new Set<string>();
+  let retained = [...pairs, ...physicalOnly].filter(candidate => {
+    const ids = candidate.displacementType === "PAIR"
+      ? [candidate.laboratoryAppointmentId, candidate.physicalExamAppointmentId]
+      : [candidate.physicalExamAppointmentId];
+    if (ids.some(id => releasedIds.has(id))) return false;
+    ids.forEach(id => releasedIds.add(id));
+    return true;
+  }).sort(compareAcceptance);
+  const simulate = (candidates: DisplacementCandidate[]) => {
+    const laboratoryLoad = { ...input.allocation.existingLaboratoryLoad };
+    const physicalExamLoad = { ...input.allocation.existingPhysicalExamLoad };
+    for (const candidate of candidates) {
+      if (candidate.displacementType === "PAIR") {
+        laboratoryLoad[candidate.laboratoryDate] = Math.max(
+          0, (laboratoryLoad[candidate.laboratoryDate] ?? 0) - 1,
+        );
+      }
+      physicalExamLoad[candidate.physicalExamDate] = Math.max(
+        0, (physicalExamLoad[candidate.physicalExamDate] ?? 0) - 1,
+      );
+    }
+    return generatePairedSchedule({
+      ...input.allocation,
+      existingLaboratoryLoad: laboratoryLoad,
+      existingPhysicalExamLoad: physicalExamLoad,
+    });
+  };
+  let assignments = simulate(retained);
+  if (compare(assignments, initial) >= 0) {
+    return { assignments: initial, candidates: [] as DisplacementCandidate[] };
+  }
+  // Start with all complementary slots available, then remove unnecessary releases.
+  // Removing oldest candidates first retains later-accepted students on equal outcomes.
+  for (const candidate of [...retained]) {
+    const without = retained.filter(entry => entry !== candidate);
+    const trial = simulate(without);
+    if (compare(trial, assignments) <= 0) {
+      retained = without;
+      assignments = trial;
+    }
+  }
+  for (const candidate of [...retained]) {
+    if (candidate.displacementType !== "PAIR") continue;
+    const physical = physicalById.get(candidate.physicalExamAppointmentId);
+    if (!physical) continue;
+    const downgraded = retained.map(entry => entry === candidate ? physical : entry);
+    const trial = simulate(downgraded);
+    if (compare(trial, assignments) <= 0) {
+      retained = downgraded;
+      assignments = trial;
+    }
+  }
+  return { assignments, candidates: retained };
 }
 
 function addDays(date: string, days: number) {
@@ -165,11 +227,6 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
   });
   const blockedLaboratoryDates = blocked.laboratoryDates;
   const blockedPhysicalExamDates = blocked.physicalExamDates;
-  const orderCandidates = (entries: typeof boundedCandidates) => [...entries].sort((left, right) => (
-    left.candidate.acceptedAt.getTime() - right.candidate.acceptedAt.getTime()
-    || left.candidate.sourceRowOrder - right.candidate.sourceRowOrder
-    || left.candidate.studentNumber.localeCompare(right.candidate.studentNumber)
-  ));
   const pairAssignments: Array<{
     requestId: string;
     studentNumber: string;
@@ -178,9 +235,35 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
     physicalExamDate: string;
   }> = [];
   const fallbackCandidates: DisplacementCandidate[] = [];
-  for (const { candidate, bounds } of orderCandidates(
-    boundedCandidates.filter(({ candidate }) => candidate.displacementType === "PAIR"),
-  )) {
+  const physicalExamCeiling = Math.max(0, physicalExamCapacity.max_daily_capacity);
+  const blockedPhysicalExamSet = new Set(blockedPhysicalExamDates);
+  const physicalExamOnlyAssignments: Array<{
+    candidate: DisplacementCandidate;
+    physicalExamDate: string;
+  }> = [];
+  const recoveryQueue = [...boundedCandidates].sort(
+    (left, right) => compareAcceptance(left.candidate, right.candidate),
+  );
+  for (const { candidate, bounds } of recoveryQueue) {
+    if (candidate.displacementType === "PHYSICAL_EXAM_ONLY") {
+      const startDate = bounds.lowerBound;
+      let physicalExamDate: string | null = null;
+      for (let date = startDate; date <= bounds.upperBound; date = addDays(date, 1)) {
+        const weekday = new Date(`${date}T00:00:00.000Z`).getUTCDay();
+        if (weekday === 0 || weekday === 6 || blockedPhysicalExamSet.has(date)) continue;
+        if ((physicalExamLoad[date] ?? 0) < physicalExamCeiling) {
+          physicalExamDate = date;
+          physicalExamLoad[date] = (physicalExamLoad[date] ?? 0) + 1;
+          break;
+        }
+      }
+      if (!physicalExamDate) {
+        fallbackCandidates.push(candidate);
+        continue;
+      }
+      physicalExamOnlyAssignments.push({ candidate, physicalExamDate });
+      continue;
+    }
     if (bounds.lowerBound > bounds.upperBound) {
       fallbackCandidates.push(candidate);
       continue;
@@ -210,32 +293,6 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
     pairAssignments.push({ ...assignment, schedulePairId: candidate.schedulePairId });
     laboratoryLoad[assignment.laboratoryDate] = (laboratoryLoad[assignment.laboratoryDate] ?? 0) + 1;
     physicalExamLoad[assignment.physicalExamDate] = (physicalExamLoad[assignment.physicalExamDate] ?? 0) + 1;
-  }
-  const physicalExamCeiling = Math.max(0, physicalExamCapacity.max_daily_capacity);
-  const blockedPhysicalExamSet = new Set(blockedPhysicalExamDates);
-  const physicalExamOnlyAssignments: Array<{
-    candidate: DisplacementCandidate;
-    physicalExamDate: string;
-  }> = [];
-  for (const { candidate, bounds } of orderCandidates(
-    boundedCandidates.filter(({ candidate }) => candidate.displacementType === "PHYSICAL_EXAM_ONLY"),
-  )) {
-    const startDate = bounds.lowerBound;
-    let physicalExamDate: string | null = null;
-    for (let date = startDate; date <= bounds.upperBound; date = addDays(date, 1)) {
-      const weekday = new Date(`${date}T00:00:00.000Z`).getUTCDay();
-      if (weekday === 0 || weekday === 6 || blockedPhysicalExamSet.has(date)) continue;
-      if ((physicalExamLoad[date] ?? 0) < physicalExamCeiling) {
-        physicalExamDate = date;
-        physicalExamLoad[date] = (physicalExamLoad[date] ?? 0) + 1;
-        break;
-      }
-    }
-    if (!physicalExamDate) {
-      fallbackCandidates.push(candidate);
-      continue;
-    }
-    physicalExamOnlyAssignments.push({ candidate, physicalExamDate });
   }
   const successfulCandidateNumbers = new Set([
     ...pairAssignments.map((assignment) => assignment.studentNumber),

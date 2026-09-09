@@ -14,10 +14,12 @@ import {
   teardownCapacityFixtureLock,
   type CapacityFixtureLock,
 } from "@/test/capacity-fixture-lifecycle";
+import { acceptAndScheduleImport } from "./schedule-imports.service";
 import { publishDisplacedRegularReplacements } from "./priority-displacement.service";
 
 const studentPattern = "99-94%";
-const importPattern = "TEST-DISPLACE-UNIFIED%";
+const importPattern = "%TEST-DISPLACE-UNIFIED%";
+const ownedOvpsaBatches: string[] = [];
 let capacityFixture: CapacityFixtureLock | null = null;
 let ownsAcademicYear = false;
 
@@ -36,9 +38,13 @@ async function cleanup() {
       WHERE closure_group_id IN (SELECT id FROM clinic_closure_groups WHERE reason LIKE 'TEST-DISPLACE%')`,
   );
   await pool.query("DELETE FROM clinic_closure_groups WHERE reason LIKE 'TEST-DISPLACE%'");
+  await pool.query("DELETE FROM ovpsa_first_year_service_reservations WHERE batch_id=ANY($1::uuid[])", [ownedOvpsaBatches]);
+  await pool.query("DELETE FROM ovpsa_first_year_batches WHERE id=ANY($1::uuid[])", [ownedOvpsaBatches]);
+  ownedOvpsaBatches.length = 0;
+  await pool.query("UPDATE academic_years SET closing_date='2028-07-31' WHERE start_year=2027");
 }
 
-async function fixture(studentNumber: string) {
+async function fixture(studentNumber: string, firstYear = false) {
   await insertTestStudent({
     studentNumber,
     firstName: "Priority",
@@ -47,9 +53,10 @@ async function fixture(studentNumber: string) {
   });
   const importGroup = await pool.query<{ id: string }>(
     `INSERT INTO schedule_import_groups (
-       import_name,source_filename,total_rows,created_by,student_category,academic_year_start
-     ) VALUES ($1,$1,1,$2,'REGULAR',2027) RETURNING id::text`,
-    [`${importPattern.replace("%", "")}-${studentNumber}`, TEST_REFERENCE_IDS.adminUser],
+       import_name,source_filename,total_rows,created_by,student_category,academic_year_start,
+       import_mode,first_year_laboratory_date
+     ) VALUES ($1,$1,1,$2,'REGULAR',2027,$3::varchar,CASE WHEN $3::varchar='FIRST_YEAR_OVPSA' THEN DATE '2027-08-30' END) RETURNING id::text`,
+    [`${importPattern.replaceAll("%", "")}-${studentNumber}`, TEST_REFERENCE_IDS.adminUser, firstYear ? "FIRST_YEAR_OVPSA" : "STANDARD"],
   );
   const batches = await pool.query<{ id: string; clinicId: string }>(
     `INSERT INTO schedule_batches (
@@ -61,7 +68,7 @@ async function fixture(studentNumber: string) {
     [
       TEST_REFERENCE_IDS.laboratoryClinic,
       TEST_REFERENCE_IDS.physicalExamClinic,
-      `${importPattern.replace("%", "")}-${studentNumber}`,
+      `${importPattern.replaceAll("%", "")}-${studentNumber}`,
       TEST_REFERENCE_IDS.adminUser,
       importGroup.rows[0].id,
     ],
@@ -100,8 +107,8 @@ async function fixture(studentNumber: string) {
   return { importGroupId: importGroup.rows[0].id, pairId, laboratory, physicalExam };
 }
 
-async function eligibleFixture(studentNumber: string) {
-  const created = await fixture(studentNumber);
+async function eligibleFixture(studentNumber: string, firstYear = false) {
+  const created = await fixture(studentNumber, firstYear);
   await pool.query(
     `UPDATE appointments
         SET status='PENDING', is_published=TRUE
@@ -263,6 +270,15 @@ beforeAll(async () => {
 afterEach(async () => {
   if (!capacityFixture) return;
   await cleanupAndRestoreCapacitySettings(pool, capacityFixture.originalCapacities, cleanup);
+  const residue = await pool.query(`SELECT
+    (SELECT COUNT(*)::int FROM students WHERE student_number LIKE $1) AS students,
+    (SELECT COUNT(*)::int FROM appointments WHERE student_number LIKE $1) AS appointments,
+    (SELECT COUNT(*)::int FROM student_academic_snapshots WHERE student_number LIKE $1) AS snapshots,
+    (SELECT COUNT(*)::int FROM schedule_import_groups WHERE import_name LIKE $2) AS imports,
+    (SELECT COUNT(*)::int FROM appointment_reschedule_events WHERE student_number LIKE $1) AS events,
+    (SELECT COUNT(*)::int FROM student_portal_notifications WHERE student_number LIKE $1) AS notifications`,
+    [studentPattern, importPattern]);
+  expect(residue.rows).toEqual([{students: 0, appointments: 0, snapshots: 0, imports: 0, events: 0, notifications: 0}]);
 });
 afterAll(async () => {
   if (!capacityFixture) return;
@@ -273,7 +289,242 @@ afterAll(async () => {
   await teardownCapacityFixtureLock(pool, capacityFixture, cleanup);
 });
 
+
+async function setCapacity(closingDate = "2028-07-31", capacity = 1) {
+  await pool.query("UPDATE clinic_capacity_settings SET max_daily_capacity=$1,safe_daily_capacity=$1", [capacity]);
+  await pool.query("UPDATE academic_years SET closing_date=$1 WHERE start_year=2027", [closingDate]);
+}
+
+async function importPriority(count = 1) {
+  const contents = [
+    "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth",
+    ...Array.from({ length: count }, (_, i) => `99-9490-${String(i).padStart(2, "0")},Incoming,Priority,Maria,,College of Computer Studies,BSIT,4,2003-05-06`),
+  ].join("\n");
+  return acceptAndScheduleImport({
+    fileName: "TEST-DISPLACE-UNIFIED.csv", fileSize: Buffer.byteLength(contents), contents,
+    studentCategory: "OJT", academicYearStart: 2027, preferredMonth: 8,
+  }, { userId: TEST_REFERENCE_IDS.adminUser, role: "ADMIN", fullName: "System Admin", email: "admin@medclinic.local" });
+}
+
+async function attachOvpsa(appointmentId: string) {
+  const batch = await pool.query<{ id: string }>(`INSERT INTO ovpsa_first_year_batches
+    (schedule_cycle_start,college_id,created_by,updated_by) VALUES (2027,$1,$2,$2) RETURNING id`,
+    [TEST_REFERENCE_IDS.college, TEST_REFERENCE_IDS.adminUser]);
+  ownedOvpsaBatches.push(batch.rows[0].id);
+  const revision = await pool.query<{ id: string }>(`INSERT INTO ovpsa_first_year_batch_revisions
+    (batch_id,revision_number,laboratory_date,physical_exam_date,created_by)
+    VALUES ($1,1,'2027-08-30','2027-09-06',$2) RETURNING id`, [batch.rows[0].id, TEST_REFERENCE_IDS.adminUser]);
+  const reservation = await pool.query<{ id: string }>(`INSERT INTO ovpsa_first_year_service_reservations
+    (batch_id,revision_id,schedule_type,reservation_date,created_by)
+    SELECT $1,$2,schedule_type,appointment_date,$3 FROM appointments WHERE id=$4 RETURNING id`,
+    [batch.rows[0].id, revision.rows[0].id, TEST_REFERENCE_IDS.adminUser, appointmentId]);
+  await pool.query(`UPDATE appointments SET ovpsa_batch_id=$2,ovpsa_revision_id=$3,
+    ovpsa_service_reservation_id=$4 WHERE id=$1`, [appointmentId, batch.rows[0].id, revision.rows[0].id, reservation.rows[0].id]);
+  return reservation.rows[0].id;
+}
+
 describe("priority displacement with the unified closure calendar", () => {
+  it.each(["FIRST_YEAR", "LABORATORY", "PHYSICAL_EXAM"].flatMap(protection =>
+    ["PAIR", "PHYSICAL_EXAM_ONLY"].map(selector => ({ protection, selector })),
+  ))("excludes $protection ownership from $selector victim selection", async ({ protection, selector }) => {
+    const regular = await eligibleFixture("99-9420-00");
+    const protectedPair = await eligibleFixture("99-9421-00", protection === "FIRST_YEAR");
+    const reservationId = protection === "FIRST_YEAR" ? null : await attachOvpsa(
+      protection === "LABORATORY" ? protectedPair.laboratory.id : protectedPair.physicalExam.id);
+    const before = (await pool.query("SELECT * FROM appointments WHERE student_number='99-9421-00' ORDER BY id")).rows;
+    {
+      const select = selector === "PAIR" ? lockEligibleRegularPairs : lockEligibleRegularPhysicalExams;
+      const candidates = await transaction(client => select(client, {
+        scheduleCycleStart: 2027, windowStart: "2027-08-01", windowEnd: "2027-09-30", limit: 10,
+      }));
+      expect(candidates.map(candidate => candidate.schedulePairId)).toEqual([regular.pairId]);
+    }
+    expect((await pool.query("SELECT * FROM appointments WHERE student_number='99-9421-00' ORDER BY id")).rows).toEqual(before);
+    if (reservationId) expect((await pool.query("SELECT status FROM ovpsa_first_year_service_reservations WHERE id=$1", [reservationId])).rows).toEqual([{ status: "ACTIVE" }]);
+  });
+
+  it.each([false, true].flatMap(reverse => [false, true].map(pairOlder => ({ reverse, pairOlder }))))(
+    "recovers mixed victims by global FCFS with reversed=$reverse and pairOlder=$pairOlder", async ({ reverse, pairOlder }) => {
+      await setCapacity();
+      const older = await candidateFixture({
+        studentNumber: "99-9422-00",
+        laboratoryDate: "2028-07-27",
+        physicalExamDate: "2028-07-28",
+        windowStart: "2028-07-31",
+        acceptedAt: "2027-08-01T00:00:00Z",
+      });
+      const later = await candidateFixture({
+        studentNumber: "99-9423-00",
+        laboratoryDate: "2028-07-26",
+        physicalExamDate: "2028-07-27",
+        windowStart: "2028-07-28",
+        acceptedAt: "2027-08-02T00:00:00Z",
+      });
+      await pool.query("UPDATE appointments SET status='COMPLETED' WHERE id=$1", [older.created.laboratory.id]);
+      if (pairOlder) {
+        later.candidate.acceptedAt = new Date("2027-07-31T00:00:00Z");
+        await pool.query("UPDATE appointments SET scheduling_accepted_at=$2 WHERE student_number=$1", [later.candidate.studentNumber, later.candidate.acceptedAt]);
+      }
+      const winner = pairOlder ? later : older;
+      const loser = pairOlder ? older : later;
+      const candidates: DisplacementCandidate[] = [{ ...older.candidate, displacementType: "PHYSICAL_EXAM_ONLY" }, later.candidate];
+      if (reverse) candidates.reverse();
+      const replacements = await transaction(client => publishDisplacedRegularReplacements({ candidates, sourceImportGroupId: later.created.importGroupId, actorUserId: TEST_REFERENCE_IDS.adminUser }, client));
+      expect(replacements.map(row => row.studentNumber)).toEqual([winner.candidate.studentNumber]);
+      expect((await pool.query("SELECT status FROM appointments WHERE id=$1", [older.created.laboratory.id])).rows).toEqual([{ status: "COMPLETED" }]);
+      expect((await pool.query("SELECT student_number,reason_code FROM clinic_closure_manual_cases WHERE student_number LIKE $1", [studentPattern])).rows).toEqual([{ student_number: loser.candidate.studentNumber, reason_code: "NO_VALID_REPLACEMENT_WITHIN_CYCLE" }]);
+      expect((await pool.query("SELECT COUNT(*)::int AS count FROM student_portal_notifications WHERE student_number LIKE $1", [studentPattern])).rows).toEqual([{ count: 2 }]);
+    });
+
+  it.each([1, 2])("considers displacement for %s incoming students in a full or partially full cycle", async (count) => {
+    await setCapacity("2027-08-04");
+    const regular = await candidateFixture({
+      studentNumber: "99-9424-00",
+      laboratoryDate: "2027-08-02",
+      physicalExamDate: "2027-08-03",
+      windowStart: "2027-08-02",
+    });
+    if (count === 1) await setCapacity("2027-08-03");
+    const result = await importPriority(count);
+    expect(result).toMatchObject({ status: "PUBLISHED", displacementTotal: 1 });
+    expect((await pool.query("SELECT COUNT(*)::int AS count FROM appointments WHERE student_number LIKE '99-9490-%'")).rows).toEqual([{ count: count * 2 }]);
+    expect((await pool.query("SELECT reason_code FROM clinic_closure_manual_cases WHERE student_number=$1", [regular.candidate.studentNumber])).rows).toEqual([{ reason_code: "NO_VALID_REPLACEMENT_WITHIN_CYCLE" }]);
+  });
+
+  it("preserves an ineffective blocked victim without displacement history or notices", async () => {
+    await setCapacity();
+    const regular = await candidateFixture({
+      studentNumber: "99-9425-00",
+      laboratoryDate: "2027-08-30",
+      physicalExamDate: "2027-08-31",
+      windowStart: "2027-08-01",
+    });
+    for (let day = 1;day <= 31;day++) await insertUnifiedDate(`2027-08-${String(day).padStart(2, "0")}`, false);
+    const before = (await pool.query("SELECT * FROM appointments WHERE student_number=$1 ORDER BY id", [regular.candidate.studentNumber])).rows;
+    expect(await importPriority()).toMatchObject({ status: "PUBLISHED", displacementTotal: 0, overflow: { pairCountBeyondPreferredWindow: 1 } });
+    expect((await pool.query("SELECT * FROM appointments WHERE student_number=$1 ORDER BY id", [regular.candidate.studentNumber])).rows).toEqual(before);
+    expect((await pool.query(`SELECT (SELECT COUNT(*)::int FROM appointment_reschedule_events WHERE student_number=$1) AS events,
+      (SELECT COUNT(*)::int FROM student_portal_notifications WHERE student_number=$1) AS notifications`, [regular.candidate.studentNumber])).rows).toEqual([{ events: 0, notifications: 0 }]);
+  });
+
+  it("reports PE-only overflow when an exclusive reservation prevents preferred-window placement", async () => {
+    await setCapacity();
+    const protectedPair = await candidateFixture({
+      studentNumber: "99-9437-00",
+      laboratoryDate: "2027-08-27",
+      physicalExamDate: "2027-08-31",
+      windowStart: "2027-08-01",
+    });
+    const reservationId = await attachOvpsa(protectedPair.created.physicalExam.id);
+    for (let day = 1;day <= 29;day++) await insertUnifiedDate(`2027-08-${String(day).padStart(2, "0")}`, false);
+    const before = (await pool.query("SELECT * FROM appointments WHERE student_number=$1 ORDER BY id", [protectedPair.candidate.studentNumber])).rows;
+    expect(await importPriority()).toMatchObject({ displacementTotal: 0, overflow: { pairCountBeyondPreferredWindow: 1, unscheduledStudentCount: 0 } });
+    expect((await pool.query("SELECT appointment_date::text FROM appointments WHERE student_number='99-9490-00' ORDER BY schedule_type")).rows).toEqual([{ appointment_date: "2027-08-30" }, { appointment_date: "2027-09-01" }]);
+    expect((await pool.query("SELECT * FROM appointments WHERE student_number=$1 ORDER BY id", [protectedPair.candidate.studentNumber])).rows).toEqual(before);
+    expect((await pool.query("SELECT status FROM ovpsa_first_year_service_reservations WHERE id=$1", [reservationId])).rows).toEqual([{ status: "ACTIVE" }]);
+    expect((await pool.query("SELECT COUNT(*)::int AS count FROM student_portal_notifications WHERE student_number=$1", [protectedPair.candidate.studentNumber])).rows).toEqual([{ count: 0 }]);
+  });
+
+  it("combines complementary releases and preserves a redundant Laboratory", async () => {
+    await setCapacity();
+    const labVictim = await candidateFixture({
+      studentNumber: "99-9430-00",
+      laboratoryDate: "2027-08-30",
+      physicalExamDate: "2027-09-01",
+      windowStart: "2027-08-01",
+      acceptedAt: "2027-07-01T00:00:00Z",
+    });
+    const peVictim = await candidateFixture({
+      studentNumber: "99-9431-00",
+      laboratoryDate: "2027-08-27",
+      physicalExamDate: "2027-08-31",
+      windowStart: "2027-08-01",
+      acceptedAt: "2027-07-02T00:00:00Z",
+    });
+    for (let day = 1;day <= 29;day++) await insertUnifiedDate(`2027-08-${String(day).padStart(2, "0")}`, false);
+    const preservedLab = (await pool.query("SELECT * FROM appointments WHERE id=$1", [peVictim.created.laboratory.id])).rows;
+    expect(await importPriority()).toMatchObject({ displacementTotal: 2, overflow: { pairCountBeyondPreferredWindow: 0 } });
+    expect((await pool.query("SELECT appointment_date::text FROM appointments WHERE student_number='99-9490-00' ORDER BY schedule_type")).rows).toEqual([{ appointment_date: "2027-08-30" }, { appointment_date: "2027-08-31" }]);
+    expect((await pool.query("SELECT * FROM appointments WHERE id=$1", [peVictim.created.laboratory.id])).rows).toEqual(preservedLab);
+    expect((await pool.query("SELECT student_number,strategy FROM appointment_reschedule_events WHERE student_number LIKE $1 ORDER BY student_number", [studentPattern])).rows).toEqual([
+      { student_number: labVictim.candidate.studentNumber, strategy: "MOVE_COMPLETE_PAIR" },
+      { student_number: peVictim.candidate.studentNumber, strategy: "MOVE_PHYSICAL_ONLY" },
+    ]);
+    const duplicates = await pool.query(`SELECT student_number,schedule_type FROM appointments
+      WHERE student_number LIKE $1 AND status IN ('PENDING','COMPLETED') GROUP BY student_number,schedule_type HAVING COUNT(*)>1`, [studentPattern]);
+    expect(duplicates.rows).toEqual([]);
+  });
+
+  it("prunes an older redundant victim and retains the later accepted pair", async () => {
+    await setCapacity("2028-07-31", 2);
+    const older = await candidateFixture({
+      studentNumber: "99-9432-00",
+      laboratoryDate: "2027-08-30",
+      physicalExamDate: "2027-08-31",
+      windowStart: "2027-08-01",
+      acceptedAt: "2027-07-01T00:00:00Z",
+    });
+    const later = await candidateFixture({
+      studentNumber: "99-9433-00",
+      laboratoryDate: "2027-08-30",
+      physicalExamDate: "2027-08-31",
+      windowStart: "2027-08-01",
+      acceptedAt: "2027-07-02T00:00:00Z",
+    });
+    for (let day = 1;day <= 29;day++) await insertUnifiedDate(`2027-08-${String(day).padStart(2, "0")}`, false);
+    const before = (await pool.query("SELECT * FROM appointments WHERE student_number=$1 ORDER BY id", [older.candidate.studentNumber])).rows;
+    expect(await importPriority()).toMatchObject({ displacementTotal: 1, overflow: { pairCountBeyondPreferredWindow: 0 } });
+    expect((await pool.query("SELECT * FROM appointments WHERE student_number=$1 ORDER BY id", [older.candidate.studentNumber])).rows).toEqual(before);
+    expect((await pool.query("SELECT student_number FROM appointment_reschedule_events WHERE student_number LIKE $1", [studentPattern])).rows).toEqual([{ student_number: later.candidate.studentNumber }]);
+    expect((await pool.query("SELECT COUNT(*)::int AS count FROM student_portal_notifications WHERE student_number=$1", [older.candidate.studentNumber])).rows).toEqual([{ count: 0 }]);
+  });
+
+  it("searches the remaining cycle for unassigned demand even after the preferred month", async () => {
+    await setCapacity("2027-09-02");
+    await candidateFixture({ studentNumber: "99-9434-00", laboratoryDate: "2027-09-01", physicalExamDate: "2027-09-02", windowStart: "2027-09-01" });
+    for (let day = 1;day <= 31;day++) await insertUnifiedDate(`2027-08-${String(day).padStart(2, "0")}`, false);
+    expect(await importPriority()).toMatchObject({ displacementTotal: 1, overflow: { pairCountBeyondPreferredWindow: 1, unscheduledStudentCount: 0 } });
+    expect((await pool.query("SELECT reason_code FROM clinic_closure_manual_cases WHERE student_number='99-9434-00'")).rows).toEqual([{ reason_code: "NO_VALID_REPLACEMENT_WITHIN_CYCLE" }]);
+  });
+
+  it("relieves unassigned PE-only pressure while preserving a completed Laboratory", async () => {
+    await setCapacity("2027-08-03");
+    const victim = await candidateFixture({
+      studentNumber: "99-9435-00",
+      laboratoryDate: "2027-07-30",
+      physicalExamDate: "2027-08-03",
+      windowStart: "2027-08-01",
+    });
+    await pool.query("UPDATE appointments SET status='COMPLETED' WHERE id=$1", [victim.created.laboratory.id]);
+    const before = (await pool.query("SELECT * FROM appointments WHERE id=$1", [victim.created.laboratory.id])).rows;
+    expect(await importPriority()).toMatchObject({ displacementTotal: 1 });
+    expect((await pool.query("SELECT * FROM appointments WHERE id=$1", [victim.created.laboratory.id])).rows).toEqual(before);
+    expect((await pool.query("SELECT strategy,outcome FROM appointment_reschedule_events WHERE student_number=$1", [victim.candidate.studentNumber])).rows).toEqual([{ strategy: "MOVE_PHYSICAL_ONLY", outcome: "REPLACED" }]);
+  });
+
+  it("rolls back actual incoming student updates, snapshots and publication when protected capacity cannot fit the entire import", async () => {
+    await setCapacity("2027-08-03");
+    const protectedPair = await candidateFixture({
+      studentNumber: "99-9436-00",
+      laboratoryDate: "2027-08-02",
+      physicalExamDate: "2027-08-03",
+      windowStart: "2027-08-01",
+    });
+    const reservationId = await attachOvpsa(protectedPair.created.physicalExam.id);
+    await insertTestStudent({ studentNumber: "99-9490-00", firstName: "Unchanged", lastName: "Before", yearLevel: 4 });
+    const before = (await pool.query("SELECT * FROM appointments WHERE student_number=$1 ORDER BY id", [protectedPair.candidate.studentNumber])).rows;
+    await expect(importPriority(2)).rejects.toMatchObject({ code: "SCHEDULE_CAPACITY_EXHAUSTED" });
+    expect((await pool.query("SELECT * FROM appointments WHERE student_number=$1 ORDER BY id", [protectedPair.candidate.studentNumber])).rows).toEqual(before);
+    expect((await pool.query("SELECT first_name FROM students WHERE student_number LIKE '99-9490-%'")).rows).toEqual([{ first_name: "Unchanged" }]);
+    expect((await pool.query(`SELECT
+      (SELECT COUNT(*)::int FROM appointments WHERE student_number LIKE '99-9490-%') AS appointments,
+      (SELECT COUNT(*)::int FROM student_academic_snapshots WHERE student_number LIKE '99-9490-%') AS snapshots,
+      (SELECT COUNT(*)::int FROM schedule_import_groups WHERE source_filename='TEST-DISPLACE-UNIFIED.csv') AS imports,
+      (SELECT COUNT(*)::int FROM appointment_reschedule_events WHERE student_number LIKE $1) AS events,
+      (SELECT COUNT(*)::int FROM student_portal_notifications WHERE student_number LIKE $1) AS notifications`, [studentPattern])).rows).toEqual([{ appointments: 0, snapshots: 0, imports: 0, events: 0, notifications: 0 }]);
+    expect((await pool.query("SELECT status FROM ovpsa_first_year_service_reservations WHERE id=$1", [reservationId])).rows).toEqual([{ status: "ACTIVE" }]);
+  });
+
   it("uses persisted scheduling lineage before deterministic legacy fallbacks", async () => {
     const fixture = await candidateFixture({
       studentNumber: "99-9405-05",
