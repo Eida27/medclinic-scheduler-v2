@@ -1,12 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import nodemailer from "nodemailer";
 import { Client } from "pg";
 import { parseEmailOutboxEncryptionKey } from "../src/server/email/verification-body-encryption";
 
 type Environment = Record<string, string | undefined>;
+const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const JWT_SECRET_PLACEHOLDERS = new Set([
+  "replace-with-a-strong-random-secret-of-at-least-32-characters",
+  "replace-with-at-least-32-random-characters",
+]);
 
 export type InstallationConfiguration = {
   databaseUrl: string;
@@ -67,6 +72,9 @@ export function validateInstallationConfiguration(
 
   const jwtSecret = required(environment.JWT_SECRET);
   if (jwtSecret.length < 32) issues.push("JWT_SECRET must contain at least 32 characters.");
+  if (JWT_SECRET_PLACEHOLDERS.has(jwtSecret)) {
+    issues.push("JWT_SECRET must replace the public placeholder with a generated secret.");
+  }
 
   const emailOutboxEncryptionKey = required(environment.EMAIL_OUTBOX_ENCRYPTION_KEY);
   try {
@@ -106,9 +114,9 @@ export function validateInstallationConfiguration(
   if (!resultUploadRootValue) {
     issues.push("RESULT_UPLOAD_ROOT is required.");
   } else if (!path.isAbsolute(resultUploadRootValue)) {
-    issues.push("RESULT_UPLOAD_ROOT must be an absolute durable private storage path.");
-  } else if (isWithin(path.resolve("public"), resultUploadRoot)) {
-    issues.push("RESULT_UPLOAD_ROOT must be private and cannot be inside public/.");
+    issues.push("RESULT_UPLOAD_ROOT must be an absolute private storage path.");
+  } else if (isWithin(REPOSITORY_ROOT, resultUploadRoot)) {
+    issues.push("RESULT_UPLOAD_ROOT must be outside the repository on deployment-provided durable private storage.");
   }
 
   const smtpHost = required(environment.SMTP_HOST);
@@ -224,16 +232,16 @@ export async function runInstallationPreflight(
   await runCheck("database", () => (
     (dependencies.verifyDatabase ?? verifyDatabase)(configuration)
   ));
-  log("Installation preflight: database connection ready.");
+  log("Installation preflight: database is reachable.");
   await runCheck("storage", () => (
     (dependencies.verifyStorage ?? verifyStorage)(configuration)
   ));
-  log("Installation preflight: private storage ready.");
+  log("Installation preflight: configured result storage path is writable; verify deployment durability and access controls separately.");
   await runCheck("smtp", () => (
     (dependencies.verifySmtp ?? verifySmtp)(configuration)
   ));
-  log("Installation preflight: SMTP connection ready.");
-  return { database: "ready", storage: "ready", smtp: "ready" } as const;
+  log("Installation preflight: SMTP is reachable.");
+  return { database: "reachable", storage: "writable", smtp: "reachable" } as const;
 }
 
 function isDirectExecution() {

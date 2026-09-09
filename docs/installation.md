@@ -14,7 +14,7 @@ npm ci
 
 Run commands from the same checked-out release that will be built and started. Do not copy `node_modules` from another operating system or Node version.
 
-The Task 2 local verification was executed on Windows with Node.js 26.4.0 and PostgreSQL 18.4. The repository CI workflow declares Node.js 22, but that workflow and a Linux runner were not executed as part of this local verification.
+Verification note dated 2026-09-09: the installation checks were executed on Windows with Node.js 26.4.0 and PostgreSQL 18.4. The repository CI workflow declares Node.js 22, but that workflow and a Linux runner were not executed in this verification.
 
 ## 2. Configure and preflight every prerequisite
 
@@ -41,7 +41,7 @@ Create the empty database using your normal PostgreSQL administration process, t
 npm run install:preflight
 ```
 
-Preflight validates all configuration before it opens a connection. It then proves the database is reachable, the private result directory is writable, and the SMTP server accepts a connection. It reports only readiness and corrective guidance; it does not print credentials, mail bodies, or verification URLs. A missing SMTP host/from or partially configured SMTP authentication fails before Administrator bootstrap can write to the database.
+Preflight validates all configuration before it opens a connection. It then proves the database and SMTP server are reachable and that the configured private result directory is currently writable. A successful write probe cannot prove that the deployment volume is durable, shared consistently by instances, protected by the required operating-system access controls, or included in coordinated backups; verify those deployment properties separately. Preflight reports only the observed checks and corrective guidance, and it does not print credentials, mail bodies, or verification URLs. A missing SMTP host/from or partially configured SMTP authentication fails before Administrator bootstrap can write to the database.
 
 For automated local acceptance, `npm run smtp:acceptance` starts a development-only sink on `127.0.0.1:2525` and accepts only recipients beneath the reserved `.test` top-level domain. Its routine output prints only the listener and capture count. Acceptance code can deliberately inspect captured messages by importing `startLoopbackSmtpSink` from `scripts/loopback-smtp-sink.ts`; do not use this sink as a production mail service.
 

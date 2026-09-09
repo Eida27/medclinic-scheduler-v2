@@ -31,9 +31,9 @@ describe("live installation preflight", () => {
         SMTP_PORT: String(sink.port),
         SMTP_FROM: "clinic@installation.test",
       }, { log: () => undefined })).resolves.toEqual({
-        database: "ready",
-        storage: "ready",
-        smtp: "ready",
+        database: "reachable",
+        storage: "writable",
+        smtp: "reachable",
       });
       expect((await stat(storageRoot)).isDirectory()).toBe(true);
       expect(sink.messages).toHaveLength(0);
