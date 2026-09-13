@@ -1641,3 +1641,56 @@ it("keeps completed OVPSA appointment reservations when closing availability", a
   expect((await pool.query("SELECT status FROM appointments WHERE student_number='UCAL-OVPSA-BOUND' ORDER BY schedule_type")).rows)
     .toEqual([{ status: "COMPLETED" }, { status: "COMPLETED" }]);
 });
+
+
+describe("mixed block and reopening preview agreement", () => {
+  it.each([
+    { reservedService: null, reservedDate: "2049-08-11", recovered: 1 },
+    { reservedService: "LABORATORY", reservedDate: "2049-08-11", recovered: 0 },
+    { reservedService: "PHYSICAL_EXAM", reservedDate: "2049-08-12", recovered: 0 },
+    { reservedService: "PHYSICAL_EXAM", reservedDate: "2049-08-11", recovered: 1 },
+  ])("matches confirmation with $reservedService reserved on $reservedDate", async ({ reservedService, reservedDate, recovered }) => {
+    const initial = await saveClinicCalendarChanges({
+      requestId: requestIds.pair, emergencyAcknowledged: false, recoveryMode: "AUTO_ELIGIBLE",
+      changes: [{ action: "BLOCK", date: "2049-08-11", category: "CLOSURE", reason: "TEST-UNIFIED mixed preview" }],
+    }, admin);
+    const reopening = initial.activeUnavailableDates.find((date) => date.blockedDate === "2049-08-11")!;
+    let reservationId: string | undefined;
+    if (reservedService) {
+      const lineage = await createReleasedOvpsaLaboratoryLineage("2049-08-16");
+      reservationId = (await pool.query(`INSERT INTO ovpsa_first_year_service_reservations
+        (batch_id,revision_id,schedule_type,reservation_date,status,reservation_kind,created_by)
+        VALUES($1,$2,$3,$4,'ACTIVE','EXCLUSIVE',$5) RETURNING id`,
+      [lineage.batchId, lineage.revisionId, reservedService, reservedDate, admin.userId])).rows[0].id;
+    }
+    await pool.query("UPDATE academic_years SET closing_date='2049-08-12' WHERE start_year=2048");
+    await createPair({ studentNumber: "UCAL-MIXED-REOPEN", laboratoryDate: "2049-08-09", physicalExamDate: "2049-08-10" });
+    const request = {
+      requestId: requestIds.pairReopenOne, emergencyAcknowledged: false,
+      changes: [
+        { action: "BLOCK", date: "2049-08-09", category: "CLOSURE", reason: "TEST-UNIFIED mixed preview" },
+        { action: "BLOCK", date: "2049-08-10", category: "CLOSURE", reason: "TEST-UNIFIED mixed preview" },
+        { action: "REOPEN", date: reopening.blockedDate, unavailableDateId: reopening.id, expectedUpdatedAt: reopening.updatedAt },
+      ],
+    };
+    const preview = await previewClinicCalendarChanges(request, admin);
+    expect(preview).toMatchObject({ automaticRecoveryEligibleCount: recovered, manualResolutionRequiredCount: 1 - recovered });
+    // A preview simulates availability without reopening the actual calendar or changing appointments.
+    expect((await pool.query("SELECT reopened_at FROM clinic_unavailable_dates WHERE id=$1", [reopening.id])).rows[0].reopened_at).toBeNull();
+    expect((await pool.query("SELECT id FROM appointments WHERE student_number='UCAL-MIXED-REOPEN'")).rowCount).toBe(2);
+    const saved = await saveClinicCalendarChanges({ ...request, recoveryMode: "AUTO_ELIGIBLE" }, admin);
+    expect(saved).toMatchObject({ reopenedDateCount: 1, movedStudentCount: recovered, manualCaseCount: 1 - recovered });
+    expect(saved.movedStudentCount).toBe(preview.automaticRecoveryEligibleCount);
+    expect(saved.manualCaseCount).toBe(preview.manualResolutionRequiredCount);
+    if (recovered) {
+      expect((await pool.query("SELECT schedule_type,appointment_date::text FROM appointments WHERE student_number='UCAL-MIXED-REOPEN' AND is_published ORDER BY schedule_type")).rows)
+        .toEqual([{ schedule_type: "LABORATORY", appointment_date: "2049-08-11" }, { schedule_type: "PHYSICAL_EXAM", appointment_date: "2049-08-12" }]);
+    } else {
+      expect(saved.manualReasonGroups).toEqual([expect.objectContaining({ reasonCode: "NO_VALID_REPLACEMENT_WITHIN_CYCLE" })]);
+    }
+    if (reservationId) {
+      expect((await pool.query("SELECT schedule_type,reservation_date::text,status FROM ovpsa_first_year_service_reservations WHERE id=$1", [reservationId])).rows)
+        .toEqual([{ schedule_type: reservedService, reservation_date: reservedDate, status: "ACTIVE" }]);
+    }
+  });
+});

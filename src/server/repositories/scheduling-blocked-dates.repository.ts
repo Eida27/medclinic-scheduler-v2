@@ -12,6 +12,7 @@ export async function loadSchedulingBlockedDates(
     startDate: string;
     endDate: string;
     excludeOvpsaBatchId?: string | null;
+    excludeUnavailableDateIds?: string[];
   },
 ): Promise<SchedulingBlockedDates> {
   const result = await client.query<{
@@ -25,6 +26,7 @@ export async function loadSchedulingBlockedDates(
            AS service(schedule_type)
         WHERE unavailable.blocked_date BETWEEN $1::date AND $2::date
           AND unavailable.reopened_at IS NULL
+          AND NOT (unavailable.id=ANY($4::uuid[]))
      ),
      service_reserved AS (
        SELECT reservation.schedule_type,reservation.reservation_date::text AS date
@@ -41,7 +43,7 @@ export async function loadSchedulingBlockedDates(
          SELECT * FROM service_reserved
        ) blocked
       ORDER BY schedule_type,date`,
-    [input.startDate, input.endDate, input.excludeOvpsaBatchId ?? null],
+    [input.startDate, input.endDate, input.excludeOvpsaBatchId ?? null, input.excludeUnavailableDateIds ?? []],
   );
   const forService = (scheduleType: "LABORATORY" | "PHYSICAL_EXAM") => (
     result.rows

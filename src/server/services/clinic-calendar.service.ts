@@ -1100,10 +1100,14 @@ export async function previewClinicCalendarChanges(
       await loadAffectedCycles(client, blockChanges.map((change) => change.date), false),
       groups,
     );
+    const reopenChanges = request.changes.filter((change) => change.action === "REOPEN");
     const blockedDates = await listUnifiedBlockedDateSet(client);
+    for (const change of reopenChanges) blockedDates.delete(change.date);
     for (const change of blockChanges) blockedDates.add(change.date);
     const recoveryBounds = await loadRecoveryBounds(client, cycles);
     const serviceBlockedDates = await loadSchedulingBlockedDates(client, {
+      // Simulate global reopenings without removing independent service reservations.
+      excludeUnavailableDateIds: reopenChanges.map((change) => change.unavailableDateId),
       startDate: manilaToday(),
       endDate: [manilaToday(), ...[...recoveryBounds.values()].flatMap((bounds) => bounds ? [bounds.cycleClosingDate] : [])].sort().at(-1)!,
     });
