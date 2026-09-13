@@ -3,8 +3,9 @@ import { createHash, randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { z } from "zod";
 import { AppError } from "@/lib/errors";
-import { assertManualAppointmentDestination } from "@/server/appointments/manual-appointment-destination";
+import { assertManualAppointmentDestination, assertReplacementPairOrder } from "@/server/appointments/manual-appointment-destination";
 import { transaction } from "@/server/db/pool";
+import { lockAcademicYearSchedulingBoundary } from "@/server/repositories/academic-years.repository";
 import { getManualRescheduleDestinationState } from "@/server/repositories/appointments.repository";
 import {
   createClosureGroupWithDates,
@@ -52,6 +53,7 @@ import {
   type ClinicCycleAppointment,
   type ClinicCycleClassification,
   type ReplacementCapacity,
+  type ReplacementCycleBounds,
   type UsedReplacementCapacity,
 } from "./clinic-calendar-planner";
 import {
@@ -522,7 +524,7 @@ async function loadCapacity(client: PoolClient) {
     `SELECT setting.schedule_type,setting.max_daily_capacity
        FROM clinic_capacity_settings setting
        JOIN clinics clinic ON clinic.id=setting.clinic_id
-      WHERE clinic.code IN ('KABALAKA_CLINIC','CPU_CLINIC')`,
+      WHERE clinic.code IN ('KABALAKA_CLINIC','CPU_CLINIC') AND setting.is_active=TRUE`,
   );
   const capacity = Object.fromEntries(
     capacityRows.rows.map((row) => [row.schedule_type, row.max_daily_capacity]),
@@ -537,7 +539,7 @@ async function loadCapacity(client: PoolClient) {
   }>(
     `SELECT schedule_type,appointment_date::text,COUNT(*)::int AS used
        FROM appointments
-      WHERE is_published=TRUE AND status IN ('DRAFT','PENDING')
+      WHERE status IN ('DRAFT','PENDING','COMPLETED','NO_SHOW')
         AND NOT (schedule_type='LABORATORY' AND ovpsa_batch_id IS NOT NULL)
       GROUP BY schedule_type,appointment_date`,
   );
@@ -741,8 +743,33 @@ async function markOvpsaLaboratoryClosure(
   );
 }
 
+async function loadRecoveryBounds(client: PoolClient, cycles: CalendarCycle[]) {
+  const bounds = new Map<number, ReplacementCycleBounds | null>();
+  for (const year of [...new Set(cycles.map((cycle) => cycle.scheduleCycleStart))].sort()) {
+    const boundary = await lockAcademicYearSchedulingBoundary(client, year);
+    bounds.set(year, boundary ? {
+      cycleStartDate: `${year}-08-01`, cycleClosingDate: boundary.closingDate, manilaToday: manilaToday(),
+    } : null);
+  }
+  return bounds;
+}
+
+function copyCapacity(used: UsedReplacementCapacity): UsedReplacementCapacity {
+  return { LABORATORY: new Map(used.LABORATORY), PHYSICAL_EXAM: new Map(used.PHYSICAL_EXAM) };
+}
+
+function releaseCapacity(used: UsedReplacementCapacity, originals: ClinicCycleAppointment[]) {
+  for (const original of originals) {
+    if (!["DRAFT", "PENDING"].includes(original.status)
+      || (original.scheduleType === "LABORATORY" && original.ovpsaBatchId)) continue;
+    const service = used[original.scheduleType];
+    service.set(original.appointmentDate, Math.max(0, (service.get(original.appointmentDate) ?? 0) - 1));
+  }
+}
+
 function allocateCycleRecovery(input: {
   cycle: CalendarCycle;
+  bounds: ReplacementCycleBounds | null;
   affectedAppointmentIds: ReadonlySet<string>;
   afterDate: string;
   blockedDates: Set<string>;
@@ -753,44 +780,36 @@ function allocateCycleRecovery(input: {
   let classification = classifyClinicCycle(input.cycle.appointments, {
     affectedAppointmentIds: input.affectedAppointmentIds,
   });
-  if (
-    classification.strategy === "MOVE_COMPLETE_PAIR"
+  // Explore Laboratory-only first without freeing the PE that may be preserved.
+  if (classification.strategy === "MOVE_COMPLETE_PAIR"
     && input.affectedAppointmentIds.has(classification.laboratory.id)
-    && !input.affectedAppointmentIds.has(classification.physicalExam.id)
-  ) {
-    const laboratoryCandidate = allocateReplacementDates({
-      strategy: "MOVE_LABORATORY_ONLY",
-      afterDate: input.afterDate,
-      blockedDates: input.blockedDates,
-      blockedDatesByService: input.blockedDatesByService,
-      usedCapacity: input.usedCapacity,
-      capacity: input.capacity,
-    });
+    && !input.affectedAppointmentIds.has(classification.physicalExam.id)) {
+    const usedCapacity = copyCapacity(input.usedCapacity);
+    releaseCapacity(usedCapacity, [classification.laboratory]);
+    const dates = allocateReplacementDates({ ...input, usedCapacity, strategy: "MOVE_LABORATORY_ONLY" });
     classification = classifyClinicCycle(input.cycle.appointments, {
       affectedAppointmentIds: input.affectedAppointmentIds,
-      proposedLaboratoryDate: laboratoryCandidate.laboratoryDate,
+      proposedLaboratoryDate: dates.laboratoryDate,
     });
     if (classification.strategy === "MOVE_LABORATORY_ONLY") {
-      return { classification, dates: laboratoryCandidate };
+      reserveCapacity(usedCapacity, dates);
+      return { classification, dates, usedCapacity };
     }
   }
-  if (
-    classification.strategy === "MANUAL_RESOLUTION_REQUIRED"
-    || classification.strategy === "PRESERVE_COMPLETION"
-  ) {
-    return { classification, dates: {} };
+  if (classification.strategy === "MANUAL_RESOLUTION_REQUIRED"
+    || classification.strategy === "PRESERVE_COMPLETION") {
+    return { classification, dates: {}, usedCapacity: input.usedCapacity };
   }
-  return {
-    classification,
-    dates: allocateReplacementDates({
-      strategy: classification.strategy,
-      afterDate: input.afterDate,
-      blockedDates: input.blockedDates,
-      blockedDatesByService: input.blockedDatesByService,
-      usedCapacity: input.usedCapacity,
-      capacity: input.capacity,
-    }),
-  };
+  const usedCapacity = copyCapacity(input.usedCapacity);
+  releaseCapacity(usedCapacity, classification.strategy === "MOVE_COMPLETE_PAIR"
+    ? [classification.laboratory, classification.physicalExam] : [classification.physicalExam]);
+  const afterDate = classification.strategy === "MOVE_PHYSICAL_ONLY"
+    ? [input.afterDate, addCalendarDays(classification.laboratory.appointmentDate,
+      classification.laboratory.ovpsaBatchId ? 6 : 0)].sort().at(-1)!
+    : input.afterDate;
+  const dates = allocateReplacementDates({ ...input, afterDate, usedCapacity, strategy: classification.strategy });
+  reserveCapacity(usedCapacity, dates);
+  return { classification, dates, usedCapacity };
 }
 
 function movedAppointmentCount(classification: ClinicCycleClassification) {
@@ -1072,6 +1091,7 @@ export async function previewClinicCalendarChanges(
     requireRecoveryMode: false,
   });
   return transaction(async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('medclinic:schedule-import-queue'))");
     const active = await listActiveUnavailableDatesWithClient(client);
     await validateCalendarState(active, request.changes);
     const blockChanges = request.changes.filter((change): change is ClinicCalendarBlockChange => change.action === "BLOCK");
@@ -1082,11 +1102,13 @@ export async function previewClinicCalendarChanges(
     );
     const blockedDates = await listUnifiedBlockedDateSet(client);
     for (const change of blockChanges) blockedDates.add(change.date);
+    const recoveryBounds = await loadRecoveryBounds(client, cycles);
     const serviceBlockedDates = await loadSchedulingBlockedDates(client, {
       startDate: manilaToday(),
-      endDate: addCalendarDays(manilaToday(), 366 * 5),
+      endDate: [manilaToday(), ...[...recoveryBounds.values()].flatMap((bounds) => bounds ? [bounds.cycleClosingDate] : [])].sort().at(-1)!,
     });
-    const { capacity, usedCapacity } = await loadCapacity(client);
+    const { capacity, usedCapacity: initialCapacity } = await loadCapacity(client);
+    let usedCapacity = initialCapacity;
     let automaticRecoveryEligibleCount = 0;
     let manualResolutionRequiredCount = 0;
     let completePairMoveEstimate = 0;
@@ -1115,6 +1137,7 @@ export async function previewClinicCalendarChanges(
       try {
         const planned = allocateCycleRecovery({
           cycle,
+          bounds: recoveryBounds.get(cycle.scheduleCycleStart) ?? null,
           affectedAppointmentIds: policy.affectedAppointmentIds,
           afterDate: cycleGroups.reduce(
             (latest, group) => group.endDate > latest ? group.endDate : latest,
@@ -1144,7 +1167,7 @@ export async function previewClinicCalendarChanges(
         if (planned.classification.strategy === "MOVE_PHYSICAL_ONLY") physicalOnlyMoveEstimate += 1;
         preservedAppointmentCount += cycle.appointments.length
           - movedAppointmentCount(planned.classification);
-        reserveCapacity(usedCapacity, planned.dates);
+        usedCapacity = planned.usedCapacity;
       } catch (error) {
         if (!(error instanceof ClinicCalendarPlanningError)) throw error;
         expectedCapacityFallbackCount += 1;
@@ -1244,11 +1267,13 @@ export async function saveClinicCalendarChanges(
         persistedGroups,
       );
       const blockedDates = await listUnifiedBlockedDateSet(client);
+      const recoveryBounds = await loadRecoveryBounds(client, cycles);
       const serviceBlockedDates = await loadSchedulingBlockedDates(client, {
         startDate: manilaToday(),
-        endDate: addCalendarDays(manilaToday(), 366 * 5),
+        endDate: [manilaToday(), ...[...recoveryBounds.values()].flatMap((bounds) => bounds ? [bounds.cycleClosingDate] : [])].sort().at(-1)!,
       });
-      const { capacity, usedCapacity } = await loadCapacity(client);
+      const { capacity, usedCapacity: initialCapacity } = await loadCapacity(client);
+      let usedCapacity = initialCapacity;
       const clinicRows = await client.query<{ id: string; code: keyof ReplacementCapacity }>(
         `SELECT id::text,CASE code
            WHEN 'KABALAKA_CLINIC' THEN 'LABORATORY'
@@ -1329,6 +1354,7 @@ export async function saveClinicCalendarChanges(
             try {
               planned = allocateCycleRecovery({
                 cycle,
+                bounds: recoveryBounds.get(cycle.scheduleCycleStart) ?? null,
                 affectedAppointmentIds: policy.affectedAppointmentIds,
                 afterDate: cycleGroups.reduce(
                   (latest, item) => item.endDate > latest ? item.endDate : latest,
@@ -1356,7 +1382,7 @@ export async function saveClinicCalendarChanges(
                 policyMetadata: { ...policyMetadata, fallbackReasonCode: error.reasonCode },
               });
               manualCaseCount += 1;
-              capacityFallbackCount += error.reasonCode === "NO_REPLACEMENT_CAPACITY" ? 1 : 0;
+              capacityFallbackCount += ["NO_REPLACEMENT_CAPACITY", "NO_VALID_REPLACEMENT_WITHIN_CYCLE"].includes(error.reasonCode) ? 1 : 0;
               notificationWarningCount += manual.notificationWarningCount;
               addReasonCount(manualReasonCounts, error.reasonCode);
               preservedAppointmentCount += cycle.appointments.filter((appointment) =>
@@ -1399,7 +1425,7 @@ export async function saveClinicCalendarChanges(
               clinicIds,
               policyMetadata,
             });
-            reserveCapacity(usedCapacity, planned.dates);
+            usedCapacity = planned.usedCapacity;
             movedStudentCount += 1;
             movedAppointmentCount += moved.movedAppointmentCount;
             notificationWarningCount += moved.notificationWarningCount;
@@ -1422,7 +1448,7 @@ export async function saveClinicCalendarChanges(
             policyMetadata: { ...policyMetadata, fallbackReasonCode: error.reasonCode },
           });
           manualCaseCount += 1;
-          capacityFallbackCount += error.reasonCode === "NO_REPLACEMENT_CAPACITY" ? 1 : 0;
+          capacityFallbackCount += ["NO_REPLACEMENT_CAPACITY", "NO_VALID_REPLACEMENT_WITHIN_CYCLE"].includes(error.reasonCode) ? 1 : 0;
           notificationWarningCount += manual.notificationWarningCount;
           addReasonCount(manualReasonCounts, error.reasonCode);
           await client.query(`RELEASE SAVEPOINT ${savepoint}`);
@@ -1431,10 +1457,16 @@ export async function saveClinicCalendarChanges(
 
       if (ovpsaPhysicalReservationsToRelease.size) {
         await client.query(
-          `UPDATE ovpsa_first_year_service_reservations
+          `UPDATE ovpsa_first_year_service_reservations reservation
               SET status='RELEASED',released_at=clock_timestamp(),released_by=$2,
                   release_reason='Clinic closure recovery moved the assigned Physical Examination.'
-            WHERE id=ANY($1::uuid[]) AND status IN ('ACTIVE','INVALIDATED')`,
+            WHERE reservation.id=ANY($1::uuid[]) AND reservation.status IN ('ACTIVE','INVALIDATED')
+              AND NOT EXISTS (
+                SELECT 1 FROM appointments preserved
+                 WHERE preserved.ovpsa_service_reservation_id=reservation.id
+                   AND preserved.is_published=TRUE
+                   AND preserved.status IN ('DRAFT','PENDING','COMPLETED','NO_SHOW')
+              )`,
           [[...ovpsaPhysicalReservationsToRelease], actor.userId],
         );
       }
@@ -1740,37 +1772,6 @@ async function loadAppointmentStates(client: PoolClient, ids: string[]) {
   }));
 }
 
-async function assertManualDateAvailable(
-  client: PoolClient,
-  scheduleType: AppointmentState["scheduleType"],
-  date: string,
-) {
-  if (date < manilaToday() || !isClinicSchedulingWeekday(date)) {
-    throw validationError("Manual replacement dates must be current or future weekdays.");
-  }
-  if (await isSchedulingDateBlocked(client, { scheduleType, date })) {
-    throw new AppError("CLINIC_CALENDAR_CONFLICT", `${date} is blocked or reserved.`, 409);
-  }
-  const capacity = await client.query<{ max_daily_capacity: number; used: number }>(
-    `SELECT setting.max_daily_capacity,
-            (SELECT COUNT(*)::int FROM appointments appointment
-              WHERE appointment.schedule_type=$1 AND appointment.appointment_date=$2
-                AND appointment.is_published=TRUE AND appointment.status IN ('DRAFT','PENDING')
-                AND NOT (
-                  appointment.schedule_type='LABORATORY'
-                  AND appointment.ovpsa_batch_id IS NOT NULL
-                )) AS used
-       FROM clinic_capacity_settings setting
-       JOIN clinics clinic ON clinic.id=setting.clinic_id
-      WHERE setting.schedule_type=$1
-        AND clinic.code=CASE $1 WHEN 'LABORATORY' THEN 'KABALAKA_CLINIC' ELSE 'CPU_CLINIC' END`,
-    [scheduleType, date],
-  );
-  if (!capacity.rowCount || capacity.rows[0].used >= capacity.rows[0].max_daily_capacity) {
-    throw new AppError("CLINIC_CAPACITY_CONFLICT", `${date} has no remaining capacity.`, 409);
-  }
-}
-
 async function assertAutomaticManualDateAvailable(
   client: PoolClient,
   appointment: AppointmentState,
@@ -1913,12 +1914,9 @@ export async function resolveClinicClosureManualCase(
         PHYSICAL_EXAM: request.physicalExamDate
           ?? affected.find((appointment) => appointment.scheduleType === "PHYSICAL_EXAM")?.appointmentDate,
       };
-      if (
-        finalDateByType.LABORATORY
-        && finalDateByType.PHYSICAL_EXAM
-        && finalDateByType.PHYSICAL_EXAM <= finalDateByType.LABORATORY
-      ) {
-        throw validationError("Physical Examination must follow Laboratory.");
+      if (finalDateByType.LABORATORY && finalDateByType.PHYSICAL_EXAM) {
+        assertReplacementPairOrder(finalDateByType.LABORATORY, finalDateByType.PHYSICAL_EXAM,
+          affected.some((appointment) => appointment.ovpsaBatchId) ? 7 : 1);
       }
       const moving = affected.filter((appointment) => Boolean(dateByType[appointment.scheduleType]));
       const assignmentBlock = currentAssignmentBlock(moving);
@@ -1927,16 +1925,7 @@ export async function resolveClinicClosureManualCase(
       }
       for (const appointment of moving) {
         const date = dateByType[appointment.scheduleType]!;
-        if (manualCase.case_source === "AUTOMATIC_DISPLACEMENT") {
-          await assertAutomaticManualDateAvailable(
-            client,
-            appointment,
-            date,
-            manualCase.schedule_cycle_start,
-          );
-        } else {
-          await assertManualDateAvailable(client, appointment.scheduleType, date);
-        }
+        await assertAutomaticManualDateAvailable(client, appointment, date, manualCase.schedule_cycle_start);
       }
       await client.query(
         `UPDATE appointments
@@ -2109,6 +2098,8 @@ type OvpsaRecoveryCaseRow = {
   student_number: string;
   laboratory_id: string;
   laboratory_status: string;
+  laboratory_locked: boolean;
+  physical_locked: boolean;
   laboratory_date: string;
   laboratory_clinic_id: string;
   physical_id: string;
@@ -2129,12 +2120,6 @@ async function planOvpsaClosureBatchRecovery(
     lock: boolean;
   },
 ) {
-  if (!isClinicSchedulingWeekday(input.replacementLaboratoryDate)) {
-    throw validationError("The replacement Mission Hospital Laboratory date must be a weekday.");
-  }
-  if (input.replacementLaboratoryDate < manilaToday()) {
-    throw validationError("The replacement Mission Hospital Laboratory date cannot be in the past.");
-  }
   const batchResult = await client.query<OvpsaRecoveryBatchRow>(
     `SELECT batch.id::text AS batch_id,batch.status,batch.optimistic_token::text,
             batch.schedule_cycle_start,revision.id::text AS revision_id,
@@ -2158,21 +2143,30 @@ async function planOvpsaClosureBatchRecovery(
       409,
     );
   }
-  if (await isSchedulingDateBlocked(client, {
-    scheduleType: "LABORATORY",
-    date: input.replacementLaboratoryDate,
-    excludeOvpsaBatchId: input.batchId,
-  })) {
-    throw new AppError(
-      "CLINIC_CALENDAR_CONFLICT",
-      `${input.replacementLaboratoryDate} is blocked or reserved.`,
-      409,
-    );
+  const boundary = await lockAcademicYearSchedulingBoundary(client, batch.schedule_cycle_start);
+  if (!boundary || boundary.closingDate <= manilaToday()) {
+    throw new AppError("NO_VALID_REPLACEMENT_WITHIN_CYCLE",
+      "The original academic cycle is missing or closed. Keep the batch in Manual Resolution.", 409);
   }
+  const bounds: ReplacementCycleBounds = {
+    cycleStartDate: `${batch.schedule_cycle_start}-08-01`,
+    cycleClosingDate: boundary.closingDate, manilaToday: manilaToday(),
+  };
+  assertManualAppointmentDestination({
+    appointment: { id: batch.batch_id, scheduleType: "LABORATORY" },
+    pair: { laboratory: null, physicalExam: null },
+    destinationDate: input.replacementLaboratoryDate, ...bounds,
+    isBlocked: await isSchedulingDateBlocked(client, {
+      scheduleType: "LABORATORY", date: input.replacementLaboratoryDate, excludeOvpsaBatchId: input.batchId,
+    }),
+    // Mission Hospital Laboratory is external and does not use clinic capacity.
+    usedCapacity: 0, maxDailyCapacity: 1,
+  });
   const cases = await client.query<OvpsaRecoveryCaseRow>(
     `SELECT manual_case.id::text AS case_id,manual_case.optimistic_token::text,
             manual_case.student_number,laboratory.id::text AS laboratory_id,
             laboratory.status AS laboratory_status,laboratory.appointment_date::text AS laboratory_date,
+            laboratory.is_manually_locked AS laboratory_locked,physical.is_manually_locked AS physical_locked,
             laboratory.clinic_id::text AS laboratory_clinic_id,
             physical.id::text AS physical_id,physical.status AS physical_status,
             physical.appointment_date::text AS physical_date,
@@ -2212,19 +2206,27 @@ async function planOvpsaClosureBatchRecovery(
     client,
     cases.rows.flatMap((row) => [row.laboratory_id, row.physical_id]),
   );
+  if (cases.rows.some((row) => row.laboratory_locked
+    || protectionStates.get(row.laboratory_id)?.type === "PROTECTED")) {
+    throw new AppError("OVPSA_PROTECTED_APPOINTMENT_CONFLICT",
+      "An affected Laboratory appointment is protected and cannot be replaced safely.", 409);
+  }
   const blocked = await loadSchedulingBlockedDates(client, {
     startDate: input.replacementLaboratoryDate,
-    endDate: addCalendarDays(input.replacementLaboratoryDate, 366 * 5),
+    endDate: bounds.cycleClosingDate,
     excludeOvpsaBatchId: input.batchId,
   });
   const blockedDates = await listUnifiedBlockedDateSet(client);
-  const { capacity, usedCapacity } = await loadCapacity(client);
+  const { capacity, usedCapacity: initialCapacity } = await loadCapacity(client);
+  let usedCapacity = initialCapacity;
   const minimumPhysicalExamDate = addCalendarDays(input.replacementLaboratoryDate, 7);
   const allocations: OvpsaClosureBatchRecoveryPreview["allocations"] = [];
   for (const row of cases.rows) {
     const physicalProtected = protectionStates.get(row.physical_id)?.type === "PROTECTED";
     const canPreserve = ["PENDING", "COMPLETED"].includes(row.physical_status)
       && row.physical_date >= minimumPhysicalExamDate
+      && row.physical_date <= bounds.cycleClosingDate
+      && isClinicSchedulingWeekday(row.physical_date)
       && !blockedDates.has(row.physical_date)
       && !blocked.physicalExamDates.includes(row.physical_date);
     if (canPreserve) {
@@ -2240,6 +2242,7 @@ async function planOvpsaClosureBatchRecovery(
       row.physical_status === "COMPLETED"
       || !["PENDING", "AWAITING_RESCHEDULE"].includes(row.physical_status)
       || physicalProtected
+      || row.physical_locked
     ) {
       throw new AppError(
         "OVPSA_PROTECTED_APPOINTMENT_CONFLICT",
@@ -2247,17 +2250,25 @@ async function planOvpsaClosureBatchRecovery(
         409,
       );
     }
-    const dates = allocateReplacementDates({
-      strategy: "MOVE_PHYSICAL_ONLY",
-      afterDate: addCalendarDays(input.replacementLaboratoryDate, 6),
-      blockedDates,
-      blockedDatesByService: {
-        PHYSICAL_EXAM: new Set(blocked.physicalExamDates),
-      },
-      usedCapacity,
-      capacity,
-    });
-    reserveCapacity(usedCapacity, dates);
+    const candidateCapacity = copyCapacity(usedCapacity);
+    if (row.physical_status === "PENDING") {
+      candidateCapacity.PHYSICAL_EXAM.set(row.physical_date,
+        Math.max(0, (candidateCapacity.PHYSICAL_EXAM.get(row.physical_date) ?? 0) - 1));
+    }
+    let dates: ReturnType<typeof allocateReplacementDates>;
+    try {
+      dates = allocateReplacementDates({
+        bounds, strategy: "MOVE_PHYSICAL_ONLY",
+        afterDate: addCalendarDays(input.replacementLaboratoryDate, 6),
+        blockedDates, blockedDatesByService: { PHYSICAL_EXAM: new Set(blocked.physicalExamDates) },
+        usedCapacity: candidateCapacity, capacity,
+      });
+    } catch (error) {
+      if (!(error instanceof ClinicCalendarPlanningError)) throw error;
+      throw new AppError(error.reasonCode, error.message, 409);
+    }
+    reserveCapacity(candidateCapacity, dates);
+    usedCapacity = candidateCapacity;
     allocations.push({
       studentNumber: row.student_number,
       currentPhysicalExamDate: row.physical_date,
@@ -2286,13 +2297,12 @@ export async function previewOvpsaClinicClosureBatchRecovery(
   if (!z.string().uuid().safeParse(batchId).success) throw validationError("The OVPSA batch ID is invalid.");
   const parsed = ovpsaBatchPreviewSchema.safeParse(raw);
   if (!parsed.success) throw validationError("Please correct the OVPSA batch recovery preview.", parsed.error.flatten());
-  return transaction(async (client) => (
-    await planOvpsaClosureBatchRecovery(client, {
-      batchId,
-      ...parsed.data,
-      lock: false,
-    })
-  ).preview);
+  return transaction(async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('medclinic:schedule-import-queue'))");
+    return (await planOvpsaClosureBatchRecovery(client, {
+      batchId, ...parsed.data, lock: false,
+    })).preview;
+  });
 }
 
 export async function confirmOvpsaClinicClosureBatchRecovery(

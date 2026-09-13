@@ -20,6 +20,15 @@ function isWeekday(date: string) {
   return weekday >= 1 && weekday <= 5;
 }
 
+export function assertReplacementPairOrder(laboratoryDate: string, physicalExamDate: string, minimumGapDays = 1) {
+  const gap = (Date.parse(`${physicalExamDate}T00:00:00Z`) - Date.parse(`${laboratoryDate}T00:00:00Z`)) / 86_400_000;
+  if (gap < minimumGapDays) {
+    throw new AppError("PAIR_ORDER_VIOLATION",
+      minimumGapDays === 7 ? "OVPSA Physical Examination must be at least seven calendar days after Laboratory."
+        : "Laboratory must remain strictly before Physical Examination.", 409);
+  }
+}
+
 export function assertManualAppointmentDestination(
   input: ManualAppointmentDestinationInput,
 ) {
@@ -58,16 +67,10 @@ export function assertManualAppointmentDestination(
   const counterpart = input.appointment.scheduleType === "LABORATORY"
     ? input.pair.physicalExam
     : input.pair.laboratory;
-  const violatesPairOrder = counterpart && (
-    input.appointment.scheduleType === "LABORATORY"
-      ? input.destinationDate >= counterpart.appointmentDate
-      : input.destinationDate <= counterpart.appointmentDate
-  );
-  if (violatesPairOrder) {
-    throw new AppError(
-      "PAIR_ORDER_VIOLATION",
-      "Laboratory must remain strictly before Physical Examination.",
-      409,
+  if (counterpart) {
+    assertReplacementPairOrder(
+      input.appointment.scheduleType === "LABORATORY" ? input.destinationDate : counterpart.appointmentDate,
+      input.appointment.scheduleType === "PHYSICAL_EXAM" ? input.destinationDate : counterpart.appointmentDate,
     );
   }
   if (input.usedCapacity >= input.maxDailyCapacity) {

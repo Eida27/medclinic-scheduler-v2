@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { randomUUID } from "node:crypto";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { pool, transaction } from "@/server/db/pool";
 import { lockEligibleRegularPairs } from "@/server/repositories/priority-displacement.repository";
 import { TEST_REFERENCE_IDS, insertTestStudent } from "@/test/integration-fixtures";
@@ -15,9 +15,13 @@ import {
   listClinicClosureManualCases,
   listClinicUnavailableDates,
   previewClinicCalendarChanges,
+  previewOvpsaClinicClosureBatchRecovery,
+  confirmOvpsaClinicClosureBatchRecovery,
   resolveClinicClosureManualCase,
   saveClinicCalendarChanges,
 } from "./clinic-calendar.service";
+
+import { changeCapacity } from "./appointments.service";
 
 const studentPattern = "UCAL-%";
 let capacityFixture: CapacityFixtureLock | null = null;
@@ -390,7 +394,15 @@ afterEach(async () => {
 });
 afterAll(async () => {
   if (!capacityFixture) return;
-  await teardownCapacityFixtureLock(pool, capacityFixture, cleanup);
+  await teardownCapacityFixtureLock(pool, capacityFixture, async () => {
+    await cleanup();
+    const residue = await pool.query(`SELECT
+      (SELECT COUNT(*)::int FROM students WHERE student_number LIKE 'UCAL-%') AS students,
+      (SELECT COUNT(*)::int FROM appointments WHERE student_number LIKE 'UCAL-%') AS appointments,
+      (SELECT COUNT(*)::int FROM clinic_closure_manual_cases WHERE student_number LIKE 'UCAL-%') AS cases,
+      (SELECT COUNT(*)::int FROM clinic_closure_groups WHERE reason LIKE 'TEST-UNIFIED%') AS groups`);
+    expect(residue.rows[0]).toEqual({ students: 0, appointments: 0, cases: 0, groups: 0 });
+  });
 });
 
 describe("unified clinic calendar lifecycle", () => {
@@ -1415,4 +1427,217 @@ describe("unified clinic calendar lifecycle", () => {
     );
     expect(audit.rowCount).toBe(1);
   });
+});
+
+
+describe("closure same-cycle integrity", () => {
+  it.each(["2049-07-30", "2049-08-11", null])(
+    "keeps no complete pair within closing %s in Manual Resolution", async (closing) => {
+      await createPair({ studentNumber: "UCAL-BOUND", laboratoryDate: "2049-08-09", physicalExamDate: "2049-08-10" });
+      if (closing) await pool.query("UPDATE academic_years SET closing_date=$1 WHERE start_year=2048", [closing]);
+      else await pool.query("DELETE FROM academic_years WHERE start_year=2048");
+      const request = { requestId: requestIds.pair, emergencyAcknowledged: false, recoveryMode: "AUTO_ELIGIBLE", changes: [
+        { action: "BLOCK", date: "2049-08-09", category: "CLOSURE", reason: "TEST-UNIFIED bound" },
+        { action: "BLOCK", date: "2049-08-10", category: "CLOSURE", reason: "TEST-UNIFIED bound" },
+      ] };
+      const preview = await previewClinicCalendarChanges({ requestId: request.requestId, emergencyAcknowledged: false, changes: request.changes }, admin);
+      expect(preview).toMatchObject({ automaticRecoveryEligibleCount: 0, manualResolutionRequiredCount: 1,
+        manualReasonGroups: [expect.objectContaining({ reasonCode: "NO_VALID_REPLACEMENT_WITHIN_CYCLE" })] });
+      const saved = await saveClinicCalendarChanges(request, admin);
+      expect(saved).toMatchObject({ movedStudentCount: 0, manualCaseCount: 1, capacityFallbackCount: 1 });
+      expect((await pool.query("SELECT status FROM appointments WHERE student_number='UCAL-BOUND'")).rows)
+        .toEqual([{ status: "AWAITING_RESCHEDULE" }, { status: "AWAITING_RESCHEDULE" }]);
+    },
+  );
+  it("revalidates a shortened academic cycle at confirmation", async () => {
+    await createPair({ studentNumber: "UCAL-BOUND", laboratoryDate: "2049-08-09", physicalExamDate: "2049-08-10" });
+    const request = { requestId: requestIds.pair, emergencyAcknowledged: false, recoveryMode: "AUTO_ELIGIBLE", changes: [
+      { action: "BLOCK", date: "2049-08-09", category: "CLOSURE", reason: "TEST-UNIFIED bound" },
+      { action: "BLOCK", date: "2049-08-10", category: "CLOSURE", reason: "TEST-UNIFIED bound" },
+    ] };
+    expect((await previewClinicCalendarChanges({ requestId: request.requestId, emergencyAcknowledged: false, changes: request.changes }, admin)).automaticRecoveryEligibleCount).toBe(1);
+    await pool.query("UPDATE academic_years SET closing_date='2049-08-11' WHERE start_year=2048");
+    expect(await saveClinicCalendarChanges(request, admin)).toMatchObject({ movedStudentCount: 0, manualCaseCount: 1 });
+  });
+  it("reuses the retired PE slot for the next student while preserving completed Laboratory", async () => {
+    await createPair({ studentNumber: "UCAL-REUSE-A", laboratoryDate: "2049-08-09", physicalExamDate: "2049-08-11" });
+    await createPair({ studentNumber: "UCAL-REUSE-B", laboratoryDate: "2049-08-08", physicalExamDate: "2049-08-10", laboratoryStatus: "COMPLETED" });
+    await pool.query("UPDATE appointments SET created_at='2049-07-01' WHERE student_number='UCAL-REUSE-A'");
+    await pool.query("UPDATE appointments SET created_at='2049-07-02' WHERE student_number='UCAL-REUSE-B'");
+    await pool.query("UPDATE clinic_capacity_settings SET max_daily_capacity=1,safe_daily_capacity=1");
+    const request = { requestId: requestIds.pair, emergencyAcknowledged: false, recoveryMode: "AUTO_ELIGIBLE", changes: [
+      { action: "BLOCK", date: "2049-08-09", category: "CLOSURE", reason: "TEST-UNIFIED reuse" },
+      { action: "BLOCK", date: "2049-08-10", category: "CLOSURE", reason: "TEST-UNIFIED reuse" },
+    ] };
+    // A must move its PE because replacement Laboratory falls on its old PE date.
+    // B preserves completed Laboratory and reuses the legitimately freed PE date.
+    expect(await saveClinicCalendarChanges(request, admin)).toMatchObject({ movedStudentCount: 2, movedAppointmentCount: 3 });
+    expect((await pool.query("SELECT schedule_type,appointment_date::text FROM appointments WHERE student_number='UCAL-REUSE-A' AND is_published ORDER BY schedule_type")).rows)
+      .toEqual([{ schedule_type: "LABORATORY", appointment_date: "2049-08-11" }, { schedule_type: "PHYSICAL_EXAM", appointment_date: "2049-08-12" }]);
+    expect((await pool.query("SELECT appointment_date::text FROM appointments WHERE student_number='UCAL-REUSE-B' AND schedule_type='PHYSICAL_EXAM' AND is_published")).rows)
+      .toEqual([{ appointment_date: "2049-08-11" }]);
+  });
+  it("rejects ordinary manual recovery beyond its configured cycle", async () => {
+    await createPair({ studentNumber: "UCAL-BOUND", laboratoryDate: "2049-08-09", physicalExamDate: "2049-08-10" });
+    await saveClinicCalendarChanges({ requestId: requestIds.pair, emergencyAcknowledged: false, recoveryMode: "MANUAL_ALL", changes: [
+      { action: "BLOCK", date: "2049-08-09", category: "CLOSURE", reason: "TEST-UNIFIED manual bound" },
+      { action: "BLOCK", date: "2049-08-10", category: "CLOSURE", reason: "TEST-UNIFIED manual bound" },
+    ] }, admin);
+    await pool.query("UPDATE academic_years SET closing_date='2049-08-11' WHERE start_year=2048");
+    const row = (await pool.query("SELECT id,optimistic_token FROM clinic_closure_manual_cases WHERE student_number='UCAL-BOUND'")).rows[0];
+    await expect(resolveClinicClosureManualCase(row.id, { action: "ASSIGN_REPLACEMENT", expectedOptimisticToken: row.optimistic_token,
+      laboratoryDate: "2049-08-11", physicalExamDate: "2049-08-12", reason: "Reviewed replacement dates" }, admin))
+      .rejects.toMatchObject({ code: "OUTSIDE_SCHEDULING_CYCLE" });
+    expect((await pool.query("SELECT status FROM clinic_closure_manual_cases WHERE id=$1", [row.id])).rows[0].status).toBe("OPEN");
+  });
+});
+
+
+async function ovpsaClosureFixture(closeLaboratory = true, completed = false) {
+  const lineage = await createReleasedOvpsaLaboratoryLineage("2049-08-16");
+  await pool.query(`UPDATE ovpsa_first_year_batch_revisions SET status='PUBLISHED',validated_by=$2,validated_at=NOW(),
+    validation_snapshot='{}',published_by=$2,published_at=NOW() WHERE id=$1`, [lineage.revisionId, admin.userId]);
+  await pool.query(`UPDATE ovpsa_first_year_batches SET status='PUBLISHED',current_revision_id=$2,
+    published_by=$3,published_at=NOW() WHERE id=$1`, [lineage.batchId, lineage.revisionId, admin.userId]);
+  await createPair({ studentNumber: "UCAL-OVPSA-BOUND", laboratoryDate: "2049-08-16", physicalExamDate: "2049-08-23" });
+  const peReservation = (await pool.query(`INSERT INTO ovpsa_first_year_service_reservations
+    (batch_id,revision_id,schedule_type,reservation_date,status,created_by)
+    VALUES($1,$2,'PHYSICAL_EXAM','2049-08-23','ACTIVE',$3) RETURNING id`, [lineage.batchId, lineage.revisionId, admin.userId])).rows[0].id;
+  await pool.query(`UPDATE appointments SET ovpsa_batch_id=$1,ovpsa_revision_id=$2,
+    ovpsa_service_reservation_id=CASE schedule_type WHEN 'LABORATORY' THEN $3::uuid ELSE $4::uuid END
+    WHERE student_number='UCAL-OVPSA-BOUND'`, [lineage.batchId, lineage.revisionId, lineage.reservationId, peReservation]);
+  if (completed) await pool.query("UPDATE appointments SET status='COMPLETED' WHERE student_number='UCAL-OVPSA-BOUND'");
+  await saveClinicCalendarChanges({ requestId: requestIds.pair, emergencyAcknowledged: false, recoveryMode: "MANUAL_ALL", changes: [
+    { action: "BLOCK", date: closeLaboratory ? "2049-08-16" : "2049-08-23", category: "CLOSURE", reason: "TEST-UNIFIED ovpsa bound" },
+  ] }, admin);
+  const batch = (await pool.query("SELECT optimistic_token FROM ovpsa_first_year_batches WHERE id=$1", [lineage.batchId])).rows[0];
+  const manual = (await pool.query("SELECT id,optimistic_token FROM clinic_closure_manual_cases WHERE student_number='UCAL-OVPSA-BOUND'")).rows[0];
+  return { ...lineage, optimisticToken: batch.optimistic_token as string, manual };
+}
+
+describe("OVPSA closure cycle boundaries", () => {
+  it("rejects a seven-day gap crossing cycle close and preserves the open batch case", async () => {
+    const fixture = await ovpsaClosureFixture();
+    await pool.query("UPDATE academic_years SET closing_date='2049-08-24' WHERE start_year=2048");
+    const request = { optimisticToken: fixture.optimisticToken, replacementLaboratoryDate: "2049-08-20" };
+    await expect(previewOvpsaClinicClosureBatchRecovery(fixture.batchId, request, admin))
+      .rejects.toMatchObject({ code: "NO_VALID_REPLACEMENT_WITHIN_CYCLE", status: 409 });
+    await expect(confirmOvpsaClinicClosureBatchRecovery(fixture.batchId, { ...request,
+      caseTokens: [{ caseId: fixture.manual.id, expectedOptimisticToken: fixture.manual.optimistic_token }], reason: "Review batch dates" }, admin))
+      .rejects.toMatchObject({ code: "NO_VALID_REPLACEMENT_WITHIN_CYCLE", status: 409 });
+    expect((await pool.query("SELECT status FROM clinic_closure_manual_cases WHERE id=$1", [fixture.manual.id])).rows[0].status).toBe("OPEN");
+    expect((await pool.query("SELECT id FROM ovpsa_first_year_batch_revisions WHERE batch_id=$1", [fixture.batchId])).rows).toEqual([{ id: fixture.revisionId }]);
+  });
+  it("previews and confirms a complete batch pair on the custom last weekday", async () => {
+    const fixture = await ovpsaClosureFixture();
+    await pool.query("UPDATE academic_years SET closing_date='2049-08-24' WHERE start_year=2048");
+    const request = { optimisticToken: fixture.optimisticToken, replacementLaboratoryDate: "2049-08-17" };
+    expect(await previewOvpsaClinicClosureBatchRecovery(fixture.batchId, request, admin)).toMatchObject({
+      movedPhysicalExamCount: 1, allocations: [{ proposedPhysicalExamDate: "2049-08-24", physicalExamAction: "MOVE" }],
+    });
+    await confirmOvpsaClinicClosureBatchRecovery(fixture.batchId, { ...request,
+      caseTokens: [{ caseId: fixture.manual.id, expectedOptimisticToken: fixture.manual.optimistic_token }], reason: "Review batch dates" }, admin);
+    expect((await pool.query("SELECT appointment_date::text FROM appointments WHERE student_number='UCAL-OVPSA-BOUND' AND is_published ORDER BY schedule_type")).rows)
+      .toEqual([{ appointment_date: "2049-08-17" }, { appointment_date: "2049-08-24" }]);
+  });
+  it("revalidates shortened batch bounds at confirmation", async () => {
+    const fixture = await ovpsaClosureFixture();
+    const request = { optimisticToken: fixture.optimisticToken, replacementLaboratoryDate: "2049-08-17" };
+    expect((await previewOvpsaClinicClosureBatchRecovery(fixture.batchId, request, admin)).movedPhysicalExamCount).toBe(1);
+    await pool.query("UPDATE academic_years SET closing_date='2049-08-23' WHERE start_year=2048");
+    await expect(confirmOvpsaClinicClosureBatchRecovery(fixture.batchId, { ...request,
+      caseTokens: [{ caseId: fixture.manual.id, expectedOptimisticToken: fixture.manual.optimistic_token }], reason: "Review batch dates" }, admin))
+      .rejects.toMatchObject({ code: "NO_VALID_REPLACEMENT_WITHIN_CYCLE", status: 409 });
+  });
+  it("rejects an individual OVPSA PE replacement earlier than seven days after Laboratory", async () => {
+    const fixture = await ovpsaClosureFixture(false);
+    await expect(resolveClinicClosureManualCase(fixture.manual.id, {
+      action: "ASSIGN_REPLACEMENT", expectedOptimisticToken: fixture.manual.optimistic_token,
+      preserveLaboratory: true, physicalExamDate: "2049-08-20", reason: "Review individual PE date",
+    }, admin)).rejects.toMatchObject({ code: "PAIR_ORDER_VIOLATION" });
+  });
+});
+
+
+describe("closure recovery protected occupancy", () => {
+  it("keeps a preserved PE occupied for the next student", async () => {
+    await createPair({ studentNumber: "UCAL-KEEP-A", laboratoryDate: "2049-08-09", physicalExamDate: "2049-08-12" });
+    await createPair({ studentNumber: "UCAL-KEEP-B", laboratoryDate: "2049-08-08", physicalExamDate: "2049-08-10", laboratoryStatus: "COMPLETED" });
+    await insertPublishedLaboratoryCapacityOccupant({ studentNumber: "UCAL-KEEP-C", appointmentDate: "2049-08-11", status: "COMPLETED" });
+    // Block B's otherwise earliest PE date with committed completed work.
+    await pool.query("UPDATE appointments SET clinic_id=$1,schedule_type='PHYSICAL_EXAM' WHERE student_number='UCAL-KEEP-C'", [TEST_REFERENCE_IDS.physicalExamClinic]);
+    await pool.query("UPDATE clinic_capacity_settings SET max_daily_capacity=1,safe_daily_capacity=1");
+    await saveClinicCalendarChanges({ requestId: requestIds.pair, emergencyAcknowledged: false, recoveryMode: "AUTO_ELIGIBLE", changes: [
+      { action: "BLOCK", date: "2049-08-09", category: "CLOSURE", reason: "TEST-UNIFIED preserved" },
+      { action: "BLOCK", date: "2049-08-10", category: "CLOSURE", reason: "TEST-UNIFIED preserved" },
+    ] }, admin);
+    expect((await pool.query("SELECT appointment_date::text FROM appointments WHERE student_number='UCAL-KEEP-B' AND schedule_type='PHYSICAL_EXAM' AND is_published")).rows)
+      .toEqual([{ appointment_date: "2049-08-13" }]);
+    expect((await pool.query("SELECT status,appointment_date::text FROM appointments WHERE student_number='UCAL-KEEP-A' AND schedule_type='PHYSICAL_EXAM'")).rows)
+      .toEqual([{ status: "PENDING", appointment_date: "2049-08-12" }]);
+  });
+  it("discards a failed student's simulated release and reservation", async () => {
+    await createPair({ studentNumber: "UCAL-FAIL-A", laboratoryDate: "2049-08-09", physicalExamDate: "2049-08-11" });
+    await createPair({ studentNumber: "UCAL-FAIL-B", laboratoryDate: "2049-08-08", physicalExamDate: "2049-08-10", laboratoryStatus: "COMPLETED" });
+    await pool.query("UPDATE clinic_capacity_settings SET max_daily_capacity=1,safe_daily_capacity=1");
+    await pool.query(`CREATE FUNCTION task4_move_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+      IF OLD.student_number='UCAL-FAIL-A' AND NEW.status='RESCHEDULED' THEN RETURN NULL; END IF; RETURN NEW; END $$`);
+    await pool.query("CREATE TRIGGER task4_move_failure BEFORE UPDATE ON appointments FOR EACH ROW EXECUTE FUNCTION task4_move_failure()");
+    try {
+      expect(await saveClinicCalendarChanges({ requestId: requestIds.pair, emergencyAcknowledged: false, recoveryMode: "AUTO_ELIGIBLE", changes: [
+        { action: "BLOCK", date: "2049-08-09", category: "CLOSURE", reason: "TEST-UNIFIED rollback slots" },
+        { action: "BLOCK", date: "2049-08-10", category: "CLOSURE", reason: "TEST-UNIFIED rollback slots" },
+      ] }, admin)).toMatchObject({ movedStudentCount: 1, manualCaseCount: 1 });
+      expect((await pool.query("SELECT appointment_date::text FROM appointments WHERE student_number='UCAL-FAIL-B' AND schedule_type='PHYSICAL_EXAM' AND is_published")).rows)
+        .toEqual([{ appointment_date: "2049-08-12" }]);
+      expect((await pool.query("SELECT status FROM appointments WHERE student_number='UCAL-FAIL-A' AND schedule_type='PHYSICAL_EXAM'")).rows)
+        .toEqual([{ status: "PENDING" }]);
+    } finally {
+      await pool.query("DROP TRIGGER task4_move_failure ON appointments");
+      await pool.query("DROP FUNCTION task4_move_failure()");
+    }
+  });
+  it("does not count external OVPSA Laboratory in a capacity reduction", async () => {
+    const lineage = await createReleasedOvpsaLaboratoryLineage("2049-08-16");
+    await insertPublishedLaboratoryCapacityOccupant({ studentNumber: "UCAL-EXTERNAL-A", appointmentDate: "2049-08-16", status: "PENDING", ovpsaLineage: lineage });
+    await insertPublishedLaboratoryCapacityOccupant({ studentNumber: "UCAL-INTERNAL-B", appointmentDate: "2049-08-16", status: "PENDING" });
+    expect(await changeCapacity({ clinicCode: "KABALAKA_CLINIC", scheduleType: "LABORATORY", maxDailyCapacity: 1 }, admin.userId))
+      .toMatchObject({ maxDailyCapacity: 1 });
+    await pool.query("DELETE FROM audit_logs WHERE action='CAPACITY_UPDATED'");
+  });
+  it.each(["today", "expired", "missing"])("keeps ordinary %s manual cases unresolved", async (state) => {
+    await createPair({ studentNumber: "UCAL-TODAY", laboratoryDate: "2049-08-09", physicalExamDate: "2049-08-10" });
+    await saveClinicCalendarChanges({ requestId: requestIds.pair, emergencyAcknowledged: false, recoveryMode: "MANUAL_ALL", changes: [
+      { action: "BLOCK", date: "2049-08-09", category: "CLOSURE", reason: "TEST-UNIFIED today" },
+      { action: "BLOCK", date: "2049-08-10", category: "CLOSURE", reason: "TEST-UNIFIED today" },
+    ] }, admin);
+    const row = (await pool.query("SELECT id,optimistic_token FROM clinic_closure_manual_cases WHERE student_number='UCAL-TODAY'")).rows[0];
+    if (state === "expired") await pool.query("UPDATE academic_years SET closing_date='2049-08-10' WHERE start_year=2048");
+    if (state === "missing") await pool.query("DELETE FROM academic_years WHERE start_year=2048");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2049-08-11T00:00:00Z"));
+    try {
+      await expect(resolveClinicClosureManualCase(row.id, { action: "ASSIGN_REPLACEMENT", expectedOptimisticToken: row.optimistic_token,
+        laboratoryDate: state === "today" ? "2049-08-11" : "2049-08-12", physicalExamDate: "2049-08-13", reason: "Reviewed replacement dates" }, admin))
+        .rejects.toMatchObject({ code: state === "today" ? "APPOINTMENT_DATE_IN_PAST" : "OUTSIDE_SCHEDULING_CYCLE" });
+      expect((await pool.query("SELECT status FROM clinic_closure_manual_cases WHERE id=$1", [row.id])).rows[0].status).toBe("OPEN");
+    } finally { vi.useRealTimers(); }
+  });
+  it.each(["LABORATORY", "PHYSICAL_EXAM"])("does not move a manually locked OVPSA %s in coordinated recovery", async (scheduleType) => {
+    const fixture = await ovpsaClosureFixture();
+    await pool.query(`UPDATE appointments SET is_manually_locked=TRUE,locked_by=$1,locked_at=NOW(),lock_reason='Protected PE'
+      WHERE student_number='UCAL-OVPSA-BOUND' AND schedule_type=$2`, [admin.userId, scheduleType]);
+    await expect(previewOvpsaClinicClosureBatchRecovery(fixture.batchId, {
+      optimisticToken: fixture.optimisticToken, replacementLaboratoryDate: "2049-08-17",
+    }, admin)).rejects.toMatchObject({ code: "OVPSA_PROTECTED_APPOINTMENT_CONFLICT", status: 409 });
+  });
+});
+
+
+it("keeps completed OVPSA appointment reservations when closing availability", async () => {
+  const fixture = await ovpsaClosureFixture(false, true);
+  expect((await pool.query("SELECT status FROM ovpsa_first_year_service_reservations WHERE batch_id=$1 AND schedule_type='PHYSICAL_EXAM'", [fixture.batchId])).rows)
+    .toEqual([{ status: "ACTIVE" }]);
+  expect((await pool.query("SELECT status FROM appointments WHERE student_number='UCAL-OVPSA-BOUND' ORDER BY schedule_type")).rows)
+    .toEqual([{ status: "COMPLETED" }, { status: "COMPLETED" }]);
 });

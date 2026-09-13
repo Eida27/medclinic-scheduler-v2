@@ -86,6 +86,8 @@ const admin = {
 describe("capacity settings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    query.mockResolvedValue({ rows: [] });
+    transaction.mockImplementation((callback) => callback(client));
     updateCapacitySetting.mockResolvedValue({
       scheduleType: "LABORATORY",
       maxDailyCapacity: 125,
@@ -107,6 +109,7 @@ describe("capacity settings", () => {
       "KABALAKA_CLINIC",
       "LABORATORY",
       125,
+      client,
     );
     expect(writeAudit).toHaveBeenCalledWith(
       admin.userId,
@@ -118,6 +121,7 @@ describe("capacity settings", () => {
         scheduleType: "LABORATORY",
         maxDailyCapacity: 125,
       },
+      client,
     );
   });
 

@@ -850,8 +850,11 @@ export const capacitySchema = z.object({
 
 export async function changeCapacity(raw: unknown, actorUserId: string) {
   const input = capacitySchema.parse(raw);
-  const result = await updateCapacitySetting(input.clinicCode, input.scheduleType, input.maxDailyCapacity);
-  if (!result) throw new AppError("CAPACITY_NOT_FOUND", "Capacity setting not found.", 404);
-  await writeAudit(actorUserId, "CAPACITY_UPDATED", "capacity_setting", `${input.clinicCode}:${input.scheduleType}`, input);
-  return result;
+  return transaction(async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('medclinic:schedule-import-queue'))");
+    const result = await updateCapacitySetting(input.clinicCode, input.scheduleType, input.maxDailyCapacity, client);
+    if (!result) throw new AppError("CAPACITY_NOT_FOUND", "Capacity setting not found.", 404);
+    await writeAudit(actorUserId, "CAPACITY_UPDATED", "capacity_setting", `${input.clinicCode}:${input.scheduleType}`, input, client);
+    return result;
+  });
 }

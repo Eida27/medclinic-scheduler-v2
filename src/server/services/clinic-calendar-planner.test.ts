@@ -142,6 +142,7 @@ describe("unified clinic closure planning", () => {
 
   it("starts after the full closure period and skips weekends, closures, and full dates", () => {
     expect(allocateReplacementDates({
+      bounds: { cycleStartDate: "2027-08-01", cycleClosingDate: "2028-07-31", manilaToday: "2027-08-01" },
       strategy: "MOVE_COMPLETE_PAIR",
       afterDate: "2027-08-13",
       blockedDates: new Set(["2027-08-16"]),
@@ -155,6 +156,7 @@ describe("unified clinic closure planning", () => {
 
   it("allocates a Laboratory-only recovery without consuming Physical capacity", () => {
     expect(allocateReplacementDates({
+      bounds: { cycleStartDate: "2027-08-01", cycleClosingDate: "2028-07-31", manilaToday: "2027-08-01" },
       strategy: "MOVE_LABORATORY_ONLY",
       afterDate: "2027-08-13",
       blockedDates: new Set(),
@@ -172,6 +174,7 @@ describe("unified clinic closure planning", () => {
       PHYSICAL_EXAM: new Map<string, number>(),
     };
     const first = allocateReplacementDates({
+      bounds: { cycleStartDate: "2027-08-01", cycleClosingDate: "2028-07-31", manilaToday: "2027-08-01" },
       strategy: "MOVE_PHYSICAL_ONLY",
       afterDate: "2027-08-13",
       blockedDates: new Set(),
@@ -180,6 +183,7 @@ describe("unified clinic closure planning", () => {
     });
     if (first.physicalExamDate) usedCapacity.PHYSICAL_EXAM.set(first.physicalExamDate, 1);
     const second = allocateReplacementDates({
+      bounds: { cycleStartDate: "2027-08-01", cycleClosingDate: "2028-07-31", manilaToday: "2027-08-01" },
       strategy: "MOVE_PHYSICAL_ONLY",
       afterDate: "2027-08-13",
       blockedDates: new Set(),
@@ -201,11 +205,37 @@ describe("unified clinic closure planning", () => {
       blockedDates.add(date);
     }
     expect(() => allocateReplacementDates({
+      bounds: { cycleStartDate: "2027-08-01", cycleClosingDate: "2028-07-31", manilaToday: "2027-08-01" },
       strategy: "MOVE_PHYSICAL_ONLY",
       afterDate,
       blockedDates,
       usedCapacity: { LABORATORY: new Map(), PHYSICAL_EXAM: new Map() },
       capacity: { LABORATORY: 1, PHYSICAL_EXAM: 1 },
-    })).toThrow(expect.objectContaining({ reasonCode: "NO_REPLACEMENT_CAPACITY" }));
+    })).toThrow(expect.objectContaining({ reasonCode: "NO_VALID_REPLACEMENT_WITHIN_CYCLE" }));
+  });
+});
+
+
+describe("replacement cycle boundaries", () => {
+  it.each([
+    ["2027-07-30", "2027-07-31"],
+    ["2027-07-28", "2027-07-29"],
+  ])("never allocates a partial pair after %s through %s", (afterDate, cycleClosingDate) => {
+    expect(() => allocateReplacementDates({
+      strategy: "MOVE_COMPLETE_PAIR", afterDate,
+      bounds: { cycleStartDate: "2026-08-01", cycleClosingDate, manilaToday: "2027-07-01" },
+      blockedDates: new Set(),
+      usedCapacity: { LABORATORY: new Map(), PHYSICAL_EXAM: new Map() },
+      capacity: { LABORATORY: 1, PHYSICAL_EXAM: 1 },
+    })).toThrow(expect.objectContaining({ reasonCode: "NO_VALID_REPLACEMENT_WITHIN_CYCLE" }));
+  });
+  it("clamps replacement search to tomorrow in Manila and cycle opening", () => {
+    expect(allocateReplacementDates({
+      strategy: "MOVE_COMPLETE_PAIR", afterDate: "2027-07-20",
+      bounds: { cycleStartDate: "2027-08-01", cycleClosingDate: "2027-08-03", manilaToday: "2027-08-01" },
+      blockedDates: new Set(),
+      usedCapacity: { LABORATORY: new Map(), PHYSICAL_EXAM: new Map() },
+      capacity: { LABORATORY: 1, PHYSICAL_EXAM: 1 },
+    })).toEqual({ laboratoryDate: "2027-08-02", physicalExamDate: "2027-08-03" });
   });
 });

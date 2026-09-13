@@ -565,8 +565,23 @@ export async function getCapacitySettings() {
   )).rows;
 }
 
-export async function updateCapacitySetting(clinicCode: string, scheduleType: string, max: number) {
-  return (await query(
+export async function updateCapacitySetting(clinicCode: string, scheduleType: string, max: number, client: PoolClient) {
+  const workload = await client.query<{ date: string; count: number }>(
+    `SELECT appointment_date::text AS date,COUNT(*)::int AS count
+       FROM appointments
+      WHERE clinic_id=(SELECT id FROM clinics WHERE code=$1) AND schedule_type=$2
+        AND appointment_date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Manila')::date
+        AND status IN ('DRAFT','PENDING','COMPLETED','NO_SHOW')
+        AND NOT (schedule_type='LABORATORY' AND ovpsa_batch_id IS NOT NULL)
+      GROUP BY appointment_date HAVING COUNT(*) > $3 ORDER BY appointment_date`,
+    [clinicCode, scheduleType, max],
+  );
+  if (workload.rows.length) {
+    throw new AppError("CAPACITY_COMMITTED_WORKLOAD_CONFLICT",
+      "The maximum is below already committed appointments. Review the affected dates.",
+      409, undefined, { clinicCode, scheduleType, maxDailyCapacity: max, affectedDates: workload.rows });
+  }
+  return (await client.query(
     `UPDATE clinic_capacity_settings SET safe_daily_capacity=$3, max_daily_capacity=$3
      WHERE clinic_id=(SELECT id FROM clinics WHERE code=$1) AND schedule_type=$2
      RETURNING schedule_type AS "scheduleType",

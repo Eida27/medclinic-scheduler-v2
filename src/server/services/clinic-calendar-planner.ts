@@ -1,3 +1,5 @@
+import { AppError } from "@/lib/errors";
+import { assertManualAppointmentDestination } from "@/server/appointments/manual-appointment-destination";
 import type {
   ClinicCalendarBlockChange,
   ClinicCalendarClosureGroupPreview,
@@ -236,7 +238,14 @@ export function classifyClinicCycle(
   );
 }
 
+export type ReplacementCycleBounds = {
+  cycleStartDate: string;
+  cycleClosingDate: string;
+  manilaToday: string;
+};
+
 function nextCapacityDate(input: {
+  bounds: ReplacementCycleBounds | null;
   afterDate: string;
   scheduleType: keyof ReplacementCapacity;
   blockedDates: Set<string>;
@@ -244,30 +253,37 @@ function nextCapacityDate(input: {
   usedCapacity: UsedReplacementCapacity;
   capacity: ReplacementCapacity;
 }) {
-  const horizon = addCalendarDays(input.afterDate, 366 * 5);
-  for (
-    let candidate = addCalendarDays(input.afterDate, 1);
-    candidate <= horizon;
-    candidate = addCalendarDays(candidate, 1)
-  ) {
-    const blockedForService = input.blockedDatesByService?.[input.scheduleType];
-    if (
-      !isClinicSchedulingWeekday(candidate)
-      || input.blockedDates.has(candidate)
-      || blockedForService?.has(candidate)
-    ) continue;
-    if ((input.usedCapacity[input.scheduleType].get(candidate) ?? 0) >= input.capacity[input.scheduleType]) {
-      continue;
+  if (input.bounds) {
+    const afterDate = [input.afterDate, input.bounds.manilaToday,
+      addCalendarDays(input.bounds.cycleStartDate, -1)].sort().at(-1)!;
+    for (let candidate = addCalendarDays(afterDate, 1);
+      candidate <= input.bounds.cycleClosingDate;
+      candidate = addCalendarDays(candidate, 1)) {
+      try {
+        assertManualAppointmentDestination({
+          appointment: { id: "replacement", scheduleType: input.scheduleType },
+          pair: { laboratory: null, physicalExam: null },
+          destinationDate: candidate,
+          ...input.bounds,
+          isBlocked: input.blockedDates.has(candidate)
+            || Boolean(input.blockedDatesByService?.[input.scheduleType]?.has(candidate)),
+          usedCapacity: input.usedCapacity[input.scheduleType].get(candidate) ?? 0,
+          maxDailyCapacity: input.capacity[input.scheduleType],
+        });
+        return candidate;
+      } catch (error) {
+        if (!(error instanceof AppError)) throw error;
+      }
     }
-    return candidate;
   }
   throw new ClinicCalendarPlanningError(
-    "NO_REPLACEMENT_CAPACITY",
-    `No ${input.scheduleType === "LABORATORY" ? "Laboratory" : "Physical Examination"} capacity is available within five years.`,
+    "NO_VALID_REPLACEMENT_WITHIN_CYCLE",
+    "No safe replacement is available within the original configured academic cycle.",
   );
 }
 
 export function allocateReplacementDates(input: {
+  bounds: ReplacementCycleBounds | null;
   strategy: "MOVE_COMPLETE_PAIR" | "MOVE_LABORATORY_ONLY" | "MOVE_PHYSICAL_ONLY";
   afterDate: string;
   blockedDates: Set<string>;
