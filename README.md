@@ -2,6 +2,8 @@
 
 Academic-year Laboratory and Physical Examination scheduling, clinic operations, and private student result submission for Central Philippine University Health Services.
 
+See the [current policy index](docs/current-policies.md) before using historical design and implementation records as guidance.
+
 ## Capabilities
 
 - Separate JWT sessions for administrators, coordinators, clinic staff, and students

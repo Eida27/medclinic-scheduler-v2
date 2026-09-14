@@ -1,5 +1,7 @@
 # Scheduling Integrity Hardening Implementation Plan
 
+> **Historical:** Retained as implementation history. Use the [current policy index](../../current-policies.md) for current compatibility routes and corrected scheduling behavior.
+
 **Spec:** `docs/superpowers/specs/2026-08-26-scheduling-integrity-hardening-design.md`
 
 ## Global Constraints

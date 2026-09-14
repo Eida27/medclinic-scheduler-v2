@@ -1,5 +1,7 @@
 # Clinic Scheduler UI/UX Revision Design
 
+> **Historical:** Retained for UI history. The [current policy index](../../current-policies.md) replaces its generic Appointments/Results route and earlier navigation guidance.
+
 ## Goal
 
 Simplify the administrative and clinic workflows, prevent accidental duplicate actions, keep users within the correct clinic context, allow safe status corrections, repair completion filtering, and remove redundant system features.

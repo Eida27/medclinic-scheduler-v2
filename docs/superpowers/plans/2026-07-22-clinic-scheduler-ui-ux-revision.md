@@ -1,5 +1,7 @@
 # Clinic Scheduler UI/UX Revision Implementation Plan
 
+> **Historical:** Retained for implementation history. Use the [current policy index](../../current-policies.md) for current routes and navigation.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Deliver the approved clinic-scheduler UI/UX revision: standard Excel CSV compatibility, reliable import progress, clinic-context appointment profiles, audited completed-status corrections, simplified completion filters, removal of the legacy Results workspace, maximum-only capacity rules, and an interactive unavailable-date calendar.

@@ -1,5 +1,7 @@
 # First Year Schedule Import Consolidation Design
 
+> **Historical with current core behavior:** First-Year import ownership, reservations and lifecycle remain active. Later retirement and readiness documents replace `SPECIALIZED`, compatibility routes and corrected scheduling edges; see the [current policy index](../../current-policies.md).
+
 **Date:** 2026-08-13  
 **Repository:** `Eida27/medclinic-scheduler-v2`  
 **Status:** Approved design  

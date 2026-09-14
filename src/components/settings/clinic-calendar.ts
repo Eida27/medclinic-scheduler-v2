@@ -68,11 +68,6 @@ export function expandUnavailableRanges(records: ClinicUnavailableDateRecord[]) 
   return new Map(records.map((record) => [record.blockedDate, record]));
 }
 
-export function shiftMonth(month: string, offset: number) {
-  const { year, monthIndex } = parseMonth(month);
-  return formatDateOnly(utcDate(year, monthIndex + offset, 1)).slice(0, 7);
-}
-
 export function manilaToday() {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "Asia/Manila",

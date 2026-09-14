@@ -34,19 +34,6 @@ export const clinicConfigs = {
   },
 } as const satisfies Record<ClinicCode, ClinicConfig>;
 
-export const clinicCodeByScheduleType = {
-  LABORATORY: "KABALAKA_CLINIC",
-  PHYSICAL_EXAM: "CPU_CLINIC",
-} as const satisfies Record<AppointmentScheduleType, ClinicCode>;
-
-export function clinicForScheduleType(scheduleType: AppointmentScheduleType): ClinicConfig {
-  return clinicConfigs[clinicCodeByScheduleType[scheduleType]];
-}
-
-export function clinicConfigForCode(code: ClinicCode): ClinicConfig {
-  return clinicConfigs[code];
-}
-
 export function isClinicCode(value: unknown): value is ClinicCode {
   return value === "KABALAKA_CLINIC" || value === "CPU_CLINIC";
 }

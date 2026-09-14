@@ -5,6 +5,25 @@ import { describe, expect, it, vi } from "vitest";
 import { ConfirmDialog } from "./ConfirmDialog";
 
 describe("ConfirmDialog", () => {
+  it("contains long content within a short viewport scroll region", () => {
+    render(
+      <ConfirmDialog
+        open
+        title="Confirm import"
+        description={`Import ${"a".repeat(145)}.csv?`}
+        confirmLabel="Agree and import"
+        onCancel={vi.fn()}
+        onConfirm={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("dialog")).toHaveClass(
+      "max-h-[calc(100dvh-2rem)]",
+      "overflow-y-auto",
+    );
+    expect(screen.getByRole("button", { name: "Agree and import" })).toBeVisible();
+  });
+
   it("announces pending work and prevents cancellation", () => {
     const onCancel = vi.fn();
 

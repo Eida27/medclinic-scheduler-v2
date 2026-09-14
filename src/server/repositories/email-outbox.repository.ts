@@ -192,16 +192,6 @@ export async function markEmailOutboxObsoleteWithClient(
   return true;
 }
 
-export async function markEmailOutboxObsolete(
-  id: string,
-  reason: EmailOutboxObsoleteReason,
-  now: Date,
-) {
-  return transaction(async (client) => {
-    return markEmailOutboxObsoleteWithClient(client, id, reason, now);
-  });
-}
-
 export async function obsoleteVerificationEmailOutboxForRequest(
   client: PoolClient,
   requestId: string,

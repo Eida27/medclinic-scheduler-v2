@@ -1,5 +1,7 @@
 # Unified Clinic Calendar Design
 
+> **Historical:** Retained for unified-calendar rationale. Later closure recovery, same-cycle bounds and reopening policy are indexed in the [current policy index](../../current-policies.md).
+
 **Date:** 2026-07-27  
 **Repository:** `Eida27/medclinic-scheduler-v2`  
 **Status:** Approved design

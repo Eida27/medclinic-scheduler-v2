@@ -93,7 +93,7 @@ export function ConfirmDialog({
         aria-describedby={error
           ? "confirm-dialog-description confirm-dialog-error"
           : "confirm-dialog-description"}
-        className="w-full max-w-md rounded-3xl border border-line bg-surface p-6 shadow-2xl"
+        className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-3xl border border-line bg-surface p-6 shadow-2xl"
       >
         <div className="mb-5 h-1.5 w-14 rounded-full bg-cpu-gold" />
         <h2 id="confirm-dialog-title" className="text-xl font-bold text-ink">{title}</h2>

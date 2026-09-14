@@ -1,30 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  appointmentResultStatusLabel,
   operationalStatusLabel,
-  overallStatusLabel,
   statusTone,
 } from "./status-labels";
-
-describe("appointmentResultStatusLabel", () => {
-  it.each([
-    ["PENDING_UPLOAD", "Pending"],
-    ["COMPLETED", "Completed"],
-    ["REQUIRES_FOLLOW_UP", "Needs follow-up"],
-    ["NOT_APPLICABLE", "Not applicable"],
-  ])("labels %s as %s", (value, expected) => {
-    expect(appointmentResultStatusLabel(value)).toBe(expected);
-  });
-});
-
-describe("overallStatusLabel", () => {
-  it.each([
-    ["COMPLETE", "Complete"],
-    ["INCOMPLETE", "Incomplete"],
-  ])("labels %s as %s", (value, expected) => {
-    expect(overallStatusLabel(value)).toBe(expected);
-  });
-});
 
 describe("operationalStatusLabel", () => {
   it.each([
@@ -42,8 +20,6 @@ describe("operationalStatusLabel", () => {
 
 describe("readable fallback", () => {
   it.each([
-    [appointmentResultStatusLabel, "AWAITING_REVIEW", "Awaiting review"],
-    [overallStatusLabel, "PARTIALLY_COMPLETE", "Partially complete"],
     [operationalStatusLabel, "CHECKED_IN", "Checked in"],
   ])("formats an unknown underscore-separated value", (label, value, expected) => {
     expect(label(value)).toBe(expected);

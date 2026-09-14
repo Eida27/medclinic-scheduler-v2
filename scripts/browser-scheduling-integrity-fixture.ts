@@ -117,14 +117,36 @@ export const SCHEDULING_INTEGRITY_FIXTURE = {
   routes: {
     homepage: "/",
     studentLogin: "/student/login",
-    retiredStudentLookup: "/student-lookup",
     studentPortal: "/student",
-    lifecycleLaboratory: `/appointments/${APPOINTMENT_IDS.lifecycleLaboratory}`,
-    lifecyclePhysicalExam: `/appointments/${APPOINTMENT_IDS.lifecyclePhysicalExam}`,
-    manualAppointment: `/appointments/${APPOINTMENT_IDS.manualPhysicalExam}`,
+    lifecycleLaboratory: `/laboratory/${APPOINTMENT_IDS.lifecycleLaboratory}`,
+    lifecyclePhysicalExam: `/physical-exam/${APPOINTMENT_IDS.lifecyclePhysicalExam}`,
+    manualAppointment: `/physical-exam/${APPOINTMENT_IDS.manualPhysicalExam}`,
     manualResolution: "/settings/clinic-unavailable-dates/manual-resolution",
   },
+  retiredPageRoutes: [
+    "/student-lookup",
+    "/settings/first-year-ovpsa",
+    `/settings/first-year-ovpsa/${FIXED_IDS.removedRouteTarget}`,
+    "/compliance",
+    "/appointments",
+    `/appointments/${APPOINTMENT_IDS.lifecycleLaboratory}`,
+    "/results",
+    "/laboratory/appointments",
+    "/physical-exam/appointments",
+  ],
   retiredRequests: [
+    {
+      method: "GET",
+      path: `/api/student-lookup?studentNumber=${CORE_STUDENTS.portal.studentNumber}`,
+    },
+    {
+      method: "GET",
+      path: "/api/student-lookup?studentNumber=B-SIH-MISSING",
+    },
+    {
+      method: "GET",
+      path: "/api/student-lookup?unexpected=%7Bmalformed%7D",
+    },
     {
       method: "POST",
       path: "/api/coordinator-schedules",
@@ -169,11 +191,6 @@ export const SCHEDULING_INTEGRITY_FIXTURE = {
       path: `/api/schedule-imports/${FIXED_IDS.removedRouteTarget}/publish`,
       body: {},
     },
-  ],
-  publicLookupRequests: [
-    `/api/student-lookup?studentNumber=${CORE_STUDENTS.portal.studentNumber}`,
-    "/api/student-lookup?studentNumber=B-SIH-MISSING",
-    "/api/student-lookup?unexpected=%7Bmalformed%7D",
   ],
 } as const;
 

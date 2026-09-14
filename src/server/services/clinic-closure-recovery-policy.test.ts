@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   compareClosureRecoveryQueueEntries,
   evaluateClosureRecoveryPolicy,
-  planMinimalClosureRecovery,
 } from "./clinic-closure-recovery-policy";
 
 describe("clinic closure recovery policy", () => {
@@ -68,31 +67,6 @@ describe("clinic closure recovery policy", () => {
     })).toMatchObject({
       decision: "MANUAL_RESOLUTION_REQUIRED",
       reasonCode: "DRAFT_RESULT_FILES_EXIST",
-    });
-  });
-
-  it("moves only the affected PE while preserving its valid Laboratory", () => {
-    expect(planMinimalClosureRecovery({
-      laboratory: { id: "lab", appointmentDate: "2026-09-01", status: "PENDING" },
-      physicalExam: { id: "pe", appointmentDate: "2026-09-14", status: "PENDING" },
-      affectedServices: new Set(["PHYSICAL_EXAM"]),
-    })).toEqual({
-      strategy: "MOVE_PHYSICAL_ONLY",
-      moveAppointmentIds: ["pe"],
-      preservedAppointmentIds: ["lab"],
-    });
-  });
-
-  it("moves a Laboratory alone when the existing PE remains safely later", () => {
-    expect(planMinimalClosureRecovery({
-      laboratory: { id: "lab", appointmentDate: "2026-09-14", status: "PENDING" },
-      physicalExam: { id: "pe", appointmentDate: "2026-10-20", status: "PENDING" },
-      affectedServices: new Set(["LABORATORY"]),
-      proposedLaboratoryDate: "2026-09-21",
-    })).toEqual({
-      strategy: "MOVE_LABORATORY_ONLY",
-      moveAppointmentIds: ["lab"],
-      preservedAppointmentIds: ["pe"],
     });
   });
 

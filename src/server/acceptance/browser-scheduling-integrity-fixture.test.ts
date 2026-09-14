@@ -69,6 +69,12 @@ describe("scheduling integrity Browser acceptance fixture", () => {
       fixture.dates.manualValidReplacement,
     ]).size).toBe(4);
     expect(fixture.routes.studentPortal).toBe("/student");
+    expect(fixture.routes.lifecycleLaboratory)
+      .toBe(`/laboratory/${fixture.appointmentIds.lifecycleLaboratory}`);
+    expect(fixture.routes.lifecyclePhysicalExam)
+      .toBe(`/physical-exam/${fixture.appointmentIds.lifecyclePhysicalExam}`);
+    expect(fixture.routes.manualAppointment)
+      .toBe(`/physical-exam/${fixture.appointmentIds.manualPhysicalExam}`);
   });
 
   it("lists representative removed scheduling routes for 404 acceptance", () => {
@@ -82,6 +88,24 @@ describe("scheduling integrity Browser acceptance fixture", () => {
       const request = requests.get(key);
       return request && "body" in request ? request.body : undefined;
     };
+    expect(SCHEDULING_INTEGRITY_FIXTURE.retiredPageRoutes).toEqual([
+      "/student-lookup",
+      "/settings/first-year-ovpsa",
+      `/settings/first-year-ovpsa/${SCHEDULING_INTEGRITY_FIXTURE.ids.removedRouteTarget}`,
+      "/compliance",
+      "/appointments",
+      `/appointments/${SCHEDULING_INTEGRITY_FIXTURE.appointmentIds.lifecycleLaboratory}`,
+      "/results",
+      "/laboratory/appointments",
+      "/physical-exam/appointments",
+    ]);
+    expect(requests.has(
+      `GET /api/student-lookup?studentNumber=${SCHEDULING_INTEGRITY_FIXTURE.students.portal.studentNumber}`,
+    )).toBe(true);
+    expect(requests.has("GET /api/student-lookup?studentNumber=B-SIH-MISSING"))
+      .toBe(true);
+    expect(requests.has("GET /api/student-lookup?unexpected=%7Bmalformed%7D"))
+      .toBe(true);
     expect(requestBody("POST /api/coordinator-schedules")).toEqual({});
     expect(requestBody("POST /api/coordinator-schedules/validate"))
       .toEqual({});

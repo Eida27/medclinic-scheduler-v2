@@ -1,5 +1,7 @@
 # Scheduling Integrity Hardening Design
 
+> **Historical with current core behavior:** Its invariants remain useful, but September 7 readiness work removes the lookup compatibility route and corrects priority displacement and closure recovery. See the [current policy index](../../current-policies.md).
+
 **Date:** 2026-08-26  
 **Repository:** `Eida27/medclinic-scheduler-v2`  
 **Status:** Approved design  

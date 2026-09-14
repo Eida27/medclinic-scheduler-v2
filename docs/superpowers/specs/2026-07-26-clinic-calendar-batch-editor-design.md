@@ -1,5 +1,7 @@
 # Clinic Calendar Batch Editor Design
 
+> **Historical:** Superseded by the unified calendar and later readiness corrections. Reopening does not automatically restore appointments; see the [current policy index](../../current-policies.md).
+
 ## Summary
 
 Revise the existing admin Clinic Calendar so administrators can configure unavailable dates before any coordinator CSV import, edit dates across both clinics and all months of the current or future years, review all pending changes, and save them once as one atomic operation.

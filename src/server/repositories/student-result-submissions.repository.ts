@@ -1401,30 +1401,6 @@ export async function getStudentNumberForSubmission(submissionId: string) {
   return result.rows[0]?.studentNumber ?? null;
 }
 
-export async function listAdminStudentResultSubmissionRows() {
-  const result = await query<{
-    id: string;
-    appointmentId: string;
-    studentNumber: string;
-    resultType: string;
-    status: string;
-    finalizedAt: Date | null;
-    fileCount: number;
-    totalBytes: string;
-  }>(
-    `SELECT submission.id, submission.appointment_id AS "appointmentId",
-            submission.student_number AS "studentNumber", submission.result_type AS "resultType",
-            submission.status, submission.finalized_at AS "finalizedAt",
-            COUNT(file.id)::int AS "fileCount", COALESCE(SUM(file.byte_size),0)::text AS "totalBytes"
-       FROM student_result_submissions submission
-       LEFT JOIN student_result_files file ON file.submission_id=submission.id AND file.deleted_at IS NULL
-      WHERE submission.status IN ('FINALIZED','INVALIDATED')
-      GROUP BY submission.id
-      ORDER BY submission.finalized_at DESC, submission.id DESC`,
-  );
-  return result.rows.map((row) => ({ ...row, totalBytes: Number(row.totalBytes) }));
-}
-
 export async function getAdminStudentResultSubmissionRow(submissionId: string) {
   const result = await query<{
     id: string;
@@ -1455,29 +1431,6 @@ export async function getAdminStudentResultSubmissionRow(submissionId: string) {
       byteSize: file.byteSize,
     })),
   };
-}
-
-export async function lockFinalizedSubmissionForInvalidation(client: PoolClient, submissionId: string) {
-  const submission = await client.query<{
-    id: string;
-    appointmentId: string;
-    studentNumber: string;
-    resultType: "LABORATORY" | "PHYSICAL_EXAM";
-  }>(
-    `SELECT id, appointment_id AS "appointmentId", student_number AS "studentNumber",
-            result_type AS "resultType"
-       FROM student_result_submissions
-      WHERE id=$1 AND status='FINALIZED'
-      FOR UPDATE`,
-    [submissionId],
-  );
-  if (!submission.rowCount) return null;
-  const files = await client.query<{ id: string; storageKey: string }>(
-    `SELECT id, storage_key AS "storageKey"
-       FROM student_result_files WHERE submission_id=$1 AND deleted_at IS NULL FOR UPDATE`,
-    [submissionId],
-  );
-  return { ...submission.rows[0], files: files.rows };
 }
 
 export async function lockCurrentFinalizedSubmissionForInvalidation(

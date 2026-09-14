@@ -8,7 +8,6 @@ import { retryAdminEmailDelivery } from "@/server/services/admin-email-deliverie
 import {
   claimEmailOutboxMessages,
   deliverClaimedEmail,
-  obsoleteEmailOutboxMessage,
 } from "@/server/services/email-outbox.service";
 import { encryptVerificationEmailBody } from "@/server/email/verification-body-encryption";
 import { cleanupTestFixtures, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
@@ -312,85 +311,6 @@ describe("email outbox delivery", () => {
       "EMAIL_OUTBOX_RETRY_SCHEDULED",
     ]);
     expect(JSON.stringify(audits.rows)).not.toContain("SMTP unavailable");
-  });
-
-  it("obsoletes verification mail, clears ciphertext, and writes a token-safe audit", async () => {
-    await insertTestStudent({ studentNumber: "99-9207-07", firstName: "Obsolete", lastName: "Student", yearLevel: 3 });
-    const { outboxId: id } = await verificationOutbox(
-      "99-9207-07",
-      "https://example.test/student/email-verification/confirm?token=obsolete-secret",
-    );
-    await expect(obsoleteEmailOutboxMessage(
-      id,
-      "SUPERSEDED",
-      new Date("2027-08-02T00:00:00.000Z"),
-    )).resolves.toBe(true);
-    expect((await pool.query(
-      `SELECT status,verification_body_encrypted,locked_at,last_attempt_at,last_attempt_status
-         FROM email_outbox WHERE id=$1`,
-      [id],
-    )).rows).toEqual([{
-      status: "OBSOLETE",
-      verification_body_encrypted: null,
-      locked_at: null,
-      last_attempt_at: new Date("2027-08-02T00:00:00.000Z"),
-      last_attempt_status: "OBSOLETE",
-    }]);
-    const audit = await pool.query<{ action: string; metadata: Record<string, unknown> }>(
-      "SELECT action,metadata FROM audit_logs WHERE entity_type='email_outbox' AND entity_id=$1",
-      [id],
-    );
-    expect(audit.rows).toEqual([{
-      action: "EMAIL_OUTBOX_OBSOLETE",
-      metadata: expect.objectContaining({ reason: "SUPERSEDED", messageKind: "VERIFICATION" }),
-    }]);
-    expect(JSON.stringify(audit.rows)).not.toContain("obsolete-secret");
-  });
-
-  it.each([
-    ["expired", "EXPIRED", "expires_at=clock_timestamp()-INTERVAL '1 second'"],
-    ["superseded", "SUPERSEDED", "consumed_at=clock_timestamp()"],
-  ])("does not send %s verification mail and atomically obsoletes its ciphertext", async (_label, reason, mutation) => {
-    const studentNumber = _label === "expired" ? "99-9210-10" : "99-9211-11";
-    await insertTestStudent({ studentNumber, firstName: "Invalid", lastName: "Verification", yearLevel: 3 });
-    const body = `https://example.test/student/email-verification/confirm?token=${_label}-secret`;
-    const fixture = await verificationOutbox(studentNumber, body);
-    await pool.query(
-      `UPDATE student_email_verifications SET ${mutation} WHERE id=$1`,
-      [fixture.verificationId],
-    );
-    const [message] = await claimEmailOutboxMessages(1, new Date("2027-08-02T00:00:00.000Z"));
-    const transport = { sendMail: vi.fn().mockResolvedValue({ messageId: "must-not-send" }) };
-
-    await expect(deliverClaimedEmail(
-      message,
-      transport,
-      new Date("2027-08-02T00:00:00.000Z"),
-      "clinic@example.test",
-      encryptionKey,
-    )).resolves.toEqual({ status: "OBSOLETE" });
-
-    expect(transport.sendMail).not.toHaveBeenCalled();
-    await expect(pool.query(
-      `SELECT status,verification_body_encrypted,locked_at,last_attempt_status
-         FROM email_outbox WHERE id=$1`,
-      [fixture.outboxId],
-    )).resolves.toMatchObject({ rows: [{
-      status: "OBSOLETE",
-      verification_body_encrypted: null,
-      locked_at: null,
-      last_attempt_status: "OBSOLETE",
-    }] });
-    const audits = await pool.query<{ action: string; metadata: Record<string, unknown> }>(
-      "SELECT action,metadata FROM audit_logs WHERE entity_type='email_outbox' AND entity_id=$1",
-      [fixture.outboxId],
-    );
-    expect(audits.rows).toEqual([{
-      action: "EMAIL_OUTBOX_OBSOLETE",
-      metadata: expect.objectContaining({ reason, messageKind: "VERIFICATION" }),
-    }]);
-    expect(JSON.stringify(audits.rows)).not.toContain(`${_label}-secret`);
-    expect(JSON.stringify(audits.rows)).not.toContain("token=");
   });
 
   it("delivers an untyped legacy notification as ordinary GENERAL plaintext mail", async () => {

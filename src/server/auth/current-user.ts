@@ -27,14 +27,6 @@ export async function requireAuthenticatedStaff(allowedRoles?: UserRole[]) {
   }
 }
 
-export async function optionalUser() {
-  try {
-    return await requireUser();
-  } catch {
-    return null;
-  }
-}
-
 export async function optionalAuthenticatedStaff() {
   try {
     return await requireAuthenticatedStaff();

@@ -13,10 +13,8 @@ import {
   claimEmailOutboxRows,
   markEmailOutboxFailed,
   markEmailOutboxFailedWithClient,
-  markEmailOutboxObsolete,
   markEmailOutboxSent,
   markEmailOutboxSentWithClient,
-  type EmailOutboxObsoleteReason,
   type ClaimedEmailOutboxMessage,
 } from "@/server/repositories/email-outbox.repository";
 
@@ -157,14 +155,6 @@ export async function deliverClaimedEmail(
     );
     return { status: attempts >= 10 ? "PERMANENT_FAILURE" as const : "PENDING" as const };
   }
-}
-
-export function obsoleteEmailOutboxMessage(
-  id: string,
-  reason: EmailOutboxObsoleteReason,
-  now = new Date(),
-) {
-  return markEmailOutboxObsolete(id, reason, now);
 }
 
 export async function deliverEmailOutboxBatch(now = new Date()) {

@@ -6,14 +6,11 @@ import {
   clearStaffEmailFailures,
   getStaffLoginThrottle,
   lockStaffLoginBuckets,
-  normalizeStaffLoginEmail,
   pruneExpiredStaffLoginFailures,
   recordStaffLoginFailure,
 } from "./staff-login-throttle.repository";
 
-const email = "staff-throttle@security.test";
 const normalizedEmail = "staff-throttle@security.test";
-const normalizedEmailVariant = " Staff-Throttle@Security.Test ";
 const ipAddress = "198.51.100.20";
 const independentIpAddress = "198.51.100.21";
 const retentionEmail = "staff-throttle-retention@security.test";
@@ -66,26 +63,6 @@ afterAll(async () => {
 });
 
 describe("staff-login throttle repository", () => {
-  it("normalizes email variants into the same email bucket", async () => {
-    expect(normalizeStaffLoginEmail(normalizedEmailVariant)).toBe(normalizedEmail);
-
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      await recordStaffLoginFailure(client, normalizeStaffLoginEmail(normalizedEmailVariant), ipAddress);
-      await recordStaffLoginFailure(client, normalizeStaffLoginEmail(email), independentIpAddress);
-      await client.query("COMMIT");
-    } finally {
-      client.release();
-    }
-
-    await expect(getStaffLoginThrottle(pool, normalizedEmail, ipAddress)).resolves.toMatchObject({
-      emailFailureCount: 2,
-      ipFailureCount: 1,
-      throttled: false,
-    });
-  });
-
   it("counts EMAIL and IP failures independently", async () => {
     const client = await pool.connect();
     try {

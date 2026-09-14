@@ -1,5 +1,7 @@
 # First Year OVPSA Priority Scheduling Design
 
+> **Superseded:** The August 13 consolidated import workflow and August 29 retirement policy replace its standalone workflow and `SPECIALIZED` guidance. See the [current policy index](../../current-policies.md).
+
 **Date:** 2026-08-12  
 **Repository:** `Eida27/medclinic-scheduler-v2`  
 **Scope:** First Year OVPSA-controlled Laboratory and Physical Examination scheduling

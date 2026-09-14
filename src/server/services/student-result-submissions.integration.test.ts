@@ -12,7 +12,6 @@ import {
   loadAppointmentResultProtectionStates,
   lockCurrentFinalizedSubmissionForInvalidation,
   lockExpectedStudentResultDraft,
-  lockFinalizedSubmissionForInvalidation,
   lockOrCreateStudentResultDraft,
 } from "@/server/repositories/student-result-submissions.repository";
 import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
@@ -26,11 +25,9 @@ import {
   addStudentResultFiles,
   beginStudentResultEdit,
   cancelStudentResultEdit,
-  createAdminSubmissionZip,
   createAdminSubmissionZipStream,
   finalizeStudentResultSubmission as finalizeExpectedStudentResultSubmission,
   getAdminStudentResultProfile,
-  getAdminStudentResultFile,
   getAdminSubmissionResultFile,
   getAdminSubmissionStudentNumber,
   getStudentResultFile,
@@ -2484,9 +2481,9 @@ describe("student result drafts", () => {
       .resolves.toMatchObject({ filename: "shared-name.pdf", bytes: file().bytes });
     await expect(getStudentResultFile("99-9410-10", added.id, storage))
       .rejects.toMatchObject({ code: "RESULT_FILE_NOT_FOUND", status: 404 });
-    await expect(getAdminStudentResultFile(added.id, coordinator, storage))
+    await expect(getAdminSubmissionResultFile(finalized.id, added.id, coordinator, storage))
       .rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
-    await expect(getAdminStudentResultFile(added.id, clinicStaff, storage))
+    await expect(getAdminSubmissionResultFile(finalized.id, added.id, clinicStaff, storage))
       .rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
     await expect(listAdminStudentResultProfiles(coordinator, { page: 1, limit: 50, offset: 0 }))
       .rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
@@ -2494,11 +2491,8 @@ describe("student result drafts", () => {
       .rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
     await expect(getAdminSubmissionStudentNumber(finalized.id, admin))
       .resolves.toBe("99-9409-09");
-    await expect(getAdminStudentResultFile(added.id, admin, storage))
+    await expect(getAdminSubmissionResultFile(finalized.id, added.id, admin, storage))
       .resolves.toMatchObject({ filename: "shared-name.pdf", bytes: file().bytes });
-    const zip = await createAdminSubmissionZip(finalized.id, admin, storage);
-    expect(zip.subarray(0, 2).toString("ascii")).toBe("PK");
-    expect(zip.toString("latin1")).toContain("01-shared-name.pdf");
     const zipStream = await createAdminSubmissionZipStream(finalized.id, admin, storage);
     const streamedChunks: Buffer[] = [];
     for await (const chunk of zipStream) streamedChunks.push(Buffer.from(chunk));
@@ -2593,7 +2587,10 @@ describe("student result drafts", () => {
     await expect(getStudentResultFile(unrelatedStudentNumber, originalFile.id, storage))
       .rejects.toMatchObject({ code: "RESULT_FILE_NOT_FOUND", status: 404 });
 
-    const zip = await createAdminSubmissionZip(fixture.official.id, admin, storage);
+    const zipStream = await createAdminSubmissionZipStream(fixture.official.id, admin, storage);
+    const zipChunks: Buffer[] = [];
+    for await (const chunk of zipStream) zipChunks.push(Buffer.from(chunk));
+    const zip = Buffer.concat(zipChunks);
     expect(zip.subarray(0, 2).toString("ascii")).toBe("PK");
     expect(zip.toString("latin1")).toContain("01-superseded-history.pdf");
   });
@@ -3032,11 +3029,13 @@ describe("appointment result correction protection", () => {
         invalidationClient.query("SET LOCAL deadlock_timeout='100ms'"),
       ]);
       const correctionPid = await correctionClient.query<{ pid: number }>("SELECT pg_backend_pid() AS pid");
-      const lockedSubmission = await lockFinalizedSubmissionForInvalidation(
+      const lockedSubmission = await lockCurrentFinalizedSubmissionForInvalidation(
         invalidationClient,
         submission.rows[0].id,
       );
-      if (!lockedSubmission) throw new Error("Expected a finalized submission fixture.");
+      if (lockedSubmission.type !== "ready") {
+        throw new Error("Expected a current finalized submission fixture.");
+      }
 
       const correctionTask = getAppointmentResultCorrectionState(correctionClient, {
         id: appointmentId,
@@ -3048,7 +3047,7 @@ describe("appointment result correction protection", () => {
       await waitForClientLock(invalidationClient, correctionPid.rows[0].pid);
       const invalidationTask = invalidateFinalizedSubmissionMetadata(
         invalidationClient,
-        lockedSubmission,
+        lockedSubmission.submission,
         TEST_REFERENCE_IDS.adminUser,
         "Concurrent invalidation fixture",
       ).then(() => invalidationClient.query("COMMIT"));

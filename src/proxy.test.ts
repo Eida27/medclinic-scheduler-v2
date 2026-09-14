@@ -60,8 +60,10 @@ describe("proxy route boundaries", () => {
     expect(verifySessionToken).not.toHaveBeenCalled();
   });
 
-  it("authenticates reports while retaining appointment route matching", () => {
+  it("authenticates only current staff page families", () => {
     expect(config.matcher).toContain("/reports/:path*");
-    expect(config.matcher).toContain("/appointments/:path*");
+    expect(config.matcher).not.toContain("/appointments/:path*");
+    expect(config.matcher).not.toContain("/compliance/:path*");
+    expect(config.matcher).not.toContain("/results/:path*");
   });
 });

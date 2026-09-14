@@ -16,7 +16,7 @@ type AppointmentActionsProps = {
   canCorrectNoShow?: boolean;
   isManuallyLocked?: boolean;
   updatedAt?: string;
-  basePath?: "/appointments" | "/laboratory" | "/physical-exam";
+  basePath: "/laboratory" | "/physical-exam";
 };
 
 export function AppointmentActions({
@@ -25,7 +25,7 @@ export function AppointmentActions({
   canCorrectNoShow = false,
   isManuallyLocked = false,
   updatedAt,
-  basePath = "/appointments",
+  basePath,
 }: AppointmentActionsProps) {
   const router = useRouter();
   const [error, setError] = useState<string>();

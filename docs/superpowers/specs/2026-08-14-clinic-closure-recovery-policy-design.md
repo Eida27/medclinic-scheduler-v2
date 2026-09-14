@@ -1,5 +1,7 @@
 # Clinic Closure Recovery Policy Design
 
+> **Historical with current core behavior:** The unified impact-review and manual-resolution model remains. September 7 readiness policy replaces its recovery-date, cycle-bound and capacity-accounting details; see the [current policy index](../../current-policies.md).
+
 **Date:** 2026-08-14  
 **Repository:** `Eida27/medclinic-scheduler-v2`  
 **Status:** Approved design

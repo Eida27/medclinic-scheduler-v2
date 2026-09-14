@@ -2,24 +2,17 @@ import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTOMATIC_NO_SHOW_NOTE } from "@/server/appointments/automatic-no-show";
 
-const { appointmentActions, appointmentDetail, appointmentProtectionPanel, completedStatusCorrection, getPublishedAppointment, notFound, redirect, requireUser } = vi.hoisted(() => ({
+const { appointmentActions, appointmentProtectionPanel, completedStatusCorrection, getPublishedAppointment, notFound, requireUser } = vi.hoisted(() => ({
   appointmentActions: vi.fn(() => null),
-  appointmentDetail: vi.fn(() => null),
   appointmentProtectionPanel: vi.fn(() => null),
   completedStatusCorrection: vi.fn(() => null),
   getPublishedAppointment: vi.fn(),
   notFound: vi.fn(() => {
     throw new Error("NEXT_NOT_FOUND");
   }),
-  redirect: vi.fn(() => {
-    throw new Error("NEXT_REDIRECT");
-  }),
   requireUser: vi.fn(),
 }));
 
-vi.mock("@/components/appointments/AppointmentDetail", () => ({
-  AppointmentDetail: appointmentDetail,
-}));
 vi.mock("@/components/appointments/AppointmentActions", () => ({
   AppointmentActions: appointmentActions,
 }));
@@ -29,25 +22,12 @@ vi.mock("@/components/appointments/AppointmentProtectionPanel", () => ({
 vi.mock("@/components/appointments/CompletedStatusCorrection", () => ({
   CompletedStatusCorrection: completedStatusCorrection,
 }));
-vi.mock("next/navigation", () => ({ notFound, redirect }));
+vi.mock("next/navigation", () => ({ notFound }));
 vi.mock("@/server/auth/current-user", () => ({ requireUser }));
 vi.mock("@/server/repositories/appointments.repository", () => ({ getPublishedAppointment }));
 
-import AppointmentPage from "./page";
-
 const appointmentId = "11111111-1111-4111-8111-111111111111";
 const missingAppointmentId = "22222222-2222-4222-8222-222222222222";
-
-describe("AppointmentPage", () => {
-  it("delegates rendering to the shared appointment detail", async () => {
-    render(await AppointmentPage({ params: Promise.resolve({ appointmentId }) }));
-
-    expect(appointmentDetail).toHaveBeenCalledWith({
-      appointmentId,
-      source: "APPOINTMENTS",
-    }, undefined);
-  });
-});
 
 const publishedAppointment = {
   id: appointmentId,
@@ -143,7 +123,7 @@ describe("AppointmentDetail", () => {
 
     await expect(AppointmentDetail({
       appointmentId: missingAppointmentId,
-      source: "APPOINTMENTS",
+      source: "LABORATORY",
     })).rejects.toThrow("NEXT_NOT_FOUND");
     expect(getPublishedAppointment).toHaveBeenCalledWith(missingAppointmentId);
     expect(notFound).toHaveBeenCalledOnce();
@@ -255,29 +235,4 @@ describe("AppointmentDetail", () => {
     );
   });
 
-  it.each([
-    ["CLINIC_STAFF", "LABORATORY", "clinic-1", `/laboratory/${appointmentId}`],
-    ["CLINIC_STAFF", "PHYSICAL_EXAM", "clinic-2", `/physical-exam/${appointmentId}`],
-    ["ADMIN", "LABORATORY", null, `/laboratory/${appointmentId}`],
-    ["ADMIN", "PHYSICAL_EXAM", null, `/physical-exam/${appointmentId}`],
-  ] as const)(
-    "redirects %s legacy %s detail access into its operational clinic flow",
-    async (role, scheduleType, clinicId, target) => {
-      requireUser.mockResolvedValue({ role, clinicId });
-      getPublishedAppointment.mockResolvedValue({
-        ...publishedAppointment,
-        scheduleType,
-        clinicId: scheduleType === "LABORATORY" ? "clinic-1" : "clinic-2",
-      });
-      const AppointmentDetail = await getActualAppointmentDetail();
-
-      await expect(AppointmentDetail({
-        appointmentId,
-        source: "APPOINTMENTS",
-      })).rejects.toThrow("NEXT_REDIRECT");
-
-      expect(redirect).toHaveBeenCalledWith(target);
-      expect(appointmentActions).not.toHaveBeenCalled();
-    },
-  );
 });

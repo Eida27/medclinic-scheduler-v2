@@ -17,10 +17,14 @@ describe("HomePage", () => {
     expect(screen.queryByText("Published schedules")).not.toBeInTheDocument();
     expect(screen.queryByText("Secure & private")).not.toBeInTheDocument();
     expect(screen.queryByText("For CPU students")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Staff sign in" })).toHaveAttribute("href", "/login");
-    expect(screen.getByRole("link", { name: "Find my schedule" })).toBeVisible();
-    expect(screen.getByRole("link", { name: "Find my schedule" })).toHaveAttribute("href", "/student/login");
-    expect(screen.getByRole("link", { name: "Open staff dashboard" })).toHaveAttribute("href", "/login");
+    expect(screen.getByText("Student sign in").closest("a")).toHaveAttribute("href", "/student/login");
+    expect(screen.getByText("View your schedule and submit results.")).toBeVisible();
+    expect(screen.getByText("Staff sign in").closest("a")).toHaveAttribute("href", "/login");
+    expect(screen.getByText("For administrators, coordinators and clinic staff.")).toBeVisible();
+    expect(screen.getAllByText("Student sign in")).toHaveLength(1);
+    expect(screen.getAllByText("Staff sign in")).toHaveLength(1);
+    expect(screen.queryByRole("link", { name: "Find my schedule" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Open staff dashboard" })).not.toBeInTheDocument();
     expect(screen.queryByText("Clinic scheduling and compliance")).not.toBeInTheDocument();
     expect(screen.queryByText("Organize coordinator submissions, publish validated appointments, and track physical examination and laboratory completion in one focused system.")).not.toBeInTheDocument();
     expect(screen.queryByText("Recommended daily capacity per service")).not.toBeInTheDocument();

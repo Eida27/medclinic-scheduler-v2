@@ -1,5 +1,7 @@
 # Clinic Calendar Batch Editor Implementation Plan
 
+> **Historical:** Superseded by the unified calendar and later readiness corrections. See the [current policy index](../../current-policies.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the immediate-write Clinic Calendar with a January–December draft editor that saves block and unblock changes for both clinics in one atomic transaction and safely restores appointments moved by mistaken blocks.

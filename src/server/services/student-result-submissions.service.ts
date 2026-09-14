@@ -25,7 +25,6 @@ import {
   invalidateFinalizedSubmissionMetadata,
   insertStudentResultFiles,
   listAdminStudentResultProfileRows,
-  listAdminStudentResultSubmissionRows,
   listDraftFilesForUpdate,
   listResultFilesForCleanupForUpdate,
   lockCurrentFinalizedSubmissionForInvalidation,
@@ -587,17 +586,6 @@ export async function getAdminSubmissionStudentNumber(
   return getStudentNumberForSubmission(submissionId);
 }
 
-export async function getAdminStudentResultFile(
-  fileId: string,
-  actor: SessionUser,
-  storage: ResultStorage = localResultStorage,
-) {
-  assertAdmin(actor);
-  const file = await readVerifiedResultFile(await getAccessibleAdminResultFileRow(fileId), storage);
-  await writeAudit(actor.userId, "ADMIN_RESULT_FILE_DOWNLOADED", "student_result_file", fileId);
-  return file;
-}
-
 export async function getAdminSubmissionResultFile(
   submissionId: string,
   fileId: string,
@@ -615,53 +603,11 @@ export async function getAdminSubmissionResultFile(
   return file;
 }
 
-export async function listAdminStudentResultSubmissions(actor: SessionUser) {
-  assertAdmin(actor);
-  return listAdminStudentResultSubmissionRows();
-}
-
 export async function getAdminStudentResultSubmission(submissionId: string, actor: SessionUser) {
   assertAdmin(actor);
   const submission = await getAdminStudentResultSubmissionRow(submissionId);
   if (!submission) throw new AppError("RESULT_SUBMISSION_NOT_FOUND", "Result submission not found.", 404);
   return submission;
-}
-
-export async function createAdminSubmissionZip(
-  submissionId: string,
-  actor: SessionUser,
-  storage: ResultStorage = localResultStorage,
-) {
-  assertAdmin(actor);
-  const files = await getAdminSubmissionFileRows(submissionId);
-  if (!files.length) throw new AppError("RESULT_SUBMISSION_NOT_FOUND", "Official result submission not found.", 404);
-  const output = new PassThrough();
-  const chunks: Buffer[] = [];
-  output.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
-  const completed = new Promise<Buffer>((resolve, reject) => {
-    output.on("end", () => resolve(Buffer.concat(chunks)));
-    output.on("error", reject);
-  });
-  const archive = new ZipArchive({ zlib: { level: 9 } });
-  archive.on("error", (error) => output.destroy(error));
-  archive.pipe(output);
-  for (const [index, file] of files.entries()) {
-    const bytes = await storage.read(file.storageKey);
-    const checksum = createHash("sha256").update(bytes).digest("hex");
-    if (checksum !== file.checksumSha256) {
-      archive.abort();
-      throw new AppError("RESULT_FILE_INTEGRITY_ERROR", "A stored result file failed its integrity check.", 500);
-    }
-    const safeName = basename(file.originalFilename).replace(/[^a-zA-Z0-9._-]/g, "_");
-    archive.append(bytes, { name: `${String(index + 1).padStart(2, "0")}-${safeName}` });
-  }
-  await archive.finalize();
-  const zip = await completed;
-  await writeAudit(actor.userId, "ADMIN_RESULT_ZIP_DOWNLOADED", "student_result_submission", submissionId, {
-    fileCount: files.length,
-    totalBytes: files.reduce((sum, file) => sum + file.byteSize, 0),
-  });
-  return zip;
 }
 
 export async function createAdminSubmissionZipStream(

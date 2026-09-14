@@ -1,5 +1,7 @@
 # Automated Academic-Year Scheduling and Student Result Uploads — Design Specification
 
+> **Historical:** Retained for design history. The [current policy index](../../current-policies.md) identifies later authorities that retire `SPECIALIZED`, require email verification and correct scheduling and result workflows.
+
 **Date:** 2026-07-18  
 **Repository:** `Eida27/medclinic-scheduler-v2`  
 **Status:** Approved design

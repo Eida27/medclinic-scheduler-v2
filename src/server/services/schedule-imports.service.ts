@@ -216,16 +216,6 @@ export async function getScheduleImport(
   return detail;
 }
 
-export function importNameFromFileName(fileName: string): string {
-  const normalized = fileName
-    .trim()
-    .replace(/\.csv$/i, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (Array.from(normalized).length < 3) return "Schedule import";
-  return Array.from(normalized).slice(0, 150).join("");
-}
-
 export async function acceptAndScheduleImport(
   raw: unknown,
   actor: SessionUser,

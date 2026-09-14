@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  importNameFromFileName,
-  acceptAndScheduleImport,
-  preflightScheduleImport,
-} from "./schedule-imports.service";
+import { acceptAndScheduleImport, preflightScheduleImport } from "./schedule-imports.service";
 
 const admin = {
   userId: "admin-user",
@@ -12,22 +8,7 @@ const admin = {
   role: "ADMIN" as const,
 };
 
-describe("importNameFromFileName", () => {
-  it("derives a normalized name from the CSV filename", () => {
-    expect(importNameFromFileName("  First   Semester Schedules.csv  ")).toBe("First Semester Schedules");
-  });
-
-  it("uses a stable fallback for filename stems shorter than three characters", () => {
-    expect(importNameFromFileName("a.csv")).toBe("Schedule import");
-    expect(importNameFromFileName(".csv")).toBe("Schedule import");
-  });
-
-  it("truncates names to the database limit by Unicode character", () => {
-    const name = importNameFromFileName(`${"😀".repeat(160)}.csv`);
-
-    expect(Array.from(name)).toHaveLength(150);
-  });
-
+describe("schedule import request boundary", () => {
   it("keeps XLSX uploads outside the CSV import contract", async () => {
     await expect(acceptAndScheduleImport({
       fileName: "student-schedule-import-template.xlsx",

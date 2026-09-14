@@ -22,10 +22,6 @@ type ThrottleRow = {
   retryAfterSeconds: number;
 };
 
-export function normalizeStaffLoginEmail(value: string) {
-  return value.trim().toLowerCase();
-}
-
 export async function lockStaffLoginBuckets(
   client: PoolClient,
   normalizedEmail: string,

@@ -5,7 +5,6 @@ import type {
   GeneratePairedScheduleOutput,
 } from "@/server/rule-engine/types";
 import { generatePairedSchedule } from "@/server/rule-engine/generate-paired-schedule";
-import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import {
   lockEligibleRegularPairs,
   lockEligibleRegularPhysicalExams,
@@ -649,18 +648,6 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
       physicalExamDate,
     })),
   ];
-}
-
-export async function publishDisplacedRegularReplacements(
-  input: {
-    candidates: DisplacementCandidate[];
-    sourceImportGroupId: string;
-    actorUserId: string;
-  },
-  client: PoolClient,
-) {
-  await lockEffectiveAppointmentScopes(client, priorityDisplacementScopes(input.candidates));
-  return publishDisplacedRegularReplacementsWithLockedScopes(input, client);
 }
 
 export const nextDateAfter = (date: string) => addDays(date, 1);

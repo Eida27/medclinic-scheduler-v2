@@ -1,4 +1,4 @@
-import { notFound, redirect } from "next/navigation";
+import { notFound } from "next/navigation";
 import { AppointmentActions } from "@/components/appointments/AppointmentActions";
 import { AppointmentProtectionPanel } from "@/components/appointments/AppointmentProtectionPanel";
 import { CompletedStatusCorrection } from "@/components/appointments/CompletedStatusCorrection";
@@ -27,7 +27,7 @@ type Log = {
 export type AppointmentDetailProps = {
   appointmentId: string;
   expectedScheduleType?: "LABORATORY" | "PHYSICAL_EXAM";
-  source: "APPOINTMENTS" | "LABORATORY" | "PHYSICAL_EXAM";
+  source: "LABORATORY" | "PHYSICAL_EXAM";
 };
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
@@ -51,13 +51,6 @@ export async function AppointmentDetail({
   if (!appointment) notFound();
   if (expectedScheduleType && appointment.scheduleType !== expectedScheduleType) notFound();
   if (user.role === "CLINIC_STAFF" && user.clinicId !== appointment.clinicId) notFound();
-  if (source === "APPOINTMENTS") {
-    redirect(
-      appointment.scheduleType === "LABORATORY"
-        ? `/laboratory/${appointment.id}`
-        : `/physical-exam/${appointment.id}`,
-    );
-  }
   const statusLogs = appointment.statusLogs as Log[];
   const canCorrectNoShow = appointment.status === "NO_SHOW"
     && (user.role === "ADMIN" || user.clinicId === appointment.clinicId)

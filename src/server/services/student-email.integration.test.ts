@@ -10,7 +10,6 @@ import {
 import {
   createStudentNotification,
   createStudentNotificationIsolated,
-  createStudentNotifications,
   listStudentNotifications,
   markStudentNotificationRead,
 } from "./student-notifications.service";
@@ -63,7 +62,7 @@ afterAll(async () => {
 });
 
 describe("student notifications and optional email", () => {
-  it("batch-inserts portal notifications and verified-email outbox rows in one statement", async () => {
+  it("creates portal notifications and verified-email outbox rows through the live singular path", async () => {
     for (const studentNumber of ["99-9505-05", "99-9506-06"]) {
       await insertTestStudent({
         studentNumber,
@@ -79,9 +78,7 @@ describe("student notifications and optional email", () => {
     );
 
     await transaction(async (client) => {
-      const querySpy = vi.spyOn(client, "query");
-      await createStudentNotifications(client, [
-        {
+      await createStudentNotification(client, {
           studentNumber: "99-9505-05",
           notificationType: "SCHEDULE_PUBLISHED",
           title: "Schedule published",
@@ -92,16 +89,13 @@ describe("student notifications and optional email", () => {
           sourceType: "FIRST_YEAR_IMPORT",
           sourceId: "import-1",
           scheduleFingerprint: "b".repeat(64),
-        },
-        {
+      });
+      await createStudentNotification(client, {
           studentNumber: "99-9506-06",
           notificationType: "SCHEDULE_PUBLISHED",
           title: "Schedule published",
           message: "Your First Year schedule is ready.",
-        },
-      ]);
-      expect(querySpy).toHaveBeenCalledTimes(1);
-      querySpy.mockRestore();
+      });
     });
 
     await expect(pool.query(
@@ -300,7 +294,7 @@ describe("student notifications and optional email", () => {
     expect(JSON.stringify(obsoleteAudit.rows)).not.toContain(request.token);
   });
 
-  it("keeps distinct typed outbox fields correlated to identical batch portal inputs", async () => {
+  it("keeps distinct typed outbox fields correlated to identical singular portal inputs", async () => {
     const studentNumber = "99-9526-26";
     await insertTestStudent({
       studentNumber,
@@ -314,8 +308,8 @@ describe("student notifications and optional email", () => {
       [studentNumber],
     );
 
-    await transaction((client) => createStudentNotifications(client, [
-      {
+    await transaction(async (client) => {
+      await createStudentNotification(client, {
         studentNumber,
         notificationType: "SCHEDULE_CURRENT_STATE",
         title: "Identical portal title",
@@ -326,8 +320,8 @@ describe("student notifications and optional email", () => {
         sourceType: "FIRST_TYPED_SOURCE",
         sourceId: "first-source-id",
         scheduleFingerprint: "c".repeat(64),
-      },
-      {
+      });
+      await createStudentNotification(client, {
         studentNumber,
         notificationType: "SCHEDULE_CURRENT_STATE",
         title: "Identical portal title",
@@ -338,8 +332,8 @@ describe("student notifications and optional email", () => {
         sourceType: "SECOND_TYPED_SOURCE",
         sourceId: "second-source-id",
         scheduleFingerprint: "d".repeat(64),
-      },
-    ]));
+      });
+    });
 
     const portal = await pool.query(
       `SELECT id FROM student_portal_notifications

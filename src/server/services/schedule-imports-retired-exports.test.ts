@@ -4,7 +4,6 @@ import * as scheduleImports from "./schedule-imports.service";
 import * as appointments from "./appointments.service";
 import * as appointmentRepository from "@/server/repositories/appointments.repository";
 import * as ovpsaLifecycle from "@/server/ovpsa/ovpsa-first-year.service";
-import * as ruleEngine from "@/server/rule-engine";
 
 describe("schedule import public service surface", () => {
   it("exposes atomic scheduling without staged lifecycle methods", () => {
@@ -31,12 +30,5 @@ describe("schedule import public service surface", () => {
     expect(ovpsaLifecycle).not.toHaveProperty("updateOvpsaFirstYearDraft");
     expect(ovpsaLifecycle).not.toHaveProperty("validateOvpsaFirstYearBatch");
     expect(ovpsaLifecycle).not.toHaveProperty("publishOvpsaFirstYearBatch");
-  });
-
-  it("exposes only the retained paired and capacity scheduling rules", () => {
-    expect(ruleEngine.generatePairedSchedule).toBeTypeOf("function");
-    expect(ruleEngine.checkCapacity).toBeTypeOf("function");
-    expect(ruleEngine).not.toHaveProperty("generateSchedule");
-    expect(ruleEngine).not.toHaveProperty("sortByPriority");
   });
 });

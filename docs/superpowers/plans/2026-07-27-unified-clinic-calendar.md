@@ -1,5 +1,7 @@
 # Unified Clinic Calendar Implementation Plan
 
+> **Historical:** Retained for implementation history. Use the [current policy index](../../current-policies.md) for current closure and reopening behavior.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace clinic-specific unavailable dates with one annual calendar that safely reschedules unfinished appointments, preserves completed work, supports emergency closures and restoration, and routes unsafe cases to administrators.

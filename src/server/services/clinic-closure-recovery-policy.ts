@@ -4,14 +4,6 @@ import type {
   ClinicManualCaseReason,
 } from "@/types/clinic-calendar";
 
-type AppointmentStatus =
-  | "DRAFT"
-  | "PENDING"
-  | "COMPLETED"
-  | "NO_SHOW"
-  | "RESCHEDULED"
-  | "CANCELLED"
-  | "AWAITING_RESCHEDULE";
 type ServiceType = "LABORATORY" | "PHYSICAL_EXAM";
 
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1_000;
@@ -121,118 +113,6 @@ export function evaluateClosureRecoveryPolicy(
     noticeDays,
     reasonCode: null,
     reasonMessage: null,
-  };
-}
-
-interface RecoveryAppointment {
-  id: string;
-  appointmentDate: string;
-  status: AppointmentStatus;
-}
-
-export interface MinimalClosureRecoveryInput {
-  laboratory: RecoveryAppointment | null;
-  physicalExam: RecoveryAppointment | null;
-  affectedServices: ReadonlySet<ServiceType>;
-  proposedLaboratoryDate?: string | null;
-}
-
-export type MinimalClosureRecoveryStrategy =
-  | "PRESERVE_ALL"
-  | "MOVE_LABORATORY_ONLY"
-  | "MOVE_PHYSICAL_ONLY"
-  | "MOVE_PAIR"
-  | "MANUAL_RESOLUTION_REQUIRED";
-
-export interface MinimalClosureRecoveryPlan {
-  strategy: MinimalClosureRecoveryStrategy;
-  moveAppointmentIds: string[];
-  preservedAppointmentIds: string[];
-}
-
-function isCompleted(appointment: RecoveryAppointment | null): boolean {
-  return appointment?.status === "COMPLETED";
-}
-
-export function planMinimalClosureRecovery(
-  input: MinimalClosureRecoveryInput,
-): MinimalClosureRecoveryPlan {
-  const appointments = [input.laboratory, input.physicalExam].filter(
-    (appointment): appointment is RecoveryAppointment => appointment !== null,
-  );
-  const preservedCompleted = appointments.filter(isCompleted).map(({ id }) => id);
-
-  const laboratoryAffected = Boolean(
-    input.laboratory
-    && input.affectedServices.has("LABORATORY")
-    && !isCompleted(input.laboratory),
-  );
-  const physicalAffected = Boolean(
-    input.physicalExam
-    && input.affectedServices.has("PHYSICAL_EXAM")
-    && !isCompleted(input.physicalExam),
-  );
-
-  if (!laboratoryAffected && !physicalAffected) {
-    return {
-      strategy: "PRESERVE_ALL",
-      moveAppointmentIds: [],
-      preservedAppointmentIds: appointments.map(({ id }) => id),
-    };
-  }
-
-  if (!laboratoryAffected && physicalAffected && input.physicalExam) {
-    return {
-      strategy: "MOVE_PHYSICAL_ONLY",
-      moveAppointmentIds: [input.physicalExam.id],
-      preservedAppointmentIds: appointments
-        .filter(({ id }) => id !== input.physicalExam?.id)
-        .map(({ id }) => id),
-    };
-  }
-
-  if (laboratoryAffected && input.laboratory) {
-    const physicalExamCanStay = Boolean(
-      input.physicalExam
-      && !physicalAffected
-      && (
-        isCompleted(input.physicalExam)
-        || (
-          input.proposedLaboratoryDate
-          && input.proposedLaboratoryDate < input.physicalExam.appointmentDate
-        )
-      ),
-    );
-
-    if (physicalExamCanStay) {
-      return {
-        strategy: "MOVE_LABORATORY_ONLY",
-        moveAppointmentIds: [input.laboratory.id],
-        preservedAppointmentIds: appointments
-          .filter(({ id }) => id !== input.laboratory?.id)
-          .map(({ id }) => id),
-      };
-    }
-
-    if (input.physicalExam && !isCompleted(input.physicalExam)) {
-      return {
-        strategy: "MOVE_PAIR",
-        moveAppointmentIds: [input.laboratory.id, input.physicalExam.id],
-        preservedAppointmentIds: preservedCompleted,
-      };
-    }
-
-    return {
-      strategy: "MOVE_LABORATORY_ONLY",
-      moveAppointmentIds: [input.laboratory.id],
-      preservedAppointmentIds: preservedCompleted,
-    };
-  }
-
-  return {
-    strategy: "MANUAL_RESOLUTION_REQUIRED",
-    moveAppointmentIds: [],
-    preservedAppointmentIds: appointments.map(({ id }) => id),
   };
 }
 

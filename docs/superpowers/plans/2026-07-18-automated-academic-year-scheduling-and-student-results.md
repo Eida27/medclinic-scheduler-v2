@@ -1,5 +1,7 @@
 # Automated Academic-Year Scheduling and Student Result Uploads Implementation Plan
 
+> **Historical:** Retained for implementation history. Use the [current policy index](../../current-policies.md) for active categories, verification, scheduling and result policy.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace date-driven coordinator imports with deterministic academic-year scheduling, add priority displacement and clinic-closure rescheduling, and provide a secure student portal for authenticated multi-file result submissions.

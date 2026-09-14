@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { pool, transaction } from "@/server/db/pool";
+import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import { cleanupTestFixtures, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import {
   lockEligibleRegularPairs,
@@ -15,13 +16,24 @@ import {
   type CapacityFixtureLock,
 } from "@/test/capacity-fixture-lifecycle";
 import { acceptAndScheduleImport } from "./schedule-imports.service";
-import { publishDisplacedRegularReplacements } from "./priority-displacement.service";
+import {
+  priorityDisplacementScopes,
+  publishDisplacedRegularReplacementsWithLockedScopes,
+} from "./priority-displacement.service";
 
 const studentPattern = "99-94%";
 const importPattern = "%TEST-DISPLACE-UNIFIED%";
 const ownedOvpsaBatches: string[] = [];
 let capacityFixture: CapacityFixtureLock | null = null;
 let ownsAcademicYear = false;
+
+async function publishThroughLiveDisplacementPath(
+  input: Parameters<typeof publishDisplacedRegularReplacementsWithLockedScopes>[0],
+  client: Parameters<typeof publishDisplacedRegularReplacementsWithLockedScopes>[1],
+) {
+  await lockEffectiveAppointmentScopes(client, priorityDisplacementScopes(input.candidates));
+  return publishDisplacedRegularReplacementsWithLockedScopes(input, client);
+}
 
 async function cleanup() {
   await pool.query(
@@ -241,7 +253,7 @@ async function publish(studentNumber: string) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const result = await publishDisplacedRegularReplacements({
+    const result = await publishThroughLiveDisplacementPath({
       candidates: [created.candidate],
       sourceImportGroupId: created.created.importGroupId,
       actorUserId: TEST_REFERENCE_IDS.adminUser,
@@ -369,7 +381,7 @@ describe("priority displacement with the unified closure calendar", () => {
       const loser = pairOlder ? older : later;
       const candidates: DisplacementCandidate[] = [{ ...older.candidate, displacementType: "PHYSICAL_EXAM_ONLY" }, later.candidate];
       if (reverse) candidates.reverse();
-      const replacements = await transaction(client => publishDisplacedRegularReplacements({ candidates, sourceImportGroupId: later.created.importGroupId, actorUserId: TEST_REFERENCE_IDS.adminUser }, client));
+      const replacements = await transaction(client => publishThroughLiveDisplacementPath({ candidates, sourceImportGroupId: later.created.importGroupId, actorUserId: TEST_REFERENCE_IDS.adminUser }, client));
       expect(replacements.map(row => row.studentNumber)).toEqual([winner.candidate.studentNumber]);
       expect((await pool.query("SELECT status FROM appointments WHERE id=$1", [older.created.laboratory.id])).rows).toEqual([{ status: "COMPLETED" }]);
       expect((await pool.query("SELECT student_number,reason_code FROM clinic_closure_manual_cases WHERE student_number LIKE $1", [studentPattern])).rows).toEqual([{ student_number: loser.candidate.studentNumber, reason_code: "NO_VALID_REPLACEMENT_WITHIN_CYCLE" }]);
@@ -567,7 +579,7 @@ describe("priority displacement with the unified closure calendar", () => {
       original.created.laboratory.id,
       original.created.physicalExam.id,
     ], 11);
-    await transaction((client) => publishDisplacedRegularReplacements({
+    await transaction((client) => publishThroughLiveDisplacementPath({
       candidates: [original.candidate],
       sourceImportGroupId: original.created.importGroupId,
       actorUserId: TEST_REFERENCE_IDS.adminUser,
@@ -667,7 +679,7 @@ describe("priority displacement with the unified closure calendar", () => {
       displacementType: "PHYSICAL_EXAM_ONLY",
     };
 
-    const replacements = await transaction((client) => publishDisplacedRegularReplacements({
+    const replacements = await transaction((client) => publishThroughLiveDisplacementPath({
       candidates: [candidate],
       sourceImportGroupId: created.created.importGroupId,
       actorUserId: TEST_REFERENCE_IDS.adminUser,
@@ -743,7 +755,7 @@ describe("priority displacement with the unified closure calendar", () => {
           TEST_REFERENCE_IDS.adminUser,
         ],
       );
-      await publishDisplacedRegularReplacements({
+      await publishThroughLiveDisplacementPath({
         candidates: [displaced.candidate],
         sourceImportGroupId: displaced.created.importGroupId,
         actorUserId: TEST_REFERENCE_IDS.adminUser,
@@ -791,7 +803,7 @@ describe("priority displacement with the unified closure calendar", () => {
       acceptedAt: "2028-03-21T00:00:00.000Z",
     });
 
-    const replacements = await transaction((client) => publishDisplacedRegularReplacements({
+    const replacements = await transaction((client) => publishThroughLiveDisplacementPath({
       candidates: [replaceable.candidate, exhausted.candidate],
       sourceImportGroupId: replaceable.created.importGroupId,
       actorUserId: TEST_REFERENCE_IDS.adminUser,

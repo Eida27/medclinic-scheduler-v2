@@ -1,17 +1,5 @@
 type StatusTone = "success" | "danger" | "warning" | "neutral";
 
-const appointmentResultStatusLabels: Record<string, string> = {
-  PENDING_UPLOAD: "Pending",
-  COMPLETED: "Completed",
-  REQUIRES_FOLLOW_UP: "Needs follow-up",
-  NOT_APPLICABLE: "Not applicable",
-};
-
-const overallStatusLabels: Record<string, string> = {
-  COMPLETE: "Complete",
-  INCOMPLETE: "Incomplete",
-};
-
 const operationalStatusLabels: Record<string, string> = {
   UNSCHEDULED: "Unscheduled",
   PENDING: "Pending",
@@ -24,14 +12,6 @@ const operationalStatusLabels: Record<string, string> = {
 
 function readableStatus(value: string): string {
   return value.toLowerCase().replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
-}
-
-export function appointmentResultStatusLabel(value: string): string {
-  return appointmentResultStatusLabels[value] ?? readableStatus(value);
-}
-
-export function overallStatusLabel(value: string): string {
-  return overallStatusLabels[value] ?? readableStatus(value);
 }
 
 export function operationalStatusLabel(value: string): string {

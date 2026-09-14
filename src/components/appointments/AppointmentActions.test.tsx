@@ -13,7 +13,15 @@ vi.mock("next/navigation", () => ({
 }));
 vi.mock("@/components/appointments/status-labels", () => ({ operationalStatusLabel }));
 
-import { AppointmentActions } from "./AppointmentActions";
+import type { ComponentProps } from "react";
+import { AppointmentActions as LiveAppointmentActions } from "./AppointmentActions";
+
+function AppointmentActions(
+  props: Omit<ComponentProps<typeof LiveAppointmentActions>, "basePath">
+    & Partial<Pick<ComponentProps<typeof LiveAppointmentActions>, "basePath">>,
+) {
+  return <LiveAppointmentActions basePath="/laboratory" {...props} />;
+}
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
