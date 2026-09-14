@@ -109,6 +109,21 @@ describe("parseStudentImportCsv", () => {
     });
   });
 
+  it("uses the same 100 Unicode-character middle-name limit as manual entry", () => {
+    const accepted = parseStudentImportCsv([
+      header,
+      `23-1212-97,Abad,Aaron,${"😀".repeat(100)},,College of Computer Studies,BSIT,3,2004-08-04`,
+    ].join("\n"));
+    expect(accepted[0].middleName).toBe("😀".repeat(100));
+
+    expect(fieldsFrom([
+      header,
+      `23-1212-97,Abad,Aaron,${"😀".repeat(101)},,College of Computer Studies,BSIT,3,2004-08-04`,
+    ].join("\n"))).toEqual({
+      "rows.2.Middle Name": ["Middle Name must contain at most 100 characters."],
+    });
+  });
+
   it("requires the approved exact header order", () => {
     expect(fieldsFrom([
       header.replace("Surname,First Name", "First Name,Surname"),

@@ -1,7 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
+import { apiErrorMessage, readApiPayload } from "@/components/api-response";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Field } from "@/components/ui/Field";
@@ -11,29 +12,39 @@ export function StudentLoginForm() {
   const router = useRouter();
   const [error, setError] = useState<string>();
   const [pending, setPending] = useState(false);
+  const pendingRef = useRef(false);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (pendingRef.current) return;
+    pendingRef.current = true;
     setPending(true);
     setError(undefined);
     const form = new FormData(event.currentTarget);
-    const response = await fetch("/api/student-auth/login", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        studentNumber: form.get("studentNumber"),
-        dateOfBirth: form.get("dateOfBirth"),
-        middleName: form.get("middleName"),
-      }),
-    });
-    const payload = await response.json();
-    if (!response.ok) {
-      setError(payload.error?.message ?? "Unable to sign in.");
+    const fallback = "Unable to sign in. Check your connection and try again.";
+    try {
+      const response = await fetch("/api/student-auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          studentNumber: form.get("studentNumber"),
+          dateOfBirth: form.get("dateOfBirth"),
+          middleName: form.get("middleName"),
+        }),
+      });
+      const payload = await readApiPayload(response);
+      if (!response.ok) {
+        setError(apiErrorMessage(payload, fallback));
+        return;
+      }
+      router.replace("/student");
+      router.refresh();
+    } catch {
+      setError(fallback);
+    } finally {
+      pendingRef.current = false;
       setPending(false);
-      return;
     }
-    router.replace("/student");
-    router.refresh();
   }
 
   return (

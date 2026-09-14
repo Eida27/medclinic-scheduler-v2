@@ -1,7 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
+import { apiErrorMessage, readApiPayload } from "@/components/api-response";
 import { operationalStatusLabel } from "@/components/appointments/status-labels";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
@@ -29,30 +30,38 @@ export function AppointmentActions({
   const router = useRouter();
   const [error, setError] = useState<string>();
   const [pending, setPending] = useState(false);
+  const pendingRef = useRef(false);
 
   async function update(body: Record<string, unknown>, navigateToReplacement = false) {
+    if (pendingRef.current) return;
+    pendingRef.current = true;
     setPending(true);
     setError(undefined);
-    const response = await fetch(`/api/appointments/${id}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const payload = await response.json() as {
-      data?: { id?: string };
-      error?: { message?: string };
-    };
-    if (!response.ok) {
-      setError(payload.error?.message);
+    const fallback = "Unable to update the appointment. Check your connection and try again.";
+    try {
+      const response = await fetch(`/api/appointments/${id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const payload = await readApiPayload<{ id?: string }>(response);
+      if (!response.ok) {
+        setError(apiErrorMessage(payload, fallback));
+        return;
+      }
+      if (navigateToReplacement && payload?.data?.id) {
+        router.push(`${basePath}/${payload.data.id}`);
+      } else if (navigateToReplacement) {
+        setError(fallback);
+      } else {
+        router.refresh();
+      }
+    } catch {
+      setError(fallback);
+    } finally {
+      pendingRef.current = false;
       setPending(false);
-      return;
     }
-    if (navigateToReplacement && payload.data?.id) {
-      router.push(`${basePath}/${payload.data.id}`);
-    } else {
-      router.refresh();
-    }
-    setPending(false);
   }
 
   function statusSubmit(event: FormEvent<HTMLFormElement>) {

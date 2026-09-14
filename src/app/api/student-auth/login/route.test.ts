@@ -45,11 +45,24 @@ describe("POST /api/student-auth/login", () => {
     });
   });
 
+  it("accepts 100 Unicode characters without changing the login value", async () => {
+    const middleName = "😀".repeat(100);
+
+    await POST(loginRequest({
+      studentNumber: "23-1212-97",
+      dateOfBirth: "2004-08-04",
+      middleName,
+    }));
+
+    expect(authenticateStudent).toHaveBeenCalledWith(expect.objectContaining({ middleName }));
+  });
+
   it.each([
     ["missing", undefined],
     ["empty", ""],
     ["whitespace-only", "   "],
     ["over 100 characters", "M".repeat(101)],
+    ["over 100 Unicode characters", "😀".repeat(101)],
   ])("rejects a %s Middle Name before authentication", async (_label, middleName) => {
     const body: Record<string, unknown> = {
       studentNumber: "23-1212-97",

@@ -17,10 +17,18 @@ const optionalText = z.union([z.string(), z.null(), z.undefined()]).transform((v
   return trimmed ? trimmed : null;
 });
 
+const requiredMiddleName = z.string()
+  .trim()
+  .min(1, "Middle name is required.")
+  .refine(
+    (value) => Array.from(value).length <= 100,
+    "Middle name must contain at most 100 characters.",
+  );
+
 export const studentInputSchema = z.object({
   studentNumber: z.string().trim().min(3).max(20),
   firstName: z.string().trim().min(1).max(100),
-  middleName: optionalText,
+  middleName: requiredMiddleName,
   lastName: z.string().trim().min(1).max(100),
   suffix: optionalText,
   collegeId: z.string().uuid(),

@@ -103,4 +103,52 @@ describe("StudentLoginForm", () => {
     );
     expect(screen.getByRole("button", { name: "Student sign in" })).toBeEnabled();
   });
+
+  it.each([400, 500])("shows a JSON API error for HTTP %s and preserves credentials", async (status) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: { message: `Student ${status} response.` },
+    }), { status, headers: { "content-type": "application/json" } })));
+    render(<StudentLoginForm />);
+    fireEvent.change(screen.getByLabelText("Student Number"), { target: { value: "23-1212-97" } });
+    fireEvent.change(screen.getByLabelText("Date of Birth"), { target: { value: "2004-08-04" } });
+    fireEvent.change(screen.getByLabelText("Middle Name"), { target: { value: "Maria Angela" } });
+    fireEvent.submit(screen.getByRole("button", { name: "Student sign in" }).closest("form")!);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(`Student ${status} response.`);
+    expect(screen.getByLabelText("Middle Name")).toHaveValue("Maria Angela");
+    expect(screen.getByRole("button", { name: "Student sign in" })).toBeEnabled();
+  });
+
+  it.each([
+    ["an HTML gateway response", () => Promise.resolve(new Response("Bad gateway", { status: 502 }))],
+    ["a rejected fetch", () => Promise.reject(new TypeError("network down"))],
+  ])("shows actionable feedback for %s", async (_label, result) => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(result));
+    render(<StudentLoginForm />);
+    fireEvent.change(screen.getByLabelText("Student Number"), { target: { value: "23-1212-97" } });
+    fireEvent.change(screen.getByLabelText("Date of Birth"), { target: { value: "2004-08-04" } });
+    fireEvent.change(screen.getByLabelText("Middle Name"), { target: { value: "Maria Angela" } });
+    fireEvent.submit(screen.getByRole("button", { name: "Student sign in" }).closest("form")!);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/check your connection and try again/i);
+    expect(screen.getByRole("button", { name: "Student sign in" })).toBeEnabled();
+  });
+
+  it("blocks duplicate submissions synchronously", async () => {
+    const request = deferred<Response>();
+    const fetchMock = vi.fn().mockReturnValue(request.promise);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<StudentLoginForm />);
+    fireEvent.change(screen.getByLabelText("Student Number"), { target: { value: "23-1212-97" } });
+    fireEvent.change(screen.getByLabelText("Date of Birth"), { target: { value: "2004-08-04" } });
+    fireEvent.change(screen.getByLabelText("Middle Name"), { target: { value: "Maria Angela" } });
+    const form = screen.getByRole("button", { name: "Student sign in" }).closest("form")!;
+
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    request.resolve(new Response(JSON.stringify({ data: {} }), { status: 200 }));
+    await waitFor(() => expect(replace).toHaveBeenCalledOnce());
+  });
 });

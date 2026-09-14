@@ -1,7 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useMemo, useState, type FormEvent } from "react";
+import { useMemo, useRef, useState, type FormEvent } from "react";
+import { apiErrorMessage, readApiPayload } from "@/components/api-response";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -30,14 +31,19 @@ export function StudentForm({
   const router = useRouter();
   const [collegeId, setCollegeId] = useState(student?.collegeId ?? "");
   const [error, setError] = useState<string>();
+  const [success, setSuccess] = useState<string>();
   const [pending, setPending] = useState(false);
+  const pendingRef = useRef(false);
   const availablePrograms = useMemo(() => programs.filter((program) => program.collegeId === collegeId && program.isActive), [collegeId, programs]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (readOnly) return;
+    if (pendingRef.current) return;
+    pendingRef.current = true;
     setPending(true);
     setError(undefined);
+    setSuccess(undefined);
     const form = new FormData(event.currentTarget);
     const body = {
       studentNumber: form.get("studentNumber"), firstName: form.get("firstName"), middleName: form.get("middleName"),
@@ -45,23 +51,44 @@ export function StudentForm({
       programId: form.get("programId"), yearLevel: Number(form.get("yearLevel")) || null, section: form.get("section"),
       dateOfBirth: form.get("dateOfBirth"),
     };
-    const response = await fetch(student ? `/api/students/${encodeURIComponent(student.studentNumber)}` : "/api/students", {
-      method: student ? "PATCH" : "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
-    });
-    const payload = await response.json();
-    if (!response.ok) { setError(payload.error?.message ?? "Unable to save student."); setPending(false); return; }
-    router.push(`/students/${encodeURIComponent(payload.data.studentNumber)}`);
-    router.refresh();
+    const fallback = "Unable to save student. Check your connection and try again.";
+    try {
+      const response = await fetch(student ? `/api/students/${encodeURIComponent(student.studentNumber)}` : "/api/students", {
+        method: student ? "PATCH" : "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+      });
+      const payload = await readApiPayload<{ studentNumber?: string }>(response);
+      if (!response.ok) {
+        setError(apiErrorMessage(payload, fallback));
+        return;
+      }
+      if (student) {
+        setSuccess("Student changes saved.");
+        router.refresh();
+        return;
+      }
+      if (!payload?.data?.studentNumber) {
+        setError(fallback);
+        return;
+      }
+      router.push(`/students/${encodeURIComponent(payload.data.studentNumber)}`);
+      router.refresh();
+    } catch {
+      setError(fallback);
+    } finally {
+      pendingRef.current = false;
+      setPending(false);
+    }
   }
 
   return (
     <Card className="max-w-4xl">
       <form onSubmit={submit} className="grid gap-5">
         {error ? <Alert tone="danger">{error}</Alert> : null}
+        {success ? <Alert tone="success">{success}</Alert> : null}
         <div className="grid gap-4 md:grid-cols-2">
           <Field label="Student number"><Input name="studentNumber" defaultValue={student?.studentNumber} disabled={Boolean(student) || readOnly} required /></Field>
           <Field label="First name"><Input name="firstName" defaultValue={student?.firstName} disabled={readOnly} required /></Field>
-          <Field label="Middle name"><Input name="middleName" defaultValue={student?.middleName ?? ""} disabled={readOnly} /></Field>
+          <Field label="Middle name"><Input name="middleName" defaultValue={student?.middleName ?? ""} disabled={readOnly} maxLength={100} required /></Field>
           <Field label="Last name"><Input name="lastName" defaultValue={student?.lastName} disabled={readOnly} required /></Field>
           <Field label="Suffix"><Input name="suffix" defaultValue={student?.suffix ?? ""} disabled={readOnly} /></Field>
           <Field label="Date of birth"><Input name="dateOfBirth" type="date" defaultValue={student?.dateOfBirth ?? ""} disabled={readOnly} required /></Field>

@@ -13,8 +13,11 @@ const loginSchema = z.object({
   dateOfBirth: z.iso.date(),
   middleName: z.string()
     .min(1)
-    .max(100)
-    .refine((value) => value.trim().length > 0, "Middle Name is required."),
+    .refine((value) => value.trim().length > 0, "Middle Name is required.")
+    .refine(
+      (value) => Array.from(value).length <= 100,
+      "Middle Name must contain at most 100 characters.",
+    ),
 });
 
 function requestIp(request: Request) {

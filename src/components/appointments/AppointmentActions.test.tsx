@@ -197,4 +197,47 @@ describe("AppointmentActions automatic no-show correction", () => {
       }),
     ));
   });
+
+  it.each([400, 500])("shows a JSON API error for HTTP %s and restores the action", async (status) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({
+      error: { message: `Appointment ${status}.` },
+    }, status)));
+    const user = userEvent.setup();
+    render(<AppointmentActions id="appointment-1" status="PENDING" />);
+    await user.type(screen.getByPlaceholderText("Status note"), "Keep this note");
+    await user.click(screen.getByRole("button", { name: "Update status" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(`Appointment ${status}.`);
+    expect(screen.getByPlaceholderText("Status note")).toHaveValue("Keep this note");
+    expect(screen.getByRole("button", { name: "Update status" })).toBeEnabled();
+  });
+
+  it.each([
+    ["an HTML gateway response", () => Promise.resolve(new Response("Bad gateway", { status: 502 }))],
+    ["a rejected fetch", () => Promise.reject(new TypeError("network down"))],
+  ])("shows actionable feedback for %s", async (_label, result) => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(result));
+    const user = userEvent.setup();
+    render(<AppointmentActions id="appointment-1" status="PENDING" />);
+    await user.click(screen.getByRole("button", { name: "Update status" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/check your connection and try again/i);
+    expect(screen.getByRole("button", { name: "Update status" })).toBeEnabled();
+  });
+
+  it("blocks duplicate appointment mutations synchronously", async () => {
+    let resolve!: (value: Response) => void;
+    const pending = new Promise<Response>((done) => { resolve = done; });
+    const fetchMock = vi.fn().mockReturnValue(pending);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AppointmentActions id="appointment-1" status="PENDING" />);
+    const form = screen.getByRole("button", { name: "Update status" }).closest("form")!;
+
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    resolve(jsonResponse({ data: { id: "appointment-1" } }));
+    await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+  });
 });

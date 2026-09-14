@@ -53,6 +53,25 @@ function requestWith(form: FormData) {
   );
 }
 
+function requestWithParsedForm(form: FormData, headers: Record<string, string> = {}) {
+  return {
+    headers: new Headers(headers),
+    body: null,
+    formData: vi.fn().mockResolvedValue(form),
+    url: "http://localhost/api/student/result-submissions/appointment-1/files",
+  } as unknown as Request;
+}
+
+function metadataFile(name: string, size: number, type: string) {
+  const file = new File(["x"], name, { type });
+  Object.defineProperty(file, "size", { configurable: true, value: size });
+  Object.defineProperty(file, "arrayBuffer", {
+    configurable: true,
+    value: vi.fn().mockResolvedValue(new ArrayBuffer(1)),
+  });
+  return file;
+}
+
 describe("POST /api/student/result-submissions/[appointmentId]/files", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -175,5 +194,122 @@ describe("POST /api/student/result-submissions/[appointmentId]/files", () => {
 
     expect(response.status).toBe(403);
     expect(addStudentResultFiles).not.toHaveBeenCalled();
+  });
+
+  it("rejects a declared request larger than 51 MiB before multipart parsing", async () => {
+    const formData = vi.fn();
+    const response = await POST({
+      headers: new Headers({ "content-length": String(51 * 1024 * 1024 + 1) }),
+      body: null,
+      formData,
+      url: "http://localhost/upload",
+    } as unknown as Request, context);
+
+    expect(response.status).toBe(413);
+    expect(formData).not.toHaveBeenCalled();
+    expect(addStudentResultFiles).not.toHaveBeenCalled();
+  });
+
+  it("cancels a chunked request after actual streamed bytes exceed 51 MiB", async () => {
+    const chunk = new Uint8Array(17 * 1024 * 1024 + 1);
+    const cancel = vi.fn();
+    let sent = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(chunk);
+        sent += chunk.byteLength;
+      },
+      cancel,
+    });
+
+    const response = await POST({
+      headers: new Headers({ "content-type": "multipart/form-data; boundary=test" }),
+      body,
+      url: "http://localhost/upload",
+    } as unknown as Request, context);
+
+    expect(response.status).toBe(413);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(addStudentResultFiles).not.toHaveBeenCalled();
+  });
+
+  it("rejects eleven files before reading any file buffer", async () => {
+    const form = new FormData();
+    form.set("submissionId", draftId);
+    const files = Array.from({ length: 11 }, (_, index) => metadataFile(
+      `file-${index}.pdf`, 10, "application/pdf",
+    ));
+    files.forEach((file) => form.append("file", file));
+
+    const response = await POST(requestWithParsedForm(form), context);
+
+    expect(response.status).toBe(422);
+    expect(files.every((file) => !vi.mocked(file.arrayBuffer).mock.calls.length)).toBe(true);
+    expect(addStudentResultFiles).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized file before reading any file buffer", async () => {
+    const form = new FormData();
+    form.set("submissionId", draftId);
+    const oversized = metadataFile("oversized.pdf", 20 * 1024 * 1024 + 1, "application/pdf");
+    form.append("file", oversized);
+
+    const response = await POST(requestWithParsedForm(form), context);
+
+    expect(response.status).toBe(422);
+    expect(oversized.arrayBuffer).not.toHaveBeenCalled();
+    expect(addStudentResultFiles).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unsupported declared type before reading any file buffer", async () => {
+    const form = new FormData();
+    form.set("submissionId", draftId);
+    const unsupported = metadataFile("notes.txt", 10, "text/plain");
+    form.append("file", unsupported);
+
+    const response = await POST(requestWithParsedForm(form), context);
+
+    expect(response.status).toBe(422);
+    expect(unsupported.arrayBuffer).not.toHaveBeenCalled();
+    expect(addStudentResultFiles).not.toHaveBeenCalled();
+  });
+
+  it("rejects an aggregate over 50 MiB before reading any file buffer", async () => {
+    const form = new FormData();
+    form.set("submissionId", draftId);
+    const files = [
+      metadataFile("first.pdf", 17 * 1024 * 1024, "application/pdf"),
+      metadataFile("second.pdf", 17 * 1024 * 1024, "application/pdf"),
+      metadataFile("third.pdf", 17 * 1024 * 1024, "application/pdf"),
+    ];
+    files.forEach((file) => form.append("file", file));
+
+    const response = await POST(requestWithParsedForm(form), context);
+
+    expect(response.status).toBe(422);
+    expect(files.every((file) => !vi.mocked(file.arrayBuffer).mock.calls.length)).toBe(true);
+    expect(addStudentResultFiles).not.toHaveBeenCalled();
+  });
+
+  it("materializes valid files sequentially before one atomic service call", async () => {
+    const form = new FormData();
+    form.set("submissionId", draftId);
+    const first = metadataFile("first.pdf", 10, "application/pdf");
+    const second = metadataFile("second.png", 8, "image/png");
+    let releaseFirst!: (value: ArrayBuffer) => void;
+    vi.mocked(first.arrayBuffer).mockReturnValue(new Promise((resolve) => { releaseFirst = resolve; }));
+    vi.mocked(second.arrayBuffer).mockResolvedValue(Uint8Array.from([0x89]).buffer);
+    form.append("file", first);
+    form.append("file", second);
+
+    const responsePromise = POST(requestWithParsedForm(form), context);
+    await vi.waitFor(() => expect(first.arrayBuffer).toHaveBeenCalledOnce());
+    expect(second.arrayBuffer).not.toHaveBeenCalled();
+    releaseFirst(new TextEncoder().encode("%PDF-1.7\n").buffer);
+    const response = await responsePromise;
+
+    expect(response.status).toBe(200);
+    expect(second.arrayBuffer).toHaveBeenCalledOnce();
+    expect(addStudentResultFiles).toHaveBeenCalledTimes(1);
   });
 });
