@@ -27,6 +27,7 @@ function requestTooLarge() {
 async function boundedFormData(request: Request) {
   const declaredLength = Number(request.headers.get("content-length"));
   if (Number.isFinite(declaredLength) && declaredLength > RESULT_MULTIPART_MAX_BYTES) {
+    await request.body?.cancel().catch(() => undefined);
     throw requestTooLarge();
   }
   if (!request.body) return request.formData();

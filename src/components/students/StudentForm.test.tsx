@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { StudentForm } from "./StudentForm";
 
@@ -34,11 +35,35 @@ describe("StudentForm", () => {
     back.mockReset();
   });
 
-  it("requires a middle name with the shared manual-entry limit", () => {
+  it("requires a middle name without blocking 100 supplementary Unicode characters", async () => {
+    const user = userEvent.setup();
     render(<StudentForm colleges={colleges} programs={programs} student={student} />);
+    const middleName = screen.getByLabelText("Middle name");
 
-    expect(screen.getByLabelText("Middle name")).toBeRequired();
-    expect(screen.getByLabelText("Middle name")).toHaveAttribute("maxlength", "100");
+    expect(middleName).toBeRequired();
+    await user.clear(middleName);
+    await user.type(middleName, ` ${"😀".repeat(100)} `);
+    expect(middleName).toHaveValue(` ${"😀".repeat(100)} `);
+  });
+
+  it("shows and associates the real middle-name Zod field error while preserving input", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "Please correct the highlighted fields.",
+        fields: { middleName: ["Middle name is required."] },
+      },
+    }, 422)));
+    render(<StudentForm colleges={colleges} programs={programs} student={student} />);
+    const middleName = screen.getByLabelText("Middle name");
+    fireEvent.change(middleName, { target: { value: "   " } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Please correct the highlighted fields.");
+    expect(middleName).toHaveValue("   ");
+    expect(middleName).toHaveAttribute("aria-invalid", "true");
+    expect(middleName).toHaveAccessibleDescription("Middle name is required.");
   });
 
   it("lets an existing student save twice without reloading and reports each success", async () => {

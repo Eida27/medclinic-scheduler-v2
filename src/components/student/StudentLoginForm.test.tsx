@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { StudentLoginForm } from "./StudentLoginForm";
 
@@ -36,8 +37,24 @@ describe("StudentLoginForm", () => {
     ]);
     expect(screen.getByLabelText("Middle Name")).toHaveAttribute("type", "text");
     expect(screen.getByLabelText("Middle Name")).toHaveAttribute("autocomplete", "additional-name");
-    expect(screen.getByLabelText("Middle Name")).toHaveAttribute("maxlength", "100");
     expect(screen.getByLabelText("Middle Name")).toBeRequired();
+  });
+
+  it("allows 100 supplementary Unicode characters and submits them untouched", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: {} }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<StudentLoginForm />);
+    fireEvent.change(screen.getByLabelText("Student Number"), { target: { value: "23-1212-97" } });
+    fireEvent.change(screen.getByLabelText("Date of Birth"), { target: { value: "2004-08-04" } });
+    const middleName = screen.getByLabelText("Middle Name");
+    const value = "😀".repeat(100);
+
+    await user.type(middleName, value);
+    fireEvent.submit(screen.getByRole("button", { name: "Student sign in" }).closest("form")!);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string).middleName).toBe(value);
   });
 
   it("submits the untouched Middle Name and keeps the pending state until completion", async () => {

@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState, type FormEvent } from "react";
-import { apiErrorMessage, readApiPayload } from "@/components/api-response";
+import { apiErrorMessage, apiFieldError, readApiPayload } from "@/components/api-response";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -32,6 +32,7 @@ export function StudentForm({
   const [collegeId, setCollegeId] = useState(student?.collegeId ?? "");
   const [error, setError] = useState<string>();
   const [success, setSuccess] = useState<string>();
+  const [middleNameError, setMiddleNameError] = useState<string>();
   const [pending, setPending] = useState(false);
   const pendingRef = useRef(false);
   const availablePrograms = useMemo(() => programs.filter((program) => program.collegeId === collegeId && program.isActive), [collegeId, programs]);
@@ -44,6 +45,7 @@ export function StudentForm({
     setPending(true);
     setError(undefined);
     setSuccess(undefined);
+    setMiddleNameError(undefined);
     const form = new FormData(event.currentTarget);
     const body = {
       studentNumber: form.get("studentNumber"), firstName: form.get("firstName"), middleName: form.get("middleName"),
@@ -59,6 +61,7 @@ export function StudentForm({
       const payload = await readApiPayload<{ studentNumber?: string }>(response);
       if (!response.ok) {
         setError(apiErrorMessage(payload, fallback));
+        setMiddleNameError(apiFieldError(payload, "middleName"));
         return;
       }
       if (student) {
@@ -88,7 +91,16 @@ export function StudentForm({
         <div className="grid gap-4 md:grid-cols-2">
           <Field label="Student number"><Input name="studentNumber" defaultValue={student?.studentNumber} disabled={Boolean(student) || readOnly} required /></Field>
           <Field label="First name"><Input name="firstName" defaultValue={student?.firstName} disabled={readOnly} required /></Field>
-          <Field label="Middle name"><Input name="middleName" defaultValue={student?.middleName ?? ""} disabled={readOnly} maxLength={100} required /></Field>
+          <Field label="Middle name" error={middleNameError} errorId="student-middle-name-error">
+            <Input
+              name="middleName"
+              defaultValue={student?.middleName ?? ""}
+              disabled={readOnly}
+              required
+              aria-invalid={middleNameError ? true : undefined}
+              aria-describedby={middleNameError ? "student-middle-name-error" : undefined}
+            />
+          </Field>
           <Field label="Last name"><Input name="lastName" defaultValue={student?.lastName} disabled={readOnly} required /></Field>
           <Field label="Suffix"><Input name="suffix" defaultValue={student?.suffix ?? ""} disabled={readOnly} /></Field>
           <Field label="Date of birth"><Input name="dateOfBirth" type="date" defaultValue={student?.dateOfBirth ?? ""} disabled={readOnly} required /></Field>

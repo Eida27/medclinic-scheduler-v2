@@ -61,7 +61,6 @@ export function StudentLoginForm() {
           name="middleName"
           type="text"
           autoComplete="additional-name"
-          maxLength={100}
           required
         />
       </Field>

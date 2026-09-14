@@ -196,34 +196,38 @@ describe("POST /api/student/result-submissions/[appointmentId]/files", () => {
     expect(addStudentResultFiles).not.toHaveBeenCalled();
   });
 
-  it("rejects a declared request larger than 51 MiB before multipart parsing", async () => {
+  it("cancels a declared request larger than 51 MiB and keeps 413 when cancellation rejects", async () => {
     const formData = vi.fn();
+    const cancel = vi.fn(() => Promise.reject(new Error("transport already closed")));
+    const body = new ReadableStream<Uint8Array>({ cancel });
     const response = await POST({
       headers: new Headers({ "content-length": String(51 * 1024 * 1024 + 1) }),
-      body: null,
+      body,
       formData,
       url: "http://localhost/upload",
     } as unknown as Request, context);
 
     expect(response.status).toBe(413);
+    expect(cancel).toHaveBeenCalledOnce();
     expect(formData).not.toHaveBeenCalled();
     expect(addStudentResultFiles).not.toHaveBeenCalled();
   });
 
-  it("cancels a chunked request after actual streamed bytes exceed 51 MiB", async () => {
+  it("cancels after actual bytes exceed 51 MiB despite an understated Content-Length", async () => {
     const chunk = new Uint8Array(17 * 1024 * 1024 + 1);
     const cancel = vi.fn();
-    let sent = 0;
     const body = new ReadableStream<Uint8Array>({
       pull(controller) {
         controller.enqueue(chunk);
-        sent += chunk.byteLength;
       },
       cancel,
     });
 
     const response = await POST({
-      headers: new Headers({ "content-type": "multipart/form-data; boundary=test" }),
+      headers: new Headers({
+        "content-length": "1",
+        "content-type": "multipart/form-data; boundary=test",
+      }),
       body,
       url: "http://localhost/upload",
     } as unknown as Request, context);
