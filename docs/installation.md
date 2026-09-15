@@ -4,7 +4,7 @@ This guide starts with a completely empty PostgreSQL database. It does not requi
 
 ## 1. Install compatible runtimes and locked dependencies
 
-Install Node.js 20.9 or later, npm, and PostgreSQL 15 or later. The PostgreSQL role used for migration must be permitted to create the `pgcrypto` extension. Use the repository lockfile:
+Install a maintained Node.js LTS release that satisfies Next.js's Node.js 20.9 minimum, plus npm and PostgreSQL 15 or later. As of September 2026, select Node.js 22 or 24 LTS for a new production installation; Node.js 20 is end-of-life. Recheck the [Node.js release schedule](https://nodejs.org/en/about/previous-releases) when deploying. The PostgreSQL role used for migration must be permitted to create the `pgcrypto` extension. Use the repository lockfile:
 
 ```powershell
 node --version
@@ -14,7 +14,9 @@ npm ci
 
 Run commands from the same checked-out release that will be built and started. Do not copy `node_modules` from another operating system or Node version.
 
-Verification note dated 2026-09-09: the installation checks were executed on Windows with Node.js 26.4.0 and PostgreSQL 18.4. The repository CI workflow declares Node.js 22, but that workflow and a Linux runner were not executed in this verification.
+Current dependency verification dated 2026-09-15: `npm ci` installed the current lockfile on Windows with Node.js 26.4.0. The resolved tree contains Next.js 16.3.5 and one deduplicated Sharp 0.35.4 installation, retains React 19.2.4, and successfully loads native Sharp and generates a PNG. This dependency check does not replace the production build and complete runtime acceptance.
+
+The earlier installation and preflight checks dated 2026-09-09 used the previous Next.js 16.2.6 and Sharp 0.34.5 dependency set on Windows with Node.js 26.4.0 and PostgreSQL 18.4. That evidence still covers PostgreSQL and preflight behavior, but it does not verify the current dependency tree. The repository CI workflow declares Node.js 22; that workflow and a Linux runner were not executed in either verification.
 
 ## 2. Configure and preflight every prerequisite
 

@@ -77,6 +77,17 @@
 - [ ] Current-policy documentation index and historical labels for superseded design guidance; retain useful history.
 - [ ] Verify dead callers absent via searches/typecheck, live paths retain meaningful tests, removed aliases have intentional route absence. Long ConfirmDialog containment change only if actual narrow/short visual inspection proves unreachable controls.
 
+## Task 6b: Targeted runtime dependency security correction
+
+The pre-acceptance audit found a critical Windows-hosted Next.js vulnerability in the original pinned runtime. This bounded correction is separate from R12 cleanup and must precede final-build acceptance.
+
+- [ ] Capture the existing audit failure before dependency changes. Preserve the audit JSON and exit code as the security regression; do not add a test that only asserts package version strings or attempt exploitation.
+- [ ] Update Next.js and eslint-config-next together to 16.3.5, and the direct Sharp fixture dependency to 0.35.4, matching the patched Sharp range used by Next. Check maintainer release guidance and engine/peer compatibility. Retain the existing React version, application routing/configuration, Node supervision and storage contracts. No blanket audit fix, unrelated major upgrade, migration or production behavior redesign.
+- [ ] Regenerate the lockfile through npm and inspect the resolved Next/Sharp dependency trees for vulnerable duplicate copies. Verify installation consistency, native Sharp loading/image generation and the existing result-editing fixture coverage on Windows.
+- [ ] Run the relevant request-boundary/auth/proxy/upload unit coverage, guarded result-editing fixture integration coverage, TypeScript and lint affected by the matching framework configuration. Use explicit new disposable databases and retain cleanup proof. Complete suites, production build and authenticated Browser acceptance belong to Task 7 after this task's review.
+- [ ] Re-run the audit, require the targeted Next and Sharp findings to be absent, and record all remaining findings accurately. Do not claim a clean dependency audit if unrelated baseline findings remain. Update the current installation/runtime documentation to distinguish the newly tested versions from prior evidence.
+- [ ] Commit separately, report exact before/after evidence and compatibility concerns, then complete a task-scoped review before final acceptance.
+
 ## Task 7: Complete acceptance and final verification (all stages)
 
 - [ ] Prepare isolated Browser app/SMTP/private files using owned disposable data and synthetic accounts. Never use root application database. Exercise real first install without SQL edits: bootstrap verification/password replacement/admin/year configuration/staff onboarding/imported student verification.

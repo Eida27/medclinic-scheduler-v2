@@ -22,9 +22,11 @@ Doctor scheduling, QR check-in, student self-rescheduling, and cloud document st
 
 ## Requirements
 
-- Node.js 20.9 or later
+- A maintained Node.js LTS release that satisfies Next.js's Node.js 20.9 minimum (Node.js 22 or 24 as of September 2026)
 - PostgreSQL 15 or later with permission to create the `pgcrypto` extension
 - npm
+
+The current lockfile pins Next.js 16.3.5 and Sharp 0.35.4 while retaining React 19.2.4. Install this exact dependency tree with `npm ci` on the target operating system. Node.js 20 meets the framework's version floor but is end-of-life and should not be selected for a new production installation; follow the [Node.js release schedule](https://nodejs.org/en/about/previous-releases) and use an Active or Maintenance LTS release.
 
 ## First installation
 
