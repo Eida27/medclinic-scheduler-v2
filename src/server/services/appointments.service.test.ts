@@ -715,7 +715,7 @@ describe("appointment mutation authorization and automatic no-show correction", 
     expect(rescheduleAppointmentWithClient).not.toHaveBeenCalled();
     expect(query).toHaveBeenCalledWith(
       expect.stringContaining("ovpsa_first_year_service_reservations"),
-      ["2045-08-21", "2045-08-21", null],
+      ["2045-08-21", "2045-08-21", null, []],
     );
   });
 
