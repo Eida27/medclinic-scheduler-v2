@@ -67,3 +67,4 @@ next-env.d.ts
 #agents
 .codex
 .agents
+/.superpowers/
