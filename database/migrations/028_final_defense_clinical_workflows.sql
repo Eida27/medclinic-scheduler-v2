@@ -109,7 +109,7 @@ CREATE TABLE medical_certificate_revisions (
   examination_snapshot JSONB NOT NULL CHECK (jsonb_typeof(examination_snapshot)='object' AND examination_snapshot<>'{}'::jsonb),
   physician_snapshot JSONB NOT NULL CHECK (jsonb_typeof(physician_snapshot)='object' AND physician_snapshot<>'{}'::jsonb),
   classification CHAR(1) NOT NULL CHECK (classification IN ('A','B','C','D')),
-  remarks VARCHAR(1000) CHECK (remarks !~ '[[:cntrl:]]'),
+  remarks VARCHAR(1000) CHECK (replace(remarks,E'\n','') !~ '[[:cntrl:]]'),
   examination_date DATE NOT NULL,
   sex VARCHAR(30) NOT NULL CHECK (NULLIF(BTRIM(sex),'') IS NOT NULL AND sex !~ '[[:cntrl:]]'),
   template_version VARCHAR(60) NOT NULL CHECK (NULLIF(BTRIM(template_version),'') IS NOT NULL),
@@ -212,7 +212,13 @@ BEGIN
     RAISE EXCEPTION 'published appointment academic provenance missing' USING ERRCODE='23514';
   END IF;
   current_leaf := a.is_published AND a.status NOT IN ('DRAFT','RESCHEDULED','CANCELLED') AND NOT EXISTS
-    (SELECT 1 FROM appointments replacement WHERE replacement.rescheduled_from=a.id AND replacement.is_published AND replacement.status<>'DRAFT');
+    (SELECT 1 FROM appointments replacement WHERE replacement.rescheduled_from=a.id AND replacement.is_published
+      AND replacement.status NOT IN ('DRAFT','CANCELLED','RESCHEDULED'));
+  IF EXISTS (SELECT 1 FROM student_result_submissions submission WHERE submission.appointment_id=a.id
+      AND (submission.result_type<>'LABORATORY' OR a.schedule_type<>'LABORATORY'
+        OR submission.student_number<>a.student_number)) THEN
+    RAISE EXCEPTION 'submission appointment mismatch' USING ERRCODE='23514';
+  END IF;
   SELECT checklist.* INTO c FROM laboratory_checklists checklist JOIN laboratory_checklist_appointments link ON link.checklist_id=checklist.id WHERE link.appointment_id=a.id;
   IF c.id IS NOT NULL THEN
     PERFORM check_laboratory_checklist_identity(c.id);
@@ -260,14 +266,23 @@ CREATE CONSTRAINT TRIGGER appointments_clinical_consistency AFTER INSERT OR UPDA
   DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_clinical_appointment_trigger();
 
 CREATE FUNCTION check_laboratory_consistency_trigger() RETURNS TRIGGER LANGUAGE plpgsql AS $$
-DECLARE checklist UUID; linked RECORD;
+DECLARE checklist UUID; previous_checklist UUID; linked RECORD;
 BEGIN
   IF TG_TABLE_NAME='laboratory_checklists' THEN checklist:=COALESCE(NEW.id,OLD.id);
   ELSE checklist:=COALESCE(NEW.checklist_id,OLD.checklist_id); END IF;
+  IF TG_TABLE_NAME='laboratory_checklist_items' AND TG_OP='UPDATE' THEN
+    previous_checklist:=OLD.checklist_id;
+  END IF;
   PERFORM check_laboratory_checklist_identity(checklist);
   FOR linked IN SELECT appointment_id FROM laboratory_checklist_appointments WHERE checklist_id=checklist LOOP
     PERFORM check_clinical_appointment(linked.appointment_id);
   END LOOP;
+  IF previous_checklist IS DISTINCT FROM checklist AND previous_checklist IS NOT NULL THEN
+    PERFORM check_laboratory_checklist_identity(previous_checklist);
+    FOR linked IN SELECT appointment_id FROM laboratory_checklist_appointments WHERE checklist_id=previous_checklist LOOP
+      PERFORM check_clinical_appointment(linked.appointment_id);
+    END LOOP;
+  END IF;
   RETURN NULL;
 END $$;
 CREATE CONSTRAINT TRIGGER laboratory_checklists_consistency AFTER INSERT OR UPDATE OR DELETE ON laboratory_checklists
@@ -276,6 +291,17 @@ CREATE CONSTRAINT TRIGGER laboratory_checklist_items_consistency AFTER INSERT OR
   DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_laboratory_consistency_trigger();
 CREATE CONSTRAINT TRIGGER laboratory_checklist_links_consistency AFTER INSERT OR UPDATE OR DELETE ON laboratory_checklist_appointments
   DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_laboratory_consistency_trigger();
+
+CREATE FUNCTION check_submission_consistency_trigger() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP<>'DELETE' THEN PERFORM check_clinical_appointment(NEW.appointment_id); END IF;
+  IF TG_OP<>'INSERT' AND (TG_OP='DELETE' OR OLD.appointment_id IS DISTINCT FROM NEW.appointment_id) THEN
+    PERFORM check_clinical_appointment(OLD.appointment_id);
+  END IF;
+  RETURN NULL;
+END $$;
+CREATE CONSTRAINT TRIGGER student_result_submissions_clinical_consistency AFTER INSERT OR UPDATE OR DELETE ON student_result_submissions
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_submission_consistency_trigger();
 
 CREATE FUNCTION check_examination_consistency_trigger() RETURNS TRIGGER LANGUAGE plpgsql AS $$
 BEGIN

@@ -32,13 +32,13 @@ async function isolated(callback: (client: PoolClient) => Promise<void>, migrate
       CREATE TABLE exam_results (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), appointment_id uuid UNIQUE REFERENCES appointments(id),
         student_number varchar(20), result_status varchar(30) DEFAULT 'PENDING_UPLOAD', completed_at date,
         CONSTRAINT exam_results_result_status_check CHECK (result_status IN ('PENDING_UPLOAD','COMPLETED','REQUIRES_FOLLOW_UP','NOT_APPLICABLE')));
-      CREATE TABLE student_result_submissions (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), appointment_id uuid, result_type varchar(30),
+      CREATE TABLE student_result_submissions (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), appointment_id uuid, student_number varchar(20), result_type varchar(30),
         CONSTRAINT student_result_submissions_result_type_check CHECK (result_type IN ('LABORATORY','PHYSICAL_EXAM')));
       CREATE TABLE ovpsa_external_laboratory_verifications (appointment_id uuid);
       INSERT INTO users VALUES ('${actor}');
       INSERT INTO students VALUES ('S1'),('S2');
       INSERT INTO academic_years VALUES (2026,'2027-05-10'),(2025,'2026-05-10');
-      INSERT INTO student_academic_snapshots VALUES ('${snapshot}','S1',2026,2);
+      INSERT INTO student_academic_snapshots VALUES ('${snapshot}','S1',2026,2), (gen_random_uuid(),'S2',2026,2);
     `);
     if (migrate) await client.query(await readFile(migrationPath, "utf8"));
     await callback(client);
@@ -67,7 +67,7 @@ async function checklist(client: PoolClient, appointmentId: string) {
   return id;
 }
 
-async function issue(client: PoolClient, appointmentId: string) {
+async function issue(client: PoolClient, appointmentId: string, classification = "A", remarks: string | null = null) {
   const physician = randomUUID();
   const revision = randomUUID();
   await client.query("INSERT INTO medical_certificate_physicians (id) VALUES ($1)", [physician]);
@@ -76,11 +76,11 @@ async function issue(client: PoolClient, appointmentId: string) {
     VALUES ($1,$2,1,'Dr Example','LIC-1',$3,'image/png',$4,'{"name":"Admin"}')`, [revision, physician, Buffer.from("signature"), actor]);
   const result = await client.query<{ id: string }>(`INSERT INTO medical_certificate_revisions
     (certificate_id,appointment_id,student_number,academic_year_start,revision_number,physician_revision_id,
-     student_snapshot,examination_snapshot,physician_snapshot,classification,examination_date,sex,template_version,
+     student_snapshot,examination_snapshot,physician_snapshot,classification,remarks,examination_date,sex,template_version,
      jpeg_bytes,byte_length,sha256,issued_by,issued_by_snapshot,request_id)
     VALUES (gen_random_uuid(),$1,'S1',2026,1,$2,'{"name":"Student"}','{"attested":true}','{"name":"Dr Example"}',
-      'A','2026-09-23','Female','1',$3::bytea,3,encode(digest($3::bytea,'sha256'),'hex'),$4,'{"name":"Admin"}',gen_random_uuid()) RETURNING id`,
-    [appointmentId, revision, Buffer.from([0xff, 0xd8, 0xff]), actor]);
+      $5,$6,'2026-09-23','Female','1',$3::bytea,3,encode(digest($3::bytea,'sha256'),'hex'),$4,'{"name":"Admin"}',gen_random_uuid()) RETURNING id`,
+    [appointmentId, revision, Buffer.from([0xff, 0xd8, 0xff]), actor, classification, remarks]);
   await client.query("UPDATE appointments SET status='COMPLETED' WHERE id=$1", [appointmentId]);
   await client.query("INSERT INTO exam_results (appointment_id,student_number,result_status,completed_at) VALUES ($1,'S1','COMPLETED','2026-09-23')", [appointmentId]);
   return result.rows[0].id;
@@ -140,16 +140,59 @@ describe("final-defense clinical database invariants", () => {
     const wrong = await appointment(client);
     await client.query("UPDATE appointments SET student_number='S2' WHERE id=$1", [wrong]);
     await client.query("INSERT INTO laboratory_checklist_appointments VALUES ($1,$2)", [wrong, id]);
-    await expect(client.query("COMMIT")).rejects.toMatchObject({ code: "23514" });
+    await expect(client.query("COMMIT")).rejects.toMatchObject({ code: "23514", message: expect.stringContaining("lineage mismatch") });
   }));
 
   it("rejects a requirement snapshot that disagrees with immutable academic provenance", async () => isolated(async (client) => {
     await client.query("BEGIN");
     const id = await appointment(client);
-    await client.query(`INSERT INTO laboratory_checklists
+    const result = await client.query<{ id: string }>(`INSERT INTO laboratory_checklists
       (root_appointment_id,student_number,academic_year_start,academic_snapshot_id,year_level_snapshot,scheduling_category_snapshot)
-      VALUES ($1,'S1',2026,$2,1,'REGULAR')`, [id, snapshot]);
-    await expect(client.query("COMMIT")).rejects.toMatchObject({ code: "23514" });
+      VALUES ($1,'S1',2026,$2,1,'REGULAR') RETURNING id`, [id, snapshot]);
+    const checklistId = result.rows[0].id;
+    await client.query("INSERT INTO laboratory_checklist_appointments VALUES ($1,$2)", [id, checklistId]);
+    await client.query("INSERT INTO laboratory_checklist_items (checklist_id,test_code) VALUES ($1,'CBC'),($1,'URINE'),($1,'STOOL'),($1,'XRAY')", [checklistId]);
+    await expect(client.query("COMMIT")).rejects.toMatchObject({ code: "23514", message: expect.stringContaining("provenance mismatch") });
+  }));
+
+  it("rejects Laboratory-labelled submissions for a PE appointment, including later service changes", async () => isolated(async (client) => {
+    const pe = await appointment(client, "PHYSICAL_EXAM");
+    await expect(client.query("INSERT INTO student_result_submissions (appointment_id,student_number,result_type) VALUES ($1,'S1','LABORATORY')", [pe]))
+      .rejects.toMatchObject({ code: "23514", message: expect.stringContaining("submission appointment mismatch") });
+    const lab = await appointment(client, "LABORATORY", false);
+    await client.query("INSERT INTO student_result_submissions (appointment_id,student_number,result_type) VALUES ($1,'S1','LABORATORY')", [lab]);
+    await expect(client.query("UPDATE appointments SET schedule_type='PHYSICAL_EXAM' WHERE id=$1", [lab]))
+      .rejects.toMatchObject({ code: "23514", message: expect.stringContaining("submission appointment mismatch") });
+  }));
+
+  it("rechecks a checklist when a required item is moved away", async () => isolated(async (client) => {
+    await client.query("BEGIN");
+    const first = await checklist(client, await appointment(client));
+    const second = await checklist(client, await appointment(client));
+    await client.query("COMMIT");
+    await client.query("BEGIN");
+    await client.query("DELETE FROM laboratory_checklist_items WHERE checklist_id=$1 AND test_code='CBC'", [second]);
+    await client.query("UPDATE laboratory_checklist_items SET checklist_id=$2 WHERE checklist_id=$1 AND test_code='CBC'", [first, second]);
+    await expect(client.query("COMMIT")).rejects.toMatchObject({ code: "23514", message: expect.stringContaining("required test set mismatch") });
+  }));
+
+  it("keeps restored Laboratory and PE sources clinically checked after a cancelled child", async () => isolated(async (client) => {
+    await client.query("BEGIN");
+    const lab = await appointment(client);
+    const checklistId = await checklist(client, lab);
+    const pe = await appointment(client, "PHYSICAL_EXAM");
+    await client.query("COMMIT");
+    await client.query("BEGIN");
+    const cancelled = await appointment(client);
+    await client.query("UPDATE appointments SET status='CANCELLED',rescheduled_from=$1 WHERE id=$2", [lab, cancelled]);
+    await client.query("INSERT INTO laboratory_checklist_appointments VALUES ($1,$2)", [cancelled, checklistId]);
+    await client.query("UPDATE laboratory_checklist_items SET verified_at=now(),verified_by=$2,verification_source='INTERNAL' WHERE checklist_id=$1", [checklistId, actor]);
+    await expect(client.query("COMMIT")).rejects.toMatchObject({ code: "23514", message: expect.stringContaining("Laboratory completion") });
+    await client.query("BEGIN");
+    const cancelledPe = await appointment(client, "PHYSICAL_EXAM");
+    await client.query("UPDATE appointments SET status='CANCELLED',rescheduled_from=$1 WHERE id=$2", [pe, cancelledPe]);
+    await client.query("UPDATE appointments SET status='COMPLETED' WHERE id=$1", [pe]);
+    await expect(client.query("COMMIT")).rejects.toMatchObject({ code: "23514", message: expect.stringContaining("examination completion") });
   }));
 
   it("requires all verification fields together and keeps events append-only", async () => isolated(async (client) => {
@@ -194,6 +237,12 @@ describe("final-defense clinical database invariants", () => {
     await client.query("UPDATE medical_certificate_revisions SET status='REVOKED' WHERE id=$1", [certificate]);
     await client.query("UPDATE appointments SET status='PENDING' WHERE id=$1", [id]);
     await client.query("UPDATE exam_results SET result_status='REQUIRES_FOLLOW_UP' WHERE appointment_id=$1", [id]);
+    await expect(client.query("COMMIT")).resolves.toBeDefined();
+  }));
+
+  it("allows multiline findings for a non-Class-A certificate", async () => isolated(async (client) => {
+    await client.query("BEGIN");
+    await issue(client, await appointment(client, "PHYSICAL_EXAM"), "B", "Follow up with clinic\nBring records");
     await expect(client.query("COMMIT")).resolves.toBeDefined();
   }));
 
