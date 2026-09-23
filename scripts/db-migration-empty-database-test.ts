@@ -42,9 +42,9 @@ async function runMigrationCli(targetDatabaseUrl: string) {
 await withDisposableTestDatabase(async ({ targetUrl: targetDatabaseUrl }) => {
   const migrations = await sqlFiles(projectPath("database", "migrations"));
 
-  assert.equal(migrations.length, 27);
+  assert.equal(migrations.length, 28);
   assert.ok(migrations[0]?.name.startsWith("001_"));
-  assert.equal(migrations.at(-1)?.name, "027_staff_login_brute_force_protection.sql");
+  assert.equal(migrations.at(-1)?.name, "028_final_defense_clinical_workflows.sql");
 
   let client: Client | undefined;
   try {
@@ -52,7 +52,7 @@ await withDisposableTestDatabase(async ({ targetUrl: targetDatabaseUrl }) => {
     process.stdout.write(first.stdout);
     process.stderr.write(first.stderr);
     const firstAppliedCount = first.stdout.match(/^Applied /gm)?.length ?? 0;
-    assert.equal(firstAppliedCount, 27);
+    assert.equal(firstAppliedCount, 28);
     console.log(`First migration CLI applied count: ${firstAppliedCount}`);
 
     client = new Client({ connectionString: targetDatabaseUrl });
@@ -107,7 +107,18 @@ await withDisposableTestDatabase(async ({ targetUrl: targetDatabaseUrl }) => {
         AND column_name IN ('email_verified_at','must_change_password','credential_version','deleted_at','deleted_by')
     `);
     assert.equal(staffSecurityColumns.rows[0]?.count, 5);
-    console.log("Final schema and exact 27-entry migration history assertions passed.");
+    const clinicalTables = await client.query<{ name: string }>(`SELECT unnest(ARRAY[
+      to_regclass('public.laboratory_checklists')::text,
+      to_regclass('public.laboratory_checklist_items')::text,
+      to_regclass('public.laboratory_checklist_appointments')::text,
+      to_regclass('public.laboratory_checklist_events')::text,
+      to_regclass('public.medical_certificate_physicians')::text,
+      to_regclass('public.medical_certificate_physician_revisions')::text,
+      to_regclass('public.medical_certificate_revisions')::text,
+      to_regclass('public.clinical_mutation_requests')::text]) AS name`);
+    assert.equal(clinicalTables.rows.length, 8);
+    assert.ok(clinicalTables.rows.every((row) => row.name !== null));
+    console.log("Final schema and exact 28-entry migration history assertions passed.");
 
     const second = await runMigrationCli(targetDatabaseUrl);
     process.stdout.write(second.stdout);
