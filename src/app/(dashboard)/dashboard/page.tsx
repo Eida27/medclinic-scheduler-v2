@@ -10,8 +10,9 @@ export default async function DashboardPage() {
   const cards = [
     ["Students", metrics.totalStudents, "Active master records"],
     ["Pending appointments", metrics.pendingAppointments, "Published appointments awaiting completion"],
-    ["Physical exams complete", metrics.completedPhysicalExams, "Recorded completed results"],
-    ["Laboratory complete", metrics.completedLaboratory, "Recorded completed results"],
+    ["Physical examinations completed with certificate", metrics.completedPhysicalExams, "Issued certificates for completed examinations"],
+    ["Laboratory tests complete", metrics.completedLaboratory, "All required tests verified"],
+    ["Laboratory documents finalized", metrics.finalizedLaboratoryDocuments, "Student document submissions; separate from test verification"],
     ["No-shows", metrics.noShows, "Appointments requiring follow-up"],
     ["Rescheduled", metrics.rescheduled, "Original appointments replaced"],
     ["Capacity conflicts", metrics.capacityConflicts, "Service dates above maximum capacity"],

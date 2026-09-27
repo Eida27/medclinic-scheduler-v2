@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 const { getStudentPortalSchedule, requireVerifiedStudentPage } = vi.hoisted(() => ({
@@ -41,6 +41,8 @@ describe("StudentSchedulePage", () => {
         scheduleType: "LABORATORY",
         appointmentDate: "2026-08-18",
         status: "NO_SHOW",
+        academicYearStart: 2026,
+        isFutureAcademicYear: false,
       }],
       history: [],
     });
@@ -62,6 +64,8 @@ describe("StudentSchedulePage", () => {
         scheduleType: "LABORATORY",
         appointmentDate: null,
         status: "AWAITING_RESCHEDULE",
+        academicYearStart: 2026,
+        isFutureAcademicYear: false,
       }],
       history: [{
         id: "appointment-1",
@@ -70,6 +74,9 @@ describe("StudentSchedulePage", () => {
         status: "AWAITING_RESCHEDULE",
         closureReason: "Generator testing",
         strategy: "MANUAL_RESOLUTION_REQUIRED",
+        academicYearStart: 2026,
+        isEndedAcademicYear: false,
+        isFutureAcademicYear: false,
       }],
     });
 
@@ -78,7 +85,56 @@ describe("StudentSchedulePage", () => {
     expect(screen.getByRole("heading", { name: "Current schedule" })).toBeVisible();
     expect(screen.getByText("Awaiting manual reschedule")).toBeVisible();
     expect(screen.getByRole("heading", { name: "Schedule history" })).toBeVisible();
+    expect(screen.getByRole("region", { name: "Schedule history" }).textContent).toContain("Academic year 2026–2027");
     expect(screen.getByText(/Original date: 2026-08-18/)).toBeVisible();
     expect(screen.getByText(/Generator testing/)).toBeVisible();
+  });
+
+  it("labels current and prepared future academic years in the schedule", async () => {
+    requireVerifiedStudentPage.mockResolvedValue({ studentNumber: "24-0001" });
+    getStudentPortalSchedule.mockResolvedValue({
+      studentNumber: "24-0001",
+      studentName: "Santos, Ana M.",
+      appointments: [
+        { id: "current", scheduleType: "LABORATORY", appointmentDate: "2026-09-22",
+          status: "PENDING", academicYearStart: 2026, isFutureAcademicYear: false },
+        { id: "future", scheduleType: "LABORATORY", appointmentDate: "2027-09-22",
+          status: "PENDING", academicYearStart: 2027, isFutureAcademicYear: true },
+      ],
+      history: [],
+      previousAcademicYears: [],
+    });
+
+    render(await StudentSchedulePage());
+
+    expect(screen.getByText("Academic year 2026–2027")).toBeVisible();
+    expect(screen.getByText("Academic year 2027–2028 · Upcoming")).toBeVisible();
+  });
+
+  it("places ended-year reschedule history with previous academic years", async () => {
+    requireVerifiedStudentPage.mockResolvedValue({ studentNumber: "24-0001" });
+    getStudentPortalSchedule.mockResolvedValue({
+      studentNumber: "24-0001",
+      studentName: "Santos, Ana M.",
+      appointments: [],
+      history: [
+        { id: "old", scheduleType: "LABORATORY", originalDate: "2026-05-12",
+          academicYearStart: 2025, isEndedAcademicYear: true, isFutureAcademicYear: false,
+          status: "RESCHEDULED", closureReason: "Past-year closure", strategy: "AUTO" },
+        { id: "current", scheduleType: "PHYSICAL_EXAM", originalDate: "2026-09-12",
+          academicYearStart: 2026, isEndedAcademicYear: false, isFutureAcademicYear: false,
+          status: "RESCHEDULED", closureReason: "Current-year closure", strategy: "AUTO" },
+      ],
+      previousAcademicYears: [],
+    });
+
+    render(await StudentSchedulePage());
+
+    const currentHistory = screen.getByRole("region", { name: "Schedule history" });
+    const previousYears = screen.getByRole("region", { name: "Previous academic years" });
+    expect(within(currentHistory).getByText("Original date: 2026-09-12")).toBeVisible();
+    expect(within(currentHistory).queryByText("Original date: 2026-05-12")).not.toBeInTheDocument();
+    expect(within(previousYears).getByText("Original date: 2026-05-12")).toBeVisible();
+    expect(within(previousYears).getByText("Academic year 2025–2026 · Laboratory schedule change")).toBeVisible();
   });
 });

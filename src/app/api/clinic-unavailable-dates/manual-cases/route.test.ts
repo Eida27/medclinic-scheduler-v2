@@ -23,6 +23,14 @@ describe("manual-case API", () => {
       closureGroupId: "81000000-0000-4000-8000-000000000001",
       date: "2026-08-18",
       service: "LABORATORY",
+      academicYearStart: undefined,
     }, expect.objectContaining({ role: "ADMIN" }));
+  });
+  it("passes an explicit academic year for historical cases", async () => {
+    await GET(new Request("http://local/api/clinic-unavailable-dates/manual-cases?academicYearStart=2024"));
+    expect(listClinicClosureManualCases).toHaveBeenLastCalledWith(
+      expect.objectContaining({ academicYearStart: 2024 }),
+      expect.objectContaining({ role: "ADMIN" }),
+    );
   });
 });

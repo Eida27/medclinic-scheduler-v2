@@ -1,9 +1,13 @@
 // @vitest-environment node
+import { createHash, randomUUID } from "node:crypto";
+import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { pool } from "@/server/db/pool";
+import { pool, transaction } from "@/server/db/pool";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import {
   cleanupTestFixtures,
   insertNumberedTestStudents,
+  insertTestAcademicSnapshot,
   insertTestStudent,
   TEST_REFERENCE_IDS,
 } from "@/test/integration-fixtures";
@@ -28,6 +32,8 @@ const attendanceCases = [
 ] as const;
 
 let attendanceReplacementId: string;
+let createdYear = false;
+let physicianId: string | null = null;
 
 async function report(sort: Parameters<typeof appointmentSummaryReport>[0]["sort"]) {
   return appointmentSummaryReport({
@@ -40,9 +46,13 @@ async function report(sort: Parameters<typeof appointmentSummaryReport>[0]["sort
 }
 
 beforeAll(async () => {
-  await cleanupTestFixtures("TEST-ORDER-%", "TEST order fixture%");
+  await cleanupTestFixtures("TEST-ORDER-%", "TEST order fixture%", "TEST order fixture%");
   await cleanupTestFixtures("TEST-PAGE-%", "TEST page fixture%");
-  await cleanupTestFixtures("TEST-ATTENDANCE-%", "TEST attendance fixture%");
+  await cleanupTestFixtures("TEST-ATTENDANCE-%", "TEST attendance fixture%", "TEST attendance fixture%");
+  const year = await pool.query(`INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+    VALUES (2026,'2027-07-31',$1,$1) ON CONFLICT (start_year) DO NOTHING RETURNING start_year`,
+  [TEST_REFERENCE_IDS.adminUser]);
+  createdYear = Boolean(year.rowCount);
 
   for (const [studentNumber, firstName, lastName] of orderStudents) {
     await insertTestStudent({ studentNumber, firstName, lastName, yearLevel: 4 });
@@ -63,31 +73,49 @@ beforeAll(async () => {
     });
   }
 
-  await pool.query(
+  await transaction(async (client) => {
+    for (const [studentNumber] of orderStudents.slice(0, 5)) {
+      await insertTestAcademicSnapshot(client, {
+        studentNumber, academicYearStart: 2026,
+        importName: `TEST order fixture provenance ${studentNumber}`,
+        actor: TEST_REFERENCE_IDS.adminUser,
+      });
+    }
+    for (const [studentNumber] of attendanceCases) {
+      await insertTestAcademicSnapshot(client, {
+        studentNumber, academicYearStart: 2026,
+        importName: `TEST attendance fixture provenance ${studentNumber}`,
+        actor: TEST_REFERENCE_IDS.adminUser,
+      });
+    }
+  });
+
+  await transaction(async (client) => {
+  await client.query(
     `INSERT INTO appointments (
        clinic_id, student_number, schedule_type, appointment_date,
        status, is_published, created_by, updated_by
      ) VALUES
-       ($1,'TEST-ORDER-0001','LABORATORY','2046-01-01','PENDING',TRUE,$3,$3),
-       ($2,'TEST-ORDER-0001','PHYSICAL_EXAM','2046-03-01','COMPLETED',TRUE,$3,$3),
-       ($2,'TEST-ORDER-0002','PHYSICAL_EXAM','2046-02-01','PENDING',TRUE,$3,$3),
-       ($1,'TEST-ORDER-0004','LABORATORY','2046-01-01','PENDING',TRUE,$3,$3),
-       ($1,'TEST-ORDER-0005','LABORATORY','2046-01-01','PENDING',TRUE,$3,$3)`,
+       ($1,'TEST-ORDER-0001','LABORATORY','2027-01-01','PENDING',TRUE,$3,$3),
+       ($2,'TEST-ORDER-0001','PHYSICAL_EXAM','2027-03-01','COMPLETED',TRUE,$3,$3),
+       ($2,'TEST-ORDER-0002','PHYSICAL_EXAM','2027-02-01','PENDING',TRUE,$3,$3),
+       ($1,'TEST-ORDER-0004','LABORATORY','2027-01-01','PENDING',TRUE,$3,$3),
+       ($1,'TEST-ORDER-0005','LABORATORY','2027-01-01','PENDING',TRUE,$3,$3)`,
     [
       TEST_REFERENCE_IDS.laboratoryClinic,
       TEST_REFERENCE_IDS.physicalExamClinic,
       TEST_REFERENCE_IDS.adminUser,
     ],
   );
-  await pool.query(
+  await client.query(
     `INSERT INTO appointments (
        clinic_id, student_number, schedule_type, appointment_date,
        status, is_published, created_by, updated_by
-     ) VALUES ($1,'TEST-ORDER-0003','LABORATORY','2046-01-15','CANCELLED',TRUE,$2,$2)`,
+     ) VALUES ($1,'TEST-ORDER-0003','LABORATORY','2027-01-15','CANCELLED',TRUE,$2,$2)`,
     [TEST_REFERENCE_IDS.laboratoryClinic, TEST_REFERENCE_IDS.adminUser],
   );
 
-  const attendanceAppointments = await pool.query<{
+  const attendanceAppointments = await client.query<{
     id: string;
     student_number: string;
     schedule_type: "LABORATORY" | "PHYSICAL_EXAM";
@@ -96,14 +124,14 @@ beforeAll(async () => {
        clinic_id, student_number, schedule_type, appointment_date,
        status, is_published, created_by, updated_by
      ) VALUES
-       ($1,'TEST-ATTENDANCE-0001','LABORATORY','2046-04-01','COMPLETED',TRUE,$3,$3),
-       ($2,'TEST-ATTENDANCE-0001','PHYSICAL_EXAM','2046-04-08','COMPLETED',TRUE,$3,$3),
-       ($1,'TEST-ATTENDANCE-0002','LABORATORY','2046-04-01','COMPLETED',TRUE,$3,$3),
-       ($2,'TEST-ATTENDANCE-0002','PHYSICAL_EXAM','2046-04-08','PENDING',TRUE,$3,$3),
-       ($2,'TEST-ATTENDANCE-0003','PHYSICAL_EXAM','2046-04-08','COMPLETED',TRUE,$3,$3),
-       ($2,'TEST-ATTENDANCE-0004','PHYSICAL_EXAM','2046-04-08','COMPLETED',TRUE,$3,$3),
-       ($1,'TEST-ATTENDANCE-0005','LABORATORY','2046-04-01','AWAITING_RESCHEDULE',TRUE,$3,$3),
-       ($2,'TEST-ATTENDANCE-0005','PHYSICAL_EXAM','2046-04-08','COMPLETED',TRUE,$3,$3)
+       ($1,'TEST-ATTENDANCE-0001','LABORATORY','2027-04-01','COMPLETED',TRUE,$3,$3),
+       ($2,'TEST-ATTENDANCE-0001','PHYSICAL_EXAM','2027-04-08','COMPLETED',TRUE,$3,$3),
+       ($1,'TEST-ATTENDANCE-0002','LABORATORY','2027-04-01','COMPLETED',TRUE,$3,$3),
+       ($2,'TEST-ATTENDANCE-0002','PHYSICAL_EXAM','2027-04-08','PENDING',TRUE,$3,$3),
+       ($2,'TEST-ATTENDANCE-0003','PHYSICAL_EXAM','2027-04-08','COMPLETED',TRUE,$3,$3),
+       ($2,'TEST-ATTENDANCE-0004','PHYSICAL_EXAM','2027-04-08','COMPLETED',TRUE,$3,$3),
+       ($1,'TEST-ATTENDANCE-0005','LABORATORY','2027-04-01','AWAITING_RESCHEDULE',TRUE,$3,$3),
+       ($2,'TEST-ATTENDANCE-0005','PHYSICAL_EXAM','2027-04-08','COMPLETED',TRUE,$3,$3)
      RETURNING id, student_number, schedule_type`,
     [
       TEST_REFERENCE_IDS.laboratoryClinic,
@@ -111,19 +139,19 @@ beforeAll(async () => {
       TEST_REFERENCE_IDS.adminUser,
     ],
   );
-  const original = await pool.query<{ id: string }>(
+  const original = await client.query<{ id: string }>(
     `INSERT INTO appointments (
        clinic_id, student_number, schedule_type, appointment_date,
        status, is_published, created_by, updated_by
-     ) VALUES ($1,'TEST-ATTENDANCE-0003','LABORATORY','2046-04-01','RESCHEDULED',TRUE,$2,$2)
+     ) VALUES ($1,'TEST-ATTENDANCE-0003','LABORATORY','2027-04-01','RESCHEDULED',TRUE,$2,$2)
      RETURNING id`,
     [TEST_REFERENCE_IDS.laboratoryClinic, TEST_REFERENCE_IDS.adminUser],
   );
-  const replacement = await pool.query<{ id: string }>(
+  const replacement = await client.query<{ id: string }>(
     `INSERT INTO appointments (
        clinic_id, student_number, schedule_type, appointment_date,
        status, is_published, rescheduled_from, created_by, updated_by
-     ) VALUES ($1,'TEST-ATTENDANCE-0003','LABORATORY','2046-04-15','NO_SHOW',TRUE,$2,$3,$3)
+     ) VALUES ($1,'TEST-ATTENDANCE-0003','LABORATORY','2027-04-15','NO_SHOW',TRUE,$2,$3,$3)
      RETURNING id`,
     [
       TEST_REFERENCE_IDS.laboratoryClinic,
@@ -140,24 +168,86 @@ beforeAll(async () => {
   if (!conflictingPhysical) {
     throw new Error("Missing conflicting physical-exam appointment fixture");
   }
-  await pool.query(
+  await client.query(
     `INSERT INTO exam_results (
        student_number, appointment_id, result_status, completed_at, encoded_by
-     ) VALUES ('TEST-ATTENDANCE-0002',$1,'COMPLETED','2046-04-08',$2)`,
+     ) VALUES ('TEST-ATTENDANCE-0002',$1,'REQUIRES_FOLLOW_UP','2027-04-08',$2)`,
     [conflictingPhysical.id, TEST_REFERENCE_IDS.adminUser],
   );
-  await pool.query(
+  await client.query(
     `INSERT INTO laboratory_results (
        student_number, result_status, completed_at, encoded_by
-     ) VALUES ('TEST-ATTENDANCE-0004','COMPLETED','2046-04-01',$1)`,
+     ) VALUES ('TEST-ATTENDANCE-0004','COMPLETED','2027-04-01',$1)`,
     [TEST_REFERENCE_IDS.adminUser],
   );
+  await client.query(`UPDATE appointments SET schedule_cycle_start=2026,scheduling_category='REGULAR'
+    WHERE student_number LIKE 'TEST-ORDER-%' OR student_number LIKE 'TEST-ATTENDANCE-%'`);
+  const roots = await client.query<{ id: string }>(`SELECT id::text FROM appointments
+    WHERE schedule_type='LABORATORY' AND is_published=TRUE AND rescheduled_from IS NULL
+      AND (student_number LIKE 'TEST-ORDER-%' OR student_number LIKE 'TEST-ATTENDANCE-%')`);
+  await linkPublishedLaboratoryAppointments(client, roots.rows.map((row) => row.id));
+  await linkPublishedLaboratoryAppointments(client, [replacement.rows[0].id]);
+  await client.query(`UPDATE laboratory_checklist_items SET verified_at=NOW(),
+      verified_by=$1,verification_source='INTERNAL'
+    WHERE checklist_id IN (SELECT link.checklist_id FROM laboratory_checklist_appointments link
+      JOIN appointments appointment ON appointment.id=link.appointment_id
+      WHERE appointment.status='COMPLETED' AND appointment.student_number LIKE 'TEST-ATTENDANCE-%')`,
+  [TEST_REFERENCE_IDS.adminUser]);
+  const physician = await client.query<{ id: string }>(
+    "INSERT INTO medical_certificate_physicians DEFAULT VALUES RETURNING id::text",
+  );
+  physicianId = physician.rows[0].id;
+  const signature = await sharp({ create: { width: 1, height: 1, channels: 3, background: "white" } }).png().toBuffer();
+  const jpg = await sharp({ create: { width: 1, height: 1, channels: 3, background: "white" } }).jpeg().toBuffer();
+  const revision = await client.query<{ id: string }>(
+    `INSERT INTO medical_certificate_physician_revisions (physician_id,version,display_name,
+      license_number,signature_bytes,signature_media_type,actor_user_id,actor_snapshot)
+     VALUES ($1,1,'Dr. Summary Fixture','PRC 12345',$2,'image/png',$3,$4::jsonb)
+     RETURNING id::text`,
+    [physicianId, signature, TEST_REFERENCE_IDS.adminUser,
+      JSON.stringify({ userId: TEST_REFERENCE_IDS.adminUser })],
+  );
+  const completedPhysicalRows = await client.query<{ id: string; student_number: string; appointment_date: string }>(
+    `SELECT id::text,student_number,appointment_date::text FROM appointments
+      WHERE schedule_type='PHYSICAL_EXAM' AND status='COMPLETED'
+        AND (student_number LIKE 'TEST-ORDER-%' OR student_number LIKE 'TEST-ATTENDANCE-%')`,
+  );
+  for (const physical of completedPhysicalRows.rows) {
+    await client.query(`INSERT INTO exam_results (student_number,appointment_id,result_status,completed_at,encoded_by)
+      VALUES ($1,$2,'COMPLETED',$3,$4)`, [physical.student_number, physical.id,
+      physical.appointment_date, TEST_REFERENCE_IDS.adminUser]);
+    await client.query(
+      `INSERT INTO medical_certificate_revisions (certificate_id,appointment_id,student_number,
+       academic_year_start,revision_number,status,physician_revision_id,student_snapshot,
+       examination_snapshot,physician_snapshot,classification,examination_date,sex,
+       template_version,jpeg_bytes,byte_length,sha256,issued_by,issued_by_snapshot,request_id)
+       VALUES ($1,$2,$3,2026,1,'ISSUED',$4,$5::jsonb,$6::jsonb,$7::jsonb,'A',$8,
+         'Female','integration-test-v1',$9,$10,$11,$12,$13::jsonb,$14)`,
+      [randomUUID(), physical.id, physical.student_number, revision.rows[0].id,
+        JSON.stringify({ studentNumber: physical.student_number }),
+        JSON.stringify({ examinationDate: physical.appointment_date }),
+        JSON.stringify({ displayName: "Dr. Summary Fixture" }),
+        physical.appointment_date, jpg, jpg.length,
+        createHash("sha256").update(jpg).digest("hex"), TEST_REFERENCE_IDS.adminUser,
+        JSON.stringify({ userId: TEST_REFERENCE_IDS.adminUser }), randomUUID()],
+    );
+  }
+  });
 });
 
 afterAll(async () => {
-  await cleanupTestFixtures("TEST-ORDER-%", "TEST order fixture%");
+  await cleanupTestFixtures("TEST-ORDER-%", "TEST order fixture%", "TEST order fixture%");
   await cleanupTestFixtures("TEST-PAGE-%", "TEST page fixture%");
-  await cleanupTestFixtures("TEST-ATTENDANCE-%", "TEST attendance fixture%");
+  await cleanupTestFixtures("TEST-ATTENDANCE-%", "TEST attendance fixture%", "TEST attendance fixture%");
+  if (physicianId) {
+    await transaction(async (client) => {
+      await client.query("ALTER TABLE medical_certificate_physician_revisions DISABLE TRIGGER medical_certificate_physician_revisions_immutable");
+      await client.query("DELETE FROM medical_certificate_physician_revisions WHERE physician_id=$1", [physicianId]);
+      await client.query("DELETE FROM medical_certificate_physicians WHERE id=$1", [physicianId]);
+      await client.query("ALTER TABLE medical_certificate_physician_revisions ENABLE TRIGGER medical_certificate_physician_revisions_immutable");
+    });
+  }
+  if (createdYear) await pool.query("DELETE FROM academic_years WHERE start_year=2026");
   await pool.end();
 });
 
@@ -245,7 +335,7 @@ describe("appointment summary attendance", () => {
 
     expect(result.items[0]).toMatchObject({
       laboratoryAppointmentId: attendanceReplacementId,
-      laboratoryAppointmentDate: "2046-04-15",
+      laboratoryAppointmentDate: "2027-04-15",
       laboratoryAppointmentStatus: "NO_SHOW",
       laboratoryStatus: "NO_SHOW",
     });

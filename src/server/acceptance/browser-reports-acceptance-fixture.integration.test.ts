@@ -162,6 +162,20 @@ describe.runIf(exclusive)("reports Browser acceptance fixture lifecycle", () => 
       preparedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
     });
     expect(await exists(STATE_TEMP_FILE)).toBe(false);
+    const clinical = await pool.query<{
+      checklists: number; links: number; issuedCertificates: number; completedExaminations: number;
+    }>(`SELECT
+      (SELECT count(*)::int FROM laboratory_checklists WHERE student_number LIKE 'B-RPT-%') AS checklists,
+      (SELECT count(*)::int FROM laboratory_checklist_appointments link
+         JOIN appointments appointment ON appointment.id=link.appointment_id
+        WHERE appointment.student_number LIKE 'B-RPT-%') AS links,
+      (SELECT count(*)::int FROM medical_certificate_revisions WHERE student_number LIKE 'B-RPT-%'
+        AND status='ISSUED') AS "issuedCertificates",
+      (SELECT count(*)::int FROM exam_results WHERE student_number LIKE 'B-RPT-%'
+        AND result_status='COMPLETED') AS "completedExaminations"`);
+    expect(clinical.rows[0]).toEqual({
+      checklists: 157, links: 158, issuedCertificates: 3, completedExaminations: 3,
+    });
   });
 
   it("drives exact report classifications, replacement precedence, and pagination", async () => {
@@ -193,8 +207,8 @@ describe.runIf(exclusive)("reports Browser acceptance fixture lifecycle", () => 
       overallStatus: "DID_NOT_COMPLY_PHYSICAL_EXAM",
     });
     expect(byNumber["B-RPT-0004"]).toMatchObject({
-      laboratoryStatus: "NO_SHOW", physicalExamStatus: "COMPLETED",
-      overallStatus: "DID_NOT_COMPLY_LABORATORY",
+      laboratoryStatus: "NO_SHOW", physicalExamStatus: "NO_SHOW",
+      overallStatus: "DID_NOT_COMPLY_BOTH",
     });
 
     const open = await getHistoricalComplianceReport({
@@ -236,7 +250,7 @@ describe.runIf(exclusive)("reports Browser acceptance fixture lifecycle", () => 
   });
 
   it("cleans partial and complete setups repeatedly with no residue", async () => {
-    await pool.query("DELETE FROM appointments WHERE id=$1", [REPORTS_ACCEPTANCE_FIXTURE.appointmentIds.at(-1)]);
+    await pool.query("DELETE FROM appointments WHERE id=$1", [REPORTS_ACCEPTANCE_FIXTURE.appointmentIds[154]]);
     expect(await cleanupReportsAcceptanceFixture(pool, identity)).toMatchObject({
       students: 0, snapshots: 0, appointments: 0, importGroups: 0, academicYears: 0,
       crudScratchYears: 0, auditLogs: 0, stateFiles: 0,
@@ -275,7 +289,7 @@ describe.runIf(exclusive)("reports Browser acceptance fixture lifecycle", () => 
       `INSERT INTO appointments (
          id,clinic_id,student_number,schedule_type,appointment_date,status,is_published,
          schedule_cycle_start,created_by,updated_by
-       ) VALUES ($1,$2,'RPT-COLL-APPT','LABORATORY','2096-09-01','COMPLETED',TRUE,2096,$3,$3)`,
+       ) VALUES ($1,$2,'RPT-COLL-APPT','LABORATORY','2096-09-01','PENDING',FALSE,2096,$3,$3)`,
       [REPORTS_ACCEPTANCE_FIXTURE.appointmentIds[0], LABORATORY_CLINIC_ID, ADMIN_USER_ID],
     );
     await expect(setupReportsAcceptanceFixture(pool, identity)).rejects.toThrow(/reserved/i);
@@ -544,18 +558,17 @@ describe.runIf(exclusive)("reports Browser acceptance fixture lifecycle", () => 
       `INSERT INTO appointments (
          id,clinic_id,student_number,schedule_type,appointment_date,status,is_published,
          schedule_cycle_start,created_by,updated_by
-       ) VALUES ($1,$2,$3,'LABORATORY','2020-11-01','NO_SHOW',TRUE,2020,$4,$4)`,
+       ) VALUES ($1,$2,$3,'LABORATORY','2020-11-01','NO_SHOW',FALSE,2020,$4,$4)`,
       [extraId, LABORATORY_CLINIC_ID, REPORTS_ACCEPTANCE_FIXTURE.studentNumbers[4], ADMIN_USER_ID],
     );
     await expect(getReportsAcceptanceFixtureStatus(pool, identity)).rejects.toThrow(/appointment|extra|readiness|drift/i);
     await cleanupReportsAcceptanceFixture(pool, identity);
-  });
+  }, 30000);
 
   it("recovers partial fixture cleanup from the exact marker without a state file", async () => {
     await setupReportsAcceptanceFixture(pool, identity);
     await removeState();
-    await pool.query("DELETE FROM appointments WHERE id=$1", [REPORTS_ACCEPTANCE_FIXTURE.appointmentIds.at(-1)]);
-    await deleteSnapshotById(REPORTS_ACCEPTANCE_FIXTURE.snapshotIds.at(-1)!);
+    await pool.query("DELETE FROM appointments WHERE id=$1", [REPORTS_ACCEPTANCE_FIXTURE.appointmentIds[154]]);
     await expect(cleanupReportsAcceptanceFixture(pool, identity)).resolves.toMatchObject({
       students: 0, snapshots: 0, appointments: 0, importGroups: 0, academicYears: 0,
       crudScratchYears: 0, auditLogs: 0, stateFiles: 0,

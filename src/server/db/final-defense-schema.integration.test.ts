@@ -89,6 +89,26 @@ async function issue(client: PoolClient, appointmentId: string, classification =
 afterAll(async () => { await pool.end(); });
 
 describe("final-defense clinical database invariants", () => {
+  it("links published Laboratory roots and replacements to one requirement snapshot", async () => isolated(async (client) => {
+    const { linkPublishedLaboratoryAppointments } = await import("@/server/laboratory/laboratory-checklist.repository");
+    await client.query("BEGIN");
+    const root = await appointment(client);
+    await linkPublishedLaboratoryAppointments(client, [root]);
+    await client.query("COMMIT");
+    const created = await client.query<{ checklist_id: string; test_code: string }>(`SELECT link.checklist_id,item.test_code
+      FROM laboratory_checklist_appointments link JOIN laboratory_checklist_items item ON item.checklist_id=link.checklist_id
+      WHERE link.appointment_id=$1 ORDER BY item.test_code`, [root]);
+    expect(created.rows.map((row) => row.test_code)).toEqual(["CBC", "STOOL", "URINE"]);
+    await client.query("BEGIN");
+    await client.query("UPDATE appointments SET status='RESCHEDULED' WHERE id=$1", [root]);
+    const replacement = await appointment(client);
+    await client.query("UPDATE appointments SET rescheduled_from=$1 WHERE id=$2", [root, replacement]);
+    await linkPublishedLaboratoryAppointments(client, [replacement]);
+    await client.query("COMMIT");
+    const inherited = await client.query<{ checklist_id: string }>("SELECT checklist_id FROM laboratory_checklist_appointments WHERE appointment_id=$1", [replacement]);
+    expect(inherited.rows[0].checklist_id).toBe(created.rows[0].checklist_id);
+  }));
+
   it("rejects published Laboratory without a checklist at commit", async () => isolated(async (client) => {
     await client.query("BEGIN");
     await appointment(client);

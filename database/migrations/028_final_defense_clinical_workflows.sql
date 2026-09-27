@@ -11,6 +11,33 @@ BEGIN
   END IF;
 END $$;
 
+ALTER TABLE clinic_closure_manual_cases
+  DROP CONSTRAINT clinic_closure_manual_cases_reason_code_check;
+ALTER TABLE clinic_closure_manual_cases
+  ADD CONSTRAINT clinic_closure_manual_cases_reason_code_check CHECK (reason_code IN (
+    'EMERGENCY_CLOSURE','NOTICE_PERIOD_PROTECTED','OVPSA_LABORATORY_PROTECTED',
+    'ADMIN_CHOSE_MANUAL_RECOVERY','PHYSICAL_COMPLETED_BEFORE_LABORATORY',
+    'APPOINTMENT_MANUALLY_LOCKED','DRAFT_RESULT_FILES_EXIST',
+    'LABORATORY_PROGRESS_RECORDED','PROTECTED_RESULTS_EXIST',
+    'PAIR_MISSING_OR_INCONSISTENT','NO_REPLACEMENT_CAPACITY',
+    'NO_VALID_REPLACEMENT_WITHIN_CYCLE','CONCURRENT_APPOINTMENT_CHANGE',
+    'UNSAFE_RESTORATION'
+  ));
+ALTER TABLE appointment_reschedule_events
+  DROP CONSTRAINT appointment_reschedule_events_policy_reason_check;
+ALTER TABLE appointment_reschedule_events
+  ADD CONSTRAINT appointment_reschedule_events_policy_reason_check CHECK (
+    policy_reason_code IS NULL OR policy_reason_code IN (
+      'EMERGENCY_CLOSURE','NOTICE_PERIOD_PROTECTED','OVPSA_LABORATORY_PROTECTED',
+      'ADMIN_CHOSE_MANUAL_RECOVERY','PHYSICAL_COMPLETED_BEFORE_LABORATORY',
+      'APPOINTMENT_MANUALLY_LOCKED','DRAFT_RESULT_FILES_EXIST',
+      'LABORATORY_PROGRESS_RECORDED','PROTECTED_RESULTS_EXIST',
+      'PAIR_MISSING_OR_INCONSISTENT','NO_REPLACEMENT_CAPACITY',
+      'NO_VALID_REPLACEMENT_WITHIN_CYCLE','CONCURRENT_APPOINTMENT_CHANGE',
+      'UNSAFE_RESTORATION'
+    )
+  );
+
 ALTER TABLE student_result_submissions DROP CONSTRAINT student_result_submissions_result_type_check;
 ALTER TABLE student_result_submissions ADD CONSTRAINT student_result_submissions_result_type_check
   CHECK (result_type='LABORATORY');
@@ -130,6 +157,18 @@ CREATE INDEX medical_certificate_student_year_idx ON medical_certificate_revisio
 CREATE INDEX medical_certificate_appointment_idx ON medical_certificate_revisions(appointment_id,revision_number);
 CREATE INDEX medical_certificate_physician_revision_idx ON medical_certificate_revisions(physician_revision_id);
 
+CREATE TABLE medical_certificate_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  certificate_id UUID NOT NULL,
+  revision_id UUID NOT NULL REFERENCES medical_certificate_revisions(id),
+  action VARCHAR(20) NOT NULL CHECK (action IN ('LATE_ENCODING','CORRECTED','REVOKED')),
+  reason VARCHAR(1000) NOT NULL CHECK (NULLIF(BTRIM(reason),'') IS NOT NULL),
+  actor_user_id UUID NOT NULL REFERENCES users(id),
+  actor_snapshot JSONB NOT NULL CHECK (jsonb_typeof(actor_snapshot)='object' AND actor_snapshot<>'{}'::jsonb),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX medical_certificate_events_certificate_idx ON medical_certificate_events(certificate_id,created_at);
+
 CREATE TABLE clinical_mutation_requests (
   actor_user_id UUID NOT NULL REFERENCES users(id),
   request_id UUID NOT NULL,
@@ -148,6 +187,8 @@ BEGIN
   RAISE EXCEPTION 'clinical history is immutable' USING ERRCODE='23514';
 END $$;
 CREATE TRIGGER laboratory_checklist_events_immutable BEFORE UPDATE OR DELETE ON laboratory_checklist_events
+  FOR EACH ROW EXECUTE FUNCTION reject_clinical_history_mutation();
+CREATE TRIGGER medical_certificate_events_immutable BEFORE UPDATE OR DELETE ON medical_certificate_events
   FOR EACH ROW EXECUTE FUNCTION reject_clinical_history_mutation();
 CREATE TRIGGER medical_certificate_physician_revisions_immutable BEFORE UPDATE OR DELETE ON medical_certificate_physician_revisions
   FOR EACH ROW EXECUTE FUNCTION reject_clinical_history_mutation();

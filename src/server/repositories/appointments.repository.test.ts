@@ -1,9 +1,15 @@
 import type { PoolClient } from "pg";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { query } = vi.hoisted(() => ({ query: vi.fn() }));
+const { query, linkPublishedLaboratoryAppointments } = vi.hoisted(() => ({
+  query: vi.fn(),
+  linkPublishedLaboratoryAppointments: vi.fn(),
+}));
 
 vi.mock("@/server/db/pool", () => ({ query, transaction: vi.fn() }));
+vi.mock("@/server/laboratory/laboratory-checklist.repository", () => ({
+  linkPublishedLaboratoryAppointments,
+}));
 
 import {
   listAppointments,
@@ -117,6 +123,7 @@ describe("rescheduleAppointmentWithClient", () => {
     )).resolves.toBe(replacementId);
 
     expect(client.query).toHaveBeenCalledTimes(4);
+    expect(linkPublishedLaboratoryAppointments).toHaveBeenCalledWith(client, [replacementId]);
     expect(client.query).toHaveBeenNthCalledWith(
       1,
       expect.stringContaining("SET status='RESCHEDULED', is_published=FALSE"),

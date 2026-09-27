@@ -13,7 +13,7 @@ import {
 
 describe("student result submission presentation", () => {
   it("uses the approved progress labels and badge tones", () => {
-    expect(submissionProgressLabel("FULLY_SUBMITTED")).toBe("Fully submitted");
+    expect(submissionProgressLabel("FULLY_SUBMITTED")).toBe("Laboratory submitted");
     expect(submissionProgressLabel("AWAITING_RESUBMISSION")).toBe("Awaiting resubmission");
     expect(submissionProgressLabel("PARTIALLY_SUBMITTED")).toBe("Partially submitted");
     expect(submissionProgressLabel("NOT_SUBMITTED")).toBe("Not submitted");

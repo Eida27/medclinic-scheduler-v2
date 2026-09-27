@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { manilaCalendarDate } from "@/lib/academic-year";
 import { operationalStatusLabel } from "@/components/appointments/status-labels";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
@@ -25,6 +26,7 @@ type Filters = {
   date: string;
   service: string;
   status: string;
+  academicYearStart: string;
 };
 
 const initialFilters: Filters = {
@@ -34,6 +36,7 @@ const initialFilters: Filters = {
   date: "",
   service: "",
   status: "OPEN",
+  academicYearStart: "",
 };
 
 const reasonOptions = [
@@ -44,6 +47,7 @@ const reasonOptions = [
   "PHYSICAL_COMPLETED_BEFORE_LABORATORY",
   "APPOINTMENT_MANUALLY_LOCKED",
   "DRAFT_RESULT_FILES_EXIST",
+  "LABORATORY_PROGRESS_RECORDED",
   "PROTECTED_RESULTS_EXIST",
   "PAIR_MISSING_OR_INCONSISTENT",
   "NO_REPLACEMENT_CAPACITY",
@@ -76,9 +80,10 @@ function AppointmentLine({ service, appointment }: {
   );
 }
 
-function CaseResolutionCard({ manualCase, onResolved }: {
+function CaseResolutionCard({ manualCase, onResolved, readOnly = false }: {
   manualCase: ManualCase;
   onResolved(message: string): Promise<void>;
+  readOnly?: boolean;
 }) {
   const [laboratoryDate, setLaboratoryDate] = useState("");
   const [physicalExamDate, setPhysicalExamDate] = useState("");
@@ -128,6 +133,7 @@ function CaseResolutionCard({ manualCase, onResolved }: {
         <div>
           <h3 className="text-lg font-bold text-ink">{manualCase.studentName}</h3>
           <p className="font-mono text-sm font-semibold text-muted">{manualCase.studentNumber}</p>
+          <p className="text-sm text-muted">Academic year {manualCase.academicYearStart}–{manualCase.academicYearStart + 1}</p>
         </div>
         <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-900">
           {label(manualCase.reasonCode)}
@@ -171,7 +177,7 @@ function CaseResolutionCard({ manualCase, onResolved }: {
         </Alert>
       ) : null}
 
-      {manualCase.status === "OPEN" ? (
+      {manualCase.status === "OPEN" && !readOnly ? (
         <div className="grid gap-4 xl:grid-cols-2">
           <section className="grid content-start gap-3 rounded-xl border border-line p-3">
             <h4 className="font-bold text-ink">Assign replacement</h4>
@@ -387,8 +393,11 @@ export function ManualResolutionQueue() {
   const [busy, setBusy] = useState(true);
   const [message, setMessage] = useState<string>();
   const [error, setError] = useState<string>();
+  const loadedDay = useRef<string | null>(null);
+  const requestVersion = useRef(0);
 
   const load = useCallback(async () => {
+    const version = ++requestVersion.current;
     setBusy(true);
     setError(undefined);
     try {
@@ -399,36 +408,64 @@ export function ManualResolutionQueue() {
       const response = await fetch(`/api/clinic-unavailable-dates/manual-cases?${params}`, { cache: "no-store" });
       const payload = await response.json() as { data?: ManualCasePage; error?: { message?: string } };
       if (!response.ok || !payload.data) throw new Error(payload.error?.message ?? "Unable to load manual cases.");
-      setData(payload.data);
+      if (version === requestVersion.current) setData(payload.data);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Unable to load manual cases.");
+      if (version === requestVersion.current) {
+        setError(caught instanceof Error ? caught.message : "Unable to load manual cases.");
+      }
     } finally {
-      setBusy(false);
+      if (version === requestVersion.current) setBusy(false);
     }
   }, [filters, page]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => { void load(); }, 0);
-    return () => window.clearTimeout(timeoutId);
+    loadedDay.current = manilaCalendarDate(new Date());
+    const onFocus = () => {
+      loadedDay.current = manilaCalendarDate(new Date());
+      void load();
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") onFocus();
+    };
+    const interval = window.setInterval(() => {
+      const today = manilaCalendarDate(new Date());
+      if (loadedDay.current !== today) onFocus();
+    }, 60_000);
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearTimeout(timeoutId);
+      window.clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [load]);
 
   function applyFilters(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const repeat = filters === draftFilters && page === 1;
+    requestVersion.current += 1;
     setPage(1);
     setFilters(draftFilters);
+    setData(undefined);
+    setBusy(true);
     setMessage(undefined);
+    if (repeat) void load();
   }
 
+  const readOnlySelection = Boolean(filters.academicYearStart && data
+    && (data.selectedYearState === "ENDED" || data.selectedYearState === "UNKNOWN"));
   const ovpsaGroups = new Map<string, ManualCase[]>();
   for (const item of data?.items ?? []) {
-    if (!item.ovpsaBatchId || item.status !== "OPEN") continue;
+    if (readOnlySelection || !item.ovpsaBatchId || item.status !== "OPEN") continue;
     ovpsaGroups.set(item.ovpsaBatchId, [
       ...(ovpsaGroups.get(item.ovpsaBatchId) ?? []),
       item,
     ]);
   }
   const individualCases = (data?.items ?? []).filter((item) =>
-    !item.ovpsaBatchId || item.status !== "OPEN");
+    readOnlySelection || !item.ovpsaBatchId || item.status !== "OPEN");
 
   return (
     <div className="grid gap-5">
@@ -496,6 +533,22 @@ export function ManualResolutionQueue() {
               <option value="">All statuses</option>
             </Select>
           </label>
+          <label className="grid gap-1 text-sm font-semibold">
+            Academic year
+            <Input
+              aria-label="Academic year"
+              type="number"
+              min="2020"
+              max="2100"
+              value={draftFilters.academicYearStart}
+              onChange={(event) => setDraftFilters((current) => ({
+                ...current,
+                academicYearStart: event.target.value,
+                status: event.target.value ? "" : "OPEN",
+              }))}
+              placeholder="Start year; ended years are read-only"
+            />
+          </label>
           <div className="flex items-end">
             <Button type="submit" disabled={busy}>Apply filters</Button>
           </div>
@@ -504,6 +557,13 @@ export function ManualResolutionQueue() {
 
       {message ? <Alert tone="success">{message}</Alert> : null}
       {error ? <Alert tone="danger">{error}</Alert> : null}
+      {readOnlySelection && data?.selectedYearState !== "UPCOMING" ? (
+        <Alert tone="warning">Read-only academic year {filters.academicYearStart}–{Number(filters.academicYearStart) + 1} history</Alert>
+      ) : filters.academicYearStart && data?.selectedYearState === "UPCOMING" ? (
+        <Alert tone="info">Upcoming academic year {filters.academicYearStart}–{Number(filters.academicYearStart) + 1}.</Alert>
+      ) : filters.academicYearStart && data?.selectedYearState === "CURRENT" ? (
+        <Alert tone="info">Academic year {filters.academicYearStart}–{Number(filters.academicYearStart) + 1} is active.</Alert>
+      ) : null}
       {busy && !data ? <Card className="p-5 text-sm text-muted">Loading manual cases...</Card> : null}
       {!busy && data?.items.length === 0 ? <Card className="p-5 text-sm text-muted">No manual cases match these filters.</Card> : null}
       {[...ovpsaGroups.entries()].map(([batchId, cases]) => (
@@ -520,6 +580,7 @@ export function ManualResolutionQueue() {
         <CaseResolutionCard
           key={manualCase.id}
           manualCase={manualCase}
+          readOnly={readOnlySelection}
           onResolved={async (nextMessage) => {
             setMessage(nextMessage);
             await load();

@@ -215,9 +215,14 @@ export type RetiredRouteSentinelSnapshot = {
 export type SchedulingIntegrityResidue = {
   users: number;
   students: number;
+  academicSnapshots: number;
   colleges: number;
   programs: number;
   appointments: number;
+  laboratoryChecklists: number;
+  laboratoryChecklistLinks: number;
+  laboratoryChecklistItems: number;
+  laboratoryChecklistEvents: number;
   appointmentStatusLogs: number;
   laboratoryResults: number;
   examResults: number;
@@ -250,8 +255,13 @@ export type SchedulingIntegrityPreparedCounts = {
   users: number;
   coreStudents: number;
   capacityStudents: number;
+  academicSnapshots: number;
   pairAppointments: number;
   capacityAppointments: number;
+  laboratoryChecklists: number;
+  laboratoryChecklistItems: number;
+  laboratoryChecklistEvents: number;
+  manualVerifiedItems: number;
   importGroups: number;
   scheduleBatches: number;
   scheduleItems: number;
@@ -268,8 +278,13 @@ const EXPECTED_PREPARED_COUNTS: SchedulingIntegrityPreparedCounts = {
   users: 2,
   coreStudents: 4,
   capacityStudents: CAPACITY_STUDENT_COUNT,
+  academicSnapshots: ALL_STUDENT_NUMBERS.length,
   pairAppointments: 8,
   capacityAppointments: CAPACITY_STUDENT_COUNT,
+  laboratoryChecklists: 4,
+  laboratoryChecklistItems: 12,
+  laboratoryChecklistEvents: 3,
+  manualVerifiedItems: 3,
   importGroups: 1,
   scheduleBatches: 0,
   scheduleItems: 0,
@@ -284,9 +299,12 @@ const EXPECTED_PREPARED_COUNTS: SchedulingIntegrityPreparedCounts = {
 
 type OwnedManifest = {
   importGroupIds: string[];
+  academicSnapshotIds: string[];
   scheduleBatchIds: string[];
   scheduleItemIds: string[];
   appointmentIds: string[];
+  laboratoryChecklistIds: string[];
+  laboratoryChecklistEventIds: string[];
   statusLogIds: string[];
   laboratoryResultIds: string[];
   examResultIds: string[];
@@ -445,9 +463,12 @@ export function assertSafeSchedulingIntegrityStatus<T>(value: T): T {
 function emptyManifest(): OwnedManifest {
   return {
     importGroupIds: [FIXED_IDS.importGroup],
+    academicSnapshotIds: [],
     scheduleBatchIds: [],
     scheduleItemIds: [],
     appointmentIds: Object.values(APPOINTMENT_IDS),
+    laboratoryChecklistIds: [],
+    laboratoryChecklistEventIds: [],
     statusLogIds: [],
     laboratoryResultIds: [],
     examResultIds: [],
@@ -617,8 +638,13 @@ async function preparedCounts(
     users: number;
     core_students: number;
     capacity_students: number;
+    academic_snapshots: number;
     pair_appointments: number;
     capacity_appointments: number;
+    laboratory_checklists: number;
+    laboratory_checklist_items: number;
+    laboratory_checklist_events: number;
+    manual_verified_items: number;
     import_groups: number;
     schedule_batches: number;
     schedule_items: number;
@@ -634,8 +660,19 @@ async function preparedCounts(
        (SELECT COUNT(*)::int FROM users WHERE id=ANY($1::uuid[])) AS users,
        (SELECT COUNT(*)::int FROM students WHERE student_number=ANY($2::varchar[])) AS core_students,
        (SELECT COUNT(*)::int FROM students WHERE student_number=ANY($3::varchar[])) AS capacity_students,
+       (SELECT COUNT(*)::int FROM student_academic_snapshots WHERE source_import_group_id=ANY($5::uuid[])) AS academic_snapshots,
        (SELECT COUNT(*)::int FROM appointments WHERE id=ANY($4::uuid[])) AS pair_appointments,
        (SELECT COUNT(*)::int FROM appointments WHERE student_number=ANY($3::varchar[])) AS capacity_appointments,
+       (SELECT COUNT(*)::int FROM laboratory_checklists WHERE root_appointment_id=ANY($4::uuid[])) AS laboratory_checklists,
+       (SELECT COUNT(*)::int FROM laboratory_checklist_items item
+         JOIN laboratory_checklists checklist ON checklist.id=item.checklist_id
+         WHERE checklist.root_appointment_id=ANY($4::uuid[])) AS laboratory_checklist_items,
+       (SELECT COUNT(*)::int FROM laboratory_checklist_events event
+         JOIN laboratory_checklists checklist ON checklist.id=event.checklist_id
+         WHERE checklist.root_appointment_id=ANY($4::uuid[])) AS laboratory_checklist_events,
+       (SELECT COUNT(*)::int FROM laboratory_checklist_items item
+         JOIN laboratory_checklists checklist ON checklist.id=item.checklist_id
+         WHERE checklist.root_appointment_id=$15 AND item.verified_at IS NOT NULL) AS manual_verified_items,
        (SELECT COUNT(*)::int FROM schedule_import_groups WHERE id=ANY($5::uuid[])) AS import_groups,
        (SELECT COUNT(*)::int FROM schedule_batches WHERE id=ANY($6::uuid[])) AS schedule_batches,
        (SELECT COUNT(*)::int FROM coordinator_schedule_items WHERE id=ANY($7::uuid[])) AS schedule_items,
@@ -661,6 +698,7 @@ async function preparedCounts(
       FIXED_IDS.ovpsaBatch,
       FIXED_IDS.ovpsaRevision,
       FIXED_IDS.reservation,
+      APPOINTMENT_IDS.manualLaboratory,
     ],
   );
   const row = result.rows[0];
@@ -668,8 +706,13 @@ async function preparedCounts(
     users: row.users,
     coreStudents: row.core_students,
     capacityStudents: row.capacity_students,
+    academicSnapshots: row.academic_snapshots,
     pairAppointments: row.pair_appointments,
     capacityAppointments: row.capacity_appointments,
+    laboratoryChecklists: row.laboratory_checklists,
+    laboratoryChecklistItems: row.laboratory_checklist_items,
+    laboratoryChecklistEvents: row.laboratory_checklist_events,
+    manualVerifiedItems: row.manual_verified_items,
     importGroups: row.import_groups,
     scheduleBatches: row.schedule_batches,
     scheduleItems: row.schedule_items,
@@ -688,6 +731,13 @@ async function discoverOwnedManifest(
   preparedAt: string,
 ): Promise<OwnedManifest> {
   const retiredRouteOwnedIds = await discoverRetiredRouteOwnedIds(client, preparedAt);
+  const academicSnapshotIds = await queryIds(
+    client,
+    `SELECT id::text FROM student_academic_snapshots
+      WHERE student_number=ANY($1::varchar[]) AND academic_year_start=2026
+        AND source_import_group_id=$2 ORDER BY id`,
+    [ALL_STUDENT_NUMBERS, FIXED_IDS.importGroup],
+  );
   const appointmentIds = await queryIds(
     client,
     `SELECT id::text FROM appointments
@@ -700,6 +750,19 @@ async function discoverOwnedManifest(
       retiredRouteOwnedIds.scheduleBatchIds,
       retiredRouteOwnedIds.scheduleItemIds,
     ],
+  );
+  const laboratoryChecklistIds = await queryIds(
+    client,
+    `SELECT id::text FROM laboratory_checklists
+      WHERE student_number=ANY($1::varchar[]) AND academic_year_start=2026
+        AND root_appointment_id=ANY($2::uuid[]) ORDER BY id`,
+    [ALL_STUDENT_NUMBERS, appointmentIds],
+  );
+  const laboratoryChecklistEventIds = await queryIds(
+    client,
+    `SELECT id::text FROM laboratory_checklist_events
+      WHERE checklist_id=ANY($1::uuid[]) AND appointment_id=ANY($2::uuid[]) ORDER BY id`,
+    [laboratoryChecklistIds, appointmentIds],
   );
   const statusLogIds = await queryIds(
     client,
@@ -789,7 +852,10 @@ async function discoverOwnedManifest(
     ],
   );
   const ownedEntityIds = [
+    ...academicSnapshotIds,
     ...appointmentIds,
+    ...laboratoryChecklistIds,
+    ...laboratoryChecklistEventIds,
     ...submissionIds,
     ...files.rows.map((row) => row.id),
     ...manualCaseIds,
@@ -820,9 +886,12 @@ async function discoverOwnedManifest(
   );
   return {
     importGroupIds: retiredRouteOwnedIds.importGroupIds,
+    academicSnapshotIds,
     scheduleBatchIds: retiredRouteOwnedIds.scheduleBatchIds,
     scheduleItemIds: retiredRouteOwnedIds.scheduleItemIds,
     appointmentIds,
+    laboratoryChecklistIds,
+    laboratoryChecklistEventIds,
     statusLogIds,
     laboratoryResultIds,
     examResultIds,
@@ -853,9 +922,19 @@ async function schedulingIntegrityResidue(
     `SELECT
        (SELECT COUNT(*)::int FROM users WHERE id=ANY($1::uuid[])) AS users,
        (SELECT COUNT(*)::int FROM students WHERE student_number=ANY($2::varchar[])) AS students,
+       (SELECT COUNT(*)::int FROM student_academic_snapshots
+         WHERE student_number=ANY($2::varchar[]) OR id=ANY($32::uuid[])) AS "academicSnapshots",
        (SELECT COUNT(*)::int FROM colleges WHERE id=$3) AS colleges,
        (SELECT COUNT(*)::int FROM programs WHERE id=$4) AS programs,
        (SELECT COUNT(*)::int FROM appointments WHERE student_number=ANY($2::varchar[]) OR id=ANY($5::uuid[])) AS appointments,
+       (SELECT COUNT(*)::int FROM laboratory_checklists
+         WHERE student_number=ANY($2::varchar[]) OR id=ANY($33::uuid[])) AS "laboratoryChecklists",
+       (SELECT COUNT(*)::int FROM laboratory_checklist_appointments
+         WHERE appointment_id=ANY($5::uuid[]) OR checklist_id=ANY($33::uuid[])) AS "laboratoryChecklistLinks",
+       (SELECT COUNT(*)::int FROM laboratory_checklist_items
+         WHERE checklist_id=ANY($33::uuid[])) AS "laboratoryChecklistItems",
+       (SELECT COUNT(*)::int FROM laboratory_checklist_events
+         WHERE checklist_id=ANY($33::uuid[]) OR id=ANY($34::uuid[])) AS "laboratoryChecklistEvents",
        (SELECT COUNT(*)::int FROM appointment_status_logs WHERE appointment_id=ANY($5::uuid[]) OR id=ANY($6::uuid[])) AS "appointmentStatusLogs",
        (SELECT COUNT(*)::int FROM laboratory_results WHERE student_number=ANY($2::varchar[]) OR id=ANY($7::uuid[])) AS "laboratoryResults",
        (SELECT COUNT(*)::int FROM exam_results WHERE student_number=ANY($2::varchar[]) OR id=ANY($8::uuid[])) AS "examResults",
@@ -912,6 +991,9 @@ async function schedulingIntegrityResidue(
       [SCHEDULING_INTEGRITY_FIXTURE.admin.email, SCHEDULING_INTEGRITY_FIXTURE.staff.email],
       manifest.auditLogIds,
       manifest.storageKeys,
+      manifest.academicSnapshotIds,
+      manifest.laboratoryChecklistIds,
+      manifest.laboratoryChecklistEventIds,
     ],
   );
   const storageTargets = manifest.storageKeys.map((key) =>
@@ -1103,9 +1185,23 @@ async function setup(
       `INSERT INTO schedule_import_groups (
          id,import_name,source_filename,total_rows,matched_student_count,
          description,created_by,student_category,academic_year_start,accepted_at,import_mode
-       ) VALUES ($1,$2::varchar,'browser-scheduling-integrity.csv',1,1,$2::text,$3,'REGULAR',2026,
+       ) VALUES ($1,$2::varchar,'browser-scheduling-integrity.csv',$4,$4,$2::text,$3,'REGULAR',2026,
                  '2026-08-26T00:00:00.000Z','STANDARD')`,
-      [FIXED_IDS.importGroup, MARKER, FIXED_IDS.adminUser],
+      [FIXED_IDS.importGroup, MARKER, FIXED_IDS.adminUser, ALL_STUDENT_NUMBERS.length],
+    );
+    await client.query(
+      `INSERT INTO student_academic_snapshots (
+         student_number,academic_year_start,student_name,college_id,college_name,
+         program_id,program_code,program_name,year_level,source_import_group_id
+       ) SELECT student.student_number,2026,
+                CONCAT_WS(' ',student.first_name,NULLIF(student.middle_name,''),student.last_name),
+                college.id,college.name,program.id,program.code,program.name,
+                student.year_level,$2
+           FROM students student
+           JOIN colleges college ON college.id=student.college_id
+           JOIN programs program ON program.id=student.program_id
+          WHERE student.student_number=ANY($1::varchar[])`,
+      [ALL_STUDENT_NUMBERS, FIXED_IDS.importGroup],
     );
     const pairAppointments = [
       {
@@ -1228,6 +1324,55 @@ async function setup(
         FIXED_IDS.adminUser,
         MARKER,
       ],
+    );
+    const laboratoryAppointmentIds = [
+      APPOINTMENT_IDS.lifecycleLaboratory,
+      APPOINTMENT_IDS.manualLaboratory,
+      APPOINTMENT_IDS.displacementLaboratory,
+      APPOINTMENT_IDS.portalLaboratory,
+    ];
+    await client.query(
+      `INSERT INTO laboratory_checklists (
+         root_appointment_id,student_number,academic_year_start,academic_snapshot_id,
+         year_level_snapshot,scheduling_category_snapshot
+       ) SELECT appointment.id,appointment.student_number,appointment.schedule_cycle_start,
+                snapshot.id,snapshot.year_level,appointment.scheduling_category
+           FROM appointments appointment
+           JOIN student_academic_snapshots snapshot
+             ON snapshot.student_number=appointment.student_number
+            AND snapshot.academic_year_start=appointment.schedule_cycle_start
+          WHERE appointment.id=ANY($1::uuid[])`,
+      [laboratoryAppointmentIds],
+    );
+    await client.query(
+      `INSERT INTO laboratory_checklist_appointments (appointment_id,checklist_id)
+       SELECT root_appointment_id,id FROM laboratory_checklists
+        WHERE root_appointment_id=ANY($1::uuid[])`,
+      [laboratoryAppointmentIds],
+    );
+    await client.query(
+      `INSERT INTO laboratory_checklist_items (
+         checklist_id,test_code,verified_at,verified_by,verification_source
+       ) SELECT checklist.id,required.test_code,
+                CASE WHEN checklist.root_appointment_id=$2 THEN clock_timestamp() END,
+                CASE WHEN checklist.root_appointment_id=$2 THEN $3::uuid END,
+                CASE WHEN checklist.root_appointment_id=$2 THEN 'INTERNAL' END
+           FROM laboratory_checklists checklist
+          CROSS JOIN unnest(ARRAY['CBC','URINE','STOOL']::varchar[]) AS required(test_code)
+          WHERE checklist.root_appointment_id=ANY($1::uuid[])`,
+      [laboratoryAppointmentIds, APPOINTMENT_IDS.manualLaboratory, FIXED_IDS.adminUser],
+    );
+    await client.query(
+      `INSERT INTO laboratory_checklist_events (
+         checklist_id,appointment_id,test_code,old_verified,new_verified,source,
+         actor_user_id,actor_snapshot
+       ) SELECT checklist.id,checklist.root_appointment_id,item.test_code,
+                FALSE,TRUE,'INTERNAL',$2::uuid,
+                jsonb_build_object('role','ADMIN','marker',$3::text)
+           FROM laboratory_checklists checklist
+           JOIN laboratory_checklist_items item ON item.checklist_id=checklist.id
+          WHERE checklist.root_appointment_id=$1 AND item.verified_at IS NOT NULL`,
+      [APPOINTMENT_IDS.manualLaboratory, FIXED_IDS.adminUser, MARKER],
     );
     await client.query(
       `INSERT INTO clinic_closure_groups (
@@ -1491,6 +1636,12 @@ async function deleteOwnedDatabaseRows(
 ) {
   await client.query("BEGIN");
   try {
+    // These rows are fixture-owned; keep the immutable-history exceptions inside
+    // the cleanup transaction so a rollback restores every trigger state.
+    await client.query("ALTER TABLE laboratory_checklist_events DISABLE TRIGGER laboratory_checklist_events_immutable");
+    await client.query("ALTER TABLE laboratory_checklist_appointments DISABLE TRIGGER laboratory_checklist_links_immutable");
+    await client.query("ALTER TABLE laboratory_checklists DISABLE TRIGGER laboratory_checklist_identity_immutable");
+    await client.query("ALTER TABLE student_academic_snapshots DISABLE TRIGGER student_academic_snapshots_immutable");
     await client.query(
       "DELETE FROM audit_logs WHERE id=ANY($1::uuid[])",
       [manifest.auditLogIds],
@@ -1544,6 +1695,22 @@ async function deleteOwnedDatabaseRows(
       [manifest.submissionIds],
     );
     await client.query(
+      "DELETE FROM laboratory_checklist_events WHERE id=ANY($1::uuid[])",
+      [manifest.laboratoryChecklistEventIds],
+    );
+    await client.query(
+      "DELETE FROM laboratory_checklist_items WHERE checklist_id=ANY($1::uuid[])",
+      [manifest.laboratoryChecklistIds],
+    );
+    await client.query(
+      "DELETE FROM laboratory_checklist_appointments WHERE checklist_id=ANY($1::uuid[])",
+      [manifest.laboratoryChecklistIds],
+    );
+    await client.query(
+      "DELETE FROM laboratory_checklists WHERE id=ANY($1::uuid[])",
+      [manifest.laboratoryChecklistIds],
+    );
+    await client.query(
       "DELETE FROM exam_results WHERE id=ANY($1::uuid[])",
       [manifest.examResultIds],
     );
@@ -1558,6 +1725,10 @@ async function deleteOwnedDatabaseRows(
     await client.query(
       "DELETE FROM appointments WHERE id=ANY($1::uuid[])",
       [manifest.appointmentIds],
+    );
+    await client.query(
+      "DELETE FROM student_academic_snapshots WHERE id=ANY($1::uuid[])",
+      [manifest.academicSnapshotIds],
     );
     await client.query(
       "DELETE FROM coordinator_schedule_items WHERE id=ANY($1::uuid[])",
@@ -1611,6 +1782,11 @@ async function deleteOwnedDatabaseRows(
       "DELETE FROM users WHERE id=ANY($1::uuid[])",
       [[FIXED_IDS.adminUser, FIXED_IDS.staffUser]],
     );
+    await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+    await client.query("ALTER TABLE student_academic_snapshots ENABLE TRIGGER student_academic_snapshots_immutable");
+    await client.query("ALTER TABLE laboratory_checklists ENABLE TRIGGER laboratory_checklist_identity_immutable");
+    await client.query("ALTER TABLE laboratory_checklist_appointments ENABLE TRIGGER laboratory_checklist_links_immutable");
+    await client.query("ALTER TABLE laboratory_checklist_events ENABLE TRIGGER laboratory_checklist_events_immutable");
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");

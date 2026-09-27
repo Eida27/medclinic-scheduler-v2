@@ -1,10 +1,13 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { pool } from "@/server/db/pool";
+import { randomUUID } from "node:crypto";
+import { pool, transaction } from "@/server/db/pool";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import { dashboardMetrics } from "@/server/repositories/tracking.repository";
 import {
   cleanupTestFixtures,
   insertNumberedTestStudents,
+  insertTestScheduleImportGroup,
   TEST_REFERENCE_IDS,
 } from "@/test/integration-fixtures";
 
@@ -16,8 +19,16 @@ const counterStudentNumbers = Array.from(
 );
 const capacityStudentNumberPrefix = "TEST-DASH-CAP-";
 const capacityStudentNumberPattern = `${capacityStudentNumberPrefix}%`;
+const futureStudentNumberPrefix = "TEST-DASH-FUT-";
+const futureStudentNumberPattern = `${futureStudentNumberPrefix}%`;
 const batchNamePattern = "TEST dashboard metrics%";
-const appointmentDate = "2042-06-01";
+const manilaToday = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+const calendarYear = Number(manilaToday.slice(0, 4));
+const currentYear = manilaToday.slice(5) >= "08-01" ? calendarYear : calendarYear - 1;
+const futureYear = currentYear + 1;
+const appointmentDate = `${currentYear}-10-01`;
+const createdYears: number[] = [];
+let dailyCapacity: number;
 
 beforeAll(async () => {
   await cleanupTestFixtures(studentNumberPattern, batchNamePattern);
@@ -28,18 +39,79 @@ beforeAll(async () => {
     [TEST_REFERENCE_IDS.laboratoryClinic],
   );
   await insertNumberedTestStudents(counterStudentNumberPrefix, counterStudentNumbers.length);
-  await insertNumberedTestStudents(
-    capacityStudentNumberPrefix,
-    Number(capacity.rows[0].max_daily_capacity) + 1,
-  );
+  dailyCapacity = Number(capacity.rows[0].max_daily_capacity);
+  await insertNumberedTestStudents(capacityStudentNumberPrefix, dailyCapacity + 1);
+  await insertNumberedTestStudents(futureStudentNumberPrefix, dailyCapacity + 4);
+  for (const year of [currentYear, futureYear]) {
+    const created = await pool.query(`INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+      VALUES ($1,make_date($1 + 1,7,31),$2,$2)
+      ON CONFLICT (start_year) DO NOTHING RETURNING start_year`,
+    [year, TEST_REFERENCE_IDS.adminUser]);
+    if (created.rowCount) createdYears.push(year);
+  }
+  await transaction(async (client) => {
+    const importId = await insertTestScheduleImportGroup(client, {
+      name: "TEST dashboard metrics provenance", sourceFilename: `${randomUUID()}.csv`,
+      academicYearStart: currentYear, importMode: "STANDARD", actor: TEST_REFERENCE_IDS.adminUser,
+    });
+    await client.query(`INSERT INTO student_academic_snapshots
+      (student_number,academic_year_start,student_name,college_id,college_name,
+       program_id,program_code,program_name,year_level,source_import_group_id)
+      SELECT student_number,$3,first_name || ' ' || last_name,college_id,
+             'College of Computer Studies',program_id,'BSIT','BSIT',year_level,$1
+        FROM students WHERE student_number LIKE $2`, [importId, studentNumberPattern, currentYear]);
+    const futureImportId = await insertTestScheduleImportGroup(client, {
+      name: "TEST dashboard metrics future provenance", sourceFilename: `${randomUUID()}.csv`,
+      academicYearStart: futureYear, importMode: "STANDARD", actor: TEST_REFERENCE_IDS.adminUser,
+    });
+    await client.query(`INSERT INTO student_academic_snapshots
+      (student_number,academic_year_start,student_name,college_id,college_name,
+       program_id,program_code,program_name,year_level,source_import_group_id)
+      SELECT student_number,$3,first_name || ' ' || last_name,college_id,
+             'College of Computer Studies',program_id,'BSIT','BSIT',year_level,$1
+        FROM students WHERE student_number LIKE $2`, [futureImportId, futureStudentNumberPattern, futureYear]);
+  });
 });
 
 afterAll(async () => {
-  await cleanupTestFixtures(studentNumberPattern, batchNamePattern);
+  await cleanupTestFixtures(studentNumberPattern, batchNamePattern, "TEST dashboard metrics%");
+  for (const year of createdYears) await pool.query("DELETE FROM academic_years WHERE start_year=$1", [year]);
   await pool.end();
 });
 
 describe("dashboard metrics publication boundaries", () => {
+  it("excludes a prepared future cycle from operational appointment counts and capacity", async () => {
+    const baseline = await dashboardMetrics();
+    await transaction(async (client) => {
+      const inserted = await client.query<{ id: string }>(
+      `INSERT INTO appointments
+         (clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+          schedule_cycle_start,scheduling_category,created_by,updated_by)
+       SELECT $1,student_number,'LABORATORY',make_date($2,9,22),
+              CASE WHEN RIGHT(student_number,4)::integer <= $3 THEN 'PENDING'
+                   WHEN RIGHT(student_number,4)::integer = $3 + 1 THEN 'NO_SHOW'
+                   WHEN RIGHT(student_number,4)::integer = $3 + 2 THEN 'RESCHEDULED'
+                   ELSE 'PENDING' END,
+              TRUE,$2,'REGULAR',$4,$4
+         FROM students WHERE student_number LIKE $5
+       RETURNING id::text`,
+      [TEST_REFERENCE_IDS.laboratoryClinic, futureYear, dailyCapacity + 1,
+        TEST_REFERENCE_IDS.adminUser, futureStudentNumberPattern],
+      );
+      await linkPublishedLaboratoryAppointments(client, inserted.rows.map((row) => row.id));
+    });
+
+    await expect(dashboardMetrics()).resolves.toMatchObject({
+      pendingAppointments: baseline.pendingAppointments,
+      completedPhysicalExams: baseline.completedPhysicalExams,
+      completedLaboratory: baseline.completedLaboratory,
+      finalizedLaboratoryDocuments: baseline.finalizedLaboratoryDocuments,
+      noShows: baseline.noShows,
+      rescheduled: baseline.rescheduled,
+      capacityConflicts: baseline.capacityConflicts,
+    });
+  }, 60000);
+
   it("returns permanent delivery failures only when the administrator count is requested", async () => {
     const baseline = await dashboardMetrics({ includeEmailDeliveryIssues: true });
     await pool.query(
@@ -60,21 +132,20 @@ describe("dashboard metrics publication boundaries", () => {
 
   it("excludes every unpublished appointment-derived counter", async () => {
     const baseline = await dashboardMetrics();
-    const appointments = await pool.query<{ id: string; student_number: string }>(
+    await pool.query(
       `INSERT INTO appointments (
          clinic_id, student_number, schedule_type, appointment_date,
-         status, is_published, created_by, updated_by
+         status, is_published, schedule_cycle_start, scheduling_category, created_by, updated_by
        )
        SELECT clinic_id::uuid, student_number, schedule_type, $5::date,
-              status, FALSE, $6, $6
+              status, FALSE, $7, 'REGULAR', $6, $6
          FROM UNNEST(
            $1::varchar[], $2::varchar[], $3::varchar[], $4::varchar[]
-         ) AS fixture(student_number, schedule_type, status, clinic_id)
-       RETURNING id, student_number`,
+         ) AS fixture(student_number, schedule_type, status, clinic_id)`,
       [
         counterStudentNumbers,
         ["LABORATORY", "LABORATORY", "LABORATORY", "PHYSICAL_EXAM", "LABORATORY"],
-        ["PENDING", "NO_SHOW", "RESCHEDULED", "COMPLETED", "COMPLETED"],
+        ["PENDING", "NO_SHOW", "RESCHEDULED", "PENDING", "PENDING"],
         [
           TEST_REFERENCE_IDS.laboratoryClinic,
           TEST_REFERENCE_IDS.laboratoryClinic,
@@ -82,36 +153,11 @@ describe("dashboard metrics publication boundaries", () => {
           TEST_REFERENCE_IDS.physicalExamClinic,
           TEST_REFERENCE_IDS.laboratoryClinic,
         ],
-        "2042-06-02",
+        `${currentYear}-10-02`,
         TEST_REFERENCE_IDS.adminUser,
+        currentYear,
       ],
     );
-    const appointmentId = (studentNumber: string) =>
-      appointments.rows.find((appointment) => appointment.student_number === studentNumber)?.id;
-
-    await pool.query(
-      `INSERT INTO exam_results (
-         student_number, appointment_id, result_status, completed_at, encoded_by
-       ) VALUES ($1,$2,'COMPLETED',$3,$4)`,
-      [
-        counterStudentNumbers[3],
-        appointmentId(counterStudentNumbers[3]),
-        "2042-06-02",
-        TEST_REFERENCE_IDS.clinicStaffUser,
-      ],
-    );
-    await pool.query(
-      `INSERT INTO laboratory_results (
-         student_number, appointment_id, result_status, completed_at, encoded_by
-       ) VALUES ($1,$2,'COMPLETED',$3,$4)`,
-      [
-        counterStudentNumbers[4],
-        appointmentId(counterStudentNumbers[4]),
-        "2042-06-02",
-        TEST_REFERENCE_IDS.clinicStaffUser,
-      ],
-    );
-
     await expect(dashboardMetrics()).resolves.toMatchObject({
       pendingAppointments: baseline.pendingAppointments,
       completedPhysicalExams: baseline.completedPhysicalExams,
@@ -120,17 +166,21 @@ describe("dashboard metrics publication boundaries", () => {
       rescheduled: baseline.rescheduled,
     });
 
-    await pool.query(
-      `UPDATE appointments
+    await transaction(async (client) => {
+      const published = await client.query<{ id: string; schedule_type: string }>(
+        `UPDATE appointments
           SET is_published=TRUE
-        WHERE student_number = ANY($1::varchar[])`,
-      [counterStudentNumbers],
-    );
+        WHERE student_number = ANY($1::varchar[]) RETURNING id::text,schedule_type`,
+        [counterStudentNumbers],
+      );
+      await linkPublishedLaboratoryAppointments(client, published.rows
+        .filter((row) => row.schedule_type === "LABORATORY").map((row) => row.id));
+    });
 
     await expect(dashboardMetrics()).resolves.toMatchObject({
-      pendingAppointments: baseline.pendingAppointments + 1,
-      completedPhysicalExams: baseline.completedPhysicalExams + 1,
-      completedLaboratory: baseline.completedLaboratory + 1,
+      pendingAppointments: baseline.pendingAppointments + 3,
+      completedPhysicalExams: baseline.completedPhysicalExams,
+      completedLaboratory: baseline.completedLaboratory,
       noShows: baseline.noShows + 1,
       rescheduled: baseline.rescheduled + 1,
     });
@@ -141,10 +191,10 @@ describe("dashboard metrics publication boundaries", () => {
     await pool.query(
       `INSERT INTO appointments (
          clinic_id, student_number, schedule_type, appointment_date,
-         status, is_published, created_by, updated_by
+         status, is_published, schedule_cycle_start, scheduling_category, created_by, updated_by
        )
        SELECT $1, student_number, 'LABORATORY', $2::date,
-              'DRAFT', FALSE, $3, $3
+              'DRAFT', FALSE, $5, 'REGULAR', $3, $3
          FROM students
         WHERE student_number LIKE $4`,
       [
@@ -152,6 +202,7 @@ describe("dashboard metrics publication boundaries", () => {
         appointmentDate,
         TEST_REFERENCE_IDS.adminUser,
         capacityStudentNumberPattern,
+        currentYear,
       ],
     );
 
@@ -159,12 +210,15 @@ describe("dashboard metrics publication boundaries", () => {
       capacityConflicts: baseline,
     });
 
-    await pool.query(
-      `UPDATE appointments
+    await transaction(async (client) => {
+      const published = await client.query<{ id: string }>(
+        `UPDATE appointments
           SET status='PENDING', is_published=TRUE
-        WHERE student_number LIKE $1`,
-      [capacityStudentNumberPattern],
-    );
+        WHERE student_number LIKE $1 RETURNING id::text`,
+        [capacityStudentNumberPattern],
+      );
+      await linkPublishedLaboratoryAppointments(client, published.rows.map((row) => row.id));
+    });
 
     await expect(dashboardMetrics()).resolves.toMatchObject({
       capacityConflicts: baseline + 1,

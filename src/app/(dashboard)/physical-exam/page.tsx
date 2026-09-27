@@ -30,6 +30,8 @@ export default async function PhysicalExamPage({
   const params = await searchParams;
   const page = parseAppointmentPage(params.page);
   const sort = parseAppointmentListSort(params.sort);
+  const academicYearStart = params.academicYearStart && /^\d{4}$/.test(params.academicYearStart)
+    ? Number(params.academicYearStart) : undefined;
   const result = await listAppointments({
     clinicCode: "CPU_CLINIC",
     appointmentDate: params.appointmentDate,
@@ -37,6 +39,7 @@ export default async function PhysicalExamPage({
     status: params.status,
     studentNumber: params.studentNumber,
     sort,
+    academicYearStart,
     isPublished: true,
     includeLaboratoryStatus: true,
     page,
@@ -47,6 +50,7 @@ export default async function PhysicalExamPage({
 
   return (
     <ClinicPublishedSchedule
+      canBulkReplace
       basePath="/physical-exam"
       title="Published physical examination schedule"
       description={`${result.total} published CPU Clinic physical examination appointment${singular ? "" : "s"} ${singular ? "matches" : "match"} the current filters.`}

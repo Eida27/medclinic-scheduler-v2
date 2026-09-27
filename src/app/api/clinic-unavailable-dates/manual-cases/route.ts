@@ -15,6 +15,8 @@ export async function GET(request: Request) {
       closureGroupId: search.get("closureGroupId") ?? undefined,
       date: search.get("date") ?? undefined,
       service: search.get("service") ?? undefined,
+      academicYearStart: search.has("academicYearStart")
+        ? Number(search.get("academicYearStart")) : undefined,
     }, actor));
   } catch (error) {
     return errorResponse(error);

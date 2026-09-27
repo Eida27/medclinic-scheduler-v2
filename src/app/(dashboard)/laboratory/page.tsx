@@ -30,6 +30,8 @@ export default async function LaboratoryPage({
   const params = await searchParams;
   const page = parseAppointmentPage(params.page);
   const sort = parseAppointmentListSort(params.sort);
+  const academicYearStart = params.academicYearStart && /^\d{4}$/.test(params.academicYearStart)
+    ? Number(params.academicYearStart) : undefined;
   const result = await listAppointments({
     clinicCode: "KABALAKA_CLINIC",
     appointmentDate: params.appointmentDate,
@@ -37,6 +39,7 @@ export default async function LaboratoryPage({
     status: params.status,
     studentNumber: params.studentNumber,
     sort,
+    academicYearStart,
     isPublished: true,
     page,
     limit: APPOINTMENT_PAGE_SIZE,
@@ -46,6 +49,7 @@ export default async function LaboratoryPage({
 
   return (
     <ClinicPublishedSchedule
+      canBulkReplace
       basePath="/laboratory"
       title="Published laboratory schedule"
       description={`${result.total} published KABALAKA Clinic laboratory appointment${singular ? "" : "s"} ${singular ? "matches" : "match"} the current filters.`}

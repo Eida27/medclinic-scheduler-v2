@@ -3,11 +3,9 @@
 import { useRouter } from "next/navigation";
 import { useRef, useState, type FormEvent } from "react";
 import { apiErrorMessage, readApiPayload } from "@/components/api-response";
-import { operationalStatusLabel } from "@/components/appointments/status-labels";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
-import { Select } from "@/components/ui/Select";
 import { Textarea } from "@/components/ui/Textarea";
 
 type AppointmentActionsProps = {
@@ -22,7 +20,6 @@ type AppointmentActionsProps = {
 export function AppointmentActions({
   id,
   status,
-  canCorrectNoShow = false,
   isManuallyLocked = false,
   updatedAt,
   basePath,
@@ -85,31 +82,9 @@ export function AppointmentActions({
       {error ? <Alert tone="danger">{error}</Alert> : null}
       {["DRAFT", "PENDING"].includes(status) ? (
         <form onSubmit={statusSubmit} className="grid gap-3 sm:grid-cols-3">
-          <Select name="status" defaultValue={status}>
-            {status === "DRAFT" ? (
-              <option value="CANCELLED">{operationalStatusLabel("CANCELLED")}</option>
-            ) : (
-              <>
-                <option value="COMPLETED">{operationalStatusLabel("COMPLETED")}</option>
-                <option value="CANCELLED">{operationalStatusLabel("CANCELLED")}</option>
-              </>
-            )}
-          </Select>
+          <input type="hidden" name="status" value="CANCELLED" />
           <Input name="notes" placeholder="Status note" />
-          <Button type="submit" disabled={pending}>Update status</Button>
-        </form>
-      ) : null}
-      {status === "NO_SHOW" && canCorrectNoShow ? (
-        <form onSubmit={statusSubmit} className="grid gap-3 sm:grid-cols-3">
-          <input type="hidden" name="status" value="COMPLETED" />
-          <Textarea
-            name="notes"
-            aria-label="Correction reason"
-            placeholder="Reason for correcting this automatic no-show"
-            required
-            className="sm:col-span-2"
-          />
-          <Button type="submit" disabled={pending}>Correct to completed</Button>
+          <Button type="submit" disabled={pending}>Cancel appointment</Button>
         </form>
       ) : null}
       {["PENDING", "NO_SHOW"].includes(status) ? (

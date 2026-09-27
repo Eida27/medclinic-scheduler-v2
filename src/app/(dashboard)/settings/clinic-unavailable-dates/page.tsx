@@ -19,7 +19,7 @@ export default async function ClinicUnavailableDatesPage() {
   return (
     <>
       <PageHeader
-        title="Clinic unavailable dates"
+        title="Clinic calendar"
         description="Review the unified annual calendar used by every clinic scheduling workflow."
       />
       <ClinicUnavailableCalendar

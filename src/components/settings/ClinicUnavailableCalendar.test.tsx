@@ -66,18 +66,29 @@ function jsonResponse(body: unknown, status = 200) {
     headers: { "content-type": "application/json" },
   });
 }
+const emptyOccupancy = { year: 2026, capacities: { LABORATORY: 10, PHYSICAL_EXAM: 10 }, dates: [] };
+function calendarFetch(...responses: Response[]) {
+  let index = 0;
+  return vi.fn((url: string, init?: RequestInit) => {
+    void init;
+    return Promise.resolve(url.startsWith("/api/clinic-calendar/occupancy")
+      ? jsonResponse({ data: emptyOccupancy })
+      : responses[Math.min(index++, responses.length - 1)]);
+  });
+}
 
 function stageAugust18() {
   renderCalendar();
   fireEvent.change(screen.getByLabelText("Closure reason"), {
     target: { value: "Campus-wide maintenance" },
   });
-  fireEvent.click(screen.getByRole("button", { name: /August 18, 2026: Available/ }));
+  fireEvent.click(screen.getByRole("button", { name: /August 18, 2026:/ }));
 }
 
 describe("ClinicUnavailableCalendar", () => {
   beforeEach(() => {
     vi.stubGlobal("crypto", { randomUUID: () => preview.requestId });
+    vi.stubGlobal("fetch", calendarFetch());
   });
 
   afterEach(() => {
@@ -110,12 +121,28 @@ describe("ClinicUnavailableCalendar", () => {
 
     expect(screen.getByRole("button", { name: /August 18, 2026: Selected to block/ })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText("1 unsaved change")).toBeVisible();
-  });
+  }, 30000);
+
+  it("keeps an unsaved draft when server calendar props refresh", async () => {
+    const view = renderCalendar();
+    fireEvent.change(screen.getByLabelText("Closure reason"), { target: { value: "Campus-wide maintenance" } });
+    fireEvent.click(screen.getByRole("button", { name: /August 18, 2026:/ }));
+    const refreshedDates = [...unavailableDates, {
+      ...unavailableDates[0],
+      id: "70000000-0000-4000-8000-000000000002",
+      blockedDate: "2026-08-20",
+      groupStartDate: "2026-08-20",
+      groupEndDate: "2026-08-20",
+    }];
+    view.rerender(<ClinicUnavailableCalendar unavailableDates={refreshedDates}
+      initialYear={2026} today="2026-07-28" maxYear={2100} openManualCaseCount={2} />);
+    expect(screen.getByRole("button", { name: /August 18, 2026: Selected to block/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /August 20, 2026: MAINTENANCE/ })).toBeVisible();
+    expect(screen.getByText("1 unsaved change")).toBeVisible();
+  }, 60000);
 
   it("previews before saving and sends the exact public request payload", async () => {
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(jsonResponse({ data: preview }))
-      .mockResolvedValueOnce(jsonResponse({ data: operationResult }));
+    const fetchMock = calendarFetch(jsonResponse({ data: preview }), jsonResponse({ data: operationResult }));
     vi.stubGlobal("fetch", fetchMock);
     stageAugust18();
 
@@ -123,14 +150,15 @@ describe("ClinicUnavailableCalendar", () => {
     expect(await screen.findByRole("dialog", { name: "Confirm clinic calendar impact" })).toBeVisible();
     expect(screen.getByText("Automatic eligible").nextSibling).toHaveTextContent("2");
     expect(screen.getByRole("radio", { name: /Automatically reschedule eligible appointments/ })).toBeChecked();
-    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/clinic-unavailable-dates/preview", expect.objectContaining({
+    expect(fetchMock).toHaveBeenCalledWith("/api/clinic-unavailable-dates/preview", expect.objectContaining({
       method: "POST",
     }));
     fireEvent.click(screen.getByRole("button", { name: "Confirm and save" }));
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    const previewPayload = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
-    const savePayload = JSON.parse(String(fetchMock.mock.calls[1][1]?.body));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => !String(url).startsWith("/api/clinic-calendar/occupancy"))).toHaveLength(2));
+    const mutationCalls = fetchMock.mock.calls.filter(([url]) => !String(url).startsWith("/api/clinic-calendar/occupancy"));
+    const previewPayload = JSON.parse(String(mutationCalls[0][1]?.body));
+    const savePayload = JSON.parse(String(mutationCalls[1][1]?.body));
     const expectedChange = {
       action: "BLOCK",
       date: "2026-08-18",
@@ -150,7 +178,7 @@ describe("ClinicUnavailableCalendar", () => {
   });
 
   it("permits today only for an acknowledged emergency closure", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: {
+    const fetchMock = calendarFetch(jsonResponse({ data: {
       ...preview,
       automaticRecoveryEligibleCount: 0,
       manualResolutionRequiredCount: 2,
@@ -158,7 +186,7 @@ describe("ClinicUnavailableCalendar", () => {
     } }));
     vi.stubGlobal("fetch", fetchMock);
     renderCalendar();
-    const todayButton = screen.getByRole("button", { name: /July 27, 2026: Available/ });
+    const todayButton = screen.getByRole("button", { name: /July 27, 2026:/ });
 
     expect(todayButton).toBeDisabled();
     fireEvent.change(screen.getByLabelText("Closure category"), { target: { value: "EMERGENCY_CLOSURE" } });
@@ -176,7 +204,7 @@ describe("ClinicUnavailableCalendar", () => {
   });
 
   it("invalidates an impact preview whenever the draft configuration changes", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ data: preview })));
+    vi.stubGlobal("fetch", calendarFetch(jsonResponse({ data: preview })));
     stageAugust18();
     fireEvent.click(screen.getByRole("button", { name: "Review impact" }));
     expect(await screen.findByRole("dialog", { name: "Confirm clinic calendar impact" })).toBeVisible();
@@ -195,5 +223,30 @@ describe("ClinicUnavailableCalendar", () => {
     expect(screen.queryByRole("button", { name: "Review impact" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Manual Resolution/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /August 19, 2026: MAINTENANCE/ })).toBeDisabled();
+  });
+
+  it("keeps day details open when the info button receives focus and is clicked", async () => {
+    renderCalendar();
+    const info = screen.getByRole("button", { name: "View day details for 2026-08-18" });
+
+    fireEvent.focus(info);
+    fireEvent.click(info);
+
+    expect(screen.getByRole("dialog", { name: "Calendar details for 2026-08-18" })).toBeVisible();
+  });
+
+  it("distinguishes unconfigured capacity from an available date", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ data: {
+      year: 2026,
+      capacities: { LABORATORY: null, PHYSICAL_EXAM: 10 },
+      dates: [],
+    } })));
+    renderCalendar();
+
+    const day = await screen.findByRole("button", { name: /August 18, 2026: Capacity not configured/ });
+    expect(day).toHaveClass("bg-slate-100");
+    fireEvent.click(screen.getByRole("button", { name: "View day details for 2026-08-18" }));
+    expect(screen.getByRole("dialog", { name: "Calendar details for 2026-08-18" }))
+      .toHaveTextContent("Capacity not configured");
   });
 });

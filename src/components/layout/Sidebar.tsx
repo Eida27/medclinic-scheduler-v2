@@ -20,6 +20,7 @@ const adminLinks = [
   ["Reference data", "/settings/reference-data"],
   ["Academic years", "/settings/academic-years"],
   ["Capacity", "/settings/capacity"],
+  ["Certificate physicians", "/settings/medical-certificate-physicians"],
   ["Email delivery", "/settings/email-delivery"],
   ["Clinic calendar", "/settings/clinic-unavailable-dates"],
   ["Manual resolution", "/settings/clinic-unavailable-dates/manual-resolution"],

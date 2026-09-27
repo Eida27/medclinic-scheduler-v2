@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { PropsWithChildren } from "react";
 import { BrandMark } from "@/components/branding/BrandMark";
 import { StudentLogoutButton } from "@/components/student/StudentLogoutButton";
+import { ManilaBoundaryRefresh } from "@/components/layout/ManilaBoundaryRefresh";
 import { optionalStudent } from "@/server/auth/current-student";
 
 export default async function StudentLayout({ children }: PropsWithChildren) {
@@ -9,6 +10,7 @@ export default async function StudentLayout({ children }: PropsWithChildren) {
   if (!student) return children;
   return (
     <div className="min-h-screen bg-canvas text-ink">
+      <ManilaBoundaryRefresh />
       <header className="border-b border-line bg-white">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-5 py-4">
           <BrandMark />

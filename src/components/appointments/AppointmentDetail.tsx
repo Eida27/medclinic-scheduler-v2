@@ -1,15 +1,19 @@
 import { notFound } from "next/navigation";
 import { AppointmentActions } from "@/components/appointments/AppointmentActions";
 import { AppointmentProtectionPanel } from "@/components/appointments/AppointmentProtectionPanel";
-import { CompletedStatusCorrection } from "@/components/appointments/CompletedStatusCorrection";
-import { ExternalLaboratoryVerificationPanel } from "@/components/appointments/ExternalLaboratoryVerificationPanel";
+import { LaboratoryChecklist } from "@/components/appointments/LaboratoryChecklist";
+import { PhysicalExamCompletionForm } from "@/components/appointments/PhysicalExamCompletionForm";
+import { CertificateRevisionPanel } from "@/components/medical-certificates/CertificateRevisionPanel";
 import { operationalStatusLabel, statusTone } from "@/components/appointments/status-labels";
 import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { isAutomaticNoShowLog } from "@/server/appointments/automatic-no-show";
 import { requireUser } from "@/server/auth/current-user";
+import { transaction } from "@/server/db/pool";
+import { loadLaboratoryChecklist } from "@/server/laboratory/laboratory-checklist.repository";
+import { certificateHistoryForAppointment, issuedCertificateForAppointment } from "@/server/medical-certificates/certificate.service";
+import { listPhysicians } from "@/server/medical-certificates/physician.service";
 import { getPublishedAppointment } from "@/server/repositories/appointments.repository";
 import type { HistoricalStaffActor } from "@/types/roles";
 
@@ -52,9 +56,12 @@ export async function AppointmentDetail({
   if (expectedScheduleType && appointment.scheduleType !== expectedScheduleType) notFound();
   if (user.role === "CLINIC_STAFF" && user.clinicId !== appointment.clinicId) notFound();
   const statusLogs = appointment.statusLogs as Log[];
-  const canCorrectNoShow = appointment.status === "NO_SHOW"
-    && (user.role === "ADMIN" || user.clinicId === appointment.clinicId)
-    && isAutomaticNoShowLog(statusLogs[0]);
+  const [issuedCertificate, physicians, certificateHistory] = appointment.scheduleType === "PHYSICAL_EXAM"
+    ? await Promise.all([issuedCertificateForAppointment(appointmentId), listPhysicians(user), certificateHistoryForAppointment(appointmentId, user)])
+    : [null, [], []];
+  const pairedLaboratoryChecklist = appointment.scheduleType === "PHYSICAL_EXAM" && appointment.pairedLaboratoryAppointmentId
+    ? await transaction((client) => loadLaboratoryChecklist(client, appointment.pairedLaboratoryAppointmentId!))
+    : null;
 
   return (
     <>
@@ -67,6 +74,7 @@ export async function AppointmentDetail({
           </Badge>
         )}
       />
+      {appointment.academicYearEnded ? <Alert tone="info">Academic year ended — historical record. Clinical and scheduling changes are closed.</Alert> : null}
       <Card>
         <div className="grid gap-4 sm:grid-cols-3">
           <div>
@@ -83,12 +91,16 @@ export async function AppointmentDetail({
           </div>
         </div>
       </Card>
-      {appointment.isOvpsaFirstYear && appointment.scheduleType === "PHYSICAL_EXAM"
-        && appointment.linkedOvpsaLaboratoryAppointmentId ? (
-          <ExternalLaboratoryVerificationPanel
-            laboratoryAppointmentId={appointment.linkedOvpsaLaboratoryAppointmentId}
-            verified={Boolean(appointment.linkedOvpsaLaboratoryVerified)}
-          />
+      {appointment.scheduleType === "PHYSICAL_EXAM" && pairedLaboratoryChecklist ? (
+          <Card>
+            <CardTitle>{appointment.isOvpsaFirstYear ? "External Laboratory verification" : "Laboratory progress"}</CardTitle>
+            <p className="mt-1 text-sm text-muted">{appointment.isOvpsaFirstYear
+              ? "Iloilo Mission Hospital results are verified by CPU Clinic one test at a time."
+              : "Laboratory test progress is read-only on this Physical Examination record."}</p>
+            <div className="mt-4"><LaboratoryChecklist appointmentId={pairedLaboratoryChecklist.appointmentId}
+              initial={pairedLaboratoryChecklist}
+              readOnly={!appointment.isOvpsaFirstYear || appointment.academicYearEnded} /></div>
+          </Card>
         ) : null}
       <AppointmentProtectionPanel
         appointmentId={String(appointment.id)}
@@ -99,34 +111,63 @@ export async function AppointmentDetail({
         {...(appointment.lockedBy ? { lockedBy: appointment.lockedBy } : {})}
         lockedAt={appointment.lockedAt?.toISOString() ?? null}
         updatedAt={appointment.updatedAt.toISOString()}
-        canManage={user.role === "ADMIN"}
+        canManage={user.role === "ADMIN" && !appointment.academicYearEnded}
       />
-      <Card>
+      {appointment.scheduleType === "PHYSICAL_EXAM" ? <Card>
+        <CardTitle>Medical certificate</CardTitle>
+        <div className="mt-4">
+          {issuedCertificate ? <CertificateRevisionPanel certificate={issuedCertificate}
+            physicians={physicians} canRevoke={user.role === "ADMIN"} canCorrect={!appointment.academicYearEnded} />
+          : !appointment.academicYearEnded && ["PENDING", "NO_SHOW"].includes(appointment.status) ? (
+            <PhysicalExamCompletionForm
+              appointmentId={appointmentId}
+              studentName={String(appointment.studentName)}
+              studentNumber={String(appointment.studentNumber)}
+              appointmentDate={String(appointment.appointmentDate)}
+              scheduleCycleStart={appointment.scheduleCycleStart}
+              dateOfBirth={appointment.dateOfBirth}
+              studentAcademicSnapshot={appointment.certificateStudentName ? {
+                studentName: appointment.certificateStudentName,
+                collegeName: appointment.certificateCollegeName ?? "",
+                programName: appointment.certificateProgramName ?? "",
+                yearLevel: appointment.certificateYearLevel,
+              } : null}
+              physicians={physicians}
+            />
+          ) : <p className="text-sm text-muted">No issued certificate is available.</p>}
+          {certificateHistory.length ? <div className="mt-6 border-t border-line pt-4">
+            <h3 className="font-semibold">Certificate history</h3>
+            <ul className="mt-2 grid gap-2">
+              {certificateHistory.map((revision) => <li key={revision.revisionId} className="text-sm">
+                Revision {revision.revisionNumber} · {revision.status.toLowerCase()} · Class {revision.classification}{" "}
+                <a className="font-semibold text-cpu-navy underline"
+                  href={`/api/medical-certificates/${revision.certificateId}/revisions/${revision.revisionId}/download`}>
+                  Download historical JPG
+                </a>
+              </li>)}
+            </ul>
+          </div> : null}
+        </div>
+      </Card> : null}
+      {!appointment.academicYearEnded ? <Card>
         <CardTitle>Update appointment</CardTitle>
         <div className="mt-4">
-          {appointment.isOvpsaFirstYear && appointment.scheduleType === "LABORATORY" ? (
+          {appointment.scheduleType === "LABORATORY" && !appointment.isOvpsaFirstYear ? (
+            <LaboratoryChecklist appointmentId={String(appointment.id)} />
+          ) : appointment.isOvpsaFirstYear && appointment.scheduleType === "LABORATORY" ? (
             <Alert tone={appointment.status === "COMPLETED" ? "success" : "info"}>
-              {String(appointment.displayStatus)}. This Mission Hospital appointment is updated only through the linked Physical Examination verification panel.
+              {String(appointment.displayStatus)}. CPU Clinic verifies individual tests from the linked Physical Examination detail.
             </Alert>
-          ) : <AppointmentActions
+          ) : null}
+          {!(appointment.isOvpsaFirstYear && appointment.scheduleType === "LABORATORY") ? <AppointmentActions
               id={String(appointment.id)}
               status={String(appointment.status)}
-              canCorrectNoShow={canCorrectNoShow}
               isManuallyLocked={Boolean(appointment.isManuallyLocked)}
               updatedAt={appointment.updatedAt.toISOString()}
               basePath={source === "LABORATORY" ? "/laboratory" : "/physical-exam"}
-            />}
-          {appointment.status === "COMPLETED" && !(appointment.isOvpsaFirstYear && appointment.scheduleType === "LABORATORY") ? (
-            <div className="mt-5">
-              <CompletedStatusCorrection
-                appointmentId={String(appointment.id)}
-                appointmentDate={String(appointment.appointmentDate)}
-                source={source}
-              />
-            </div>
-          ) : null}
+            /> : null}
         </div>
-      </Card>
+      </Card> : null}
       <Card>
         <CardTitle>Status history</CardTitle>
         <div className="mt-4 grid gap-3">

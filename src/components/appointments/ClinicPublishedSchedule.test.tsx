@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
@@ -67,7 +67,8 @@ describe("ClinicPublishedSchedule", () => {
       "/laboratory/appointment-1",
     );
     expect(within(row).getByText("2026-08-18")).toBeVisible();
-    expect(within(row).getByRole("button", { name: "Pending — click to mark completed" })).toBeVisible();
+    expect(within(row).getByText("Loading Laboratory checklist…")).toBeVisible();
+    expect(within(row).queryByRole("button", { name: /mark completed/i })).not.toBeInTheDocument();
     expect(within(row).getByText("Protected")).toHaveAttribute("aria-label", "Appointment manually locked");
     expect(within(row).queryByRole("link", { name: "Open" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("columnheader")).toHaveLength(4);
@@ -132,20 +133,30 @@ describe("ClinicPublishedSchedule", () => {
     expect(laboratoryBadge).toHaveClass(backgroundClass, textClass);
     expect(within(laboratoryCell).queryByRole("button", { name: label })).not.toBeInTheDocument();
     expect(within(laboratoryCell).queryByRole("link", { name: label })).not.toBeInTheDocument();
-    const quickStatus = within(row).getByRole("button", { name: "Pending — click to mark completed" });
     if (laboratoryStatus === "COMPLETED") {
-      expect(quickStatus).toBeEnabled();
+      expect(within(row).getByRole("link", { name: "Complete examination" })).toHaveAttribute("href", "/physical-exam/appointment-1");
       expect(within(row).queryByText(/Laboratory must be completed/)).not.toBeInTheDocument();
     } else {
-      const explanation = within(row).getByText(
+      within(row).getByText(
         "Laboratory must be completed before Physical Examination can be marked completed.",
       );
-      expect(quickStatus).toBeDisabled();
-      expect(quickStatus).toHaveAttribute("aria-describedby", explanation.id);
+      expect(within(row).queryByRole("link", { name: "Complete examination" })).not.toBeInTheDocument();
     }
   });
 
-  it("keeps a completed Physical Examination revert available when Laboratory is incomplete", () => {
+  it("shows read-only Laboratory test progress on a Physical Examination row", () => {
+    render(<ClinicPublishedSchedule basePath="/physical-exam" title="Physical Examination"
+      description="Current appointments" emptyMessage="No appointments" page={1} total={1}
+      filters={{}} showLaboratoryStatus appointments={[{ ...appointment,
+        scheduleType: "PHYSICAL_EXAM", laboratoryStatus: "PENDING",
+        laboratoryVerifiedTests: 2, laboratoryRequiredTests: 3 }]} />);
+
+    const row = screen.getByRole("row", { name: /Ana Maria Santos Jr\./ });
+    expect(within(row).getByText("2/3 verified")).toBeVisible();
+    expect(within(row).queryByRole("checkbox", { name: /CBC|Urine|Stool|X-ray/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps completed Physical Examination status read only in the schedule", () => {
     render(
       <ClinicPublishedSchedule
         basePath="/physical-exam"
@@ -166,7 +177,8 @@ describe("ClinicPublishedSchedule", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Completed — click to restore pending" })).toBeEnabled();
+    expect(screen.getAllByText("Completed")).not.toHaveLength(0);
+    expect(screen.queryByRole("button", { name: /restore pending/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/Laboratory must be completed/)).not.toBeInTheDocument();
   });
 
@@ -222,5 +234,33 @@ describe("ClinicPublishedSchedule", () => {
       "href",
       "/physical-exam/appointment-1",
     );
+  });
+
+  it("clears bulk selection when the student filter changes, including when returning", async () => {
+    sessionStorage.clear();
+    const props = {
+      basePath: "/laboratory", title: "Laboratory", description: "Appointments",
+      emptyMessage: "No appointments", page: 1, total: 1, canBulkReplace: true,
+      appointments: [{ ...appointment, isManuallyLocked: false,
+        updatedAt: "2026-09-23T00:00:00.000Z" }],
+    };
+    const view = render(<ClinicPublishedSchedule {...props} filters={{ studentNumber: "Ana" }} />);
+    const selectedCount = (count: number) => screen.getByText(`${count} selected (maximum 100)`);
+    const settleSelection = async () => act(async () => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    });
+    await settleSelection();
+    fireEvent.click(screen.getByRole("checkbox", { name: /Select Ana Maria Santos Jr. for replacement/ }));
+    selectedCount(1);
+    view.rerender(<ClinicPublishedSchedule {...props} page={2}
+      filters={{ studentNumber: "Ana", sort: "latest" }} />);
+    await settleSelection();
+    selectedCount(1);
+    view.rerender(<ClinicPublishedSchedule {...props} filters={{ studentNumber: "Ben" }} />);
+    await settleSelection();
+    selectedCount(0);
+    view.rerender(<ClinicPublishedSchedule {...props} filters={{ studentNumber: "Ana" }} />);
+    await settleSelection();
+    selectedCount(0);
   });
 });

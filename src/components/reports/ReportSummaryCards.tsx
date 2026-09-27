@@ -22,6 +22,10 @@ export function ReportSummaryCards({
     ["Laboratory incomplete", summary.laboratoryIncomplete],
     ["Physical Examination incomplete", summary.physicalExamIncomplete],
     ["Both incomplete", summary.bothIncomplete],
+    ...(summary.laboratoryDocumentsFinalized !== undefined
+      ? [["Laboratory documents finalized", summary.laboratoryDocumentsFinalized]] : []),
+    ...(summary.certificatesIssued !== undefined
+      ? [["Certificates issued", summary.certificatesIssued]] : []),
   ];
 
   return (
@@ -35,6 +39,7 @@ export function ReportSummaryCards({
           </Card>
         ))}
       </section>
+      <p className="text-xs text-muted">Completion counts reflect verified Laboratory tests and completed examinations. Document submission and certificate issue are shown separately; completion alone does not indicate medical fitness.</p>
       <section aria-label="Secondary report metrics" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {secondary.map(([label, value]) => (
           <Card key={label} className="py-4">

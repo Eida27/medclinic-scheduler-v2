@@ -2,6 +2,7 @@ import "server-only";
 import type { PoolClient } from "pg";
 
 import { AppError } from "@/lib/errors";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import { generatePairedSchedule } from "@/server/rule-engine/generate-paired-schedule";
 import { loadSchedulingBlockedDates } from "@/server/repositories/scheduling-blocked-dates.repository";
 import { loadAppointmentResultProtectionStates } from "@/server/repositories/student-result-submissions.repository";
@@ -333,7 +334,7 @@ export async function planOvpsaLowerPriorityDisplacementsForServiceDates(
     if (
       conflict.status !== "PENDING" ||
       conflict.isManuallyLocked ||
-      state?.type === "PROTECTED"
+      state?.type === "PROTECTED" || state?.type === "PROGRESS"
     ) {
       recordProtected(
         protectedConflict(
@@ -342,9 +343,13 @@ export async function planOvpsaLowerPriorityDisplacementsForServiceDates(
             ? "APPOINTMENT_MANUALLY_LOCKED"
             : state?.type === "PROTECTED"
               ? state.reason
+              : state?.type === "PROGRESS"
+                ? "LABORATORY_PROGRESS_RECORDED"
               : `APPOINTMENT_${conflict.status}`,
           state?.type === "PROTECTED"
             ? state.message
+            : state?.type === "PROGRESS"
+              ? "Laboratory tests have been verified and require Manual Resolution."
             : "A completed, locked, or otherwise protected appointment cannot be displaced.",
         ),
       );
@@ -401,7 +406,7 @@ export async function planOvpsaLowerPriorityDisplacementsForServiceDates(
       return (
         appointment.status !== "PENDING" ||
         appointment.isManuallyLocked ||
-        relatedState?.type === "PROTECTED"
+        relatedState?.type === "PROTECTED" || relatedState?.type === "PROGRESS"
       );
     });
     if (protectedRelated) {
@@ -413,9 +418,13 @@ export async function planOvpsaLowerPriorityDisplacementsForServiceDates(
             ? "APPOINTMENT_MANUALLY_LOCKED"
             : relatedState?.type === "PROTECTED"
               ? relatedState.reason
+              : relatedState?.type === "PROGRESS"
+                ? "LABORATORY_PROGRESS_RECORDED"
               : `APPOINTMENT_${protectedRelated.status}`,
           relatedState?.type === "PROTECTED"
             ? relatedState.message
+            : relatedState?.type === "PROGRESS"
+              ? "Laboratory tests have been verified and require Manual Resolution."
             : "The paired appointment cannot be displaced safely.",
         ),
       );
@@ -803,6 +812,7 @@ export async function applyOvpsaLowerPriorityDisplacements(
      RETURNING id::text,student_number,schedule_type,rescheduled_from::text`,
     [JSON.stringify(replacementRows), input.actorUserId],
   );
+  await linkPublishedLaboratoryAppointments(client, inserted.rows.map((appointment) => appointment.id));
   await client.query(
     `INSERT INTO appointment_status_logs (
        appointment_id,old_status,new_status,notes,changed_by

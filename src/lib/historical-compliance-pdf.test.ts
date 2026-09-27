@@ -93,6 +93,16 @@ const report = {
 };
 
 describe("historical compliance PDF document model", () => {
+  it("separates Laboratory documents and issued certificate class from attendance", () => {
+    const model = buildHistoricalCompliancePdfModel({
+      ...report,
+      items: [{ ...report.items[0], laboratoryDocumentsFinalized: false,
+        certificateIssued: true, certificateClassification: "B" }],
+    }, { userId: "staff-1", fullName: "Test Administrator" }, new Date("2026-08-02T02:03:04.000Z"));
+
+    expect(model.details[0].laboratory).toContain("No finalized document");
+    expect(model.details[0].physicalExam).toContain("Certificate issued - Class B");
+  });
   it("builds an ASCII-safe dated filename with the selected year and main status", () => {
     expect(buildHistoricalCompliancePdfFilename({
       academicYearLabel: "2025–2026",

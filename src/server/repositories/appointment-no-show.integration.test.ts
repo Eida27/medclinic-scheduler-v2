@@ -24,8 +24,10 @@ import {
   isAutomaticNoShowLog,
 } from "@/server/appointments/automatic-no-show";
 import { pool, transaction } from "@/server/db/pool";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import {
   cleanupTestFixtures,
+  insertTestAcademicSnapshot,
   TEST_REFERENCE_IDS,
 } from "@/test/integration-fixtures";
 import {
@@ -68,6 +70,12 @@ async function insertFixtureAppointment(
       TEST_REFERENCE_IDS.program,
     ],
   );
+  await insertTestAcademicSnapshot(client, {
+    studentNumber,
+    academicYearStart: 2044,
+    importName: `TEST automatic no-show fixture ${studentNumber}`,
+    actor: TEST_REFERENCE_IDS.adminUser,
+  });
 
   const clinicId = scheduleType === "LABORATORY"
     ? TEST_REFERENCE_IDS.laboratoryClinic
@@ -75,8 +83,8 @@ async function insertFixtureAppointment(
   const result = await client.query<{ id: string }>(
     `INSERT INTO appointments (
        clinic_id, student_number, schedule_type, appointment_date,
-       status, is_published, notes, created_by, updated_by
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)
+       status, is_published, notes, schedule_cycle_start, scheduling_category, created_by, updated_by
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,2044,'REGULAR',$8,$8)
      RETURNING id`,
     [
       clinicId,
@@ -89,7 +97,18 @@ async function insertFixtureAppointment(
       TEST_REFERENCE_IDS.adminUser,
     ],
   );
-  return result.rows[0].id;
+  const id = result.rows[0].id;
+  if (scheduleType === "LABORATORY" && isPublished) {
+    await linkPublishedLaboratoryAppointments(client, [id]);
+    if (status === "COMPLETED") {
+      await client.query(
+        `UPDATE laboratory_checklist_items SET verified_at=NOW(),verified_by=$2,verification_source='INTERNAL'
+          WHERE checklist_id=(SELECT checklist_id FROM laboratory_checklist_appointments WHERE appointment_id=$1)`,
+        [id, TEST_REFERENCE_IDS.adminUser],
+      );
+    }
+  }
+  return id;
 }
 
 async function appointmentState(client: PoolClient, id: string) {
@@ -123,12 +142,15 @@ async function withRollbackTransaction<T>(
 
 beforeEach(async () => {
   transactionSeam.client = null;
-  await cleanupTestFixtures(studentPattern, batchPattern);
+  await cleanupTestFixtures(studentPattern, batchPattern, batchPattern);
+  await pool.query(`INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+    VALUES (2044,'2045-07-31',$1,$1) ON CONFLICT (start_year) DO NOTHING`,
+  [TEST_REFERENCE_IDS.adminUser]);
 });
 
 afterEach(async () => {
   transactionSeam.client = null;
-  await cleanupTestFixtures(studentPattern, batchPattern);
+  await cleanupTestFixtures(studentPattern, batchPattern, batchPattern);
 });
 
 afterAll(async () => {
@@ -138,6 +160,7 @@ afterAll(async () => {
       [studentPattern],
     );
     expect(leakedFixtures.rows[0].count).toBe(0);
+    await pool.query("DELETE FROM academic_years WHERE start_year=2044");
   } finally {
     await pool.end();
   }

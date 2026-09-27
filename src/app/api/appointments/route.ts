@@ -14,6 +14,8 @@ export async function GET(request: Request) {
       scheduleType: params.get("scheduleType") || undefined, status: params.get("status") || undefined,
       collegeId: params.get("collegeId") || undefined, programId: params.get("programId") || undefined,
       studentNumber: params.get("studentNumber") || undefined,
+      academicYearStart: /^\d{4}$/.test(params.get("academicYearStart") ?? "")
+        ? Number(params.get("academicYearStart")) : undefined,
       sort: parseAppointmentListSort(params.get("sort") || undefined),
       isPublished: true,
     })), page: paging.page, limit: paging.limit });

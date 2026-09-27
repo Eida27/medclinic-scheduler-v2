@@ -2,6 +2,7 @@ export type AppointmentResultTable = "laboratory_results" | "exam_results";
 
 export type AppointmentResultProtectionState =
   | { type: "CLEAR" }
+  | { type: "PROGRESS"; verifiedCount: number }
   | {
       type: "PENDING_PLACEHOLDER";
       resultId: string;

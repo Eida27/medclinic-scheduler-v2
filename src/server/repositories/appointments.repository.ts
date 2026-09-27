@@ -2,6 +2,7 @@ import "server-only";
 import type { PoolClient } from "pg";
 import type { AppointmentListSort } from "@/components/appointments/appointment-list-sort";
 import { AppError } from "@/lib/errors";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import type { AutomaticNoShowLog } from "@/server/appointments/automatic-no-show";
 import { query } from "@/server/db/pool";
 import type { ClinicCode } from "@/server/clinics";
@@ -22,11 +23,19 @@ type AppointmentDetail = {
   lockedBy: HistoricalStaffActor | null;
   completedFromStatus: CompletionSourceStatus | null;
   laboratoryStatus?: "PENDING" | "COMPLETED" | "NO_SHOW" | null;
+  laboratoryVerifiedTests?: number | null;
+  laboratoryRequiredTests?: number | null;
   locationName: string;
   isOvpsaFirstYear: boolean;
   displayStatus: string;
-  linkedOvpsaLaboratoryAppointmentId?: string | null;
-  linkedOvpsaLaboratoryVerified?: boolean | null;
+  scheduleCycleStart: number;
+  academicYearEnded: boolean;
+  pairedLaboratoryAppointmentId?: string | null;
+  certificateStudentName: string | null;
+  certificateCollegeName: string | null;
+  certificateProgramName: string | null;
+  certificateYearLevel: number | null;
+  dateOfBirth: string | null;
 };
 type StatusLog = { id: string; oldStatus: string | null; newStatus: string; notes: string | null; createdAt: Date; changedById: string | null; changedByName: string | null; changedBy: HistoricalStaffActor | null };
 
@@ -78,6 +87,7 @@ export type AppointmentLockMutationContext = Pick<
   | "lockedById"
   | "lockedAt"
   | "updatedAt"
+  | "scheduleCycleStart"
 >;
 
 const appointmentListOrderBy: Record<AppointmentListSort, string> = {
@@ -89,10 +99,17 @@ const appointmentListOrderBy: Record<AppointmentListSort, string> = {
 
 export async function listAppointments(filters: {
   clinicCode?: ClinicCode; appointmentDate?: string; scheduleType?: string; status?: string; collegeId?: string; programId?: string;
-  studentNumber?: string; isPublished?: true; sort?: AppointmentListSort; includeLaboratoryStatus?: boolean; page: number; limit: number; offset: number;
+  studentNumber?: string; isPublished?: true; sort?: AppointmentListSort; includeLaboratoryStatus?: boolean; academicYearStart?: number; page: number; limit: number; offset: number;
 }) {
   const clauses = ["a.is_published=TRUE", "a.status NOT IN ('RESCHEDULED','CANCELLED','AWAITING_RESCHEDULE')"]; const values: unknown[] = [];
   const add = (sql: string, value: unknown) => { values.push(value); clauses.push(sql.replaceAll("?", `$${values.length}`)); };
+  if (filters.academicYearStart !== undefined) {
+    if (!Number.isInteger(filters.academicYearStart)) throw new AppError("INVALID_ACADEMIC_YEAR", "Select a valid academic year.", 422);
+    add("a.schedule_cycle_start=?", filters.academicYearStart);
+  } else {
+    clauses.push("make_date(year.start_year, 8, 1) <= (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date");
+    clauses.push("year.closing_date >= (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date");
+  }
   if (filters.appointmentDate) add("a.appointment_date = ?::date", filters.appointmentDate);
   if (filters.clinicCode) add("cl.code = ?", filters.clinicCode);
   if (filters.scheduleType) add("a.schedule_type = ?", filters.scheduleType);
@@ -115,11 +132,11 @@ export async function listAppointments(filters: {
   const where = clauses.join(" AND ");
   const orderBy = appointmentListOrderBy[filters.sort ?? "soonest"];
   const laboratoryStatusSelect = filters.includeLaboratoryStatus
-    ? ', laboratory.status AS "laboratoryStatus"'
+    ? ', laboratory.status AS "laboratoryStatus", checklist_progress.verified AS "laboratoryVerifiedTests", checklist_progress.required AS "laboratoryRequiredTests"'
     : "";
   const laboratoryStatusJoin = filters.includeLaboratoryStatus
     ? `LEFT JOIN LATERAL (
-         SELECT laboratory.status
+         SELECT laboratory.id,laboratory.status
            FROM appointments laboratory
           WHERE a.schedule_type='PHYSICAL_EXAM'
             AND laboratory.student_number=a.student_number
@@ -136,14 +153,22 @@ export async function listAppointments(filters: {
             )
             AND (
               (a.schedule_pair_id IS NOT NULL AND laboratory.schedule_pair_id=a.schedule_pair_id)
-              OR a.schedule_pair_id IS NULL
+              OR (a.schedule_pair_id IS NULL AND laboratory.schedule_pair_id IS NULL)
             )
           ORDER BY laboratory.appointment_date DESC, laboratory.created_at DESC, laboratory.id DESC
           LIMIT 1
-       ) laboratory ON TRUE`
+       ) laboratory ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*) FILTER (WHERE item.verified_at IS NOT NULL)::integer AS verified,
+                COUNT(*)::integer AS required
+           FROM laboratory_checklist_appointments link
+           JOIN laboratory_checklist_items item ON item.checklist_id=link.checklist_id
+          WHERE link.appointment_id=laboratory.id
+       ) checklist_progress ON TRUE`
     : "";
   const count = await query<{ count: string }>(
     `SELECT COUNT(*)::text AS count FROM appointments a
+      JOIN academic_years year ON year.start_year=a.schedule_cycle_start
       JOIN clinics cl ON cl.id=a.clinic_id
       JOIN students s ON s.student_number=a.student_number WHERE ${where}`,
     values,
@@ -155,7 +180,9 @@ export async function listAppointments(filters: {
             a.clinic_id AS "clinicId", cl.code AS "clinicCode", cl.name AS "clinicName",
             a.appointment_date::text AS "appointmentDate",
             a.status, a.is_published AS "isPublished", c.name AS "collegeName", p.name AS "programName",
-            a.is_manually_locked AS "isManuallyLocked",
+            a.schedule_cycle_start AS "scheduleCycleStart",
+            (year.closing_date < (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date) AS "academicYearEnded",
+            a.is_manually_locked AS "isManuallyLocked",a.updated_at AS "updatedAt",
             CASE WHEN a.ovpsa_batch_id IS NOT NULL AND a.schedule_type='LABORATORY'
                  THEN 'Iloilo Mission Hospital' ELSE cl.name END AS "locationName",
             (a.ovpsa_batch_id IS NOT NULL) AS "isOvpsaFirstYear",
@@ -168,6 +195,7 @@ export async function listAppointments(filters: {
               ELSE NULL
             END AS "completedFromStatus"${laboratoryStatusSelect}
      FROM appointments a JOIN students s ON s.student_number=a.student_number
+     JOIN academic_years year ON year.start_year=a.schedule_cycle_start
      JOIN clinics cl ON cl.id=a.clinic_id
      JOIN colleges c ON c.id=s.college_id JOIN programs p ON p.id=s.program_id
      LEFT JOIN LATERAL (
@@ -194,6 +222,13 @@ export async function getPublishedAppointment(id: string) {
             a.schedule_type AS "scheduleType", a.appointment_date::text AS "appointmentDate",
             a.clinic_id AS "clinicId", cl.code AS "clinicCode", cl.name AS "clinicName",
             a.status, a.is_published AS "isPublished",
+            a.schedule_cycle_start AS "scheduleCycleStart",
+            snapshot.student_name AS "certificateStudentName",
+            snapshot.college_name AS "certificateCollegeName",
+            snapshot.program_name AS "certificateProgramName",
+            snapshot.year_level AS "certificateYearLevel",
+            s.date_of_birth::text AS "dateOfBirth",
+            (year.closing_date < (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date) AS "academicYearEnded",
             a.notes, a.rescheduled_from AS "rescheduledFrom", c.name AS "collegeName", p.name AS "programName",
             CASE WHEN a.ovpsa_batch_id IS NOT NULL AND a.schedule_type='LABORATORY'
                  THEN 'Iloilo Mission Hospital' ELSE cl.name END AS "locationName",
@@ -201,8 +236,7 @@ export async function getPublishedAppointment(id: string) {
             CASE WHEN a.ovpsa_batch_id IS NOT NULL AND a.schedule_type='LABORATORY'
                        AND a.status='PENDING' AND ovpsa_verification.id IS NULL
                  THEN 'Awaiting External Laboratory Result' ELSE a.status END AS "displayStatus",
-            linked_laboratory.id::text AS "linkedOvpsaLaboratoryAppointmentId",
-            linked_laboratory.is_verified AS "linkedOvpsaLaboratoryVerified",
+            linked_laboratory.id::text AS "pairedLaboratoryAppointmentId",
             a.is_manually_locked AS "isManuallyLocked", a.lock_reason AS "lockReason",
             a.locked_by::text AS "lockedById", locked_user.full_name AS "lockedByName",
             CASE WHEN locked_user.id IS NULL THEN NULL ELSE json_build_object(
@@ -212,25 +246,33 @@ export async function getPublishedAppointment(id: string) {
             ) END AS "lockedBy",
             a.locked_at AS "lockedAt", a.updated_at AS "updatedAt"
      FROM appointments a JOIN students s ON s.student_number=a.student_number
+     JOIN academic_years year ON year.start_year=a.schedule_cycle_start
+     LEFT JOIN student_academic_snapshots snapshot
+       ON snapshot.student_number=a.student_number
+      AND snapshot.academic_year_start=a.schedule_cycle_start
      JOIN clinics cl ON cl.id=a.clinic_id
      JOIN colleges c ON c.id=s.college_id JOIN programs p ON p.id=s.program_id
      LEFT JOIN users locked_user ON locked_user.id=a.locked_by
      LEFT JOIN ovpsa_external_laboratory_verifications ovpsa_verification
        ON ovpsa_verification.appointment_id=a.id
      LEFT JOIN LATERAL (
-       SELECT laboratory.id,
-              EXISTS (
-                SELECT 1 FROM ovpsa_external_laboratory_verifications verification
-                 WHERE verification.appointment_id=laboratory.id
-              ) AS is_verified
+       SELECT laboratory.id
          FROM appointments laboratory
         WHERE a.schedule_type='PHYSICAL_EXAM'
-          AND a.ovpsa_batch_id IS NOT NULL
-          AND laboratory.ovpsa_batch_id=a.ovpsa_batch_id
           AND laboratory.student_number=a.student_number
+          AND laboratory.schedule_cycle_start=a.schedule_cycle_start
           AND laboratory.schedule_type='LABORATORY'
           AND laboratory.is_published=TRUE
-          AND laboratory.status IN ('PENDING','COMPLETED','AWAITING_RESCHEDULE')
+          AND laboratory.status IN ('PENDING','COMPLETED','NO_SHOW','AWAITING_RESCHEDULE')
+          AND ((a.schedule_pair_id IS NOT NULL AND laboratory.schedule_pair_id=a.schedule_pair_id)
+            OR (a.ovpsa_batch_id IS NOT NULL AND laboratory.ovpsa_batch_id=a.ovpsa_batch_id)
+            OR (a.schedule_pair_id IS NULL AND a.ovpsa_batch_id IS NULL AND laboratory.schedule_pair_id IS NULL))
+          AND NOT EXISTS (
+            SELECT 1 FROM appointments replacement
+             WHERE replacement.rescheduled_from=laboratory.id
+               AND replacement.is_published=TRUE
+               AND replacement.status NOT IN ('DRAFT','CANCELLED')
+          )
         ORDER BY laboratory.created_at DESC,laboratory.id DESC
         LIMIT 1
      ) linked_laboratory ON TRUE
@@ -434,6 +476,7 @@ export async function getAppointmentLockMutationContext(
     `SELECT id::text,student_number AS "studentNumber",schedule_type AS "scheduleType",
             appointment_date::text AS "appointmentDate",status,
             clinic_id::text AS "clinicId",is_published AS "isPublished",
+            schedule_cycle_start AS "scheduleCycleStart",
             is_manually_locked AS "isManuallyLocked",lock_reason AS "lockReason",
             locked_by::text AS "lockedById",locked_at AS "lockedAt",updated_at AS "updatedAt"
        FROM appointments
@@ -553,6 +596,7 @@ export async function rescheduleAppointmentWithClient(
      ) VALUES ($1,NULL,'PENDING',$2,$3)`,
     [replacement.rows[0].id, notes, actorUserId],
   );
+  await linkPublishedLaboratoryAppointments(client, [replacement.rows[0].id]);
   return replacement.rows[0].id;
 }
 

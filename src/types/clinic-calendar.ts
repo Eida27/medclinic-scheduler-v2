@@ -113,6 +113,7 @@ export type ClinicManualCaseReason =
   | "PHYSICAL_COMPLETED_BEFORE_LABORATORY"
   | "APPOINTMENT_MANUALLY_LOCKED"
   | "DRAFT_RESULT_FILES_EXIST"
+  | "LABORATORY_PROGRESS_RECORDED"
   | "PROTECTED_RESULTS_EXIST"
   | "PAIR_MISSING_OR_INCONSISTENT"
   | "NO_REPLACEMENT_CAPACITY"
@@ -125,6 +126,7 @@ export type ClinicManualCaseSource = "CLINIC_CLOSURE" | "AUTOMATIC_DISPLACEMENT"
 export type ClinicManualCaseDto = {
   id: string;
   studentNumber: string;
+  academicYearStart: number;
   studentName: string;
   caseSource: ClinicManualCaseSource;
   closureGroupId: string | null;
@@ -169,6 +171,7 @@ export type ClinicManualCasePageDto = {
   page: number;
   pageSize: number;
   total: number;
+  selectedYearState: "CURRENT" | "UPCOMING" | "ENDED" | "UNKNOWN" | null;
   items: ClinicManualCaseDto[];
 };
 

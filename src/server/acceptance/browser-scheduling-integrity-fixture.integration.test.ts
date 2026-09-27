@@ -64,6 +64,47 @@ describe.sequential("scheduling integrity guarded fixture workflow", () => {
       });
       expect(() => assertSafeSchedulingIntegrityStatus(setup)).not.toThrow();
 
+      const clinicalSetup = await pool.query<{
+        snapshots: number;
+        checklists: number;
+        links: number;
+        items: number;
+        verified_manual_items: number;
+      }>(
+        `SELECT
+           (SELECT COUNT(*)::int FROM student_academic_snapshots
+             WHERE source_import_group_id=$1 AND academic_year_start=2026) AS snapshots,
+           (SELECT COUNT(*)::int FROM laboratory_checklists
+             WHERE root_appointment_id=ANY($2::uuid[])) AS checklists,
+           (SELECT COUNT(*)::int FROM laboratory_checklist_appointments
+             WHERE appointment_id=ANY($2::uuid[])) AS links,
+           (SELECT COUNT(*)::int FROM laboratory_checklist_items item
+             JOIN laboratory_checklists checklist ON checklist.id=item.checklist_id
+             WHERE checklist.root_appointment_id=ANY($2::uuid[])) AS items,
+           (SELECT COUNT(*)::int FROM laboratory_checklist_items item
+             JOIN laboratory_checklists checklist ON checklist.id=item.checklist_id
+             WHERE checklist.root_appointment_id=$3 AND item.verified_at IS NOT NULL
+               AND item.verified_by=$4 AND item.verification_source='INTERNAL') AS verified_manual_items`,
+        [
+          SCHEDULING_INTEGRITY_FIXTURE.ids.importGroup,
+          [
+            SCHEDULING_INTEGRITY_FIXTURE.appointmentIds.lifecycleLaboratory,
+            SCHEDULING_INTEGRITY_FIXTURE.appointmentIds.manualLaboratory,
+            SCHEDULING_INTEGRITY_FIXTURE.appointmentIds.displacementLaboratory,
+            SCHEDULING_INTEGRITY_FIXTURE.appointmentIds.portalLaboratory,
+          ],
+          SCHEDULING_INTEGRITY_FIXTURE.appointmentIds.manualLaboratory,
+          SCHEDULING_INTEGRITY_FIXTURE.admin.id,
+        ],
+      );
+      expect(clinicalSetup.rows[0]).toEqual({
+        snapshots: 154,
+        checklists: 4,
+        links: 4,
+        items: 12,
+        verified_manual_items: 3,
+      });
+
       const initialStatus = await operation("status");
       expect(initialStatus).toMatchObject({
         mode: "status",
@@ -115,6 +156,28 @@ describe.sequential("scheduling integrity guarded fixture workflow", () => {
         phase: "ABSENT",
       });
       expect(Object.values(cleanup.residue).every((count) => count === 0)).toBe(true);
+      const clinicalResidue = await pool.query<{
+        snapshots: number;
+        checklists: number;
+        links: number;
+        items: number;
+        events: number;
+      }>(
+        `SELECT
+           (SELECT COUNT(*)::int FROM student_academic_snapshots WHERE source_import_group_id=$1) AS snapshots,
+           (SELECT COUNT(*)::int FROM laboratory_checklists WHERE student_number LIKE 'B-SIH-%') AS checklists,
+           (SELECT COUNT(*)::int FROM laboratory_checklist_appointments link
+             JOIN appointments appointment ON appointment.id=link.appointment_id
+             WHERE appointment.student_number LIKE 'B-SIH-%') AS links,
+           (SELECT COUNT(*)::int FROM laboratory_checklist_items item
+             JOIN laboratory_checklists checklist ON checklist.id=item.checklist_id
+             WHERE checklist.student_number LIKE 'B-SIH-%') AS items,
+           (SELECT COUNT(*)::int FROM laboratory_checklist_events event
+             JOIN laboratory_checklists checklist ON checklist.id=event.checklist_id
+             WHERE checklist.student_number LIKE 'B-SIH-%') AS events`,
+        [SCHEDULING_INTEGRITY_FIXTURE.ids.importGroup],
+      );
+      expect(Object.values(clinicalResidue.rows[0]).every((count) => count === 0)).toBe(true);
       const remaining = await pool.query<{ owned_count: number; unrelated_count: number }>(
         `SELECT
            (SELECT COUNT(*)::int FROM schedule_import_groups WHERE id=$1) AS owned_count,

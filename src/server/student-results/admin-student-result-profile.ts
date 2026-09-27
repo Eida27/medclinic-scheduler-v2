@@ -58,6 +58,7 @@ export type AdminStudentResultListItem = {
   latestActivityAt: Date;
   laboratory: Pick<AdminCurrentResultSection, "state"> & { fileCount: number };
   physicalExam: Pick<AdminCurrentResultSection, "state"> & { fileCount: number };
+  certificate: { status: "ISSUED" | "REVOKED" | null; classification: string | null };
 };
 
 export type AdminStudentResultProfile = {
@@ -69,6 +70,7 @@ export type AdminStudentResultProfile = {
   latestActivityAt: Date | null;
   laboratory: AdminCurrentResultSection;
   physicalExam: AdminCurrentResultSection;
+  certificate: { id: string; status: "ISSUED" | "REVOKED" | null; classification: string | null; examinationDate: string | null };
   history: AdminResultSubmission[];
 };
 
@@ -82,16 +84,12 @@ export function currentSubmissionState(
 
 export function combinedSubmissionProgress(
   laboratory: CurrentSubmissionState,
-  physicalExam: CurrentSubmissionState,
 ): AdminSubmissionProgress {
-  if (laboratory === "INVALIDATED" || physicalExam === "INVALIDATED") {
+  if (laboratory === "INVALIDATED") {
     return "AWAITING_RESUBMISSION";
   }
-  if (laboratory === "FINALIZED" && physicalExam === "FINALIZED") {
+  if (laboratory === "FINALIZED") {
     return "FULLY_SUBMITTED";
-  }
-  if (laboratory === "FINALIZED" || physicalExam === "FINALIZED") {
-    return "PARTIALLY_SUBMITTED";
   }
   return "NOT_SUBMITTED";
 }

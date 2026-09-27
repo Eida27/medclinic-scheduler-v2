@@ -122,9 +122,9 @@ integration("reference catalog destructive cleanup", () => {
          id, batch_id, schedule_item_id, clinic_id, student_number, schedule_type,
          appointment_date, status, is_published, schedule_cycle_start, created_by
        ) VALUES
-         ($1,$3,$4,'60000000-0000-4000-8000-000000000001',$6,'LABORATORY','2026-08-03','PENDING',TRUE,2026,
+         ($1,$3,$4,'60000000-0000-4000-8000-000000000001',$6,'LABORATORY','2026-08-03','PENDING',FALSE,2026,
           '00000000-0000-4000-8000-000000000001'),
-         ($2,$3,$5,'60000000-0000-4000-8000-000000000001',$7,'LABORATORY','2026-08-03','PENDING',TRUE,2026,
+         ($2,$3,$5,'60000000-0000-4000-8000-000000000001',$7,'LABORATORY','2026-08-03','PENDING',FALSE,2026,
           '00000000-0000-4000-8000-000000000001')`,
       [targetAppointmentId, retainedAppointmentId, created.batchId, targetItemId, retainedItemId, created.targetStudent, created.retainedStudent],
     );

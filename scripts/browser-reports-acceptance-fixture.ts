@@ -2,6 +2,7 @@ import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool, type PoolClient } from "pg";
+import sharp from "sharp";
 
 const FIXTURE_DIRECTORY = resolve(".data/browser-reports-acceptance");
 const STATE_FILE = resolve(FIXTURE_DIRECTORY, "state.json");
@@ -28,6 +29,14 @@ const appointmentIds = Array.from({ length: 165 }, (_, index) =>
   `b8300000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`);
 const snapshotIds = Array.from({ length: 157 }, (_, index) =>
   `b8400000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`);
+const checklistIds = Array.from({ length: 157 }, (_, index) =>
+  `b8800000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`);
+const PHYSICIAN_ID = "b8810000-0000-4000-8000-000000000001";
+const PHYSICIAN_REVISION_ID = "b8820000-0000-4000-8000-000000000001";
+const certificateIds = Array.from({ length: 3 }, (_, index) =>
+  `b8830000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`);
+const certificateRevisionIds = Array.from({ length: 3 }, (_, index) =>
+  `b8840000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`);
 const importGroups = [
   {
     id: "b8000000-0000-4000-8000-000000000001",
@@ -96,9 +105,9 @@ export const REPORTS_ACCEPTANCE_FIXTURE = {
       classification: "DID_NOT_COMPLY_BOTH",
       importMode: "FIRST_YEAR_OVPSA",
     },
-    laboratoryOnly: {
+    incompleteBoth: {
       studentNumber: "B-RPT-0004",
-      classification: "DID_NOT_COMPLY_LABORATORY",
+      classification: "DID_NOT_COMPLY_BOTH",
     },
     completed: {
       studentNumber: "B-RPT-0005",
@@ -123,6 +132,12 @@ export type ReportsAcceptanceResidue = {
   crudScratchYears: number;
   auditLogs: number;
   stateFiles: number;
+  checklists?: number;
+  checklistItems?: number;
+  checklistLinks?: number;
+  certificates?: number;
+  examinationResults?: number;
+  physicianProfiles?: number;
 };
 
 type FixtureState = {
@@ -190,6 +205,7 @@ type AppointmentSeed = {
   is_published: boolean;
   rescheduled_from: string | null;
   schedule_cycle_start: number;
+  scheduling_category: "REGULAR";
 };
 
 export function normalizeReportsAcceptanceDatabaseIdentity(
@@ -423,8 +439,9 @@ function snapshots(): SnapshotSeed[] {
 
 function appointments(): AppointmentSeed[] {
   let idIndex = 0;
-  const next = (input: Omit<AppointmentSeed, "id">): AppointmentSeed => ({
+  const next = (input: Omit<AppointmentSeed, "id" | "scheduling_category">): AppointmentSeed => ({
     id: appointmentIds[idIndex++],
+    scheduling_category: "REGULAR",
     ...input,
   });
   const rows: AppointmentSeed[] = studentNumbers.map((studentNumber, offset) => {
@@ -464,7 +481,7 @@ function appointments(): AppointmentSeed[] {
     }),
     next({
       clinic_id: PHYSICAL_EXAM_CLINIC_ID, student_number: studentNumbers[3],
-      schedule_type: "PHYSICAL_EXAM", appointment_date: "2020-10-18", status: "COMPLETED",
+      schedule_type: "PHYSICAL_EXAM", appointment_date: "2020-10-18", status: "NO_SHOW",
       is_published: true, rescheduled_from: null, schedule_cycle_start: 2020,
     }),
     next({
@@ -494,7 +511,7 @@ function appointments(): AppointmentSeed[] {
     }),
     next({
       clinic_id: PHYSICAL_EXAM_CLINIC_ID, student_number: studentNumbers[2],
-      schedule_type: "PHYSICAL_EXAM", appointment_date: "2098-09-05", status: "COMPLETED",
+      schedule_type: "PHYSICAL_EXAM", appointment_date: "2098-09-05", status: "NO_SHOW",
       is_published: true, rescheduled_from: null, schedule_cycle_start: 2098,
     }),
     next({
@@ -507,6 +524,138 @@ function appointments(): AppointmentSeed[] {
     throw new Error(`Reports fixture appointment contract drifted: expected ${appointmentIds.length}, got ${idIndex}.`);
   }
   return rows;
+}
+
+function clinicalFixtureRows() {
+  const allAppointments = appointments();
+  const snapshotByStudentYear = new Map(snapshots().map((snapshot) => [
+    `${snapshot.student_number}:${snapshot.academic_year_start}`, snapshot,
+  ]));
+  const publishedLaboratory = allAppointments.filter((appointment) =>
+    appointment.schedule_type === "LABORATORY" && appointment.is_published);
+  const roots = publishedLaboratory.filter((appointment) => appointment.rescheduled_from === null);
+  const checklistByRoot = new Map(roots.map((root, index) => [root.id, checklistIds[index]]));
+  const checklists = roots.map((root, index) => {
+    const snapshot = snapshotByStudentYear.get(`${root.student_number}:${root.schedule_cycle_start}`);
+    if (!snapshot) throw new Error("Reports clinical fixture snapshot provenance drifted.");
+    return {
+      id: checklistIds[index], root_appointment_id: root.id, student_number: root.student_number,
+      academic_year_start: root.schedule_cycle_start, academic_snapshot_id: snapshot.id,
+      year_level_snapshot: snapshot.year_level,
+      scheduling_category_snapshot: root.scheduling_category,
+    };
+  });
+  const links = publishedLaboratory.map((appointment) => ({
+    appointment_id: appointment.id,
+    checklist_id: checklistByRoot.get(appointment.rescheduled_from ?? appointment.id),
+  }));
+  if (checklists.length !== checklistIds.length || links.some((link) => !link.checklist_id)) {
+    throw new Error("Reports clinical fixture Laboratory lineage drifted.");
+  }
+  const completedRoots = new Map(publishedLaboratory.filter((appointment) =>
+    appointment.status === "COMPLETED").map((appointment) => [
+    appointment.rescheduled_from ?? appointment.id,
+    `${appointment.appointment_date}T04:00:00.000Z`,
+  ]));
+  const items = checklists.flatMap((checklist) => {
+    const required = ["CBC", "URINE", "STOOL"];
+    if (checklist.year_level_snapshot === 1) {
+      required.push("XRAY");
+    }
+    return required.map((testCode) => ({
+      checklist_id: checklist.id, test_code: testCode,
+      verified_at: completedRoots.get(checklist.root_appointment_id) ?? null,
+    }));
+  });
+  const completedExaminations = allAppointments.filter((appointment) =>
+    appointment.schedule_type === "PHYSICAL_EXAM" && appointment.is_published
+      && appointment.status === "COMPLETED");
+  if (completedExaminations.length !== certificateIds.length) {
+    throw new Error("Reports clinical fixture examination contract drifted.");
+  }
+  return { checklists, links, items, completedExaminations };
+}
+
+async function insertClinicalFixtureRows(client: PoolClient) {
+  const clinical = clinicalFixtureRows();
+  await client.query(
+    `INSERT INTO laboratory_checklists
+       (id,root_appointment_id,student_number,academic_year_start,academic_snapshot_id,
+        year_level_snapshot,scheduling_category_snapshot)
+     SELECT row.id,row.root_appointment_id,row.student_number,row.academic_year_start,
+            row.academic_snapshot_id,row.year_level_snapshot,row.scheduling_category_snapshot
+       FROM jsonb_to_recordset($1::jsonb) AS row(
+         id uuid,root_appointment_id uuid,student_number text,academic_year_start int,
+         academic_snapshot_id uuid,year_level_snapshot int,scheduling_category_snapshot text)
+     ON CONFLICT (id) DO NOTHING`,
+    [JSON.stringify(clinical.checklists)],
+  );
+  await client.query(
+    `INSERT INTO laboratory_checklist_appointments (appointment_id,checklist_id)
+     SELECT row.appointment_id,row.checklist_id
+       FROM jsonb_to_recordset($1::jsonb) AS row(appointment_id uuid,checklist_id uuid)
+     ON CONFLICT (appointment_id) DO NOTHING`,
+    [JSON.stringify(clinical.links)],
+  );
+  await client.query(
+    `INSERT INTO laboratory_checklist_items
+       (checklist_id,test_code,verified_at,verified_by,verification_source)
+     SELECT row.checklist_id,row.test_code,row.verified_at::timestamptz,
+            CASE WHEN row.verified_at IS NULL THEN NULL ELSE $2::uuid END,
+            CASE WHEN row.verified_at IS NULL THEN NULL ELSE 'INTERNAL' END
+       FROM jsonb_to_recordset($1::jsonb) AS row(
+         checklist_id uuid,test_code text,verified_at text)
+     ON CONFLICT (checklist_id,test_code) DO NOTHING`,
+    [JSON.stringify(clinical.items), ADMIN_USER_ID],
+  );
+  const signature = await sharp({ create: {
+    width: 2, height: 2, channels: 4, background: "#000000",
+  } }).png().toBuffer();
+  const jpeg = await sharp({ create: {
+    width: 2, height: 2, channels: 3, background: "#ffffff",
+  } }).jpeg().toBuffer();
+  const actorSnapshot = JSON.stringify({ userId: ADMIN_USER_ID, name: "Reports fixture administrator" });
+  const physicianSnapshot = JSON.stringify({ displayName: "Dr. Reports Fixture", licenseNumber: "FIXTURE-001" });
+  await client.query(
+    `INSERT INTO medical_certificate_physicians (id) VALUES ($1) ON CONFLICT (id) DO NOTHING`,
+    [PHYSICIAN_ID],
+  );
+  await client.query(
+    `INSERT INTO medical_certificate_physician_revisions
+       (id,physician_id,version,display_name,license_number,signature_bytes,
+        signature_media_type,actor_user_id,actor_snapshot)
+     VALUES ($1,$2,1,'Dr. Reports Fixture','FIXTURE-001',$3,'image/png',$4,$5::jsonb)
+     ON CONFLICT (id) DO NOTHING`,
+    [PHYSICIAN_REVISION_ID, PHYSICIAN_ID, signature, ADMIN_USER_ID, actorSnapshot],
+  );
+  for (const [index, appointment] of clinical.completedExaminations.entries()) {
+    const classification = index === 1 ? "B" : "A";
+    const remarks = classification === "B" ? "Fixture follow-up recommendation" : null;
+    await client.query(
+      `INSERT INTO medical_certificate_revisions
+         (id,certificate_id,appointment_id,student_number,academic_year_start,revision_number,
+          physician_revision_id,student_snapshot,examination_snapshot,physician_snapshot,
+          classification,remarks,examination_date,sex,template_version,jpeg_bytes,
+          byte_length,sha256,issued_by,issued_by_snapshot,request_id)
+       VALUES ($1,$2,$3,$4,$5,1,$6,$7::jsonb,$8::jsonb,$9::jsonb,
+               $10,$11,$12::date,'Not recorded','reports-fixture-v1',$13,$14,
+               encode(digest($13::bytea,'sha256'),'hex'),$15,$16::jsonb,$17)
+       ON CONFLICT (id) DO NOTHING`,
+      [certificateRevisionIds[index], certificateIds[index], appointment.id,
+        appointment.student_number, appointment.schedule_cycle_start, PHYSICIAN_REVISION_ID,
+        JSON.stringify({ studentNumber: appointment.student_number }),
+        JSON.stringify({ appointmentId: appointment.id, status: "COMPLETED" }),
+        physicianSnapshot, classification, remarks, appointment.appointment_date,
+        jpeg, jpeg.length, ADMIN_USER_ID, actorSnapshot, certificateIds[index]],
+    );
+    await client.query(
+      `INSERT INTO exam_results
+         (appointment_id,student_number,result_status,completed_at,encoded_by)
+       VALUES ($1,$2,'COMPLETED',$3::date,$4)
+       ON CONFLICT (appointment_id) DO NOTHING`,
+      [appointment.id, appointment.student_number, appointment.appointment_date, ADMIN_USER_ID],
+    );
+  }
 }
 
 function setupMarkerMetadata() {
@@ -700,19 +849,28 @@ async function assertReservedScopeAvailable(client: PoolClient) {
   ];
   const collision = await client.query<{
     years: number; students: number; snapshots: number; appointments: number; importGroups: number;
+    checklists: number; certificates: number; physician: number;
   }>(
     `SELECT
        (SELECT COUNT(*)::int FROM academic_years WHERE start_year=ANY($1::int[])) AS years,
        (SELECT COUNT(*)::int FROM students WHERE student_number LIKE $2) AS students,
        (SELECT COUNT(*)::int FROM student_academic_snapshots WHERE id=ANY($3::uuid[])) AS snapshots,
        (SELECT COUNT(*)::int FROM appointments WHERE id=ANY($4::uuid[])) AS appointments,
-       (SELECT COUNT(*)::int FROM schedule_import_groups WHERE id=ANY($5::uuid[])) AS "importGroups"`,
+       (SELECT COUNT(*)::int FROM schedule_import_groups WHERE id=ANY($5::uuid[])) AS "importGroups",
+       (SELECT COUNT(*)::int FROM laboratory_checklists WHERE id=ANY($6::uuid[])) AS checklists,
+       (SELECT COUNT(*)::int FROM medical_certificate_revisions WHERE id=ANY($7::uuid[])) AS certificates,
+       ((SELECT COUNT(*)::int FROM medical_certificate_physicians WHERE id=$8)
+        +(SELECT COUNT(*)::int FROM medical_certificate_physician_revisions WHERE id=$9)) AS physician`,
     [
       reservedYears,
       `${REPORTS_ACCEPTANCE_FIXTURE.studentPrefix}%`,
       snapshotIds,
       appointmentIds,
       importGroups.map((group) => group.id),
+      checklistIds,
+      certificateRevisionIds,
+      PHYSICIAN_ID,
+      PHYSICIAN_REVISION_ID,
     ],
   );
   const ownedAuditCollisions = exactOwnedAuditCandidates(await auditCandidates(client));
@@ -791,16 +949,19 @@ async function insertFixtureRows(client: PoolClient) {
   await client.query(
     `INSERT INTO appointments (
        id,clinic_id,student_number,schedule_type,appointment_date,status,is_published,
-       rescheduled_from,schedule_cycle_start,created_by,updated_by,notes
+       rescheduled_from,schedule_cycle_start,scheduling_category,created_by,updated_by,notes
      ) SELECT row.id,row.clinic_id,row.student_number,row.schedule_type,row.appointment_date::date,
-              row.status,row.is_published,row.rescheduled_from,row.schedule_cycle_start,$2,$2,$3
+              row.status,row.is_published,row.rescheduled_from,row.schedule_cycle_start,
+              row.scheduling_category,$2,$2,$3
          FROM jsonb_to_recordset($1::jsonb) AS row(
            id uuid,clinic_id uuid,student_number text,schedule_type text,appointment_date text,
-           status text,is_published boolean,rescheduled_from uuid,schedule_cycle_start int
+           status text,is_published boolean,rescheduled_from uuid,schedule_cycle_start int,
+           scheduling_category text
          )
      ON CONFLICT (id) DO NOTHING`,
     [JSON.stringify(appointments()), ADMIN_USER_ID, REPORTS_ACCEPTANCE_FIXTURE.marker],
   );
+  await insertClinicalFixtureRows(client);
 }
 
 async function ensureSetupMarker(client: PoolClient) {
@@ -931,12 +1092,14 @@ async function assertFixtureReady(client: PoolClient) {
   const appointmentRows = await client.query<{
     id: string; clinicId: string; studentNumber: string; scheduleType: string;
     appointmentDate: string; status: string; published: boolean; rescheduledFrom: string | null;
-    scheduleCycleStart: number; createdBy: string; updatedBy: string; notes: string | null;
+    scheduleCycleStart: number; schedulingCategory: string;
+    createdBy: string; updatedBy: string; notes: string | null;
   }>(
     `SELECT id::text AS id,clinic_id::text AS "clinicId",student_number AS "studentNumber",
             schedule_type AS "scheduleType",appointment_date::text AS "appointmentDate",status,
             is_published AS published,rescheduled_from::text AS "rescheduledFrom",
-            schedule_cycle_start AS "scheduleCycleStart",created_by::text AS "createdBy",
+            schedule_cycle_start AS "scheduleCycleStart",
+            scheduling_category AS "schedulingCategory",created_by::text AS "createdBy",
             updated_by::text AS "updatedBy",notes
        FROM appointments
       WHERE student_number LIKE $1 OR id=ANY($2::uuid[]) ORDER BY id`,
@@ -947,11 +1110,41 @@ async function assertFixtureReady(client: PoolClient) {
     studentNumber: appointment.student_number, scheduleType: appointment.schedule_type,
     appointmentDate: appointment.appointment_date, status: appointment.status,
     published: appointment.is_published, rescheduledFrom: appointment.rescheduled_from,
-    scheduleCycleStart: appointment.schedule_cycle_start, createdBy: ADMIN_USER_ID,
+    scheduleCycleStart: appointment.schedule_cycle_start,
+    schedulingCategory: appointment.scheduling_category, createdBy: ADMIN_USER_ID,
     updatedBy: ADMIN_USER_ID, notes: REPORTS_ACCEPTANCE_FIXTURE.marker,
   })).sort((left, right) => left.id.localeCompare(right.id));
   if (canonicalJson(appointmentRows.rows) !== canonicalJson(expectedAppointments)) {
     throw new Error("Reports fixture readiness detected appointment drift or extra fixture-student appointments.");
+  }
+
+  const clinical = clinicalFixtureRows();
+  const clinicalCounts = await client.query<{
+    checklists: number; links: number; items: number; verifiedItems: number;
+    physicianRevisions: number; certificates: number; examResults: number;
+  }>(`SELECT
+      (SELECT count(*)::int FROM laboratory_checklists WHERE student_number LIKE $1) AS checklists,
+      (SELECT count(*)::int FROM laboratory_checklist_appointments link
+         JOIN appointments appointment ON appointment.id=link.appointment_id
+        WHERE appointment.student_number LIKE $1) AS links,
+      (SELECT count(*)::int FROM laboratory_checklist_items WHERE checklist_id=ANY($2::uuid[])) AS items,
+      (SELECT count(*)::int FROM laboratory_checklist_items
+        WHERE checklist_id=ANY($2::uuid[]) AND verified_at IS NOT NULL) AS "verifiedItems",
+      (SELECT count(*)::int FROM medical_certificate_physician_revisions
+        WHERE id=$3) AS "physicianRevisions",
+      (SELECT count(*)::int FROM medical_certificate_revisions
+        WHERE student_number LIKE $1) AS certificates,
+      (SELECT count(*)::int FROM exam_results WHERE student_number LIKE $1) AS "examResults"`,
+    [`${REPORTS_ACCEPTANCE_FIXTURE.studentPrefix}%`, checklistIds, PHYSICIAN_REVISION_ID]);
+  const expectedClinicalCounts = {
+    checklists: clinical.checklists.length, links: clinical.links.length,
+    items: clinical.items.length,
+    verifiedItems: clinical.items.filter((item) => item.verified_at !== null).length,
+    physicianRevisions: 1, certificates: clinical.completedExaminations.length,
+    examResults: clinical.completedExaminations.length,
+  };
+  if (canonicalJson(clinicalCounts.rows[0]) !== canonicalJson(expectedClinicalCounts)) {
+    throw new Error("Reports fixture readiness detected clinical checklist or certificate drift.");
   }
 
   return databaseCounts(client);
@@ -1052,9 +1245,20 @@ async function residueCounts(client: PoolClient): Promise<Omit<ReportsAcceptance
          WHERE id=ANY($3::uuid[]) OR student_number=ANY($1::varchar[])) AS appointments,
        (SELECT COUNT(*)::int FROM schedule_import_groups WHERE id=ANY($4::uuid[])) AS "importGroups",
        (SELECT COUNT(*)::int FROM academic_years WHERE start_year=ANY($5::int[])) AS "academicYears",
-       (SELECT COUNT(*)::int FROM academic_years WHERE start_year=$6) AS "crudScratchYears"`,
+       (SELECT COUNT(*)::int FROM academic_years WHERE start_year=$6) AS "crudScratchYears",
+       (SELECT COUNT(*)::int FROM laboratory_checklists WHERE id=ANY($7::uuid[])) AS checklists,
+       (SELECT COUNT(*)::int FROM laboratory_checklist_items WHERE checklist_id=ANY($7::uuid[])) AS "checklistItems",
+       (SELECT COUNT(*)::int FROM laboratory_checklist_appointments
+          WHERE checklist_id=ANY($7::uuid[])) AS "checklistLinks",
+       (SELECT COUNT(*)::int FROM medical_certificate_revisions
+          WHERE id=ANY($8::uuid[]) OR student_number=ANY($1::varchar[])) AS certificates,
+       (SELECT COUNT(*)::int FROM exam_results
+          WHERE student_number=ANY($1::varchar[])) AS "examinationResults",
+       ((SELECT COUNT(*)::int FROM medical_certificate_physicians WHERE id=$9)
+        +(SELECT COUNT(*)::int FROM medical_certificate_physician_revisions WHERE id=$10)) AS "physicianProfiles"`,
     [studentNumbers, snapshotIds, appointmentIds, importGroups.map((group) => group.id), years,
-      REPORTS_ACCEPTANCE_FIXTURE.crudScratch.startYear],
+      REPORTS_ACCEPTANCE_FIXTURE.crudScratch.startYear, checklistIds, certificateRevisionIds,
+      PHYSICIAN_ID, PHYSICIAN_REVISION_ID],
   );
   const marker = await getSetupMarker(client);
   const markerCount = marker.kind === "absent" ? 0 : 1;
@@ -1090,6 +1294,23 @@ export async function cleanupReportsAcceptanceFixture(
           .map((candidate) => candidate.id),
       ];
       await client.query("DELETE FROM audit_logs WHERE id=ANY($1::uuid[])", [ownedAuditIds]);
+      await client.query("ALTER TABLE laboratory_checklist_events DISABLE TRIGGER laboratory_checklist_events_immutable");
+      await client.query("ALTER TABLE medical_certificate_events DISABLE TRIGGER medical_certificate_events_immutable");
+      await client.query("ALTER TABLE medical_certificate_revisions DISABLE TRIGGER medical_certificate_revision_immutable");
+      await client.query("ALTER TABLE laboratory_checklist_appointments DISABLE TRIGGER laboratory_checklist_links_immutable");
+      await client.query("ALTER TABLE laboratory_checklists DISABLE TRIGGER laboratory_checklist_identity_immutable");
+      await client.query("ALTER TABLE medical_certificate_physician_revisions DISABLE TRIGGER medical_certificate_physician_revisions_immutable");
+      await client.query("DELETE FROM laboratory_checklist_events WHERE checklist_id=ANY($1::uuid[])", [checklistIds]);
+      await client.query("DELETE FROM medical_certificate_events WHERE certificate_id=ANY($1::uuid[])", [certificateIds]);
+      await client.query("DELETE FROM medical_certificate_revisions WHERE id=ANY($1::uuid[]) OR student_number=ANY($2::varchar[])", [
+        certificateRevisionIds, studentNumbers,
+      ]);
+      await client.query("DELETE FROM exam_results WHERE student_number=ANY($1::varchar[])", [studentNumbers]);
+      await client.query("DELETE FROM laboratory_checklist_items WHERE checklist_id=ANY($1::uuid[])", [checklistIds]);
+      await client.query("DELETE FROM laboratory_checklist_appointments WHERE checklist_id=ANY($1::uuid[])", [checklistIds]);
+      await client.query("DELETE FROM laboratory_checklists WHERE id=ANY($1::uuid[])", [checklistIds]);
+      await client.query("DELETE FROM medical_certificate_physician_revisions WHERE id=$1", [PHYSICIAN_REVISION_ID]);
+      await client.query("DELETE FROM medical_certificate_physicians WHERE id=$1", [PHYSICIAN_ID]);
       await client.query(
         "DELETE FROM appointments WHERE id=ANY($1::uuid[]) OR student_number=ANY($2::varchar[])",
         [appointmentIds, studentNumbers],
@@ -1108,6 +1329,13 @@ export async function cleanupReportsAcceptanceFixture(
         "DELETE FROM academic_years WHERE start_year=ANY($1::int[])",
         [[...years, REPORTS_ACCEPTANCE_FIXTURE.crudScratch.startYear]],
       );
+      await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+      await client.query("ALTER TABLE laboratory_checklist_events ENABLE TRIGGER laboratory_checklist_events_immutable");
+      await client.query("ALTER TABLE medical_certificate_events ENABLE TRIGGER medical_certificate_events_immutable");
+      await client.query("ALTER TABLE medical_certificate_revisions ENABLE TRIGGER medical_certificate_revision_immutable");
+      await client.query("ALTER TABLE laboratory_checklist_appointments ENABLE TRIGGER laboratory_checklist_links_immutable");
+      await client.query("ALTER TABLE laboratory_checklists ENABLE TRIGGER laboratory_checklist_identity_immutable");
+      await client.query("ALTER TABLE medical_certificate_physician_revisions ENABLE TRIGGER medical_certificate_physician_revisions_immutable");
     } else if (state.kind !== "absent") {
       throw new Error("Reports fixture state exists without exact database marker ownership; refusing cleanup.");
     }

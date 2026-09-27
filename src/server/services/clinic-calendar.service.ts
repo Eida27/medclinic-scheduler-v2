@@ -1,4 +1,5 @@
 import "server-only";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import { createHash, randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { z } from "zod";
@@ -388,6 +389,7 @@ const manualReasonPriority: Record<ClinicManualCaseReason, number> = {
   NOTICE_PERIOD_PROTECTED: 2,
   APPOINTMENT_MANUALLY_LOCKED: 3,
   DRAFT_RESULT_FILES_EXIST: 4,
+  LABORATORY_PROGRESS_RECORDED: 4,
   PROTECTED_RESULTS_EXIST: 5,
   PHYSICAL_COMPLETED_BEFORE_LABORATORY: 6,
   PAIR_MISSING_OR_INCONSISTENT: 7,
@@ -983,6 +985,7 @@ async function applyAutomaticMove(
           ],
         );
     replacementByType[original.scheduleType] = inserted.rows[0].id;
+    await linkPublishedLaboratoryAppointments(client, [inserted.rows[0].id]);
     await insertStatusLogs(
       client,
       [inserted.rows[0].id],
@@ -1549,6 +1552,7 @@ export async function listClinicClosureManualCases(
     closureGroupId?: string;
     date?: string;
     service?: string;
+    academicYearStart?: number;
   },
   actor: SessionUser,
 ): Promise<ClinicManualCasePageDto> {
@@ -1557,14 +1561,35 @@ export async function listClinicClosureManualCases(
   const pageSize = Math.min(100, Math.max(1, Number(raw.pageSize) || 20));
   const search = raw.search?.trim() || null;
   const reasonCode = raw.reasonCode?.trim() || null;
-  const status = raw.status?.trim() || "OPEN";
   const closureGroupId = raw.closureGroupId?.trim() || null;
   const date = raw.date?.trim() || null;
   const service = raw.service?.trim() || null;
+  const academicYearStart = raw.academicYearStart ?? null;
+  if (academicYearStart !== null && (!Number.isInteger(academicYearStart)
+    || academicYearStart < 2020 || academicYearStart > 2100)) {
+    throw validationError("Choose a valid academic year start.");
+  }
+  const status = raw.status === undefined
+    ? (academicYearStart === null ? "OPEN" : null)
+    : raw.status.trim() || null;
   const loaded = await transaction(async (client) => {
+    const selectedYearState = academicYearStart === null ? null : (
+      await client.query<{ state: "CURRENT" | "UPCOMING" | "ENDED" }>(
+        `SELECT CASE
+           WHEN (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date < make_date(start_year,8,1)
+             THEN 'UPCOMING'
+           WHEN closing_date < (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date
+             THEN 'ENDED'
+           ELSE 'CURRENT'
+         END AS state
+         FROM academic_years WHERE start_year=$1`,
+        [academicYearStart],
+      )
+    ).rows[0]?.state ?? "UNKNOWN";
     const result = await client.query<{
     id: string;
     student_number: string;
+    schedule_cycle_start: number;
     student_name: string;
     case_source: ClinicManualCaseDto["caseSource"];
     closure_group_id: string | null;
@@ -1596,7 +1621,7 @@ export async function listClinicClosureManualCases(
     replacement_physical_exam_is_manually_locked: boolean | null;
     total: number;
   }>(
-    `SELECT manual_case.id::text,manual_case.student_number,
+    `SELECT manual_case.id::text,manual_case.student_number,manual_case.schedule_cycle_start,
             ${studentDisplayNameSql("student")} AS student_name,
             manual_case.case_source,
             manual_case.closure_group_id::text,closure.start_date::text AS group_start_date,
@@ -1619,6 +1644,7 @@ export async function listClinicClosureManualCases(
             ovpsa_batch.optimistic_token::text AS ovpsa_batch_optimistic_token,
             COUNT(*) OVER()::int AS total
        FROM clinic_closure_manual_cases manual_case
+       JOIN academic_years academic_year ON academic_year.start_year=manual_case.schedule_cycle_start
        JOIN students student ON student.student_number=manual_case.student_number
        LEFT JOIN clinic_closure_groups closure ON closure.id=manual_case.closure_group_id
        LEFT JOIN appointments laboratory ON laboratory.id=manual_case.affected_laboratory_appointment_id
@@ -1640,9 +1666,16 @@ export async function listClinicClosureManualCases(
         AND ($6::text IS NULL
              OR ($6='LABORATORY' AND laboratory.id IS NOT NULL)
              OR ($6='PHYSICAL_EXAM' AND physical.id IS NOT NULL))
+        AND (($7::int IS NULL
+              AND make_date(academic_year.start_year,8,1) <=
+                (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date
+              AND academic_year.closing_date >=
+                (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date)
+          OR ($7::int IS NOT NULL AND manual_case.schedule_cycle_start=$7))
       ORDER BY manual_case.created_at,manual_case.id
-      LIMIT $7 OFFSET $8`,
-    [search, reasonCode, status || null, closureGroupId, date, service, pageSize, (page - 1) * pageSize],
+      LIMIT $8 OFFSET $9`,
+    [search, reasonCode, status || null, closureGroupId, date, service,
+      academicYearStart, pageSize, (page - 1) * pageSize],
     );
     const appointmentIds = result.rows.flatMap((row) =>
       [
@@ -1652,13 +1685,14 @@ export async function listClinicClosureManualCases(
         row.replacement_physical_exam_id,
       ].filter((id): id is string => Boolean(id)));
     const protectionStates = await loadAppointmentResultProtectionStates(client, appointmentIds);
-    return { result, protectionStates };
+    return { result, protectionStates, selectedYearState };
   });
-  const { result, protectionStates } = loaded;
+  const { result, protectionStates, selectedYearState } = loaded;
   return {
     page,
     pageSize,
     total: result.rows[0]?.total ?? 0,
+    selectedYearState,
     items: result.rows.map((row) => {
       const affectedIds = new Set(
         Array.isArray(row.policy_metadata.affectedAppointmentIds)
@@ -1672,6 +1706,7 @@ export async function listClinicClosureManualCases(
       return ({
       id: row.id,
       studentNumber: row.student_number,
+      academicYearStart: row.schedule_cycle_start,
       studentName: row.student_name,
       caseSource: row.case_source,
       closureGroupId: row.closure_group_id,
@@ -1857,6 +1892,13 @@ export async function resolveClinicClosureManualCase(
     if (manualCase.optimistic_token !== request.expectedOptimisticToken) {
       throw new AppError("MANUAL_CASE_STALE", "The manual case changed. Reload and try again.", 409);
     }
+    const cycle = await lockAcademicYearSchedulingBoundary(client, manualCase.schedule_cycle_start);
+    if (!cycle) {
+      throw new AppError("ACADEMIC_YEAR_MISSING", "The manual case has no configured academic year.", 409);
+    }
+    if (cycle.closingDate < manilaToday()) {
+      throw new AppError("ACADEMIC_YEAR_ENDED", "This academic year has ended; the manual case is historical.", 409);
+    }
     if (manualCase.reason_code === "OVPSA_LABORATORY_PROTECTED") {
       throw new AppError(
         "OVPSA_BATCH_RECOVERY_REQUIRED",
@@ -1993,6 +2035,7 @@ export async function resolveClinicClosureManualCase(
               ],
             );
         insertedByType[appointment.scheduleType] = inserted.rows[0].id;
+        await linkPublishedLaboratoryAppointments(client, [inserted.rows[0].id]);
       }
     } else {
       auditedAppointments = replacements;
@@ -2485,6 +2528,7 @@ export async function confirmOvpsaClinicClosureBatchRecovery(
         laboratoryReservation.rows[0].id,
       ],
     );
+    await linkPublishedLaboratoryAppointments(client, newLaboratories.rows.map((appointment) => appointment.id));
     const newLaboratoryByStudent = new Map(
       newLaboratories.rows.map((item) => [item.student_number, item.id]),
     );

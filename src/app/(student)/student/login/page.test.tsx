@@ -17,12 +17,12 @@ describe("StudentLoginPage", () => {
     optionalStudent.mockResolvedValue(null);
   });
 
-  it("explains that the portal supports appointments and result uploads", async () => {
+  it("explains that the portal supports Laboratory uploads and issued certificates", async () => {
     render(await StudentLoginPage());
 
     expect(screen.getByRole("heading", { name: "Student sign in" })).toBeVisible();
     expect(screen.getByText(
-      "Sign in to view your appointments and upload your laboratory and physical examination results.",
+      "Sign in to view appointments, upload Laboratory documents, and download an issued Physical Examination certificate.",
     )).toBeVisible();
   });
 });

@@ -1,7 +1,9 @@
 // @vitest-environment node
+import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { pool } from "@/server/db/pool";
-import { cleanupTestFixtures, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
+import { pool, transaction } from "@/server/db/pool";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
+import { cleanupTestFixtures, insertTestScheduleImportGroup, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import { setupCapacityFixtureLock, cleanupAndRestoreCapacitySettings, teardownCapacityFixtureLock, type CapacityFixtureLock } from "@/test/capacity-fixture-lifecycle";
 import { changeCapacity } from "./appointments.service";
 import { acceptAndScheduleImport } from "./schedule-imports.service";
@@ -34,12 +36,45 @@ afterAll(async () => {
   });
 });
 async function load(count: number, status = "PENDING", date = "2049-08-02") {
+  const studentNumbers: string[] = [];
   for (let index = 0; index < count; index++) {
     const studentNumber = `99-97${String(index).padStart(3, "0")}`;
+    studentNumbers.push(studentNumber);
     await insertTestStudent({ studentNumber, firstName: "Capacity", lastName: "Fixture", yearLevel: 4 });
-    await pool.query(`INSERT INTO appointments(clinic_id,student_number,schedule_type,appointment_date,status,is_published,schedule_pair_id,schedule_cycle_start)
-      VALUES($1,$2,'LABORATORY',$3,$4,TRUE,gen_random_uuid(),2049)`, [TEST_REFERENCE_IDS.laboratoryClinic, studentNumber, date, status]);
   }
+  await transaction(async (client) => {
+    const importId = await insertTestScheduleImportGroup(client, {
+      name: `TEST-CAPACITY-${randomUUID()}`,
+      sourceFilename: `TEST-CAPACITY-${randomUUID()}.csv`,
+      academicYearStart: 2049,
+      importMode: "STANDARD",
+      actor: actor.userId,
+    });
+    await client.query(`INSERT INTO student_academic_snapshots
+      (student_number,academic_year_start,student_name,college_id,college_name,
+       program_id,program_code,program_name,year_level,source_import_group_id)
+      SELECT student.student_number,2049,CONCAT_WS(' ',student.first_name,student.last_name),
+             student.college_id,college.name,student.program_id,program.code,program.name,
+             student.year_level,$2
+        FROM students student
+        JOIN colleges college ON college.id=student.college_id
+        JOIN programs program ON program.id=student.program_id
+       WHERE student.student_number=ANY($1::varchar[])`, [studentNumbers, importId]);
+    const appointments = await client.query<{ id: string }>(`INSERT INTO appointments
+      (clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+       schedule_pair_id,schedule_cycle_start,scheduling_category)
+      SELECT $2,student_number,'LABORATORY',$3,$4,TRUE,gen_random_uuid(),2049,'REGULAR'
+        FROM unnest($1::varchar[]) AS fixture(student_number)
+      RETURNING id::text`, [studentNumbers, TEST_REFERENCE_IDS.laboratoryClinic, date, status]);
+    await linkPublishedLaboratoryAppointments(client, appointments.rows.map((appointment) => appointment.id));
+    if (status === "COMPLETED") {
+      await client.query(`UPDATE laboratory_checklist_items
+          SET verified_at=clock_timestamp(),verified_by=$1,verification_source='INTERNAL'
+        WHERE checklist_id IN
+          (SELECT checklist_id FROM laboratory_checklist_appointments WHERE appointment_id=ANY($2::uuid[]))`,
+      [actor.userId, appointments.rows.map((appointment) => appointment.id)]);
+    }
+  });
 }
 async function current() {
   return (await pool.query("SELECT max_daily_capacity FROM clinic_capacity_settings WHERE clinic_id=$1 AND schedule_type='LABORATORY'", [TEST_REFERENCE_IDS.laboratoryClinic])).rows[0].max_daily_capacity;

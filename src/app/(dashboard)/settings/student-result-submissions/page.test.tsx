@@ -25,10 +25,11 @@ const listItem = {
   studentName: "Abad, Aaron",
   collegeName: "College of Computer Studies",
   programName: "BS Computer Science",
-  progress: "PARTIALLY_SUBMITTED" as const,
+  progress: "FULLY_SUBMITTED" as const,
   latestActivityAt: new Date("2026-08-19T16:00:00.000Z"),
   laboratory: { state: "FINALIZED" as const, fileCount: 2 },
   physicalExam: { state: "NOT_SUBMITTED" as const, fileCount: 0 },
+  certificate: { status: null, classification: null },
 };
 
 describe("AdminStudentResultSubmissionsPage", () => {
@@ -38,7 +39,7 @@ describe("AdminStudentResultSubmissionsPage", () => {
     listAdminStudentResultProfiles.mockResolvedValue({ items: [], total: 0 });
   });
 
-  it("renders one grouped card link per student with both service states and pagination", async () => {
+  it("renders Laboratory submission and separate certificate state with pagination", async () => {
     listAdminStudentResultProfiles.mockResolvedValue({ items: [listItem], total: 101 });
 
     render(await AdminStudentResultSubmissionsPage({
@@ -57,8 +58,8 @@ describe("AdminStudentResultSubmissionsPage", () => {
       "/settings/student-result-submissions/students/23-8200-01",
     );
     expect(screen.getByText("Laboratory: Finalized · 2 files")).toBeVisible();
-    expect(screen.getByText("Physical Exam: Not submitted yet")).toBeVisible();
-    expect(screen.getAllByText("Partially submitted")).toHaveLength(1);
+    expect(screen.getByText("Physical Examination certificate: Not issued")).toBeVisible();
+    expect(screen.getAllByText("Laboratory submitted")).toHaveLength(1);
     expect(screen.getByText("Latest activity: Aug 20, 2026, 12:00 AM")).toBeVisible();
     expect(screen.getByRole("navigation", {
       name: "Student result submission pagination",

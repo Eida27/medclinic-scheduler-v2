@@ -24,6 +24,8 @@ import {
 } from "./clinic-calendar-draft";
 import { UnsavedCalendarChangesDialog } from "./clinic-calendar/UnsavedCalendarChangesDialog";
 import { useUnsavedCalendarNavigation } from "./clinic-calendar/useUnsavedCalendarNavigation";
+import { CalendarDayDetails } from "./clinic-calendar/CalendarDayDetails";
+import type { CalendarOccupancyDay } from "@/server/services/calendar-occupancy.service";
 
 type Props = {
   unavailableDates: ClinicUnavailableDateRecord[];
@@ -53,7 +55,8 @@ function sortedChanges(draft: Map<string, ClinicCalendarChange>) {
   return [...draft.values()].sort((left, right) => left.date.localeCompare(right.date));
 }
 
-function dayTone(state: ReturnType<typeof resolveCalendarDateState>, isToday: boolean) {
+function dayTone(state: ReturnType<typeof resolveCalendarDateState>, isToday: boolean,
+  occupancyTone: CalendarOccupancyDay["tone"] = "NONE") {
   if (state.state === "CONFLICT") return "border-red-500 bg-red-50 text-red-800";
   if (state.state === "STAGED_BLOCK") return "border-cpu-navy bg-cpu-navy text-white";
   if (state.state === "STAGED_REOPEN") return "border-amber-500 bg-amber-50 text-amber-900 line-through";
@@ -62,6 +65,12 @@ function dayTone(state: ReturnType<typeof resolveCalendarDateState>, isToday: bo
       ? "border-red-500 bg-red-100 text-red-900"
       : "border-amber-400 bg-amber-100 text-amber-950";
   }
+  if (occupancyTone === "RED") return isToday
+    ? "border-cpu-gold bg-red-100 text-red-900" : "border-red-400 bg-red-100 text-red-900";
+  if (occupancyTone === "GREEN") return isToday
+    ? "border-cpu-gold bg-emerald-100 text-emerald-900" : "border-emerald-400 bg-emerald-100 text-emerald-900";
+  if (occupancyTone === "NEUTRAL") return isToday
+    ? "border-cpu-gold bg-slate-100 text-slate-800" : "border-slate-400 bg-slate-100 text-slate-800";
   return isToday ? "border-cpu-gold bg-cpu-gold/15 text-cpu-navy" : "border-transparent bg-white text-ink";
 }
 
@@ -77,7 +86,11 @@ export function ClinicUnavailableCalendar({
   const [selectedYear, setSelectedYear] = useState(initialYear);
   const [category, setCategory] = useState<ClinicCalendarCategory>("CLOSURE");
   const [reason, setReason] = useState("");
-  const [records, setRecords] = useState(unavailableDates);
+  const [recordsOverride, setRecordsOverride] = useState<{
+    base: Props["unavailableDates"];
+    records: Props["unavailableDates"];
+  } | null>(null);
+  const records = recordsOverride?.base === unavailableDates ? recordsOverride.records : unavailableDates;
   const [draft, setDraft] = useState<Map<string, ClinicCalendarChange>>(new Map());
   const [conflicts, setConflicts] = useState<Map<string, string[]>>(new Map());
   const [preview, setPreview] = useState<ClinicCalendarPreviewResult>();
@@ -87,6 +100,10 @@ export function ClinicUnavailableCalendar({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiError>();
   const [success, setSuccess] = useState<ClinicCalendarOperationResult>();
+  const [occupancy, setOccupancy] = useState<{ year: number; capacities: { LABORATORY: number | null;
+    PHYSICAL_EXAM: number | null }; dates: CalendarOccupancyDay[] } | null>(null);
+  const [occupancyError, setOccupancyError] = useState("");
+  const [detailsDate, setDetailsDate] = useState<string | null>(null);
   const submitting = useRef(false);
   const impactDialog = useRef<HTMLDivElement>(null);
   const annual = useMemo(() => buildAnnualCalendar(selectedYear), [selectedYear]);
@@ -98,6 +115,28 @@ export function ClinicUnavailableCalendar({
     change.action === "BLOCK"
     && change.date === today
     && change.category === "EMERGENCY_CLOSURE");
+
+  useEffect(() => {
+    let alive = true;
+    async function refresh() {
+      try {
+        const response = await fetch(`/api/clinic-calendar/occupancy?year=${selectedYear}`, { cache: "no-store" });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error?.message ?? "Unable to load calendar capacity.");
+        if (alive) { setOccupancy(payload.data); setOccupancyError(""); }
+      } catch (caught) {
+        if (alive) setOccupancyError(caught instanceof Error ? caught.message : "Unable to load calendar capacity.");
+      }
+    }
+    void refresh();
+    const interval = window.setInterval(() => { void refresh(); }, 60_000);
+    const onFocus = () => { void refresh(); };
+    window.addEventListener("focus", onFocus);
+    return () => { alive = false; window.clearInterval(interval); window.removeEventListener("focus", onFocus); };
+  }, [selectedYear]);
+  const occupancyByDate = useMemo(() => new Map(
+    (occupancy?.year === selectedYear ? occupancy.dates : []).map((item) => [item.date, item]),
+  ), [occupancy, selectedYear]);
 
   useEffect(() => {
     if (!preview) return;
@@ -194,7 +233,7 @@ export function ClinicUnavailableCalendar({
         setConflicts(nextConflicts);
         throw responseError;
       }
-      setRecords(payload.data.activeUnavailableDates);
+      setRecordsOverride({ base: unavailableDates, records: payload.data.activeUnavailableDates });
       setDraft(new Map());
       setSuccess(payload.data);
       setPreview(undefined);
@@ -280,6 +319,9 @@ export function ClinicUnavailableCalendar({
       </div>
 
       <div aria-label="Calendar legend" className="flex flex-wrap gap-x-4 gap-y-2 text-xs font-semibold text-muted">
+        <span><span className="mr-1 inline-block size-3 rounded bg-emerald-100 ring-1 ring-emerald-400" />Booked / capacity held</span>
+        <span><span className="mr-1 inline-block size-3 rounded bg-red-100 ring-1 ring-red-400" />At least one service full</span>
+        <span><span className="mr-1 inline-block size-3 rounded bg-slate-100 ring-1 ring-slate-400" />Capacity not configured</span>
         <span><span className="mr-1 inline-block size-3 rounded bg-white ring-1 ring-line" />Available</span>
         <span><span className="mr-1 inline-block size-3 rounded bg-amber-100 ring-1 ring-amber-400" />Blocked</span>
         <span><span className="mr-1 inline-block size-3 rounded bg-cpu-navy" />Selected to block</span>
@@ -287,6 +329,7 @@ export function ClinicUnavailableCalendar({
         <span><span className="mr-1 inline-block size-3 rounded bg-red-50 ring-1 ring-red-500" />Conflict</span>
         <span><span className="mr-1 inline-block size-3 rounded bg-cpu-gold/20 ring-1 ring-cpu-gold" />Today</span>
       </div>
+      {occupancyError ? <Alert tone="danger">{occupancyError}</Alert> : null}
 
       <div className="grid min-w-0 grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
         {annual.map((month) => (
@@ -325,19 +368,44 @@ export function ClinicUnavailableCalendar({
                       : state.state === "CONFLICT"
                         ? state.messages.join(" ")
                         : cell.isWeekend ? "Weekend" : "Available";
+                const booked = occupancyByDate.get(cell.date);
+                const maxLaboratory = occupancy?.year === selectedYear ? occupancy.capacities.LABORATORY : null;
+                const maxPhysical = occupancy?.year === selectedYear ? occupancy.capacities.PHYSICAL_EXAM : null;
+                const day: CalendarOccupancyDay = booked ?? {
+                  date: cell.date, uniqueStudents: 0, appointmentTotal: 0,
+                  laboratory: { used: 0, maximum: maxLaboratory, remaining: maxLaboratory },
+                  physicalExam: { used: 0, maximum: maxPhysical, remaining: maxPhysical },
+                  externalLaboratory: 0, heldCapacity: 0, hiddenCapacityHold: 0,
+                  groups: [], reservations: [],
+                  tone: maxLaboratory === null || maxPhysical === null ? "NEUTRAL" : "NONE",
+                };
+                const dayLabel = details === "Available"
+                  ? day.tone === "NEUTRAL" ? "Capacity not configured"
+                    : day.tone === "RED" ? "Full capacity" : details
+                  : details;
                 return (
+                  <div key={cell.key} className="relative aspect-square min-w-0"
+                    onMouseEnter={() => setDetailsDate(cell.date)}
+                    onMouseLeave={() => setDetailsDate((current) => current === cell.date ? null : current)}
+                    onKeyDown={(event) => { if (event.key === "Escape") setDetailsDate(null); }}>
                   <button
-                    key={cell.key}
                     type="button"
-                    aria-label={`${month.name} ${cell.dayOfMonth}, ${selectedYear}: ${details}`}
+                    aria-label={`${month.name} ${cell.dayOfMonth}, ${selectedYear}: ${dayLabel}`}
                     aria-pressed={state.state === "STAGED_BLOCK" || state.state === "STAGED_REOPEN"}
-                    title={details}
+                    title={dayLabel}
                     disabled={disabled}
                     onClick={() => toggleDate(cell.date)}
-                    className={`aspect-square min-w-0 rounded-lg border text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-45 ${dayTone(state, isToday)}`}
+                    className={`size-full min-w-0 rounded-lg border text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-45 ${dayTone(state, isToday, day.tone)}`}
                   >
                     {cell.dayOfMonth}
                   </button>
+                  <button type="button" aria-label={`View day details for ${cell.date}`}
+                    onFocus={() => setDetailsDate(cell.date)}
+                    onClick={() => setDetailsDate(cell.date)}
+                    className={`absolute -bottom-1 -right-1 z-10 size-5 rounded-full border border-white text-[8px] font-bold text-white shadow-sm ${day.tone === "RED" ? "bg-red-700" : day.tone === "GREEN" ? "bg-emerald-700" : "bg-slate-600"}`}>i</button>
+                  {detailsDate === cell.date ? <CalendarDayDetails day={day}
+                    closedLabel={details === "Available" ? undefined : details} /> : null}
+                  </div>
                 );
               })}
             </div>

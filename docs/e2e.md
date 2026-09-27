@@ -1,43 +1,16 @@
 # End-to-end Browser acceptance
 
-## Student result multi-upload and editing
+Use a dedicated disposable local PostgreSQL database and private `RESULT_UPLOAD_ROOT`. Apply all 28 migrations and the reference seed. Keep staff and student login facts in an ignored local fixture manifest; never commit them or use production medical records.
 
-Use this fixture only with a disposable local PostgreSQL database and the local private result-upload root. The fixture rejects every non-loopback `DATABASE_URL`. `prepare` and `cleanup` also refuse to run unless the exact opt-in flag is `1`; `status` is read-only and does not require the flag.
+## Staff and student journey
 
-Prerequisites:
+1. Sign in as a verified Administrator. Configure the academic year, both service capacities, and one active physician profile with an authorized signature image. Verify the profile has no invented identity or signature.
+2. Publish a synthetic Standard pair and a First-Year/OVPSA pair. Check both clinic lists and the student's schedule. Confirm their academic snapshots determine whether X-ray appears.
+3. Sign in as KABALAKA Clinic staff. Check CBC, Urine, Stool, and applicable X-ray one at a time. Verify partial progress stays “In progress”, survives an explicit replacement, and excludes the visit from automatic no-show. Confirm an unrelated clinic account cannot change it.
+4. Sign in as CPU Clinic staff. On Physical Examination, confirm the read-only Laboratory progress and blocked completion while a required test is missing. Once complete, open the form, select the actual Class A–D finding, enter sex, remarks, examination date and physician, and preview the visibly marked JPG. Save once; verify appointment completion and certificate issuance together. Retry the same request and verify the issued number and bytes do not change.
+5. As the student, download the JPG and confirm it opens at landscape A4, 300 DPI. Check that only Laboratory offers document uploads and that a forged Physical Examination upload fails without writing a file. Complete and revise a Laboratory submission, then confirm authorized student and Administrator downloads.
+6. As authorized staff, select multiple eligible ordinary appointments on one service page. Preview one destination date and its used/maximum/incoming totals. Change one source before save and verify the stale preview saves none; preview again and save all. Check exact replacement IDs, preserved Laboratory checklist progress, one notification per student, and a successful idempotent replay after token expiry.
+7. Open **Clinic calendar**. Inspect a zero day, a partially used day, a day where either service is full, an external-only day, and a reserved or closed day using mouse, keyboard, and touch-sized details controls. Group totals must reconcile with published appointments; unpublished capacity holds remain visible as aggregate counts. Make a closure draft and refresh occupancy without losing the draft.
+8. Set a synthetic academic year to close before the current Manila date. Confirm it leaves current staff/student lists at the boundary while explicit year/history views retain appointments, Laboratory files, and issued certificate downloads. Confirm new clinical and replacement writes fail for that year. Current Physical Examination must not inherit a completed Laboratory from the previous year.
 
-- Apply migrations through `018_student_result_storage_cleanup_intents.sql` and seed the standard local reference/admin rows.
-- Use the worktree application at `http://localhost:3000`.
-- Ensure no other process or test is using the acceptance database while this fixture is prepared.
-- Do not copy the local state manifest into logs, issue comments, or commits. It contains the synthetic student login facts and seeded admin login. CLI output intentionally omits those secrets.
-
-From the repository worktree in PowerShell:
-
-```powershell
-$env:STUDENT_RESULT_EDITING_ACCEPTANCE_EXCLUSIVE_DATABASE='1'
-npm run acceptance:student-result-editing -- prepare
-npm run acceptance:student-result-editing -- status
-npm run dev
-```
-
-`prepare` is idempotent and resumable. A successful initial status reports one synthetic student, two published completed appointments (Laboratory and Physical Examination), one Laboratory draft, one finalized Physical Examination official submission, two initial result-file rows/private objects, four parser-valid chooser artifacts, one fixture setup audit, and one state file. The chooser artifacts are under `.data/browser-student-result-editing/chooser-artifacts`, outside `public/`; status prints their absolute paths. The local state manifest at `.data/browser-student-result-editing/state.json` contains every reserved and subsequently discovered owned identifier needed for cleanup and acceptance.
-
-Use only the in-app Browser for acceptance. Verify:
-
-1. Sign in as the synthetic student using the local manifest. For Laboratory, confirm the chooser has `multiple`, the TXT selection is blocked, PDF+PNG upload is atomic, and final submission succeeds.
-2. Enter Laboratory edit mode, cancel it, enter edit mode again, replace the official files, and submit the replacement.
-3. Open Physical Examination editing in the student tab. In a separate administrator tab, confirm only official files remain visible with `Student editing in progress`, then invalidate the official submission.
-4. Return to the stale student tab and confirm the approved conflict message. In the administrator UI, verify superseded history/downloads and the administrator replacement reason.
-5. Check desktop and `390x844` layouts for horizontal overflow and check both tabs for zero console warnings or errors.
-
-`status` never repairs or deletes partial state. If preparation is interrupted, inspect status and rerun `prepare`. If cleanup is interrupted—including a private-storage deletion failure—inspect status and rerun `cleanup`; cleanup resumes from the persisted phase. Cleanup deletes only identifiers and exact file paths derived from the fixture's immutable database lineage. Manifest-owned private storage is removed while that live lineage can still be re-derived; after database deletion, cleanup touches only the fixture's fixed chooser-artifact and state paths. It rejects a modified ownership manifest, a changed canonical root, or any symbolic-link/junction/reparse component before database deletion, and refuses recursive removal when an unowned file appears in its state directory.
-
-Always clean the fixture before the authoritative serialized test suite:
-
-```powershell
-$env:STUDENT_RESULT_EDITING_ACCEPTANCE_EXCLUSIVE_DATABASE='1'
-npm run acceptance:student-result-editing -- cleanup
-npm run acceptance:student-result-editing -- status
-```
-
-Do not start the full suite until status reports `0` for every scoped dimension: students, appointments, submissions, files, legacy exam results, legacy laboratory results, appointment status logs, storage cleanup intents, notifications, outbox rows, audit logs, login attempts, email verifications, private storage objects, chooser artifacts, and state files.
+Inspect real route responses and the Browser console after each workflow. Confirm no medical remarks, signature bytes, or student identities appear in calendar responses or generic notifications. Render and visually inspect the issued and preview JPG variants and the historical Reports PDF. Clean the fixture and private files, then prove zero database and storage residue before running the serialized suite.

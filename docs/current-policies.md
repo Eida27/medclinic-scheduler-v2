@@ -9,7 +9,9 @@ Use this index when repository design records disagree. The [README](../README.m
 - Scheduling uses Manila dates and weekdays. Laboratory precedes Physical Examination. First-Year/OVPSA keeps its owned reservations, external Laboratory accounting and minimum seven-calendar-day PE gap.
 - Configured service capacity is the ceiling. Automatic and manual replacements remain in the original configured academic cycle; exhaustion enters Manual Resolution.
 - The clinic calendar is unified. Closure changes use impact review and explicit recovery; reopening a date only restores availability.
-- Attendance and result completion remain separate. Finalized result submissions support the revision/edit/resubmit lifecycle.
+- Laboratory clinical completion follows the versioned CBC/Urine/Stool/applicable X-ray checklist. Laboratory document uploads remain separate and support revision/edit/resubmit. Physical Examination student uploads are retired; CPU Clinic or an Administrator records the physician finding and issues a private immutable JPG certificate in the completion transaction.
+- Bulk replacement reviews 1–100 eligible appointments in one service, clinic, and academic year against a chosen date, then saves the whole selection atomically. A partially verified Laboratory visit retains its checklist through an explicit replacement and is protected from automatic displacement.
+- Current schedules exclude academic years after their stored Manila closing date. Staff and students retain authorized historical records and downloads. The clinic calendar reports internal capacity by service and published college groups without exposing clinical content.
 - Effective appointment lineage, import-backed immutable snapshots, result revisions, private file authorization, audit events and encrypted retryable outbox delivery remain required.
 
 ## Current design authorities
@@ -24,6 +26,7 @@ Use this index when repository design records disagree. The [README](../README.m
 | Student verification and notifications | [Mandatory student email verification](superpowers/specs/2026-08-22-mandatory-student-email-verification-and-schedule-notifications-design.md) and its [plan](superpowers/plans/2026-08-22-mandatory-student-email-verification-and-schedule-notifications.md) |
 | Staff account security | [Staff account security, onboarding, recovery and deletion](superpowers/specs/2026-08-25-staff-account-security-onboarding-and-deletion-design.md) and [staff login throttling](superpowers/plans/2026-08-31-staff-login-brute-force-protection.md) |
 | Result uploads and revisions | [Student result multi-upload and editing](superpowers/specs/2026-08-06-student-result-multi-upload-editing-design.md) and its [plan](superpowers/plans/2026-08-06-student-result-multi-upload-editing.md), as corrected by the September 7 readiness documents |
+| Final-defense clinical and scheduling workflows | [Final-defense revisions](superpowers/specs/2026-09-22-final-defense-revisions-design.md) and [implementation plan](superpowers/plans/2026-09-23-final-defense-revisions.md); this supersedes Physical Examination upload and generic completion guidance above |
 
 ## Historical and superseded guidance
 

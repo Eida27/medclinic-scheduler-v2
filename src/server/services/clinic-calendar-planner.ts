@@ -174,6 +174,14 @@ export function classifyClinicCycle(
     );
   }
   const protectionStates = [laboratory.resultProtectionState, physicalExam.resultProtectionState];
+  if (laboratory.resultProtectionState.type === "PROGRESS") {
+    return manual(
+      "LABORATORY_PROGRESS_RECORDED",
+      "Laboratory tests have been verified. Review and preserve them through Manual Resolution.",
+      laboratory,
+      physicalExam,
+    );
+  }
   if (protectionStates.some(
     (state) => state.type === "PROTECTED" && state.reason === "DRAFT_RESULT_FILES_EXIST",
   )) {

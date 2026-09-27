@@ -2,8 +2,9 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { pool, transaction } from "@/server/db/pool";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
-import { cleanupTestFixtures, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
+import { cleanupTestFixtures, insertTestAcademicSnapshot, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import {
   lockEligibleRegularPairs,
   lockEligibleRegularPhysicalExams,
@@ -70,6 +71,20 @@ async function fixture(studentNumber: string, firstYear = false) {
      ) VALUES ($1,$1,1,$2,'REGULAR',2027,$3::varchar,CASE WHEN $3::varchar='FIRST_YEAR_OVPSA' THEN DATE '2027-08-30' END) RETURNING id::text`,
     [`${importPattern.replaceAll("%", "")}-${studentNumber}`, TEST_REFERENCE_IDS.adminUser, firstYear ? "FIRST_YEAR_OVPSA" : "STANDARD"],
   );
+  await pool.query(
+    `INSERT INTO student_academic_snapshots (
+       student_number,academic_year_start,student_name,college_id,college_name,
+       program_id,program_code,program_name,year_level,source_import_group_id)
+     SELECT student.student_number,2027,
+            CONCAT_WS(' ',student.first_name,student.last_name),
+            student.college_id,college.name,student.program_id,program.code,program.name,
+            student.year_level,$2
+       FROM students student
+       JOIN colleges college ON college.id=student.college_id
+       JOIN programs program ON program.id=student.program_id
+      WHERE student.student_number=$1`,
+    [studentNumber, importGroup.rows[0].id],
+  );
   const batches = await pool.query<{ id: string; clinicId: string }>(
     `INSERT INTO schedule_batches (
        clinic_id,batch_name,status,created_by,import_group_id
@@ -99,10 +114,10 @@ async function fixture(studentNumber: string, firstYear = false) {
   }>(
     `INSERT INTO appointments (
        clinic_id,student_number,schedule_type,appointment_date,status,is_published,
-       schedule_pair_id,schedule_cycle_start,batch_id,created_by,updated_by
+       schedule_pair_id,schedule_cycle_start,scheduling_category,batch_id,created_by,updated_by
      ) VALUES
-       ($1,$3,'LABORATORY','2027-08-30','RESCHEDULED',FALSE,$4,2027,$5,$7,$7),
-       ($2,$3,'PHYSICAL_EXAM','2027-08-31','RESCHEDULED',FALSE,$4,2027,$6,$7,$7)
+       ($1,$3,'LABORATORY','2027-08-30','RESCHEDULED',FALSE,$4,2027,'REGULAR',$5,$7,$7),
+       ($2,$3,'PHYSICAL_EXAM','2027-08-31','RESCHEDULED',FALSE,$4,2027,'REGULAR',$6,$7,$7)
      RETURNING id::text,schedule_type,appointment_date::text`,
     [
       TEST_REFERENCE_IDS.laboratoryClinic,
@@ -121,13 +136,28 @@ async function fixture(studentNumber: string, firstYear = false) {
 
 async function eligibleFixture(studentNumber: string, firstYear = false) {
   const created = await fixture(studentNumber, firstYear);
-  await pool.query(
+  await transaction(async (client) => {
+    await client.query(
     `UPDATE appointments
         SET status='PENDING', is_published=TRUE
       WHERE id=ANY($1::uuid[])`,
     [[created.laboratory.id, created.physicalExam.id]],
-  );
+    );
+    await linkPublishedLaboratoryAppointments(client, [created.laboratory.id]);
+  });
   return created;
+}
+
+async function completeLaboratory(appointmentId: string) {
+  await transaction(async (client) => {
+    await client.query(
+      `UPDATE laboratory_checklist_items
+          SET verified_at=clock_timestamp(),verified_by=$2,verification_source='INTERNAL'
+        WHERE checklist_id=(SELECT checklist_id FROM laboratory_checklist_appointments WHERE appointment_id=$1)`,
+      [appointmentId, TEST_REFERENCE_IDS.adminUser],
+    );
+    await client.query("UPDATE appointments SET status='COMPLETED' WHERE id=$1", [appointmentId]);
+  });
 }
 
 async function attachSourceScheduleItems(appointmentIds: string[], sourceRowOrder: number) {
@@ -372,7 +402,7 @@ describe("priority displacement with the unified closure calendar", () => {
         windowStart: "2028-07-28",
         acceptedAt: "2027-08-02T00:00:00Z",
       });
-      await pool.query("UPDATE appointments SET status='COMPLETED' WHERE id=$1", [older.created.laboratory.id]);
+      await completeLaboratory(older.created.laboratory.id);
       if (pairOlder) {
         later.candidate.acceptedAt = new Date("2027-07-31T00:00:00Z");
         await pool.query("UPDATE appointments SET scheduling_accepted_at=$2 WHERE student_number=$1", [later.candidate.studentNumber, later.candidate.acceptedAt]);
@@ -507,7 +537,7 @@ describe("priority displacement with the unified closure calendar", () => {
       physicalExamDate: "2027-08-03",
       windowStart: "2027-08-01",
     });
-    await pool.query("UPDATE appointments SET status='COMPLETED' WHERE id=$1", [victim.created.laboratory.id]);
+    await completeLaboratory(victim.created.laboratory.id);
     const before = (await pool.query("SELECT * FROM appointments WHERE id=$1", [victim.created.laboratory.id])).rows;
     expect(await importPriority()).toMatchObject({ displacementTotal: 1 });
     expect((await pool.query("SELECT * FROM appointments WHERE id=$1", [victim.created.laboratory.id])).rows).toEqual(before);
@@ -625,16 +655,18 @@ describe("priority displacement with the unified closure calendar", () => {
     }))).resolves.toEqual([]);
   });
 
-  it("excludes a Physical-only candidate with an active draft result file", async () => {
+  it("keeps a Physical-only candidate eligible when only Laboratory has a draft file", async () => {
     const created = await eligibleFixture("99-9404-04");
-    await addActiveDraftFile(created.physicalExam.id, "99-9404-04");
+    await addActiveDraftFile(created.laboratory.id, "99-9404-04");
 
     await expect(transaction((client) => lockEligibleRegularPhysicalExams(client, {
       scheduleCycleStart: 2027,
       windowStart: "2027-08-01",
       windowEnd: "2027-09-30",
       limit: 10,
-    }))).resolves.toEqual([]);
+    }))).resolves.toEqual([expect.objectContaining({
+      physicalExamAppointmentId: created.physicalExam.id,
+    })]);
   });
 
   it("skips the same active blocked dates for both replacement services", async () => {
@@ -739,14 +771,21 @@ describe("priority displacement with the unified closure calendar", () => {
     });
 
     await expect(transaction(async (client) => {
+      await insertTestAcademicSnapshot(client, {
+        studentNumber: incomingStudent,
+        academicYearStart: 2027,
+        importName: `${importPattern.replaceAll("%", "")}-rollback`,
+        actor: TEST_REFERENCE_IDS.adminUser,
+      });
       const incomingPairId = randomUUID();
-      await client.query(
+      const incoming = await client.query<{ id: string; schedule_type: string }>(
         `INSERT INTO appointments (
            clinic_id,student_number,schedule_type,appointment_date,status,is_published,
-           schedule_pair_id,schedule_cycle_start,created_by,updated_by
+           schedule_pair_id,schedule_cycle_start,scheduling_category,created_by,updated_by
          ) VALUES
-           ($1,$3,'LABORATORY','2028-03-28','PENDING',TRUE,$4,2027,$5,$5),
-           ($2,$3,'PHYSICAL_EXAM','2028-03-29','PENDING',TRUE,$4,2027,$5,$5)`,
+           ($1,$3,'LABORATORY','2028-03-28','PENDING',TRUE,$4,2027,'OJT',$5,$5),
+           ($2,$3,'PHYSICAL_EXAM','2028-03-29','PENDING',TRUE,$4,2027,'OJT',$5,$5)
+         RETURNING id::text,schedule_type`,
         [
           TEST_REFERENCE_IDS.laboratoryClinic,
           TEST_REFERENCE_IDS.physicalExamClinic,
@@ -755,6 +794,9 @@ describe("priority displacement with the unified closure calendar", () => {
           TEST_REFERENCE_IDS.adminUser,
         ],
       );
+      await linkPublishedLaboratoryAppointments(client, incoming.rows
+        .filter((appointment) => appointment.schedule_type === "LABORATORY")
+        .map((appointment) => appointment.id));
       await publishThroughLiveDisplacementPath({
         candidates: [displaced.candidate],
         sourceImportGroupId: displaced.created.importGroupId,

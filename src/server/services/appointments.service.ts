@@ -2,16 +2,14 @@ import "server-only";
 import type { PoolClient } from "pg";
 import { z } from "zod";
 import { AppError, isPostgresUniqueViolation } from "@/lib/errors";
+import { assertOpenAppointmentCycle } from "@/server/appointments/academic-year-visibility";
 import {
   assertManualAppointmentDestination,
 } from "@/server/appointments/manual-appointment-destination";
 import {
-  assertLaboratoryCompletionRollbackAllowed,
-  assertPhysicalExamCompletionAllowed,
   cancellationTargetsForPair,
   type PairAppointment,
 } from "@/server/appointments/appointment-pair-integrity";
-import { isAutomaticNoShowLog } from "@/server/appointments/automatic-no-show";
 import { transaction } from "@/server/db/pool";
 import { writeAudit } from "@/server/repositories/audit.repository";
 import {
@@ -27,13 +25,7 @@ import {
   type EffectivePairAppointment,
 } from "@/server/repositories/effective-appointment-pair.repository";
 import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
-import {
-  deletePendingResultPlaceholder,
-  ensurePendingUploadResult,
-  getAppointmentResultCorrectionState,
-} from "@/server/repositories/student-result-submissions.repository";
 import type { SessionUser } from "@/types/roles";
-import { assertOvpsaAppointmentCompletionAllowed } from "@/server/ovpsa/external-laboratory-verification.service";
 import { isSchedulingDateBlocked } from "@/server/repositories/scheduling-blocked-dates.repository";
 import { queueAuthoritativeScheduleNotification } from "@/server/schedule/schedule-notification-hooks";
 import {
@@ -60,15 +52,13 @@ export function assertStatusTransition(from: AppointmentStatus, to: AppointmentS
 }
 
 export const appointmentUpdateSchema = z.object({
-  status: z.enum(["DRAFT", "PENDING", "COMPLETED", "NO_SHOW", "RESCHEDULED", "CANCELLED"]).optional(),
+  status: z.enum(["DRAFT", "PENDING", "NO_SHOW", "RESCHEDULED", "CANCELLED"]).optional(),
   appointmentDate: z.iso.date().optional(),
   notes: z.union([z.string().max(1000), z.null()]).optional(),
   lockAction: z.enum(["LOCK", "UNLOCK"]).optional(),
   lockReason: z.union([z.string().max(500), z.null()]).optional(),
   expectedUpdatedAt: z.iso.datetime({ offset: true }).optional(),
-  correctionReason: z.string().trim().min(3).max(1000).optional(),
-  source: z.enum(["APPOINTMENTS", "LABORATORY", "PHYSICAL_EXAM"]).optional(),
-}).superRefine((input, context) => {
+}).strict().superRefine((input, context) => {
   if (!input.status && !input.appointmentDate && !input.lockAction) {
     context.addIssue({ code: "custom", message: "Provide a status, reschedule date, or lock action." });
   }
@@ -80,44 +70,14 @@ export const appointmentUpdateSchema = z.object({
 type AppointmentUpdateInput = z.infer<typeof appointmentUpdateSchema>;
 type AppointmentMutationContextWithDate = AppointmentMutationContext & { appointmentDate: string };
 
-export const appointmentQuickStatusSchema = z.object({
-  quickStatusAction: z.enum(["MARK_COMPLETED", "REVERT_COMPLETION"]),
-  expectedStatus: z.enum(["PENDING", "NO_SHOW", "COMPLETED"]),
-}).strict();
-
-export type AppointmentQuickStatusRequest = z.infer<typeof appointmentQuickStatusSchema>;
-
-function isQuickStatusRequestCandidate(raw: unknown): boolean {
-  return typeof raw === "object"
-    && raw !== null
-    && ("quickStatusAction" in raw || "expectedStatus" in raw);
-}
-
 function isManualLockRequestCandidate(raw: unknown): boolean {
   return typeof raw === "object"
     && raw !== null
     && "lockAction" in raw;
 }
 
-function parseAppointmentUpdate(raw: unknown, currentStatus: AppointmentStatus): AppointmentUpdateInput {
-  const parsed = appointmentUpdateSchema.safeParse(raw);
-  if (parsed.success) return parsed.data;
-  if (
-    currentStatus === "COMPLETED"
-    && typeof raw === "object"
-    && raw !== null
-    && "status" in raw
-    && (raw.status === "PENDING" || raw.status === "NO_SHOW")
-    && "correctionReason" in raw
-    && typeof raw.correctionReason === "string"
-    && parsed.error.issues.every((issue) => issue.path[0] === "correctionReason" && issue.code === "too_small")
-  ) {
-    const withoutInvalidReason = appointmentUpdateSchema.safeParse({ ...raw, correctionReason: undefined });
-    if (withoutInvalidReason.success) {
-      return { ...withoutInvalidReason.data, correctionReason: raw.correctionReason.trim() };
-    }
-  }
-  throw parsed.error;
+function parseAppointmentUpdate(raw: unknown): AppointmentUpdateInput {
+  return appointmentUpdateSchema.parse(raw);
 }
 
 function manilaToday() {
@@ -278,6 +238,7 @@ async function applyAppointmentManualLockWithClient(
   if (!appointment || !appointment.isPublished) {
     throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
   }
+  await assertOpenAppointmentCycle(client, appointment.scheduleCycleStart, new Date());
 
   const record = typeof raw === "object" && raw !== null
     ? raw as Record<string, unknown>
@@ -350,230 +311,11 @@ async function applyAppointmentManualLockWithClient(
   );
 }
 
-export async function completeAppointmentWithClient(
-  id: string,
-  actor: SessionUser,
-  reason: string | null | undefined,
-  client: PoolClient,
-) {
-  const { appointment, pair } = await loadLockedAppointmentPair(id, actor, client);
-  if (appointment.ovpsaBatchId && appointment.scheduleType === "LABORATORY") {
-    throw new AppError(
-      "OVPSA_EXTERNAL_LABORATORY_VERIFICATION_REQUIRED",
-      "First Year Mission Hospital Laboratory appointments can only be changed through external-result verification or the batch lifecycle.",
-      422,
-    );
-  }
-  await assertOvpsaAppointmentCompletionAllowed(client, appointment);
-  assertPhysicalExamCompletionAllowed(appointment, pair);
-  if (appointment.status === "COMPLETED") return appointment;
-  if (appointment.status === "NO_SHOW") {
-    if (!isAutomaticNoShowLog(appointment.latestLog)) {
-      throw new AppError("NO_SHOW_CORRECTION_NOT_ALLOWED", "Only an automatic no-show can be corrected to completed.", 422);
-    }
-    if (!reason?.trim()) {
-      throw new AppError("CORRECTION_REASON_REQUIRED", "Enter a reason for correcting this automatic no-show.", 422);
-    }
-  } else if (appointment.status !== "PENDING") {
-    assertStatusTransition(appointment.status, "COMPLETED");
-  }
-  await changeAppointmentStatusWithClient(
-    client,
-    id,
-    appointment.status,
-    "COMPLETED",
-    reason?.trim() || null,
-    actor.userId,
-  );
-  await ensurePendingUploadResult(client, appointment);
-  return appointment;
-}
-
-async function correctCompletedAppointmentWithClient(
-  id: string,
-  target: "PENDING" | "NO_SHOW",
-  correctionReason: string | undefined,
-  source: "APPOINTMENTS" | "LABORATORY" | "PHYSICAL_EXAM" | undefined,
-  actor: SessionUser,
-  client: PoolClient,
-) {
-  const { appointment, pair } = await loadLockedAppointmentPair(id, actor, client);
-  if (appointment.ovpsaBatchId && appointment.scheduleType === "LABORATORY") {
-    throw new AppError(
-      "OVPSA_EXTERNAL_LABORATORY_VERIFICATION_REQUIRED",
-      "First Year Mission Hospital Laboratory appointments cannot be corrected through generic appointment controls.",
-      422,
-    );
-  }
-  if (appointment.status !== "COMPLETED") {
-    throw new AppError(
-      "APPOINTMENT_STATUS_CONFLICT",
-      "The appointment status changed. Refresh and try again.",
-      409,
-    );
-  }
-  const reason = correctionReason?.trim();
-  if (!reason || reason.length < 3) {
-    throw new AppError(
-      "CORRECTION_REASON_REQUIRED",
-      "Enter a reason for correcting this completed appointment.",
-      422,
-    );
-  }
-  if (target === "NO_SHOW" && appointment.appointmentDate >= manilaToday()) {
-    throw new AppError(
-      "NO_SHOW_REQUIRES_PAST_DATE",
-      "A completed appointment can be corrected to no-show only after its appointment date.",
-      422,
-    );
-  }
-  assertLaboratoryCompletionRollbackAllowed(appointment, pair);
-  const resultState = await getAppointmentResultCorrectionState(client, appointment);
-  if (resultState.type === "PROTECTED") {
-    throw new AppError(
-      "APPOINTMENT_RESULT_PROTECTED",
-      "This appointment has protected result data and cannot be corrected.",
-      409,
-    );
-  }
-  if (resultState.type === "PENDING_PLACEHOLDER") {
-    await deletePendingResultPlaceholder(client, resultState);
-  }
-  await changeAppointmentStatusWithClient(
-    client,
-    id,
-    "COMPLETED",
-    target,
-    reason,
-    actor.userId,
-  );
-  await writeAudit(
-    actor.userId,
-    "APPOINTMENT_STATUS_CORRECTED",
-    "appointment",
-    id,
-    {
-      oldStatus: "COMPLETED",
-      newStatus: target,
-      reason,
-      source: source ?? "APPOINTMENTS",
-    },
-    client,
-  );
-}
-
-async function applyQuickStatusWithClient(
-  id: string,
-  input: AppointmentQuickStatusRequest,
-  actor: SessionUser,
-  client: PoolClient,
-) {
-  const { appointment, pair } = await loadLockedAppointmentPair(id, actor, client);
-  if (appointment.ovpsaBatchId && appointment.scheduleType === "LABORATORY") {
-    throw new AppError(
-      "OVPSA_EXTERNAL_LABORATORY_VERIFICATION_REQUIRED",
-      "First Year Mission Hospital Laboratory appointments can only be changed through external-result verification or the batch lifecycle.",
-      422,
-    );
-  }
-  if (appointment.status !== input.expectedStatus) {
-    throw new AppError(
-      "APPOINTMENT_STATUS_CONFLICT",
-      "The appointment status changed. Refresh and try again.",
-      409,
-    );
-  }
-
-  if (input.quickStatusAction === "MARK_COMPLETED") {
-    await assertOvpsaAppointmentCompletionAllowed(client, appointment);
-    assertPhysicalExamCompletionAllowed(appointment, pair);
-    if (appointment.status !== "PENDING" && appointment.status !== "NO_SHOW") {
-      throw new AppError(
-        "APPOINTMENT_QUICK_STATUS_NOT_ALLOWED",
-        "Only pending or automatic no-show appointments can be marked completed from the clinic schedule.",
-        422,
-      );
-    }
-    if (appointment.status === "NO_SHOW" && !isAutomaticNoShowLog(appointment.latestLog)) {
-      throw new AppError(
-        "NO_SHOW_CORRECTION_NOT_ALLOWED",
-        "Only an automatic no-show can be corrected to completed.",
-        422,
-      );
-    }
-    const oldStatus = appointment.status;
-    const note = oldStatus === "PENDING"
-      ? "Marked completed through the clinic schedule."
-      : "Automatic no-show corrected to completed through the clinic schedule.";
-    await changeAppointmentStatusWithClient(client, id, oldStatus, "COMPLETED", note, actor.userId);
-    await ensurePendingUploadResult(client, appointment);
-    await writeAudit(
-      actor.userId,
-      oldStatus === "PENDING" ? "APPOINTMENT_STATUS_CHANGED" : "APPOINTMENT_STATUS_CORRECTED",
-      "appointment",
-      id,
-      {
-        oldStatus,
-        newStatus: "COMPLETED",
-        quickStatusAction: input.quickStatusAction,
-        source: "CLINIC_SCHEDULE_QUICK_STATUS",
-      },
-      client,
-    );
-    return;
-  }
-
-  if (appointment.status !== "COMPLETED") {
-    throw new AppError(
-      "APPOINTMENT_QUICK_STATUS_NOT_ALLOWED",
-      "Only completed appointments can be reverted from the clinic schedule.",
-      422,
-    );
-  }
-  assertLaboratoryCompletionRollbackAllowed(appointment, pair);
-  const target = appointment.completedFromStatus;
-  if (target !== "PENDING" && target !== "NO_SHOW") {
-    throw new AppError(
-      "APPOINTMENT_COMPLETION_HISTORY_INVALID",
-      "The previous appointment status could not be determined. Open the appointment details to review its history.",
-      409,
-    );
-  }
-  const resultState = await getAppointmentResultCorrectionState(client, appointment);
-  if (resultState.type === "PROTECTED") {
-    throw new AppError(
-      "APPOINTMENT_RESULT_PROTECTED",
-      "This appointment can no longer be reverted because protected result data is linked to it.",
-      409,
-    );
-  }
-  if (resultState.type === "PENDING_PLACEHOLDER") {
-    await deletePendingResultPlaceholder(client, resultState);
-  }
-  const note = target === "PENDING"
-    ? "Clinic schedule completion reverted to pending."
-    : "Clinic schedule completion reverted to the previous automatic no-show.";
-  await changeAppointmentStatusWithClient(client, id, "COMPLETED", target, note, actor.userId);
-  await writeAudit(
-    actor.userId,
-    "APPOINTMENT_STATUS_CORRECTED",
-    "appointment",
-    id,
-    {
-      oldStatus: "COMPLETED",
-      newStatus: target,
-      quickStatusAction: input.quickStatusAction,
-      source: "CLINIC_SCHEDULE_QUICK_STATUS",
-    },
-    client,
-  );
-}
-
 export async function updateAppointment(id: string, raw: unknown, actor: SessionUser) {
-  if (isQuickStatusRequestCandidate(raw)) {
-    const input = appointmentQuickStatusSchema.parse(raw);
-    await transaction((client) => applyQuickStatusWithClient(id, input, actor, client));
-    return getPublishedAppointment(id);
+  if (raw && typeof raw === "object" && !Array.isArray(raw)
+    && ("quickStatusAction" in raw || ("status" in raw && raw.status === "COMPLETED"))) {
+    throw new AppError("CLINICAL_COMPLETION_RETIRED",
+      "Use the Laboratory checklist or examination completion form for clinical completion.", 422);
   }
   if (isManualLockRequestCandidate(raw)) {
     await transaction((client) => applyAppointmentManualLockWithClient(
@@ -586,8 +328,15 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
   }
   const current = await getPublishedAppointment(id);
   if (!current) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
-  const input = parseAppointmentUpdate(raw, current.status);
+  const input = parseAppointmentUpdate(raw);
   assertAppointmentMutationAuthorized(actor, current);
+  if (current.academicYearEnded) {
+    throw new AppError("ACADEMIC_YEAR_ENDED", "The academic year has ended; this appointment is historical.", 409);
+  }
+  if (current.status === "COMPLETED" && (input.status === "PENDING" || input.status === "NO_SHOW")) {
+    throw new AppError("CLINICAL_COMPLETION_RETIRED",
+      "Correct Laboratory tests through the checklist or use the certificate correction workflow.", 422);
+  }
   if (input.appointmentDate) {
     const appointmentDate = input.appointmentDate;
     try {
@@ -605,6 +354,7 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
         const appointment = await getAppointmentMutationContext(id, client);
         if (!appointment) throw new AppError("APPOINTMENT_NOT_FOUND", "Appointment not found.", 404);
         assertAppointmentMutationAuthorized(actor, appointment);
+        await assertOpenAppointmentCycle(client, appointment.scheduleCycleStart, new Date());
         if (
           input.expectedUpdatedAt
           && appointment.updatedAt.getTime() !== new Date(input.expectedUpdatedAt).getTime()
@@ -717,44 +467,6 @@ export async function updateAppointment(id: string, raw: unknown, actor: Session
       if (isPostgresUniqueViolation(error)) throw new AppError("ACTIVE_APPOINTMENT_EXISTS", "The student already has an active appointment for this service.", 409);
       throw error;
     }
-  }
-  if (
-    current.status === "COMPLETED"
-    && (input.status === "PENDING" || input.status === "NO_SHOW")
-  ) {
-    const correctionTarget = input.status;
-    await transaction((client) => correctCompletedAppointmentWithClient(
-      id,
-      correctionTarget,
-      input.correctionReason,
-      input.source,
-      actor,
-      client,
-    ));
-    return getPublishedAppointment(id);
-  }
-  if (input.status === "COMPLETED") {
-    await transaction(async (client) => {
-      const appointment = await completeAppointmentWithClient(id, actor, input.notes, client);
-      if (appointment.status === "COMPLETED") return;
-      const reason = input.notes?.trim() || null;
-      await writeAudit(
-        actor.userId,
-        appointment.status === "NO_SHOW"
-          ? "APPOINTMENT_STATUS_CORRECTED"
-          : "APPOINTMENT_STATUS_CHANGED",
-        "appointment",
-        id,
-        {
-          oldStatus: appointment.status,
-          newStatus: "COMPLETED",
-          reason,
-          source: "APPOINTMENT_DETAIL",
-        },
-        client,
-      );
-    });
-    return getPublishedAppointment(id);
   }
   if (input.status) {
     const requestedStatus = input.status;

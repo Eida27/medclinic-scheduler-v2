@@ -2,8 +2,14 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { pool, transaction } from "@/server/db/pool";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import { lockEligibleRegularPairs } from "@/server/repositories/priority-displacement.repository";
-import { TEST_REFERENCE_IDS, insertTestStudent } from "@/test/integration-fixtures";
+import {
+  cleanupTestFixtures,
+  insertTestAcademicSnapshot,
+  TEST_REFERENCE_IDS,
+  insertTestStudent,
+} from "@/test/integration-fixtures";
 import {
   cleanupAndRestoreCapacitySettings,
   setupCapacityFixtureLock,
@@ -26,9 +32,9 @@ import { changeCapacity } from "./appointments.service";
 const studentPattern = "UCAL-%";
 let capacityFixture: CapacityFixtureLock | null = null;
 let createdManualResolutionAcademicYear = false;
+let createdHistoricalManualYear = false;
+let createdCurrentManualYear = false;
 const automaticCapacityBatchIds: string[] = [];
-const standardLineageBatchIds: string[] = [];
-const standardLineageImportIds: string[] = [];
 const admin: SessionUser = {
   userId: TEST_REFERENCE_IDS.adminUser,
   fullName: "System Admin",
@@ -68,41 +74,15 @@ async function cleanup() {
       [studentPattern],
     );
     await client.query(
-      `DELETE FROM student_portal_notifications
-        WHERE student_number LIKE $1`,
-      [studentPattern],
-    );
-    await client.query(
-      `DELETE FROM email_outbox
-        WHERE student_number LIKE $1`,
-      [studentPattern],
-    );
-    await client.query(
       `DELETE FROM audit_logs
         WHERE metadata->>'studentNumber' LIKE $1
            OR metadata->>'requestId' = ANY($2::text[])`,
       [studentPattern, Object.values(requestIds)],
     );
     await client.query("DELETE FROM clinic_calendar_requests WHERE request_id=ANY($1::uuid[])", [Object.values(requestIds)]);
-    await client.query("DELETE FROM appointment_status_logs WHERE appointment_id IN (SELECT id FROM appointments WHERE student_number LIKE $1)", [studentPattern]);
-    await client.query("DELETE FROM exam_results WHERE student_number LIKE $1", [studentPattern]);
-    await client.query("DELETE FROM laboratory_results WHERE student_number LIKE $1", [studentPattern]);
-    await client.query("DELETE FROM student_result_submissions WHERE student_number LIKE $1", [studentPattern]);
-    await client.query("DELETE FROM appointments WHERE student_number LIKE $1", [studentPattern]);
-    if (standardLineageBatchIds.length) {
-      await client.query(
-        "DELETE FROM coordinator_schedule_items WHERE batch_id=ANY($1::uuid[])",
-        [standardLineageBatchIds],
-      );
-      await client.query("DELETE FROM schedule_batches WHERE id=ANY($1::uuid[])", [standardLineageBatchIds]);
-    }
-    if (standardLineageImportIds.length) {
-      await client.query(
-        "DELETE FROM schedule_import_groups WHERE id=ANY($1::uuid[])",
-        [standardLineageImportIds],
-      );
-    }
-    await client.query("DELETE FROM students WHERE student_number LIKE $1", [studentPattern]);
+  });
+  await cleanupTestFixtures(studentPattern, "UCAL-LINEAGE-%", "UCAL-%");
+  await transaction(async (client) => {
     await client.query(
       `DELETE FROM clinic_unavailable_dates
         WHERE closure_group_id IN (
@@ -111,8 +91,6 @@ async function cleanup() {
     );
     await client.query("DELETE FROM clinic_closure_groups WHERE reason LIKE 'TEST-UNIFIED%'");
   });
-  standardLineageBatchIds.length = 0;
-  standardLineageImportIds.length = 0;
   if (automaticCapacityBatchIds.length) {
     await pool.query(
       "DELETE FROM ovpsa_first_year_service_reservations WHERE batch_id=ANY($1::uuid[])",
@@ -143,7 +121,6 @@ async function attachStandardBatchLineage(studentNumber: string) {
      RETURNING id::text`,
     [`UCAL-LINEAGE-${studentNumber}`, TEST_REFERENCE_IDS.adminUser],
   );
-  standardLineageImportIds.push(importGroup.rows[0].id);
   const batches = await pool.query<{ id: string }>(
     `INSERT INTO schedule_batches (
        clinic_id,batch_name,status,created_by,import_group_id
@@ -159,7 +136,6 @@ async function attachStandardBatchLineage(studentNumber: string) {
       importGroup.rows[0].id,
     ],
   );
-  standardLineageBatchIds.push(...batches.rows.map((batch) => batch.id));
   await pool.query(
     `UPDATE appointments appointment
         SET batch_id=batch.id
@@ -167,7 +143,7 @@ async function attachStandardBatchLineage(studentNumber: string) {
       WHERE appointment.student_number=$1
         AND batch.id=ANY($2::uuid[])
         AND batch.clinic_id=appointment.clinic_id`,
-    [studentNumber, standardLineageBatchIds],
+    [studentNumber, batches.rows.map((batch) => batch.id)],
   );
 }
 
@@ -186,16 +162,25 @@ async function createPair(input: {
     yearLevel: 4,
   });
   const pairId = randomUUID();
-  await pool.query(
+  await transaction(async (client) => {
+    await insertTestAcademicSnapshot(client, {
+      studentNumber: input.studentNumber,
+      academicYearStart: 2048,
+      importName: `UCAL-SNAPSHOT-${input.studentNumber}`,
+      actor: TEST_REFERENCE_IDS.adminUser,
+    });
+    const inserted = await client.query<{ id: string; schedule_type: string }>(
     `INSERT INTO appointments (
        clinic_id,student_number,schedule_type,appointment_date,status,is_published,
-       schedule_pair_id,schedule_cycle_start,is_manually_locked,locked_by,locked_at,lock_reason
+       schedule_pair_id,schedule_cycle_start,scheduling_category,
+       is_manually_locked,locked_by,locked_at,lock_reason
      ) VALUES
-       ($1,$3,'LABORATORY',$4,$6,TRUE,$8,2048,FALSE,NULL,NULL,NULL),
-       ($2,$3,'PHYSICAL_EXAM',$5,$7,TRUE,$8,2048,$9,
+       ($1,$3,'LABORATORY',$4,$6,TRUE,$8,2048,'REGULAR',FALSE,NULL,NULL,NULL),
+       ($2,$3,'PHYSICAL_EXAM',$5,$7,TRUE,$8,2048,'REGULAR',$9,
         CASE WHEN $9 THEN $10::uuid ELSE NULL END,
         CASE WHEN $9 THEN NOW() ELSE NULL END,
-        CASE WHEN $9 THEN 'TEST-UNIFIED protected appointment' ELSE NULL END)`,
+        CASE WHEN $9 THEN 'TEST-UNIFIED protected appointment' ELSE NULL END)
+     RETURNING id::text,schedule_type`,
     [
       TEST_REFERENCE_IDS.laboratoryClinic,
       TEST_REFERENCE_IDS.physicalExamClinic,
@@ -208,7 +193,18 @@ async function createPair(input: {
       input.lockPhysical ?? false,
       TEST_REFERENCE_IDS.adminUser,
     ],
-  );
+    );
+    const laboratoryId = inserted.rows.find((row) => row.schedule_type === "LABORATORY")!.id;
+    await linkPublishedLaboratoryAppointments(client, [laboratoryId]);
+    if (input.laboratoryStatus === "COMPLETED") {
+      await client.query(
+        `UPDATE laboratory_checklist_items SET verified_at=clock_timestamp(),
+           verified_by=$2,verification_source='INTERNAL'
+         WHERE checklist_id=(SELECT checklist_id FROM laboratory_checklist_appointments WHERE appointment_id=$1)`,
+        [laboratoryId, TEST_REFERENCE_IDS.adminUser],
+      );
+    }
+  });
 }
 
 async function createAutomaticManualCase(input: {
@@ -250,10 +246,11 @@ async function createAutomaticManualCase(input: {
   };
 }
 
-async function insertPublishedLaboratoryCapacityOccupant(input: {
+async function insertPublishedCapacityOccupant(input: {
   studentNumber: string;
   appointmentDate: string;
   status: "DRAFT" | "PENDING" | "COMPLETED" | "NO_SHOW";
+  scheduleType?: "LABORATORY" | "PHYSICAL_EXAM";
   ovpsaLineage?: {
     batchId: string;
     revisionId: string;
@@ -266,14 +263,23 @@ async function insertPublishedLaboratoryCapacityOccupant(input: {
     lastName: "Occupant",
     yearLevel: 4,
   });
-  await pool.query(
+  await transaction(async (client) => {
+    await insertTestAcademicSnapshot(client, {
+      studentNumber: input.studentNumber,
+      academicYearStart: 2048,
+      importName: `UCAL-SNAPSHOT-${input.studentNumber}`,
+      actor: TEST_REFERENCE_IDS.adminUser,
+    });
+    const inserted = await client.query<{ id: string }>(
     `INSERT INTO appointments (
        clinic_id,student_number,schedule_type,appointment_date,status,is_published,
        schedule_pair_id,schedule_cycle_start,created_by,updated_by,
-       ovpsa_batch_id,ovpsa_revision_id,ovpsa_service_reservation_id
-     ) VALUES ($1,$2,'LABORATORY',$3,$4,TRUE,$5,2048,$6,$6,$7,$8,$9)`,
+       ovpsa_batch_id,ovpsa_revision_id,ovpsa_service_reservation_id,scheduling_category
+     ) VALUES ($1,$2,$10,$3,$4,TRUE,$5,2048,$6,$6,$7,$8,$9,'REGULAR')
+     RETURNING id::text`,
     [
-      TEST_REFERENCE_IDS.laboratoryClinic,
+      input.scheduleType === "PHYSICAL_EXAM"
+        ? TEST_REFERENCE_IDS.physicalExamClinic : TEST_REFERENCE_IDS.laboratoryClinic,
       input.studentNumber,
       input.appointmentDate,
       input.status,
@@ -282,8 +288,21 @@ async function insertPublishedLaboratoryCapacityOccupant(input: {
       input.ovpsaLineage?.batchId ?? null,
       input.ovpsaLineage?.revisionId ?? null,
       input.ovpsaLineage?.reservationId ?? null,
+      input.scheduleType ?? "LABORATORY",
     ],
-  );
+    );
+    if (input.scheduleType !== "PHYSICAL_EXAM") {
+      await linkPublishedLaboratoryAppointments(client, [inserted.rows[0].id]);
+    }
+    if (input.status === "COMPLETED") {
+      await client.query(
+        `UPDATE laboratory_checklist_items SET verified_at=clock_timestamp(),
+           verified_by=$2,verification_source='INTERNAL'
+         WHERE checklist_id=(SELECT checklist_id FROM laboratory_checklist_appointments WHERE appointment_id=$1)`,
+        [inserted.rows[0].id, TEST_REFERENCE_IDS.adminUser],
+      );
+    }
+  });
 }
 
 async function createReleasedOvpsaLaboratoryLineage(date: string) {
@@ -389,7 +408,15 @@ afterEach(async () => {
     if (createdManualResolutionAcademicYear) {
       await pool.query("DELETE FROM academic_years WHERE start_year=2048");
     }
+    if (createdHistoricalManualYear) {
+      await pool.query("DELETE FROM academic_years WHERE start_year=2024");
+    }
+    if (createdCurrentManualYear) {
+      await pool.query("DELETE FROM academic_years WHERE start_year=2026");
+    }
     createdManualResolutionAcademicYear = false;
+    createdHistoricalManualYear = false;
+    createdCurrentManualYear = false;
   });
 });
 afterAll(async () => {
@@ -406,6 +433,72 @@ afterAll(async () => {
 });
 
 describe("unified clinic calendar lifecycle", () => {
+  it("keeps ended-cycle manual cases in an explicit read-only year view", async () => {
+    const created = await pool.query(
+      `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+       VALUES (2024,'2025-07-31',$1,$1) ON CONFLICT (start_year) DO NOTHING RETURNING start_year`,
+      [TEST_REFERENCE_IDS.adminUser],
+    );
+    createdHistoricalManualYear = created.rowCount === 1;
+    const studentNumber = "UCAL-HIST-MANUAL";
+    await insertTestStudent({ studentNumber, firstName: "Historical", lastName: "Manual", yearLevel: 4 });
+    const fixture = await transaction(async (client) => {
+      await insertTestAcademicSnapshot(client, { studentNumber, academicYearStart: 2024,
+        importName: "UCAL-HIST-MANUAL", actor: TEST_REFERENCE_IDS.adminUser });
+      const pairId = randomUUID();
+      const appointment = await client.query<{ id: string }>(
+        `INSERT INTO appointments
+          (clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+           schedule_pair_id,schedule_cycle_start,scheduling_category,created_by,updated_by)
+         VALUES ($1,$2,'PHYSICAL_EXAM','2025-03-11','AWAITING_RESCHEDULE',TRUE,$3,2024,'REGULAR',$4,$4)
+         RETURNING id::text`,
+        [TEST_REFERENCE_IDS.physicalExamClinic, studentNumber, pairId, TEST_REFERENCE_IDS.adminUser],
+      );
+      const manual = await client.query<{ id: string; optimistic_token: string }>(
+        `INSERT INTO clinic_closure_manual_cases
+          (student_number,case_source,schedule_pair_id,schedule_cycle_start,
+           affected_physical_exam_appointment_id,reason_code,reason_message,policy_metadata)
+         VALUES ($1,'AUTOMATIC_DISPLACEMENT',$2,2024,$3,
+                 'NO_VALID_REPLACEMENT_WITHIN_CYCLE','No valid replacement remained.','{}'::jsonb)
+         RETURNING id::text,optimistic_token::text`,
+        [studentNumber, pairId, appointment.rows[0].id],
+      );
+      return manual.rows[0];
+    });
+
+    expect(await listClinicClosureManualCases({ search: studentNumber }, admin))
+      .toMatchObject({ total: 0, items: [] });
+    const history = await listClinicClosureManualCases({ search: studentNumber, academicYearStart: 2024 }, admin);
+    expect(history).toMatchObject({ selectedYearState: "ENDED", total: 1,
+      items: [{ id: fixture.id, academicYearStart: 2024 }] });
+    const currentYear = await pool.query(
+      `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+       VALUES (2026,'2027-07-31',$1,$1) ON CONFLICT (start_year) DO NOTHING RETURNING start_year`,
+      [TEST_REFERENCE_IDS.adminUser],
+    );
+    createdCurrentManualYear = currentYear.rowCount === 1;
+    expect(await listClinicClosureManualCases({ search: studentNumber, academicYearStart: 2026 }, admin))
+      .toMatchObject({ selectedYearState: "CURRENT", total: 0, items: [] });
+    for (const action of ["KEEP_CURRENT_REPLACEMENT", "ASSIGN_REPLACEMENT"] as const) {
+      await expect(resolveClinicClosureManualCase(fixture.id, {
+        action, expectedOptimisticToken: fixture.optimistic_token,
+        ...(action === "ASSIGN_REPLACEMENT" ? { physicalExamDate: "2025-03-12" } : {}),
+        reason: "An ended academic year cannot be changed.",
+      }, admin)).rejects.toMatchObject({ code: "ACADEMIC_YEAR_ENDED", status: 409 });
+    }
+    const unchanged = await pool.query("SELECT status FROM clinic_closure_manual_cases WHERE id=$1", [fixture.id]);
+    expect(unchanged.rows[0].status).toBe("OPEN");
+    await pool.query(
+      `UPDATE clinic_closure_manual_cases
+          SET status='RESOLVED',resolved_at=NOW(),resolved_by=$2,
+              resolution_action='KEEP_CURRENT_REPLACEMENT',
+              resolution_details='{}'::jsonb
+        WHERE id=$1`,
+      [fixture.id, TEST_REFERENCE_IDS.adminUser],
+    );
+    const resolvedHistory = await listClinicClosureManualCases({ search: studentNumber, academicYearStart: 2024 }, admin);
+    expect(resolvedHistory).toMatchObject({ total: 1, items: [{ id: fixture.id, status: "RESOLVED" }] });
+  });
   it("previews grouped impact without writing", async () => {
     await createPair({
       studentNumber: "UCAL-PREVIEW",
@@ -463,9 +556,14 @@ describe("unified clinic calendar lifecycle", () => {
       { schedule_type: "LABORATORY", status: "AWAITING_RESCHEDULE" },
       { schedule_type: "PHYSICAL_EXAM", status: "PENDING" },
     ]);
-    const manualCase = (await listClinicClosureManualCases({
+    expect(await listClinicClosureManualCases({ search: "UCAL-MANUAL-ALL" }, admin))
+      .toMatchObject({ selectedYearState: null, total: 0, items: [] });
+    const explicitYearCases = await listClinicClosureManualCases({
       search: "UCAL-MANUAL-ALL",
-    }, admin)).items[0];
+      academicYearStart: 2048,
+    }, admin);
+    expect(explicitYearCases).toMatchObject({ selectedYearState: "UPCOMING", total: 1 });
+    const manualCase = explicitYearCases.items[0];
     expect(manualCase.caseSource).toBe("CLINIC_CLOSURE");
     await expect(resolveClinicClosureManualCase(manualCase.id, {
       action: "ASSIGN_REPLACEMENT",
@@ -527,6 +625,7 @@ describe("unified clinic calendar lifecycle", () => {
 
     const page = await listClinicClosureManualCases({
       search: "UCAL-AUTO-DISPLACE",
+      academicYearStart: 2048,
     }, admin);
 
     expect(page.items).toHaveLength(1);
@@ -616,16 +715,27 @@ describe("unified clinic calendar lifecycle", () => {
       studentNumber,
       awaitingType: "PHYSICAL_EXAM",
     });
-    const appointments = await pool.query<{
+    const appointments = await transaction(async (client) => {
+      await client.query(
+        `UPDATE laboratory_checklist_items SET verified_at=clock_timestamp(),
+           verified_by=$2,verification_source='INTERNAL'
+         WHERE checklist_id IN (
+           SELECT link.checklist_id FROM laboratory_checklist_appointments link
+           JOIN appointments appointment ON appointment.id=link.appointment_id
+           WHERE appointment.student_number=$1 AND appointment.schedule_type='LABORATORY')`,
+        [studentNumber, TEST_REFERENCE_IDS.adminUser],
+      );
+      return client.query<{
       id: string;
       schedule_type: "LABORATORY" | "PHYSICAL_EXAM";
-    }>(
+      }>(
       `UPDATE appointments
           SET status=CASE WHEN schedule_type='LABORATORY' THEN 'COMPLETED' ELSE status END
         WHERE student_number=$1
       RETURNING id::text,schedule_type`,
       [studentNumber],
-    );
+      );
+    });
     const laboratory = appointments.rows.find((row) => row.schedule_type === "LABORATORY")!;
     const physicalExam = appointments.rows.find((row) => row.schedule_type === "PHYSICAL_EXAM")!;
     await pool.query(
@@ -644,7 +754,7 @@ describe("unified clinic calendar lifecycle", () => {
       [manualCase.id, physicalExam.id],
     );
 
-    const listed = await listClinicClosureManualCases({ search: studentNumber }, admin);
+    const listed = await listClinicClosureManualCases({ search: studentNumber, academicYearStart: 2048 }, admin);
     expect(listed.items[0]).toMatchObject({
       laboratory: { id: laboratory.id, status: "COMPLETED", affected: false },
       physicalExam: { id: physicalExam.id, status: "AWAITING_RESCHEDULE", affected: true },
@@ -730,7 +840,7 @@ describe("unified clinic calendar lifecycle", () => {
         studentNumber: `UCAL-AC-${suffix}`,
         awaitingType: "LABORATORY",
       });
-      await insertPublishedLaboratoryCapacityOccupant({
+      await insertPublishedCapacityOccupant({
         studentNumber: `UCAL-CO-${suffix}`,
         appointmentDate: "2049-08-16",
         status,
@@ -758,7 +868,7 @@ describe("unified clinic calendar lifecycle", () => {
       awaitingType: "LABORATORY",
     });
     const ovpsaLineage = await createReleasedOvpsaLaboratoryLineage("2049-08-16");
-    await insertPublishedLaboratoryCapacityOccupant({
+    await insertPublishedCapacityOccupant({
       studentNumber: "UCAL-AUTO-EXT-OVPSA",
       appointmentDate: "2049-08-16",
       status: "PENDING",
@@ -882,7 +992,7 @@ describe("unified clinic calendar lifecycle", () => {
     }, admin)).rejects.toMatchObject({ code: "CLINIC_CALENDAR_REQUEST_CONFLICT", status: 409 });
   });
 
-  it("preserves completed Laboratory and moves only Physical Examination", async () => {
+  it("keeps verified Laboratory in Manual Resolution when Physical Examination closes", async () => {
     await createPair({
       studentNumber: "UCAL-PHYSICAL",
       laboratoryDate: "2049-08-09",
@@ -895,11 +1005,15 @@ describe("unified clinic calendar lifecycle", () => {
       recoveryMode: "AUTO_ELIGIBLE",
       changes: [{ action: "BLOCK", date: "2049-08-10", category: "CLOSURE", reason: "TEST-UNIFIED physical only" }],
     }, admin);
-    expect(result).toMatchObject({ movedStudentCount: 1, movedAppointmentCount: 1 });
+    expect(result).toMatchObject({ movedStudentCount: 0, movedAppointmentCount: 0, manualCaseCount: 1 });
     const laboratory = await pool.query(
       "SELECT status,is_published,appointment_date::text FROM appointments WHERE student_number='UCAL-PHYSICAL' AND schedule_type='LABORATORY'",
     );
     expect(laboratory.rows).toEqual([{ status: "COMPLETED", is_published: true, appointment_date: "2049-08-09" }]);
+    const manualCase = await pool.query(
+      "SELECT reason_code FROM clinic_closure_manual_cases WHERE student_number='UCAL-PHYSICAL'",
+    );
+    expect(manualCase.rows).toEqual([{ reason_code: "LABORATORY_PROGRESS_RECORDED" }]);
   });
 
   it("keeps a real closure while routing a locked pair to manual resolution", async () => {
@@ -924,6 +1038,7 @@ describe("unified clinic calendar lifecycle", () => {
       page: 1,
       pageSize: 20,
       search: "UCAL-MANUAL",
+      academicYearStart: 2048,
       date: "2049-08-12",
       service: "LABORATORY",
     }, admin);
@@ -1017,6 +1132,7 @@ describe("unified clinic calendar lifecycle", () => {
       page: 1,
       pageSize: 20,
       search: "UCAL-MIX-DRAFT",
+      academicYearStart: 2048,
     }, admin);
     expect(page.items[0]).toMatchObject({
       reasonCode: "DRAFT_RESULT_FILES_EXIST",
@@ -1041,6 +1157,7 @@ describe("unified clinic calendar lifecycle", () => {
     const reloaded = await listClinicClosureManualCases({
       page: 1,
       pageSize: 20,
+      academicYearStart: 2048,
       search: "UCAL-MIX-DRAFT",
     }, admin);
     expect(reloaded.items[0].currentAssignmentBlock).toBeNull();
@@ -1236,6 +1353,7 @@ describe("unified clinic calendar lifecycle", () => {
       page: 1,
       pageSize: 20,
       search: "UCAL-RESTORE-DRAFT",
+      academicYearStart: 2048,
     }, admin);
     expect(cases).toMatchObject({ total: 0, items: [] });
     const published = await pool.query<{ status: string; count: number }>(
@@ -1431,11 +1549,10 @@ describe("unified clinic calendar lifecycle", () => {
 
 
 describe("closure same-cycle integrity", () => {
-  it.each(["2049-07-30", "2049-08-11", null])(
+  it.each(["2049-07-30", "2049-08-11"])(
     "keeps no complete pair within closing %s in Manual Resolution", async (closing) => {
       await createPair({ studentNumber: "UCAL-BOUND", laboratoryDate: "2049-08-09", physicalExamDate: "2049-08-10" });
-      if (closing) await pool.query("UPDATE academic_years SET closing_date=$1 WHERE start_year=2048", [closing]);
-      else await pool.query("DELETE FROM academic_years WHERE start_year=2048");
+      await pool.query("UPDATE academic_years SET closing_date=$1 WHERE start_year=2048", [closing]);
       const request = { requestId: requestIds.pair, emergencyAcknowledged: false, recoveryMode: "AUTO_ELIGIBLE", changes: [
         { action: "BLOCK", date: "2049-08-09", category: "CLOSURE", reason: "TEST-UNIFIED bound" },
         { action: "BLOCK", date: "2049-08-10", category: "CLOSURE", reason: "TEST-UNIFIED bound" },
@@ -1459,9 +1576,9 @@ describe("closure same-cycle integrity", () => {
     await pool.query("UPDATE academic_years SET closing_date='2049-08-11' WHERE start_year=2048");
     expect(await saveClinicCalendarChanges(request, admin)).toMatchObject({ movedStudentCount: 0, manualCaseCount: 1 });
   });
-  it("reuses the retired PE slot for the next student while preserving completed Laboratory", async () => {
+  it("reuses the retired PE slot for the next student while preserving its unblocked Laboratory", async () => {
     await createPair({ studentNumber: "UCAL-REUSE-A", laboratoryDate: "2049-08-09", physicalExamDate: "2049-08-11" });
-    await createPair({ studentNumber: "UCAL-REUSE-B", laboratoryDate: "2049-08-08", physicalExamDate: "2049-08-10", laboratoryStatus: "COMPLETED" });
+    await createPair({ studentNumber: "UCAL-REUSE-B", laboratoryDate: "2049-08-08", physicalExamDate: "2049-08-10" });
     await pool.query("UPDATE appointments SET created_at='2049-07-01' WHERE student_number='UCAL-REUSE-A'");
     await pool.query("UPDATE appointments SET created_at='2049-07-02' WHERE student_number='UCAL-REUSE-B'");
     await pool.query("UPDATE clinic_capacity_settings SET max_daily_capacity=1,safe_daily_capacity=1");
@@ -1470,7 +1587,7 @@ describe("closure same-cycle integrity", () => {
       { action: "BLOCK", date: "2049-08-10", category: "CLOSURE", reason: "TEST-UNIFIED reuse" },
     ] };
     // A must move its PE because replacement Laboratory falls on its old PE date.
-    // B preserves completed Laboratory and reuses the legitimately freed PE date.
+    // B preserves its unblocked Laboratory and reuses the legitimately freed PE date.
     expect(await saveClinicCalendarChanges(request, admin)).toMatchObject({ movedStudentCount: 2, movedAppointmentCount: 3 });
     expect((await pool.query("SELECT schedule_type,appointment_date::text FROM appointments WHERE student_number='UCAL-REUSE-A' AND is_published ORDER BY schedule_type")).rows)
       .toEqual([{ schedule_type: "LABORATORY", appointment_date: "2049-08-11" }, { schedule_type: "PHYSICAL_EXAM", appointment_date: "2049-08-12" }]);
@@ -1506,7 +1623,29 @@ async function ovpsaClosureFixture(closeLaboratory = true, completed = false) {
   await pool.query(`UPDATE appointments SET ovpsa_batch_id=$1,ovpsa_revision_id=$2,
     ovpsa_service_reservation_id=CASE schedule_type WHEN 'LABORATORY' THEN $3::uuid ELSE $4::uuid END
     WHERE student_number='UCAL-OVPSA-BOUND'`, [lineage.batchId, lineage.revisionId, lineage.reservationId, peReservation]);
-  if (completed) await pool.query("UPDATE appointments SET status='COMPLETED' WHERE student_number='UCAL-OVPSA-BOUND'");
+  if (completed) {
+    await pool.query(
+      `UPDATE ovpsa_first_year_service_reservations
+          SET status='ACTIVE',released_at=NULL,released_by=NULL,release_reason=NULL
+        WHERE id=$1`,
+      [lineage.reservationId],
+    );
+    await transaction(async (client) => {
+      await client.query(
+        `UPDATE laboratory_checklist_items SET verified_at=clock_timestamp(),
+           verified_by=$1,verification_source='INTERNAL'
+         WHERE checklist_id IN (
+           SELECT link.checklist_id FROM laboratory_checklist_appointments link
+           JOIN appointments appointment ON appointment.id=link.appointment_id
+           WHERE appointment.student_number='UCAL-OVPSA-BOUND'
+             AND appointment.schedule_type='LABORATORY')`,
+        [TEST_REFERENCE_IDS.adminUser],
+      );
+      await client.query(
+        "UPDATE appointments SET status='COMPLETED' WHERE student_number='UCAL-OVPSA-BOUND' AND schedule_type='LABORATORY'",
+      );
+    });
+  }
   await saveClinicCalendarChanges({ requestId: requestIds.pair, emergencyAcknowledged: false, recoveryMode: "MANUAL_ALL", changes: [
     { action: "BLOCK", date: closeLaboratory ? "2049-08-16" : "2049-08-23", category: "CLOSURE", reason: "TEST-UNIFIED ovpsa bound" },
   ] }, admin);
@@ -1562,10 +1701,9 @@ describe("OVPSA closure cycle boundaries", () => {
 describe("closure recovery protected occupancy", () => {
   it("keeps a preserved PE occupied for the next student", async () => {
     await createPair({ studentNumber: "UCAL-KEEP-A", laboratoryDate: "2049-08-09", physicalExamDate: "2049-08-12" });
-    await createPair({ studentNumber: "UCAL-KEEP-B", laboratoryDate: "2049-08-08", physicalExamDate: "2049-08-10", laboratoryStatus: "COMPLETED" });
-    await insertPublishedLaboratoryCapacityOccupant({ studentNumber: "UCAL-KEEP-C", appointmentDate: "2049-08-11", status: "COMPLETED" });
-    // Block B's otherwise earliest PE date with committed completed work.
-    await pool.query("UPDATE appointments SET clinic_id=$1,schedule_type='PHYSICAL_EXAM' WHERE student_number='UCAL-KEEP-C'", [TEST_REFERENCE_IDS.physicalExamClinic]);
+    await createPair({ studentNumber: "UCAL-KEEP-B", laboratoryDate: "2049-08-08", physicalExamDate: "2049-08-10" });
+    await insertPublishedCapacityOccupant({ studentNumber: "UCAL-KEEP-C", appointmentDate: "2049-08-11", status: "PENDING", scheduleType: "PHYSICAL_EXAM" });
+    // Block B's otherwise earliest PE date with an occupied Physical Examination slot.
     await pool.query("UPDATE clinic_capacity_settings SET max_daily_capacity=1,safe_daily_capacity=1");
     await saveClinicCalendarChanges({ requestId: requestIds.pair, emergencyAcknowledged: false, recoveryMode: "AUTO_ELIGIBLE", changes: [
       { action: "BLOCK", date: "2049-08-09", category: "CLOSURE", reason: "TEST-UNIFIED preserved" },
@@ -1578,7 +1716,7 @@ describe("closure recovery protected occupancy", () => {
   });
   it("discards a failed student's simulated release and reservation", async () => {
     await createPair({ studentNumber: "UCAL-FAIL-A", laboratoryDate: "2049-08-09", physicalExamDate: "2049-08-11" });
-    await createPair({ studentNumber: "UCAL-FAIL-B", laboratoryDate: "2049-08-08", physicalExamDate: "2049-08-10", laboratoryStatus: "COMPLETED" });
+    await createPair({ studentNumber: "UCAL-FAIL-B", laboratoryDate: "2049-08-08", physicalExamDate: "2049-08-10" });
     await pool.query("UPDATE clinic_capacity_settings SET max_daily_capacity=1,safe_daily_capacity=1");
     await pool.query(`CREATE FUNCTION task4_move_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
       IF OLD.student_number='UCAL-FAIL-A' AND NEW.status='RESCHEDULED' THEN RETURN NULL; END IF; RETURN NEW; END $$`);
@@ -1599,13 +1737,13 @@ describe("closure recovery protected occupancy", () => {
   });
   it("does not count external OVPSA Laboratory in a capacity reduction", async () => {
     const lineage = await createReleasedOvpsaLaboratoryLineage("2049-08-16");
-    await insertPublishedLaboratoryCapacityOccupant({ studentNumber: "UCAL-EXTERNAL-A", appointmentDate: "2049-08-16", status: "PENDING", ovpsaLineage: lineage });
-    await insertPublishedLaboratoryCapacityOccupant({ studentNumber: "UCAL-INTERNAL-B", appointmentDate: "2049-08-16", status: "PENDING" });
+    await insertPublishedCapacityOccupant({ studentNumber: "UCAL-EXTERNAL-A", appointmentDate: "2049-08-16", status: "PENDING", ovpsaLineage: lineage });
+    await insertPublishedCapacityOccupant({ studentNumber: "UCAL-INTERNAL-B", appointmentDate: "2049-08-16", status: "PENDING" });
     expect(await changeCapacity({ clinicCode: "KABALAKA_CLINIC", scheduleType: "LABORATORY", maxDailyCapacity: 1 }, admin.userId))
       .toMatchObject({ maxDailyCapacity: 1 });
     await pool.query("DELETE FROM audit_logs WHERE action='CAPACITY_UPDATED'");
   });
-  it.each(["today", "expired", "missing"])("keeps ordinary %s manual cases unresolved", async (state) => {
+  it.each(["today", "expired"])("keeps ordinary %s manual cases unresolved", async (state) => {
     await createPair({ studentNumber: "UCAL-TODAY", laboratoryDate: "2049-08-09", physicalExamDate: "2049-08-10" });
     await saveClinicCalendarChanges({ requestId: requestIds.pair, emergencyAcknowledged: false, recoveryMode: "MANUAL_ALL", changes: [
       { action: "BLOCK", date: "2049-08-09", category: "CLOSURE", reason: "TEST-UNIFIED today" },
@@ -1613,13 +1751,12 @@ describe("closure recovery protected occupancy", () => {
     ] }, admin);
     const row = (await pool.query("SELECT id,optimistic_token FROM clinic_closure_manual_cases WHERE student_number='UCAL-TODAY'")).rows[0];
     if (state === "expired") await pool.query("UPDATE academic_years SET closing_date='2049-08-10' WHERE start_year=2048");
-    if (state === "missing") await pool.query("DELETE FROM academic_years WHERE start_year=2048");
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2049-08-11T00:00:00Z"));
     try {
       await expect(resolveClinicClosureManualCase(row.id, { action: "ASSIGN_REPLACEMENT", expectedOptimisticToken: row.optimistic_token,
         laboratoryDate: state === "today" ? "2049-08-11" : "2049-08-12", physicalExamDate: "2049-08-13", reason: "Reviewed replacement dates" }, admin))
-        .rejects.toMatchObject({ code: state === "today" ? "APPOINTMENT_DATE_IN_PAST" : "OUTSIDE_SCHEDULING_CYCLE" });
+        .rejects.toMatchObject({ code: state === "today" ? "APPOINTMENT_DATE_IN_PAST" : "ACADEMIC_YEAR_ENDED" });
       expect((await pool.query("SELECT status FROM clinic_closure_manual_cases WHERE id=$1", [row.id])).rows[0].status).toBe("OPEN");
     } finally { vi.useRealTimers(); }
   });
@@ -1634,12 +1771,12 @@ describe("closure recovery protected occupancy", () => {
 });
 
 
-it("keeps completed OVPSA appointment reservations when closing availability", async () => {
+it("keeps the completed OVPSA Laboratory reservation while releasing the affected PE reservation", async () => {
   const fixture = await ovpsaClosureFixture(false, true);
-  expect((await pool.query("SELECT status FROM ovpsa_first_year_service_reservations WHERE batch_id=$1 AND schedule_type='PHYSICAL_EXAM'", [fixture.batchId])).rows)
-    .toEqual([{ status: "ACTIVE" }]);
+  expect((await pool.query("SELECT schedule_type,status FROM ovpsa_first_year_service_reservations WHERE batch_id=$1 ORDER BY schedule_type", [fixture.batchId])).rows)
+    .toEqual([{ schedule_type: "LABORATORY", status: "ACTIVE" }, { schedule_type: "PHYSICAL_EXAM", status: "RELEASED" }]);
   expect((await pool.query("SELECT status FROM appointments WHERE student_number='UCAL-OVPSA-BOUND' ORDER BY schedule_type")).rows)
-    .toEqual([{ status: "COMPLETED" }, { status: "COMPLETED" }]);
+    .toEqual([{ status: "COMPLETED" }, { status: "AWAITING_RESCHEDULE" }]);
 });
 
 

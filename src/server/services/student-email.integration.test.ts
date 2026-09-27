@@ -2,8 +2,10 @@
 import { createHash } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { pool, transaction } from "@/server/db/pool";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import {
   cleanupTestFixtures,
+  insertTestAcademicSnapshot,
   insertTestStudent,
   TEST_REFERENCE_IDS,
 } from "@/test/integration-fixtures";
@@ -24,6 +26,7 @@ import { queueFirstVerificationCurrentStateCatchUp } from "./student-verificatio
 const studentPattern = "99-95%";
 const encryptionKey = Buffer.alloc(32, 11).toString("base64");
 const originalEncryptionKey = process.env.EMAIL_OUTBOX_ENCRYPTION_KEY;
+let createdCatchUpYear = false;
 
 async function cleanup() {
   await pool.query(
@@ -56,6 +59,7 @@ beforeAll(async () => {
 afterEach(cleanup);
 afterAll(async () => {
   await cleanup();
+  if (createdCatchUpYear) await pool.query("DELETE FROM academic_years WHERE start_year=2091");
   await pool.end();
   if (originalEncryptionKey === undefined) delete process.env.EMAIL_OUTBOX_ENCRYPTION_KEY;
   else process.env.EMAIL_OUTBOX_ENCRYPTION_KEY = originalEncryptionKey;
@@ -597,29 +601,41 @@ describe("student notifications and optional email", () => {
     await insertTestStudent({
       studentNumber, firstName: "Late", lastName: "Verifier", yearLevel: 3,
     });
-    const oldLaboratory = await pool.query<{ id: string }>(
+    const year = await pool.query(`INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+      VALUES (2091,'2092-07-31',$1,$1) ON CONFLICT (start_year) DO NOTHING RETURNING start_year`,
+    [TEST_REFERENCE_IDS.adminUser]);
+    createdCatchUpYear = Boolean(year.rowCount);
+    await transaction(async (client) => {
+    await insertTestAcademicSnapshot(client, {
+      studentNumber, academicYearStart: 2091,
+      importName: "TEST-STUDENT-EMAIL late verification",
+      actor: TEST_REFERENCE_IDS.adminUser,
+    });
+    const oldLaboratory = await client.query<{ id: string }>(
       `INSERT INTO appointments (
          clinic_id,student_number,schedule_type,appointment_date,status,is_published,
-         schedule_cycle_start
-       ) VALUES ($1,$2,'LABORATORY','2091-09-03','RESCHEDULED',TRUE,2091)
+         schedule_cycle_start,scheduling_category
+       ) VALUES ($1,$2,'LABORATORY','2091-09-03','RESCHEDULED',TRUE,2091,'REGULAR')
        RETURNING id::text`,
       [TEST_REFERENCE_IDS.laboratoryClinic, studentNumber],
     );
-    const oldPhysical = await pool.query<{ id: string }>(
+    await linkPublishedLaboratoryAppointments(client, [oldLaboratory.rows[0].id]);
+    const oldPhysical = await client.query<{ id: string }>(
       `INSERT INTO appointments (
          clinic_id,student_number,schedule_type,appointment_date,status,is_published,
-         schedule_cycle_start
-       ) VALUES ($1,$2,'PHYSICAL_EXAM','2091-09-10','RESCHEDULED',TRUE,2091)
+         schedule_cycle_start,scheduling_category
+       ) VALUES ($1,$2,'PHYSICAL_EXAM','2091-09-10','RESCHEDULED',TRUE,2091,'REGULAR')
        RETURNING id::text`,
       [TEST_REFERENCE_IDS.physicalExamClinic, studentNumber],
     );
-    await pool.query(
+    const replacement = await client.query<{ id: string; schedule_type: string }>(
       `INSERT INTO appointments (
          clinic_id,student_number,schedule_type,appointment_date,status,is_published,
-         schedule_cycle_start,rescheduled_from
+         schedule_cycle_start,scheduling_category,rescheduled_from
        ) VALUES
-         ($1,$3,'LABORATORY','2091-09-18','PENDING',TRUE,2091,$4),
-         ($2,$3,'PHYSICAL_EXAM','2091-09-25','PENDING',TRUE,2091,$5)`,
+         ($1,$3,'LABORATORY','2091-09-18','PENDING',TRUE,2091,'REGULAR',$4),
+         ($2,$3,'PHYSICAL_EXAM','2091-09-25','PENDING',TRUE,2091,'REGULAR',$5)
+       RETURNING id::text,schedule_type`,
       [
         TEST_REFERENCE_IDS.laboratoryClinic,
         TEST_REFERENCE_IDS.physicalExamClinic,
@@ -628,6 +644,10 @@ describe("student notifications and optional email", () => {
         oldPhysical.rows[0].id,
       ],
     );
+    await linkPublishedLaboratoryAppointments(client, [
+      replacement.rows.find((row) => row.schedule_type === "LABORATORY")!.id,
+    ]);
+    });
 
     const first = await requestStudentEmailVerification(studentNumber, "latest@example.test");
     await verifyStudentEmail(first.token);

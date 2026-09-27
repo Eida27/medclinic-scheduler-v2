@@ -16,9 +16,10 @@ import {
 } from "@/server/repositories/student-result-submissions.repository";
 import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import { getCurrentEffectiveAppointmentsForStudent } from "@/server/repositories/current-effective-appointments.repository";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import { LocalResultStorage } from "@/server/storage/local-result-storage";
 import type { ResultStorage } from "@/server/storage/result-storage";
-import { cleanupTestFixtures, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
+import { cleanupTestFixtures, insertTestAcademicSnapshot, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import type { SessionUser } from "@/types/roles";
 import { updateAppointment } from "./appointments.service";
 import {
@@ -78,26 +79,49 @@ async function appointment(
   studentNumber: string,
   status: "PENDING" | "COMPLETED" = "COMPLETED",
   scheduleType: "LABORATORY" | "PHYSICAL_EXAM" = "LABORATORY",
-  appointmentDate = "2027-08-02",
+  appointmentDate = "2026-08-03",
 ) {
-  const result = await pool.query<{ id: string }>(
-    `INSERT INTO appointments (
-       clinic_id, student_number, schedule_type, appointment_date,
-       status, is_published, created_by
-     ) VALUES ($1,$2,$3,$4,$5,TRUE,$6)
-     RETURNING id`,
-    [
-      scheduleType === "LABORATORY"
-        ? TEST_REFERENCE_IDS.laboratoryClinic
-        : TEST_REFERENCE_IDS.physicalExamClinic,
+  if (scheduleType === "PHYSICAL_EXAM" && status === "COMPLETED") {
+    throw new Error("A completed Physical Examination fixture requires certificate issuance.");
+  }
+  return transaction(async (client) => {
+    await insertTestAcademicSnapshot(client, {
       studentNumber,
-      scheduleType,
-      appointmentDate,
-      status,
-      TEST_REFERENCE_IDS.adminUser,
-    ],
-  );
-  return result.rows[0].id;
+      academicYearStart: 2026,
+      importName: `TEST-RESULT-DRAFT-${studentNumber}`,
+      actor: TEST_REFERENCE_IDS.adminUser,
+    });
+    const result = await client.query<{ id: string }>(
+      `INSERT INTO appointments (
+         clinic_id, student_number, schedule_type, appointment_date,
+         status, is_published, schedule_cycle_start, scheduling_category, created_by
+       ) VALUES ($1,$2,$3,$4,$5,TRUE,2026,'REGULAR',$6)
+       RETURNING id`,
+      [
+        scheduleType === "LABORATORY"
+          ? TEST_REFERENCE_IDS.laboratoryClinic
+          : TEST_REFERENCE_IDS.physicalExamClinic,
+        studentNumber,
+        scheduleType,
+        appointmentDate,
+        status,
+        TEST_REFERENCE_IDS.adminUser,
+      ],
+    );
+    if (scheduleType === "LABORATORY") {
+      await linkPublishedLaboratoryAppointments(client, [result.rows[0].id]);
+      if (status === "COMPLETED") {
+        await client.query(
+          `UPDATE laboratory_checklist_items SET verified_at=clock_timestamp(),
+                  verified_by=$2,verification_source='INTERNAL'
+            WHERE checklist_id=(SELECT checklist_id FROM laboratory_checklist_appointments
+                                 WHERE appointment_id=$1)`,
+          [result.rows[0].id, TEST_REFERENCE_IDS.clinicStaffUser],
+        );
+      }
+    }
+    return result.rows[0].id;
+  });
 }
 
 function file(filename = "result.pdf", body = "%PDF-1.7\nsynthetic result") {
@@ -167,7 +191,6 @@ async function finalizeStudentResultSubmission(
 async function finalizedResultFixture(
   studentNumber: string,
   filenames: string[],
-  scheduleType: "LABORATORY" | "PHYSICAL_EXAM" = "LABORATORY",
 ) {
   await insertTestStudent({
     studentNumber,
@@ -175,7 +198,7 @@ async function finalizedResultFixture(
     lastName: "Student",
     yearLevel: 3,
   });
-  const appointmentId = await appointment(studentNumber, "COMPLETED", scheduleType);
+  const appointmentId = await appointment(studentNumber);
   const draft = await getStudentResultSubmission(studentNumber, appointmentId);
   const uploads = filenames.map((filename, index) => (
     file(filename, `%PDF-1.7\n${filename}-${index}`)
@@ -310,7 +333,7 @@ beforeAll(async () => {
   await cleanup();
   const academicYear = await pool.query(
     `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
-     VALUES (2027,'2028-07-31',$1,$1)
+     VALUES (2026,'2027-07-31',$1,$1)
      ON CONFLICT (start_year) DO NOTHING
      RETURNING start_year`,
     [TEST_REFERENCE_IDS.adminUser],
@@ -321,7 +344,7 @@ afterEach(cleanup);
 afterAll(async () => {
   await cleanupTestFixtures(studentPattern, "TEST-RESULT-DRAFT%", "TEST-RESULT-DRAFT%");
   if (ownsAcademicYear) {
-    await pool.query("DELETE FROM academic_years WHERE start_year=2027");
+    await pool.query("DELETE FROM academic_years WHERE start_year=2026");
   }
   await rm(storageRoot, { recursive: true, force: true });
   await pool.end();
@@ -1486,7 +1509,7 @@ describe("student result drafts", () => {
       studentNumber,
       "COMPLETED",
       "LABORATORY",
-      "2027-08-02",
+      "2026-08-03",
     );
     let replacementAppointmentId = "";
 
@@ -1497,7 +1520,7 @@ describe("student result drafts", () => {
           studentNumber,
           "PENDING",
           "LABORATORY",
-          "2027-08-03",
+          "2026-10-05",
         );
       },
     );
@@ -1515,7 +1538,7 @@ describe("student result drafts", () => {
       studentNumber,
       "COMPLETED",
       "LABORATORY",
-      "2027-08-02",
+      "2026-08-03",
     );
     const draft = await getStudentResultSubmission(studentNumber, appointmentId);
     const populated = await addStudentResultFiles(
@@ -1539,7 +1562,7 @@ describe("student result drafts", () => {
           studentNumber,
           "PENDING",
           "LABORATORY",
-          "2027-08-03",
+          "2026-10-05",
         );
       },
     );
@@ -1557,7 +1580,7 @@ describe("student result drafts", () => {
       studentNumber,
       "PENDING",
       "LABORATORY",
-      "2027-08-02",
+      "2026-10-02",
     );
     const resultClient = await pool.connect();
     const observer = await pool.connect();
@@ -1575,7 +1598,7 @@ describe("student result drafts", () => {
 
       let rescheduleSettled = false;
       rescheduleTask = updateAppointment(appointmentId, {
-        appointmentDate: "2027-08-03",
+        appointmentDate: "2026-10-05",
       }, admin).finally(() => { rescheduleSettled = true; });
       await waitForAdvisoryLockWaiter(observer, () => rescheduleSettled);
 
@@ -1588,7 +1611,7 @@ describe("student result drafts", () => {
       resultTransactionOpen = false;
 
       await expect(rescheduleTask).resolves.toMatchObject({
-        appointmentDate: "2027-08-03",
+        appointmentDate: "2026-10-05",
         status: "PENDING",
         rescheduledFrom: appointmentId,
       });
@@ -1600,52 +1623,41 @@ describe("student result drafts", () => {
     }
   });
 
-  it("lists and loads only the current effective Laboratory and Physical Examination appointments", async () => {
+  it("loads current Laboratory uploads while Physical Examination uploads stay retired", async () => {
     const studentNumber = "99-9473-73";
     await insertTestStudent({ studentNumber, firstName: "Current", lastName: "Results", yearLevel: 3 });
     const olderLaboratoryId = await appointment(
       studentNumber,
       "COMPLETED",
       "LABORATORY",
-      "2027-08-02",
-    );
-    const olderPhysicalId = await appointment(
-      studentNumber,
-      "COMPLETED",
-      "PHYSICAL_EXAM",
-      "2027-08-02",
+      "2026-08-03",
     );
     const newerLaboratoryId = await appointment(
       studentNumber,
       "COMPLETED",
       "LABORATORY",
-      "2027-08-03",
+      "2026-08-04",
     );
     const newerPhysicalId = await appointment(
       studentNumber,
-      "COMPLETED",
+      "PENDING",
       "PHYSICAL_EXAM",
-      "2027-08-03",
+      "2026-10-05",
     );
 
     await expect(getCurrentEffectiveAppointmentsForStudent(studentNumber)).resolves.toMatchObject({
       laboratory: { id: newerLaboratoryId, status: "COMPLETED" },
-      physicalExam: { id: newerPhysicalId, status: "COMPLETED" },
+      physicalExam: { id: newerPhysicalId, status: "PENDING" },
     });
     await expect(getStudentResultSubmission(studentNumber, olderLaboratoryId))
-      .rejects.toMatchObject({ code: "RESULT_APPOINTMENT_NOT_FOUND", status: 404 });
-    await expect(getStudentResultSubmission(studentNumber, olderPhysicalId))
       .rejects.toMatchObject({ code: "RESULT_APPOINTMENT_NOT_FOUND", status: 404 });
     await expect(getStudentResultSubmission(studentNumber, newerLaboratoryId)).resolves.toMatchObject({
       appointmentId: newerLaboratoryId,
       resultType: "LABORATORY",
       status: "DRAFT",
     });
-    await expect(getStudentResultSubmission(studentNumber, newerPhysicalId)).resolves.toMatchObject({
-      appointmentId: newerPhysicalId,
-      resultType: "PHYSICAL_EXAM",
-      status: "DRAFT",
-    });
+    await expect(getStudentResultSubmission(studentNumber, newerPhysicalId))
+      .rejects.toMatchObject({ code: "PHYSICAL_EXAM_UPLOAD_RETIRED", status: 422 });
   });
 
   it.each([
@@ -1664,7 +1676,7 @@ describe("student result drafts", () => {
       studentNumber,
       "COMPLETED",
       "LABORATORY",
-      "2027-08-02",
+      "2026-08-03",
     );
     const initialDraft = await getStudentResultSubmission(studentNumber, olderAppointmentId);
     const populated = await addStudentResultFiles(
@@ -1686,7 +1698,7 @@ describe("student result drafts", () => {
       ? await beginStudentResultEdit(studentNumber, olderAppointmentId, storage)
       : populated;
     const targetFile = target.files[0];
-    await appointment(studentNumber, "COMPLETED", "LABORATORY", "2027-08-03");
+    await appointment(studentNumber, "COMPLETED", "LABORATORY", "2026-08-04");
 
     const mutation = label === "upload"
       ? addStudentResultFiles(
@@ -1750,14 +1762,13 @@ describe("student result drafts", () => {
     await expect(storage.read(targetFile.storageKey)).resolves.toBeInstanceOf(Buffer);
   });
 
-  it("rejects beginning an edit on an older finalized appointment without copying files", async () => {
+  it("rejects beginning an edit on an older finalized Laboratory appointment without copying files", async () => {
     const studentNumber = "99-9479-79";
     const fixture = await finalizedResultFixture(
       studentNumber,
-      ["older-physical-official.pdf"],
-      "PHYSICAL_EXAM",
+      ["older-laboratory-official.pdf"],
     );
-    await appointment(studentNumber, "COMPLETED", "PHYSICAL_EXAM", "2027-08-03");
+    await appointment(studentNumber, "COMPLETED", "LABORATORY", "2026-08-04");
 
     await expect(beginStudentResultEdit(studentNumber, fixture.appointmentId, storage))
       .rejects.toMatchObject({ code: "RESULT_EDIT_STALE", status: 409 });
@@ -2345,10 +2356,10 @@ describe("student result drafts", () => {
       await insertTestStudent({ studentNumber, firstName: "Access", lastName: "Student", yearLevel: 3 });
     }
     const pendingId = await appointment("99-9402-02", "PENDING");
-    const completedId = await appointment("99-9402-02", "COMPLETED", "PHYSICAL_EXAM");
+    const completedId = await appointment("99-9403-03");
     await expect(addStudentResultFile("99-9402-02", pendingId, file(), storage))
       .rejects.toMatchObject({ code: "RESULT_UPLOAD_NOT_AVAILABLE", status: 409 });
-    await expect(addStudentResultFile("99-9403-03", completedId, file(), storage))
+    await expect(addStudentResultFile("99-9402-02", completedId, file(), storage))
       .rejects.toMatchObject({ code: "RESULT_APPOINTMENT_NOT_FOUND", status: 404 });
     expect(await readdir(storageRoot)).toEqual([]);
   });
@@ -2373,15 +2384,16 @@ describe("student result drafts", () => {
     expect((await getStudentResultSubmission("99-9405-05", totalAppointmentId)).fileCount).toBe(2);
   }, 30000);
 
-  it("creates a pending upload result on completion without overwriting a manually recorded status", async () => {
+  it("rejects direct Laboratory completion without changing result rows", async () => {
     await insertTestStudent({ studentNumber: "99-9406-06", firstName: "Complete", lastName: "Student", yearLevel: 3 });
     const appointmentId = await appointment("99-9406-06", "PENDING");
-    await updateAppointment(appointmentId, { status: "COMPLETED" }, clinicStaff);
+    await expect(updateAppointment(appointmentId, { status: "COMPLETED" }, clinicStaff))
+      .rejects.toMatchObject({ code: "CLINICAL_COMPLETION_RETIRED", status: 422 });
     const pendingResult = await pool.query(
       `SELECT result_status, encoded_by FROM laboratory_results WHERE appointment_id=$1`,
       [appointmentId],
     );
-    expect(pendingResult.rows).toEqual([{ result_status: "PENDING_UPLOAD", encoded_by: null }]);
+    expect(pendingResult.rows).toEqual([]);
 
     await insertTestStudent({ studentNumber: "99-9407-07", firstName: "Manual", lastName: "Student", yearLevel: 3 });
     const manualAppointmentId = await appointment("99-9407-07", "PENDING");
@@ -2390,7 +2402,8 @@ describe("student result drafts", () => {
        VALUES ('99-9407-07',$1,'REQUIRES_FOLLOW_UP','Recorded by clinic',$2)`,
       [manualAppointmentId, TEST_REFERENCE_IDS.clinicStaffUser],
     );
-    await updateAppointment(manualAppointmentId, { status: "COMPLETED" }, clinicStaff);
+    await expect(updateAppointment(manualAppointmentId, { status: "COMPLETED" }, clinicStaff))
+      .rejects.toMatchObject({ code: "CLINICAL_COMPLETION_RETIRED", status: 422 });
     const manualResult = await pool.query(
       `SELECT result_status, remarks, encoded_by::text FROM laboratory_results WHERE appointment_id=$1`,
       [manualAppointmentId],
@@ -2501,7 +2514,7 @@ describe("student result drafts", () => {
     expect(streamedZip.toString("latin1")).toContain("01-shared-name.pdf");
   });
 
-  it("keeps an older finalized appointment file private from its student owner after a newer appointment becomes current", async () => {
+  it("keeps an older finalized Laboratory file accessible after a newer appointment becomes current", async () => {
     const studentNumber = "99-9468-68";
     await insertTestStudent({
       studentNumber,
@@ -2521,16 +2534,10 @@ describe("student result drafts", () => {
       oldAppointmentId,
       storage,
     );
-    await pool.query(
-      `INSERT INTO appointments (
-         clinic_id, student_number, schedule_type, appointment_date,
-         status, is_published, created_by
-       ) VALUES ($1,$2,'LABORATORY','2027-08-03','PENDING',TRUE,$3)`,
-      [TEST_REFERENCE_IDS.laboratoryClinic, studentNumber, TEST_REFERENCE_IDS.adminUser],
-    );
+    await appointment(studentNumber, "COMPLETED", "LABORATORY", "2026-08-04");
 
     await expect(getStudentResultFile(studentNumber, oldFile.id, storage))
-      .rejects.toMatchObject({ code: "RESULT_FILE_NOT_FOUND", status: 404 });
+      .resolves.toMatchObject({ filename: "historical-finalized.pdf", bytes: file().bytes });
     await expect(getAdminSubmissionResultFile(
       oldSubmission.id,
       oldFile.id,
@@ -2693,13 +2700,7 @@ describe("student result drafts", () => {
     const oldAppointmentId = await appointment("99-9423-23");
     const added = await addStudentResultFile("99-9423-23", oldAppointmentId, file("stale.pdf"), storage);
     const finalized = await finalizeStudentResultSubmission("99-9423-23", oldAppointmentId, storage);
-    await pool.query(
-      `INSERT INTO appointments (
-         clinic_id, student_number, schedule_type, appointment_date,
-         status, is_published, created_by
-       ) VALUES ($1,'99-9423-23','LABORATORY','2027-08-03','PENDING',TRUE,$2)`,
-      [TEST_REFERENCE_IDS.laboratoryClinic, TEST_REFERENCE_IDS.adminUser],
-    );
+    await appointment("99-9423-23", "PENDING", "LABORATORY", "2026-10-05");
     const before = await invalidationSnapshot(finalized.id);
     const storedBytes = await storage.read(added.storageKey);
     let deleteCalls = 0;
@@ -2765,7 +2766,7 @@ describe("student result drafts", () => {
 });
 
 describe("appointment result correction protection", () => {
-  it("bulk-loads clear, placeholder, finalized, verified, active-draft, and harmless-file states", async () => {
+  it("bulk-loads checklist progress, placeholder, finalized, verified, and active-file states", async () => {
     const fixtures = [
       ["99-9422-22", "Clear"],
       ["99-9423-23", "Placeholder"],
@@ -2781,14 +2782,17 @@ describe("appointment result correction protection", () => {
     }
     const ids = new Map<string, string>();
     for (const [studentNumber] of fixtures) {
-      ids.set(studentNumber, await appointment(studentNumber));
+      ids.set(studentNumber, await appointment(
+        studentNumber,
+        studentNumber === "99-9423-23" ? "PENDING" : "COMPLETED",
+      ));
     }
 
     await pool.query(
       `INSERT INTO laboratory_results (student_number, appointment_id, result_status, completed_at, encoded_by)
        VALUES
          ('99-9423-23',$1,'PENDING_UPLOAD',NULL,NULL),
-         ('99-9425-25',$2,'COMPLETED','2027-08-02',$3)`,
+         ('99-9425-25',$2,'COMPLETED','2026-08-03',$3)`,
       [ids.get("99-9423-23"), ids.get("99-9425-25"), TEST_REFERENCE_IDS.clinicStaffUser],
     );
     await pool.query(
@@ -2842,7 +2846,7 @@ describe("appointment result correction protection", () => {
       loadAppointmentResultProtectionStates(client, [...ids.values()]),
     );
 
-    expect(states.get(ids.get("99-9422-22")!)).toEqual({ type: "CLEAR" });
+    expect(states.get(ids.get("99-9422-22")!)).toEqual({ type: "PROGRESS", verifiedCount: 3 });
     expect(states.get(ids.get("99-9423-23")!)).toMatchObject({
       type: "PENDING_PLACEHOLDER",
       resultTable: "laboratory_results",
@@ -2861,9 +2865,9 @@ describe("appointment result correction protection", () => {
       reason: "DRAFT_RESULT_FILES_EXIST",
       activeFileCount: 1,
     });
-    expect(states.get(ids.get("99-9427-27")!)).toEqual({ type: "CLEAR" });
-    expect(states.get(ids.get("99-9428-28")!)).toEqual({ type: "CLEAR" });
-    expect(states.get(ids.get("99-9429-29")!)).toEqual({ type: "CLEAR" });
+    expect(states.get(ids.get("99-9427-27")!)).toEqual({ type: "PROGRESS", verifiedCount: 3 });
+    expect(states.get(ids.get("99-9428-28")!)).toEqual({ type: "PROGRESS", verifiedCount: 3 });
+    expect(states.get(ids.get("99-9429-29")!)).toEqual({ type: "PROGRESS", verifiedCount: 3 });
   });
 
   it("returns clear when the completed appointment has no result row", async () => {
@@ -2878,7 +2882,7 @@ describe("appointment result correction protection", () => {
 
   it("returns and deletes a pending-upload placeholder", async () => {
     await insertTestStudent({ studentNumber: "99-9416-16", firstName: "Pending", lastName: "Placeholder", yearLevel: 3 });
-    const appointmentId = await appointment("99-9416-16");
+    const appointmentId = await appointment("99-9416-16", "PENDING");
     const placeholder = await pool.query<{ id: string }>(
       `INSERT INTO laboratory_results (student_number, appointment_id, result_status, encoded_by)
        VALUES ('99-9416-16',$1,'PENDING_UPLOAD',NULL)
@@ -2906,19 +2910,19 @@ describe("appointment result correction protection", () => {
     )).resolves.toMatchObject({ rowCount: 0 });
   });
 
-  it("protects any verified result in the schedule-type-specific table", async () => {
+  it("protects a verified Laboratory result", async () => {
     await insertTestStudent({ studentNumber: "99-9417-17", firstName: "Verified", lastName: "Result", yearLevel: 3 });
-    const appointmentId = await appointment("99-9417-17", "COMPLETED", "PHYSICAL_EXAM");
+    const appointmentId = await appointment("99-9417-17");
     await pool.query(
-      `INSERT INTO exam_results (
+      `INSERT INTO laboratory_results (
          student_number, appointment_id, result_status, completed_at, encoded_by
-       ) VALUES ('99-9417-17',$1,'COMPLETED','2027-08-02',$2)`,
+       ) VALUES ('99-9417-17',$1,'COMPLETED','2026-08-03',$2)`,
       [appointmentId, TEST_REFERENCE_IDS.clinicStaffUser],
     );
 
     await expect(transaction((client) => getAppointmentResultCorrectionState(client, {
       id: appointmentId,
-      scheduleType: "PHYSICAL_EXAM",
+      scheduleType: "LABORATORY",
     }))).resolves.toEqual({ type: "PROTECTED", reason: "VERIFIED_RESULT" });
   });
 
@@ -2927,7 +2931,7 @@ describe("appointment result correction protection", () => {
       await insertTestStudent({ studentNumber, firstName: "Protected", lastName: "Submission", yearLevel: 3 });
     }
     const finalizedAppointmentId = await appointment("99-9418-18");
-    const fileAppointmentId = await appointment("99-9419-19");
+    const fileAppointmentId = await appointment("99-9419-19", "PENDING");
     for (const [studentNumber, appointmentId] of [
       ["99-9418-18", finalizedAppointmentId],
       ["99-9419-19", fileAppointmentId],
@@ -2974,7 +2978,7 @@ describe("appointment result correction protection", () => {
 
   it("rejects placeholder deletion when the result is no longer pending upload", async () => {
     await insertTestStudent({ studentNumber: "99-9420-20", firstName: "Changed", lastName: "Placeholder", yearLevel: 3 });
-    const appointmentId = await appointment("99-9420-20");
+    const appointmentId = await appointment("99-9420-20", "PENDING");
     await pool.query(
       `INSERT INTO laboratory_results (student_number, appointment_id, result_status, encoded_by)
        VALUES ('99-9420-20',$1,'PENDING_UPLOAD',NULL)`,
@@ -2989,7 +2993,7 @@ describe("appointment result correction protection", () => {
       if (state.type !== "PENDING_PLACEHOLDER") throw new Error("Expected a pending result placeholder.");
       await client.query(
         `UPDATE laboratory_results
-            SET result_status='COMPLETED', completed_at='2027-08-02'
+            SET result_status='COMPLETED', completed_at='2026-08-03'
           WHERE id=$1`,
         [state.resultId],
       );
@@ -3006,7 +3010,7 @@ describe("appointment result correction protection", () => {
     await pool.query(
       `INSERT INTO laboratory_results (
          student_number, appointment_id, result_status, completed_at, encoded_by
-       ) VALUES ('99-9421-21',$1,'COMPLETED','2027-08-02',$2)`,
+       ) VALUES ('99-9421-21',$1,'COMPLETED','2026-08-03',$2)`,
       [appointmentId, TEST_REFERENCE_IDS.clinicStaffUser],
     );
     const submission = await pool.query<{ id: string }>(
@@ -3060,8 +3064,7 @@ describe("appointment result correction protection", () => {
       expect(correctionOutcome).toMatchObject({
         status: "fulfilled",
         value: {
-          type: "PENDING_PLACEHOLDER",
-          table: "laboratory_results",
+          type: "CLEAR",
         },
       });
     } finally {

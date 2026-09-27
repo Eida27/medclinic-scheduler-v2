@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool, type PoolClient } from "pg";
@@ -19,6 +19,8 @@ const LABORATORY_CLINIC_ID = "60000000-0000-4000-8000-000000000001";
 const PHYSICAL_EXAM_CLINIC_ID = "60000000-0000-4000-8000-000000000002";
 const COLLEGE_ID = "ee230000-0000-4000-8000-000000000001";
 const PROGRAM_ID = "ee230000-0000-4000-8000-000000000002";
+const IMPORT_GROUP_ID = "ee230000-0000-4000-8000-000000000003";
+const ACADEMIC_YEAR_START = 2026;
 const CLOSURE_GROUP_ID = "ee230000-0000-4000-8000-000000000601";
 const UNAVAILABLE_DATE_ID = "ee230000-0000-4000-8000-000000000602";
 const MANUAL_CASE_ID = "ee230000-0000-4000-8000-000000000603";
@@ -84,12 +86,15 @@ const STAFF_IDS = Object.values(STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.staff).map((
 
 export type StudentEmailNotificationsDatabaseIdentity = { scheme: "postgresql"; host: string; port: string; database: string };
 export type StudentEmailNotificationsResidue = {
-  users: number; colleges: number; programs: number; students: number; loginAttempts: number;
+  users: number; colleges: number; programs: number; academicYears: number;
+  importGroups: number; academicSnapshots: number; students: number; loginAttempts: number;
   emailVerifications: number; appointments: number; closureGroups: number; unavailableDates: number;
   manualCases: number; rescheduleEvents: number; eventUnavailableDates: number; notifications: number;
   outbox: number; audits: number; triggers: number; triggerFunctions: number;
   appointmentStatusLogs: number; resultSubmissions: number; resultFiles: number;
   laboratoryResults: number; examResults: number; storageCleanupIntents: number;
+  laboratoryChecklists: number; laboratoryChecklistItems: number;
+  laboratoryChecklistLinks: number; laboratoryChecklistEvents: number;
   storageObjects: number; stateFiles: number;
 };
 type EffectiveDatabaseIdentity = StudentEmailNotificationsDatabaseIdentity & {
@@ -284,6 +289,9 @@ async function databaseResidue(
        (SELECT COUNT(*)::int FROM users WHERE id=ANY($1::uuid[])) AS users,
        (SELECT COUNT(*)::int FROM colleges WHERE id=$2) AS colleges,
        (SELECT COUNT(*)::int FROM programs WHERE id=$3) AS programs,
+       (SELECT COUNT(*)::int FROM academic_years WHERE start_year=$11 AND created_by=$12) AS "academicYears",
+       (SELECT COUNT(*)::int FROM schedule_import_groups WHERE id=$13) AS "importGroups",
+       (SELECT COUNT(*)::int FROM student_academic_snapshots WHERE source_import_group_id=$13 AND student_number=ANY($4::varchar[])) AS "academicSnapshots",
        (SELECT COUNT(*)::int FROM students WHERE student_number=ANY($4::varchar[])) AS students,
        (SELECT COUNT(*)::int FROM student_login_attempts WHERE student_number=ANY($4::varchar[])) AS "loginAttempts",
        (SELECT COUNT(*)::int FROM student_email_verifications WHERE student_number=ANY($4::varchar[])) AS "emailVerifications",
@@ -321,8 +329,21 @@ async function databaseResidue(
               SELECT submission.id::text FROM student_result_submissions submission
                WHERE submission.student_number=ANY($4::varchar[])
                   OR submission.appointment_id IN (SELECT id FROM appointments WHERE student_number=ANY($4::varchar[]))
-            )) AS "storageCleanupIntents"`,
-    [STAFF_IDS, COLLEGE_ID, PROGRAM_ID, STUDENT_NUMBERS, CLOSURE_GROUP_ID, `${MARKER}%`, AUDIT_IDS, FAILURE_TRIGGER, FAILURE_FUNCTION, stateStorageKeys],
+            )) AS "storageCleanupIntents",
+       (SELECT COUNT(*)::int FROM laboratory_checklists checklist
+         JOIN appointments appointment ON appointment.id=checklist.root_appointment_id
+         WHERE appointment.student_number=ANY($4::varchar[])) AS "laboratoryChecklists",
+       (SELECT COUNT(*)::int FROM laboratory_checklist_items item
+         JOIN laboratory_checklists checklist ON checklist.id=item.checklist_id
+         JOIN appointments appointment ON appointment.id=checklist.root_appointment_id
+         WHERE appointment.student_number=ANY($4::varchar[])) AS "laboratoryChecklistItems",
+       (SELECT COUNT(*)::int FROM laboratory_checklist_appointments link
+         JOIN appointments appointment ON appointment.id=link.appointment_id
+         WHERE appointment.student_number=ANY($4::varchar[])) AS "laboratoryChecklistLinks",
+       (SELECT COUNT(*)::int FROM laboratory_checklist_events event
+         JOIN appointments appointment ON appointment.id=event.appointment_id
+         WHERE appointment.student_number=ANY($4::varchar[])) AS "laboratoryChecklistEvents"`,
+    [STAFF_IDS, COLLEGE_ID, PROGRAM_ID, STUDENT_NUMBERS, CLOSURE_GROUP_ID, `${MARKER}%`, AUDIT_IDS, FAILURE_TRIGGER, FAILURE_FUNCTION, stateStorageKeys, ACADEMIC_YEAR_START, STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.staff.admin.id, IMPORT_GROUP_ID],
   );
   return result.rows[0];
 }
@@ -354,6 +375,12 @@ async function removeOwnedStorage(storageKeys: string[]) {
     const target = assertStorageTarget(storageKey);
     await rm(target, { force: true });
     await rm(`${target}.uploading`, { force: true });
+    const directory = dirname(target);
+    if (directory !== STORAGE_ROOT) {
+      await rmdir(directory).catch((error: NodeJS.ErrnoException) => {
+        if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes(error.code ?? "")) throw error;
+      });
+    }
   }
 }
 
@@ -366,6 +393,10 @@ async function removeOwnedRows(
   await removeOwnedStorage(storageKeys);
   await client.query("BEGIN");
   try {
+    await client.query("ALTER TABLE laboratory_checklist_events DISABLE TRIGGER laboratory_checklist_events_immutable");
+    await client.query("ALTER TABLE laboratory_checklist_appointments DISABLE TRIGGER laboratory_checklist_links_immutable");
+    await client.query("ALTER TABLE laboratory_checklists DISABLE TRIGGER laboratory_checklist_identity_immutable");
+    await client.query("ALTER TABLE student_academic_snapshots DISABLE TRIGGER student_academic_snapshots_immutable");
     await client.query(`DROP TRIGGER IF EXISTS ${FAILURE_TRIGGER} ON email_outbox`);
     await client.query(`DROP FUNCTION IF EXISTS ${FAILURE_FUNCTION}()`);
     await client.query(`DELETE FROM audit_logs WHERE id=ANY($1::uuid[]) OR metadata->>'studentNumber'=ANY($2::text[]) OR (entity_type='student_email_verification' AND entity_id=ANY($2::text[]))`, [AUDIT_IDS, STUDENT_NUMBERS]);
@@ -398,13 +429,25 @@ async function removeOwnedRows(
     await client.query("DELETE FROM appointment_status_logs WHERE appointment_id IN (SELECT id FROM appointments WHERE student_number=ANY($1::varchar[]))", [STUDENT_NUMBERS]);
     await client.query("DELETE FROM exam_results WHERE student_number=ANY($1::varchar[]) OR appointment_id IN (SELECT id FROM appointments WHERE student_number=ANY($1::varchar[]))", [STUDENT_NUMBERS]);
     await client.query("DELETE FROM laboratory_results WHERE student_number=ANY($1::varchar[]) OR appointment_id IN (SELECT id FROM appointments WHERE student_number=ANY($1::varchar[]))", [STUDENT_NUMBERS]);
+    await client.query(`DELETE FROM laboratory_checklist_events WHERE appointment_id IN (SELECT id FROM appointments WHERE student_number=ANY($1::varchar[]))`, [STUDENT_NUMBERS]);
+    await client.query(`DELETE FROM laboratory_checklist_appointments WHERE appointment_id IN (SELECT id FROM appointments WHERE student_number=ANY($1::varchar[]))`, [STUDENT_NUMBERS]);
+    await client.query(`DELETE FROM laboratory_checklist_items WHERE checklist_id IN (SELECT checklist.id FROM laboratory_checklists checklist JOIN appointments appointment ON appointment.id=checklist.root_appointment_id WHERE appointment.student_number=ANY($1::varchar[]))`, [STUDENT_NUMBERS]);
+    await client.query(`DELETE FROM laboratory_checklists WHERE root_appointment_id IN (SELECT id FROM appointments WHERE student_number=ANY($1::varchar[]))`, [STUDENT_NUMBERS]);
     await client.query("DELETE FROM appointments WHERE student_number=ANY($1::varchar[])", [STUDENT_NUMBERS]);
     await client.query("DELETE FROM clinic_unavailable_dates WHERE closure_group_id=$1", [CLOSURE_GROUP_ID]);
     await client.query("DELETE FROM clinic_closure_groups WHERE id=$1 OR reason LIKE $2", [CLOSURE_GROUP_ID, `${MARKER}%`]);
+    await client.query("DELETE FROM student_academic_snapshots WHERE source_import_group_id=$1 AND student_number=ANY($2::varchar[])", [IMPORT_GROUP_ID, STUDENT_NUMBERS]);
+    await client.query("DELETE FROM schedule_import_groups WHERE id=$1 AND created_by=$2", [IMPORT_GROUP_ID, STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.staff.admin.id]);
     await client.query("DELETE FROM students WHERE student_number=ANY($1::varchar[])", [STUDENT_NUMBERS]);
+    await client.query("DELETE FROM academic_years WHERE start_year=$1 AND created_by=$2", [ACADEMIC_YEAR_START, STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.staff.admin.id]);
     await client.query("DELETE FROM programs WHERE id=$1", [PROGRAM_ID]);
     await client.query("DELETE FROM colleges WHERE id=$1", [COLLEGE_ID]);
     await client.query("DELETE FROM users WHERE id=ANY($1::uuid[])", [STAFF_IDS]);
+    await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+    await client.query("ALTER TABLE laboratory_checklist_events ENABLE TRIGGER laboratory_checklist_events_immutable");
+    await client.query("ALTER TABLE laboratory_checklist_appointments ENABLE TRIGGER laboratory_checklist_links_immutable");
+    await client.query("ALTER TABLE laboratory_checklists ENABLE TRIGGER laboratory_checklist_identity_immutable");
+    await client.query("ALTER TABLE student_academic_snapshots ENABLE TRIGGER student_academic_snapshots_immutable");
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; }
 }
@@ -417,6 +460,7 @@ async function seedDatabase(client: PoolClient, rawToken: string, encryptionKey:
   await client.query("BEGIN");
   try {
     await client.query(`INSERT INTO users (id,full_name,email,password_hash,role,email_verified_at,must_change_password,credential_version) VALUES ($1,'Browser Email Administrator',$2,crypt($3,gen_salt('bf',10)),'ADMIN',clock_timestamp(),FALSE,1),($4,'Browser Email Coordinator',$5,crypt($6,gen_salt('bf',10)),'COORDINATOR',clock_timestamp(),FALSE,1)`, [STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.staff.admin.id, STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.staff.admin.email, STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.staff.admin.password, STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.staff.coordinator.id, STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.staff.coordinator.email, STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.staff.coordinator.password]);
+    await client.query(`INSERT INTO academic_years (start_year,closing_date,created_by,updated_by) VALUES ($1,'2027-07-31',$2,$2) ON CONFLICT (start_year) DO NOTHING`, [ACADEMIC_YEAR_START, STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.staff.admin.id]);
     await client.query("INSERT INTO colleges (id,code,name) VALUES ($1,'BSEN','Browser Student Email Notifications College')", [COLLEGE_ID]);
     await client.query("INSERT INTO programs (id,college_id,code,name) VALUES ($1,$2,'BSEN','Browser Student Email Notifications Program')", [PROGRAM_ID, COLLEGE_ID]);
     await client.query(
@@ -424,6 +468,20 @@ async function seedDatabase(client: PoolClient, rawToken: string, encryptionKey:
        SELECT row.student_number,row.first_name,$2,'Browser',$3,$4,3,$5::date,row.email,CASE WHEN row.email IS NULL THEN NULL ELSE clock_timestamp() END,TRUE
        FROM jsonb_to_recordset($1::jsonb) AS row(student_number varchar,first_name varchar,email varchar)`,
       [JSON.stringify(Object.values(students).map((student) => ({ student_number: student.studentNumber, first_name: student.firstName, email: student.verifiedEmail }))), SHARED_STUDENT_CREDENTIALS.middleName, COLLEGE_ID, PROGRAM_ID, SHARED_STUDENT_CREDENTIALS.dateOfBirth],
+    );
+    await client.query(
+      `INSERT INTO schedule_import_groups (id,import_name,source_filename,total_rows,matched_student_count,description,created_by,student_category,academic_year_start,preferred_month,accepted_at,import_mode)
+       VALUES ($1,$2,$3,5,5,$2::varchar,$4,'REGULAR',$5,NULL,clock_timestamp(),'STANDARD')`,
+      [IMPORT_GROUP_ID, MARKER, `${MARKER}.csv`, STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.staff.admin.id, ACADEMIC_YEAR_START],
+    );
+    await client.query(
+      `INSERT INTO student_academic_snapshots (student_number,academic_year_start,student_name,college_id,college_name,program_id,program_code,program_name,year_level,source_import_group_id)
+       SELECT student.student_number,$2,CONCAT_WS(' ',student.first_name,student.middle_name,student.last_name),
+              student.college_id,college.name,student.program_id,program.code,program.name,student.year_level,$3
+         FROM students student JOIN colleges college ON college.id=student.college_id
+         JOIN programs program ON program.id=student.program_id
+        WHERE student.student_number=ANY($1::varchar[]) AND student.student_number<>$4`,
+      [STUDENT_NUMBERS, ACADEMIC_YEAR_START, IMPORT_GROUP_ID, students.onboarding.studentNumber],
     );
     await client.query(`INSERT INTO student_email_verifications (id,student_number,pending_email,token_hash,expires_at,created_at) VALUES ($1,$2,$3,$4,clock_timestamp()+INTERVAL '30 minutes',clock_timestamp())`, [CONFIRMATION_VERIFICATION_ID, students.confirmationCatchUp.studentNumber, students.confirmationCatchUp.pendingEmail, createHash("sha256").update(rawToken).digest("hex")]);
     const appointments = [
@@ -438,10 +496,33 @@ async function seedDatabase(client: PoolClient, rawToken: string, encryptionKey:
       [APPOINTMENT_IDS.deliveryStaleLaboratory, LABORATORY_CLINIC_ID, students.deliveryStale.studentNumber, "LABORATORY", "2026-10-21", "PENDING", "ee230000-0000-4000-8000-000000000511", null],
     ].map(([id, clinicId, studentNumber, scheduleType, appointmentDate, status, pairId, rescheduledFrom]) => ({ id, clinic_id: clinicId, student_number: studentNumber, schedule_type: scheduleType, appointment_date: appointmentDate, status, pair_id: pairId, rescheduled_from: rescheduledFrom }));
     await client.query(
-      `INSERT INTO appointments (id,clinic_id,student_number,schedule_type,appointment_date,status,is_published,schedule_pair_id,schedule_cycle_start,rescheduled_from,created_by,updated_by)
-       SELECT row.id,row.clinic_id,row.student_number,row.schedule_type,row.appointment_date,row.status,TRUE,row.pair_id,2026,row.rescheduled_from,$2,$2
+      `INSERT INTO appointments (id,clinic_id,student_number,schedule_type,appointment_date,status,is_published,schedule_pair_id,schedule_cycle_start,scheduling_category,rescheduled_from,created_by,updated_by)
+       SELECT row.id,row.clinic_id,row.student_number,row.schedule_type,row.appointment_date,row.status,TRUE,row.pair_id,$3,'REGULAR',row.rescheduled_from,$2,$2
        FROM jsonb_to_recordset($1::jsonb) AS row(id uuid,clinic_id uuid,student_number varchar,schedule_type varchar,appointment_date date,status varchar,pair_id uuid,rescheduled_from uuid)`,
-      [JSON.stringify(appointments), STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.staff.admin.id],
+      [JSON.stringify(appointments), STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.staff.admin.id, ACADEMIC_YEAR_START],
+    );
+    await client.query(
+      `INSERT INTO laboratory_checklists (root_appointment_id,student_number,academic_year_start,academic_snapshot_id,year_level_snapshot,scheduling_category_snapshot)
+       SELECT appointment.id,appointment.student_number,appointment.schedule_cycle_start,snapshot.id,snapshot.year_level,appointment.scheduling_category
+         FROM appointments appointment JOIN student_academic_snapshots snapshot
+           ON snapshot.student_number=appointment.student_number AND snapshot.academic_year_start=appointment.schedule_cycle_start
+        WHERE appointment.student_number=ANY($1::varchar[]) AND appointment.schedule_type='LABORATORY' AND appointment.rescheduled_from IS NULL`,
+      [STUDENT_NUMBERS],
+    );
+    await client.query(
+      `INSERT INTO laboratory_checklist_appointments (appointment_id,checklist_id)
+       SELECT appointment.id,checklist.id FROM appointments appointment
+       JOIN laboratory_checklists checklist ON checklist.root_appointment_id=COALESCE(appointment.rescheduled_from,appointment.id)
+       WHERE appointment.student_number=ANY($1::varchar[]) AND appointment.schedule_type='LABORATORY'`,
+      [STUDENT_NUMBERS],
+    );
+    await client.query(
+      `INSERT INTO laboratory_checklist_items (checklist_id,test_code)
+       SELECT checklist.id,test.code FROM laboratory_checklists checklist
+       JOIN appointments appointment ON appointment.id=checklist.root_appointment_id
+       CROSS JOIN unnest(ARRAY['CBC','URINE','STOOL']) AS test(code)
+       WHERE appointment.student_number=ANY($1::varchar[])`,
+      [STUDENT_NUMBERS],
     );
     await client.query(`INSERT INTO clinic_closure_groups (id,start_date,end_date,category,reason,created_by,creation_batch_id,recovery_mode,policy_effective_date) VALUES ($1,'2026-09-08','2026-09-10','CLOSURE',$2,$3,$4,'MANUAL_ALL','2026-08-23')`, [CLOSURE_GROUP_ID, `${MARKER} representative closure`, STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.staff.admin.id, "ee230000-0000-4000-8000-000000000606"]);
     await client.query("INSERT INTO clinic_unavailable_dates (id,closure_group_id,blocked_date) VALUES ($1,$2,'2026-09-10')", [UNAVAILABLE_DATE_ID, CLOSURE_GROUP_ID]);

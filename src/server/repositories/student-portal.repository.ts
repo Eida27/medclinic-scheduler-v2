@@ -39,6 +39,8 @@ export async function getStudentPortalSchedule(studentNumber: string) {
     locationName: string;
     isOvpsaFirstYear: boolean;
     displayStatus: string;
+    academicYearStart: number;
+    isFutureAcademicYear: boolean;
   }>(
     `SELECT appointment.id,
             appointment.student_number AS "studentNumber",
@@ -46,6 +48,9 @@ export async function getStudentPortalSchedule(studentNumber: string) {
             ${authoritativeScheduleDateSql("appointment")} AS "appointmentDate",
             appointment.status,
             appointment.rescheduled_from AS "rescheduledFrom",
+            appointment.schedule_cycle_start AS "academicYearStart",
+            (make_date(academic_year.start_year, 8, 1) >
+              (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date) AS "isFutureAcademicYear",
             ${authoritativeScheduleLocationSql("appointment", "clinic")} AS "locationName",
             (appointment.ovpsa_batch_id IS NOT NULL) AS "isOvpsaFirstYear",
             CASE WHEN appointment.ovpsa_batch_id IS NOT NULL
@@ -53,10 +58,12 @@ export async function getStudentPortalSchedule(studentNumber: string) {
                        AND appointment.status='PENDING' AND verification.id IS NULL
                  THEN 'Awaiting External Laboratory Result' ELSE appointment.status END AS "displayStatus"
        FROM appointments appointment
+       JOIN academic_years academic_year ON academic_year.start_year=appointment.schedule_cycle_start
        JOIN clinics clinic ON clinic.id=appointment.clinic_id
        LEFT JOIN ovpsa_external_laboratory_verifications verification
          ON verification.appointment_id=appointment.id
       WHERE appointment.student_number=$1
+        AND academic_year.closing_date >= (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date
         AND ${currentPublishedSchedulePredicate("appointment")}
       ORDER BY appointment.appointment_date, appointment.schedule_type, appointment.created_at`,
     [studentNumber],
@@ -68,11 +75,19 @@ export async function getStudentPortalSchedule(studentNumber: string) {
     status: string;
     closureReason: string | null;
     strategy: string | null;
+    academicYearStart: number;
+    isEndedAcademicYear: boolean;
+    isFutureAcademicYear: boolean;
   }>(
     `SELECT appointment.id::text,appointment.schedule_type AS "scheduleType",
             appointment.appointment_date::text AS "originalDate",appointment.status,
-            closure.reason AS "closureReason",event.strategy
+            closure.reason AS "closureReason",event.strategy,
+            appointment.schedule_cycle_start AS "academicYearStart",
+            (academic_year.closing_date < (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date) AS "isEndedAcademicYear",
+            (make_date(academic_year.start_year, 8, 1) >
+              (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date) AS "isFutureAcademicYear"
        FROM appointments appointment
+       JOIN academic_years academic_year ON academic_year.start_year=appointment.schedule_cycle_start
        LEFT JOIN appointment_reschedule_events event
          ON appointment.id IN (event.old_laboratory_appointment_id,event.old_physical_exam_appointment_id)
        LEFT JOIN clinic_closure_groups closure ON closure.id=event.closure_group_id
@@ -81,5 +96,23 @@ export async function getStudentPortalSchedule(studentNumber: string) {
       ORDER BY appointment.appointment_date,appointment.schedule_type,appointment.created_at`,
     [studentNumber],
   );
-  return { ...student, appointments: appointments.rows, history: history.rows };
+  const previousAcademicYears = await query<{
+    id: string; scheduleType: string; appointmentDate: string | null; status: string;
+    academicYearStart: number; locationName: string;
+  }>(
+    `SELECT appointment.id::text,appointment.schedule_type AS "scheduleType",
+            ${authoritativeScheduleDateSql("appointment")} AS "appointmentDate",
+            appointment.status,appointment.schedule_cycle_start AS "academicYearStart",
+            ${authoritativeScheduleLocationSql("appointment", "clinic")} AS "locationName"
+       FROM appointments appointment
+       JOIN academic_years academic_year ON academic_year.start_year=appointment.schedule_cycle_start
+       JOIN clinics clinic ON clinic.id=appointment.clinic_id
+      WHERE appointment.student_number=$1
+        AND academic_year.closing_date < (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date
+        AND ${currentPublishedSchedulePredicate("appointment")}
+      ORDER BY appointment.schedule_cycle_start DESC,appointment.appointment_date,appointment.schedule_type`,
+    [studentNumber],
+  );
+  return { ...student, appointments: appointments.rows, history: history.rows,
+    previousAcademicYears: previousAcademicYears.rows };
 }

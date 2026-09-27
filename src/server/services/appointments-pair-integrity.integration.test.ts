@@ -2,9 +2,11 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { pool } from "@/server/db/pool";
+import { pool, transaction } from "@/server/db/pool";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import {
   cleanupTestFixtures,
+  insertTestAcademicSnapshot,
   insertTestStudent,
   TEST_REFERENCE_IDS,
 } from "@/test/integration-fixtures";
@@ -13,6 +15,7 @@ import { updateAppointment } from "./appointments.service";
 
 const studentPattern = "TEST-PAIR-I-%";
 const batchPattern = "TEST pair integrity%";
+let createdYear = false;
 const admin = {
   userId: TEST_REFERENCE_IDS.adminUser,
   fullName: "System Admin",
@@ -23,7 +26,7 @@ const admin = {
   clinicName: null,
 } satisfies SessionUser;
 
-type PairStatus = "PENDING" | "COMPLETED" | "NO_SHOW" | "CANCELLED";
+type PairStatus = "PENDING" | "NO_SHOW" | "CANCELLED";
 
 async function createPair(input: {
   studentNumber: string;
@@ -36,14 +39,19 @@ async function createPair(input: {
     lastName: "Integrity",
     yearLevel: 3,
   });
-  const schedulePairId = randomUUID();
-  let laboratoryId: string | null = null;
-  if (input.laboratoryStatus !== null) {
-    const laboratory = await pool.query<{ id: string }>(
+  return transaction(async (client) => {
+    await insertTestAcademicSnapshot(client, {
+      studentNumber: input.studentNumber, academicYearStart: 2045,
+      importName: `TEST pair integrity ${input.studentNumber}`, actor: admin.userId,
+    });
+    const schedulePairId = randomUUID();
+    let laboratoryId: string | null = null;
+    if (input.laboratoryStatus !== null) {
+      const laboratory = await client.query<{ id: string }>(
       `INSERT INTO appointments (
          clinic_id,student_number,schedule_type,appointment_date,status,is_published,
-         schedule_pair_id,schedule_cycle_start,created_by,updated_by
-       ) VALUES ($1,$2,'LABORATORY','2045-08-18',$3,TRUE,$4,2045,$5,$5)
+         schedule_pair_id,schedule_cycle_start,scheduling_category,created_by,updated_by
+       ) VALUES ($1,$2,'LABORATORY','2045-08-18',$3,TRUE,$4,2045,'REGULAR',$5,$5)
        RETURNING id::text`,
       [
         TEST_REFERENCE_IDS.laboratoryClinic,
@@ -53,21 +61,14 @@ async function createPair(input: {
         TEST_REFERENCE_IDS.adminUser,
       ],
     );
-    laboratoryId = laboratory.rows[0].id;
-    if (input.laboratoryStatus === "COMPLETED") {
-      await pool.query(
-        `INSERT INTO appointment_status_logs (
-           appointment_id,old_status,new_status,notes,changed_by
-         ) VALUES ($1,'PENDING','COMPLETED','Fixture completion',$2)`,
-        [laboratoryId, TEST_REFERENCE_IDS.adminUser],
-      );
+      laboratoryId = laboratory.rows[0].id;
+      await linkPublishedLaboratoryAppointments(client, [laboratoryId]);
     }
-  }
-  const physical = await pool.query<{ id: string }>(
+    const physical = await client.query<{ id: string }>(
     `INSERT INTO appointments (
        clinic_id,student_number,schedule_type,appointment_date,status,is_published,
-       schedule_pair_id,schedule_cycle_start,created_by,updated_by
-     ) VALUES ($1,$2,'PHYSICAL_EXAM','2045-08-20',$3,TRUE,$4,2045,$5,$5)
+       schedule_pair_id,schedule_cycle_start,scheduling_category,created_by,updated_by
+     ) VALUES ($1,$2,'PHYSICAL_EXAM','2045-08-20',$3,TRUE,$4,2045,'REGULAR',$5,$5)
      RETURNING id::text`,
     [
       TEST_REFERENCE_IDS.physicalExamClinic,
@@ -77,7 +78,8 @@ async function createPair(input: {
       TEST_REFERENCE_IDS.adminUser,
     ],
   );
-  return { laboratoryId, physicalExamId: physical.rows[0].id };
+    return { laboratoryId, physicalExamId: physical.rows[0].id };
+  });
 }
 
 async function statuses(studentNumber: string) {
@@ -90,10 +92,15 @@ async function statuses(studentNumber: string) {
 
 beforeAll(async () => {
   await cleanupTestFixtures(studentPattern, batchPattern);
+  const year = await pool.query(`INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+    VALUES (2045,'2046-07-31',$1,$1) ON CONFLICT (start_year) DO NOTHING RETURNING start_year`,
+  [admin.userId]);
+  createdYear = Boolean(year.rowCount);
 });
 
 afterAll(async () => {
-  await cleanupTestFixtures(studentPattern, batchPattern);
+  await cleanupTestFixtures(studentPattern, batchPattern, batchPattern);
+  if (createdYear) await pool.query("DELETE FROM academic_years WHERE start_year=2045");
   await pool.end();
 });
 
@@ -103,7 +110,7 @@ describe("pair-aware appointment lifecycle", () => {
     ["no-show", "TEST-PAIR-I-PE-N", "NO_SHOW"],
     ["cancelled", "TEST-PAIR-I-PE-C", "CANCELLED"],
     ["missing", "TEST-PAIR-I-PE-M", null],
-  ] as const)("rejects quick Physical Examination completion with a %s Laboratory", async (
+  ] as const)("rejects legacy Physical Examination completion with a %s Laboratory", async (
     _,
     studentNumber,
     laboratoryStatus,
@@ -114,54 +121,20 @@ describe("pair-aware appointment lifecycle", () => {
     await expect(updateAppointment(fixture.physicalExamId, {
       quickStatusAction: "MARK_COMPLETED",
       expectedStatus: "PENDING",
-    }, admin)).rejects.toMatchObject({ code: "LABORATORY_NOT_COMPLETED", status: 409 });
+    }, admin)).rejects.toMatchObject({ code: "CLINICAL_COMPLETION_RETIRED", status: 422 });
 
     await expect(statuses(studentNumber)).resolves.toEqual(before);
   });
 
-  it("permits quick Physical Examination completion after Laboratory completion", async () => {
-    const studentNumber = "TEST-PAIR-I-PE-OK";
-    const fixture = await createPair({ studentNumber, laboratoryStatus: "COMPLETED" });
-
-    await expect(updateAppointment(fixture.physicalExamId, {
-      quickStatusAction: "MARK_COMPLETED",
-      expectedStatus: "PENDING",
-    }, admin)).resolves.toMatchObject({ id: fixture.physicalExamId, status: "COMPLETED" });
-  });
-
-  it("enforces the Laboratory prerequisite in detailed completion", async () => {
+  it("rejects detailed completion through the generic appointment route", async () => {
     const studentNumber = "TEST-PAIR-I-PE-D";
     const fixture = await createPair({ studentNumber, laboratoryStatus: "PENDING" });
 
     await expect(updateAppointment(fixture.physicalExamId, {
       status: "COMPLETED",
       notes: "Detailed completion attempt",
-    }, admin)).rejects.toMatchObject({ code: "LABORATORY_NOT_COMPLETED", status: 409 });
+    }, admin)).rejects.toMatchObject({ code: "CLINICAL_COMPLETION_RETIRED", status: 422 });
   });
-
-  it.each(["quick", "detailed"] as const)(
-    "rejects %s Laboratory rollback when Physical Examination is completed",
-    async (path) => {
-      const studentNumber = path === "quick" ? "TEST-PAIR-I-R-Q" : "TEST-PAIR-I-R-D";
-      const fixture = await createPair({
-        studentNumber,
-        laboratoryStatus: "COMPLETED",
-        physicalExamStatus: "COMPLETED",
-      });
-      const request = path === "quick"
-        ? { quickStatusAction: "REVERT_COMPLETION", expectedStatus: "COMPLETED" }
-        : { status: "PENDING", correctionReason: "Correct fixture status", source: "LABORATORY" };
-
-      await expect(updateAppointment(fixture.laboratoryId!, request, admin)).rejects.toMatchObject({
-        code: "PHYSICAL_ALREADY_COMPLETED",
-        status: 409,
-      });
-      await expect(statuses(studentNumber)).resolves.toEqual([
-        { schedule_type: "LABORATORY", status: "COMPLETED" },
-        { schedule_type: "PHYSICAL_EXAM", status: "COMPLETED" },
-      ]);
-    },
-  );
 
   it.each(["PENDING", "NO_SHOW"] as const)(
     "atomically cascades Laboratory cancellation to a %s Physical Examination",
@@ -214,20 +187,4 @@ describe("pair-aware appointment lifecycle", () => {
     ]);
   });
 
-  it("rejects Laboratory cancellation when Physical Examination is already completed", async () => {
-    const studentNumber = "TEST-PAIR-I-C-X";
-    const fixture = await createPair({
-      studentNumber,
-      laboratoryStatus: "PENDING",
-      physicalExamStatus: "COMPLETED",
-    });
-    const before = await statuses(studentNumber);
-
-    await expect(updateAppointment(fixture.laboratoryId!, {
-      status: "CANCELLED",
-      notes: "Attempt inconsistent cancellation",
-    }, admin)).rejects.toMatchObject({ code: "PHYSICAL_ALREADY_COMPLETED", status: 409 });
-
-    await expect(statuses(studentNumber)).resolves.toEqual(before);
-  });
 });

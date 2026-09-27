@@ -92,6 +92,15 @@ describe("unified clinic closure planning", () => {
   it("reports a specific reason for draft files, protected results, and inconsistent pairs", () => {
     expect(classifyClinicCycle([
       appointment("LABORATORY", "PENDING", {
+        resultProtectionState: { type: "PROGRESS", verifiedCount: 2 },
+      }),
+      appointment("PHYSICAL_EXAM", "PENDING"),
+    ])).toMatchObject({
+      strategy: "MANUAL_RESOLUTION_REQUIRED",
+      reasonCode: "LABORATORY_PROGRESS_RECORDED",
+    });
+    expect(classifyClinicCycle([
+      appointment("LABORATORY", "PENDING", {
         resultProtectionState: {
           type: "PROTECTED",
           reason: "DRAFT_RESULT_FILES_EXIST",

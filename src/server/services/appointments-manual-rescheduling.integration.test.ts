@@ -1,9 +1,11 @@
 // @vitest-environment node
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { pool } from "@/server/db/pool";
+import { pool, transaction } from "@/server/db/pool";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import {
   cleanupTestFixtures,
+  insertTestAcademicSnapshot,
   insertTestStudent,
   TEST_REFERENCE_IDS,
 } from "@/test/integration-fixtures";
@@ -59,7 +61,11 @@ async function insertPair(studentNumber: string, options: InsertPairOptions = {}
   });
   const pairId = randomUUID();
   const appointmentCycle = options.cycle ?? cycleStart;
-  const appointments = await pool.query<{
+  const appointments = await transaction(async (client) => {
+    await insertTestAcademicSnapshot(client, { studentNumber,
+      academicYearStart: appointmentCycle, importName: `TEST-MR import ${studentNumber}`,
+      actor: TEST_REFERENCE_IDS.adminUser });
+    const inserted = await client.query<{
     id: string;
     schedule_type: "LABORATORY" | "PHYSICAL_EXAM";
     updated_at: Date;
@@ -85,7 +91,11 @@ async function insertPair(studentNumber: string, options: InsertPairOptions = {}
       appointmentCycle,
       TEST_REFERENCE_IDS.adminUser,
     ],
-  );
+    );
+    const laboratoryId = inserted.rows.find((row) => row.schedule_type === "LABORATORY")!.id;
+    await linkPublishedLaboratoryAppointments(client, [laboratoryId]);
+    return inserted;
+  });
   const byService = new Map(appointments.rows.map((row) => [row.schedule_type, row]));
   return {
     pairId,
@@ -109,12 +119,17 @@ async function insertStandaloneLaboratory(
     lastName: "Occupant",
     yearLevel: 3,
   });
-  await pool.query(
+  await transaction(async (client) => {
+    await insertTestAcademicSnapshot(client, { studentNumber,
+      academicYearStart: cycleStart, importName: `TEST-MR import ${studentNumber}`,
+      actor: TEST_REFERENCE_IDS.adminUser });
+    const appointment = await client.query<{ id: string }>(
     `INSERT INTO appointments (
        clinic_id,student_number,schedule_type,appointment_date,status,is_published,
        schedule_pair_id,schedule_cycle_start,created_by,updated_by,
-       ovpsa_batch_id,ovpsa_revision_id,ovpsa_service_reservation_id
-     ) VALUES ($1,$2,'LABORATORY',$3,'PENDING',TRUE,$4,$5,$6,$6,$7,$8,$9)`,
+       scheduling_category,ovpsa_batch_id,ovpsa_revision_id,ovpsa_service_reservation_id
+     ) VALUES ($1,$2,'LABORATORY',$3,'PENDING',TRUE,$4,$5,$6,$6,'REGULAR',$7,$8,$9)
+       RETURNING id::text`,
     [
       TEST_REFERENCE_IDS.laboratoryClinic,
       studentNumber,
@@ -126,7 +141,9 @@ async function insertStandaloneLaboratory(
       ovpsaLineage?.revisionId ?? null,
       ovpsaLineage?.reservationId ?? null,
     ],
-  );
+    );
+    await linkPublishedLaboratoryAppointments(client, [appointment.rows[0].id]);
+  });
 }
 
 async function insertGlobalClosure(date: string) {
@@ -390,7 +407,7 @@ describe("manual appointment rescheduling integrity", () => {
     const expectedUpdatedAt = pair.laboratory.updated_at.toISOString();
     await pool.query(
       `UPDATE appointments
-          SET status='COMPLETED',updated_at=updated_at + INTERVAL '1 second'
+          SET status='NO_SHOW',updated_at=updated_at + INTERVAL '1 second'
         WHERE id=$1`,
       [pair.laboratory.id],
     );
@@ -407,7 +424,7 @@ describe("manual appointment rescheduling integrity", () => {
          FROM appointments appointment WHERE appointment.id=$1`,
       [pair.laboratory.id],
     );
-    expect(state.rows).toEqual([{ status: "COMPLETED", replacements: 0 }]);
+    expect(state.rows).toEqual([{ status: "NO_SHOW", replacements: 0 }]);
   });
 
   it("moves only the selected appointment and preserves history, audit, pair, cycle, and lineage", async () => {

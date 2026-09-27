@@ -58,10 +58,16 @@ export function ReportRecordsTable({ items }: { items: HistoricalComplianceRepor
                 <td className="px-5 py-4">
                   <Badge tone={statusTone(item.laboratoryStatus)}>{operationalStatusLabel(item.laboratoryStatus)}</Badge>
                   <p className="mt-1 text-xs text-muted">{dateLabel(item.laboratoryAppointmentDate)}</p>
+                  {item.laboratoryDocumentsFinalized !== undefined ? <p className="mt-1 text-xs text-muted">
+                    {item.laboratoryDocumentsFinalized ? "Laboratory document finalized" : "No finalized Laboratory document"}
+                  </p> : null}
                 </td>
                 <td className="px-5 py-4">
                   <Badge tone={statusTone(item.physicalExamStatus)}>{operationalStatusLabel(item.physicalExamStatus)}</Badge>
                   <p className="mt-1 text-xs text-muted">{dateLabel(item.physicalExamAppointmentDate)}</p>
+                  {item.certificateIssued !== undefined ? <p className="mt-1 text-xs text-muted">
+                    {item.certificateIssued ? `Certificate issued${item.certificateClassification ? ` · Class ${item.certificateClassification}` : ""}` : "No issued certificate"}
+                  </p> : null}
                 </td>
                 <td className="px-5 py-4">
                   <Badge tone={overallTone(item.overallStatus)}>{historicalComplianceLabel(item.overallStatus)}</Badge>

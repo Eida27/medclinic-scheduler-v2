@@ -3,6 +3,7 @@ import type { SessionUser } from "@/types/roles";
 import { DashboardBackLink } from "./DashboardBackLink";
 import { LogoutButton } from "./LogoutButton";
 import { Sidebar } from "./Sidebar";
+import { ManilaBoundaryRefresh } from "./ManilaBoundaryRefresh";
 
 export function DashboardShell({ user, children }: PropsWithChildren<{ user: SessionUser }>) {
   const roleLabel = user.role === "ADMIN"
@@ -13,6 +14,7 @@ export function DashboardShell({ user, children }: PropsWithChildren<{ user: Ses
 
   return (
     <div className="min-h-screen bg-canvas lg:flex">
+      <ManilaBoundaryRefresh />
       <Sidebar user={user} />
       <div className="min-w-0 flex-1">
         <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-line bg-surface/95 px-4 backdrop-blur sm:px-6 lg:h-18 lg:px-8">

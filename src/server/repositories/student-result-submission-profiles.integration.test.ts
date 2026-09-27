@@ -1,9 +1,11 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { pool } from "@/server/db/pool";
+import { pool, transaction } from "@/server/db/pool";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import {
   cleanupTestFixtures,
+  insertTestAcademicSnapshot,
   insertTestStudent,
   TEST_REFERENCE_IDS,
 } from "@/test/integration-fixtures";
@@ -18,6 +20,7 @@ import {
 
 const studentNumberPattern = "TEST-PROFILE-%";
 const batchNamePattern = "TEST profile aggregation%";
+const createdAcademicYears: number[] = [];
 
 type AppointmentStatus = "PENDING" | "COMPLETED" | "RESCHEDULED";
 type ResultType = "LABORATORY" | "PHYSICAL_EXAM";
@@ -45,34 +48,43 @@ async function appointment(input: {
   status?: AppointmentStatus;
   createdAt: string;
   rescheduledFrom?: string;
+  scheduleCycleStart?: number;
 }) {
   const clinicId = input.resultType === "LABORATORY"
     ? TEST_REFERENCE_IDS.laboratoryClinic
     : TEST_REFERENCE_IDS.physicalExamClinic;
-  const result = await pool.query<{ id: string }>(
+  const result = await transaction(async (client) => {
+    const inserted = await client.query<{ id: string }>(
     `INSERT INTO appointments (
        clinic_id, student_number, schedule_type, appointment_date, status,
-       is_published, rescheduled_from, created_by, updated_by, created_at
-     ) VALUES ($1,$2,$3,$4,$5,TRUE,$6,$7,$7,$8)
+       is_published, schedule_cycle_start, scheduling_category, rescheduled_from,
+       created_by, updated_by, created_at
+     ) VALUES ($1,$2,$3,$4,$5,TRUE,$9,'REGULAR',$6,$7,$7,$8)
      RETURNING id`,
     [
       clinicId,
       input.studentNumber,
       input.resultType,
       input.date,
-      input.status ?? "COMPLETED",
+      input.status ?? "PENDING",
       input.rescheduledFrom ?? null,
       TEST_REFERENCE_IDS.adminUser,
       input.createdAt,
+      input.scheduleCycleStart ?? 2026,
     ],
   );
+    if (input.resultType === "LABORATORY") {
+      await linkPublishedLaboratoryAppointments(client, [inserted.rows[0].id]);
+    }
+    return inserted;
+  });
   return result.rows[0].id;
 }
 
 async function submission(input: {
   appointmentId: string;
   studentNumber: string;
-  resultType: ResultType;
+  resultType: "LABORATORY";
   status: SubmissionStatus;
   activityAt: string;
   basedOnSubmissionId?: string;
@@ -144,7 +156,14 @@ async function file(input: {
 }
 
 beforeAll(async () => {
-  await cleanupTestFixtures(studentNumberPattern, batchNamePattern);
+  await cleanupTestFixtures(studentNumberPattern, batchNamePattern, batchNamePattern);
+  const years = await pool.query<{ start_year: number }>(
+    `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+     VALUES (2025,'2026-07-31',$1,$1),(2026,'2027-07-31',$1,$1)
+     ON CONFLICT (start_year) DO NOTHING RETURNING start_year`,
+    [TEST_REFERENCE_IDS.adminUser],
+  );
+  createdAcademicYears.push(...years.rows.map((row) => row.start_year));
 
   const students = [
     ["TEST-PROFILE-0001", "Ana", "Partial"],
@@ -160,278 +179,282 @@ beforeAll(async () => {
   for (const [studentNumber, firstName, lastName] of students) {
     await insertTestStudent({ studentNumber, firstName, lastName, yearLevel: 4 });
   }
+  await transaction(async (client) => {
+    for (const [studentNumber] of students) {
+      await insertTestAcademicSnapshot(client, {
+        studentNumber, academicYearStart: 2026,
+        importName: `TEST profile aggregation provenance ${studentNumber} 2026`,
+        actor: TEST_REFERENCE_IDS.adminUser,
+      });
+    }
+    await insertTestAcademicSnapshot(client, {
+      studentNumber: "TEST-PROFILE-0004", academicYearStart: 2025,
+      importName: "TEST profile aggregation provenance TEST-PROFILE-0004 2025",
+      actor: TEST_REFERENCE_IDS.adminUser,
+    });
+  });
 
   const partialLabAppointment = await appointment({
     studentNumber: "TEST-PROFILE-0001",
     resultType: "LABORATORY",
-    date: "2098-01-10",
-    createdAt: "2098-01-01T00:00:00Z",
+    date: "2026-10-10",
+    createdAt: "2026-10-01T00:00:00Z",
   });
   await appointment({
     studentNumber: "TEST-PROFILE-0001",
     resultType: "PHYSICAL_EXAM",
-    date: "2098-01-11",
-    createdAt: "2098-01-01T00:01:00Z",
+    date: "2026-10-11",
+    createdAt: "2026-10-01T00:01:00Z",
   });
   partialLaboratoryId = await submission({
     appointmentId: partialLabAppointment,
     studentNumber: "TEST-PROFILE-0001",
     resultType: "LABORATORY",
     status: "FINALIZED",
-    activityAt: "2099-01-07T00:00:00Z",
+    activityAt: "2027-06-07T00:00:00Z",
   });
   await file({
     submissionId: partialLaboratoryId,
     name: "partial-a.pdf",
     byteSize: 10,
-    uploadedAt: "2099-01-07T00:00:01Z",
+    uploadedAt: "2027-06-07T00:00:01Z",
   });
   await file({
     submissionId: partialLaboratoryId,
     name: "partial-b.pdf",
     byteSize: 20,
-    uploadedAt: "2099-01-07T00:00:02Z",
+    uploadedAt: "2027-06-07T00:00:02Z",
   });
 
-  for (const [resultType, date] of [
-    ["LABORATORY", "2098-02-10"],
-    ["PHYSICAL_EXAM", "2098-02-11"],
-  ] as const) {
-    const appointmentId = await appointment({
-      studentNumber: "TEST-PROFILE-0002",
-      resultType,
-      date,
-      createdAt: "2098-02-01T00:00:00Z",
-    });
-    const finalized = await submission({
-      appointmentId,
-      studentNumber: "TEST-PROFILE-0002",
-      resultType,
-      status: "FINALIZED",
-      activityAt: resultType === "LABORATORY"
-        ? "2099-01-08T00:00:00Z"
-        : "2099-01-09T00:00:00Z",
-    });
-    await file({
-      submissionId: finalized,
-      name: `${resultType.toLowerCase()}-complete.pdf`,
-      byteSize: 40,
-      uploadedAt: "2099-01-09T00:00:01Z",
-    });
-  }
+  const completeLaboratoryAppointment = await appointment({
+    studentNumber: "TEST-PROFILE-0002",
+    resultType: "LABORATORY",
+    date: "2026-11-10",
+    createdAt: "2026-11-01T00:00:00Z",
+  });
+  const completeLaboratorySubmission = await submission({
+    appointmentId: completeLaboratoryAppointment,
+    studentNumber: "TEST-PROFILE-0002",
+    resultType: "LABORATORY",
+    status: "FINALIZED",
+    activityAt: "2027-06-08T00:00:00Z",
+  });
+  await file({
+    submissionId: completeLaboratorySubmission,
+    name: "laboratory-complete.pdf",
+    byteSize: 40,
+    uploadedAt: "2027-06-09T00:00:01Z",
+  });
 
   const invalidatedAppointment = await appointment({
     studentNumber: "TEST-PROFILE-0003",
     resultType: "LABORATORY",
-    date: "2098-03-10",
-    createdAt: "2098-03-01T00:00:00Z",
+    date: "2026-12-10",
+    createdAt: "2026-12-01T00:00:00Z",
   });
   invalidatedAfterCleanupId = await submission({
     appointmentId: invalidatedAppointment,
     studentNumber: "TEST-PROFILE-0003",
     resultType: "LABORATORY",
     status: "INVALIDATED",
-    activityAt: "2099-01-06T00:00:00Z",
+    activityAt: "2027-06-06T00:00:00Z",
   });
   await file({
     submissionId: invalidatedAfterCleanupId,
     name: "cleaned-a.pdf",
     byteSize: 50,
-    uploadedAt: "2099-01-05T00:00:01Z",
-    deletedAt: "2099-01-06T00:01:00Z",
+    uploadedAt: "2027-06-05T00:00:01Z",
+    deletedAt: "2027-06-06T00:01:00Z",
   });
   await file({
     submissionId: invalidatedAfterCleanupId,
     name: "cleaned-b.pdf",
     byteSize: 70,
-    uploadedAt: "2099-01-05T00:00:02Z",
-    deletedAt: "2099-01-06T00:01:00Z",
+    uploadedAt: "2027-06-05T00:00:02Z",
+    deletedAt: "2027-06-06T00:01:00Z",
   });
   await pool.query(
-    "UPDATE student_result_submissions SET last_activity_at='2099-01-01T00:00:00Z' WHERE id=$1",
+    "UPDATE student_result_submissions SET last_activity_at='2027-06-01T00:00:00Z' WHERE id=$1",
     [invalidatedAfterCleanupId],
   );
 
   const oldLaboratory = await appointment({
     studentNumber: "TEST-PROFILE-0004",
     resultType: "LABORATORY",
-    date: "2097-04-10",
-    createdAt: "2097-04-01T00:00:00Z",
+    date: "2026-04-10",
+    createdAt: "2026-04-01T00:00:00Z",
+    scheduleCycleStart: 2025,
   });
   oldFinalizedId = await submission({
     appointmentId: oldLaboratory,
     studentNumber: "TEST-PROFILE-0004",
     resultType: "LABORATORY",
     status: "FINALIZED",
-    activityAt: "2099-01-05T00:00:00Z",
+    activityAt: "2027-06-05T00:00:00Z",
   });
   newerLaboratoryId = await appointment({
     studentNumber: "TEST-PROFILE-0004",
     resultType: "LABORATORY",
-    date: "2098-04-10",
+    date: "2027-01-10",
     status: "PENDING",
-    createdAt: "2098-04-01T00:00:00Z",
+    createdAt: "2027-01-01T00:00:00Z",
   });
 
   const replacementAppointment = await appointment({
     studentNumber: "TEST-PROFILE-0005",
     resultType: "LABORATORY",
-    date: "2098-05-10",
-    createdAt: "2098-05-01T00:00:00Z",
+    date: "2027-02-10",
+    createdAt: "2027-02-01T00:00:00Z",
   });
   invalidatedReplacementId = await submission({
     appointmentId: replacementAppointment,
     studentNumber: "TEST-PROFILE-0005",
     resultType: "LABORATORY",
     status: "INVALIDATED",
-    activityAt: "2099-01-03T00:00:00Z",
+    activityAt: "2027-06-03T00:00:00Z",
   });
   replacementFinalizedId = await submission({
     appointmentId: replacementAppointment,
     studentNumber: "TEST-PROFILE-0005",
     resultType: "LABORATORY",
     status: "FINALIZED",
-    activityAt: "2099-01-04T00:00:00Z",
+    activityAt: "2027-06-04T00:00:00Z",
   });
   await file({
     submissionId: replacementFinalizedId,
     name: "active.pdf",
     byteSize: 80,
-    uploadedAt: "2099-01-04T00:00:01Z",
+    uploadedAt: "2027-06-04T00:00:01Z",
   });
   await file({
     submissionId: replacementFinalizedId,
     name: "pending-delete.pdf",
     byteSize: 90,
-    uploadedAt: "2099-01-04T00:00:02Z",
+    uploadedAt: "2027-06-04T00:00:02Z",
     storageDeletePending: true,
   });
   await file({
     submissionId: replacementFinalizedId,
     name: "deleted.pdf",
     byteSize: 100,
-    uploadedAt: "2099-01-04T00:00:03Z",
-    deletedAt: "2099-01-04T01:00:00Z",
+    uploadedAt: "2027-06-04T00:00:03Z",
+    deletedAt: "2027-06-04T01:00:00Z",
   });
 
   const draftAppointment = await appointment({
     studentNumber: "TEST-PROFILE-0006",
     resultType: "LABORATORY",
-    date: "2098-06-10",
-    createdAt: "2098-06-01T00:00:00Z",
+    date: "2027-03-10",
+    createdAt: "2027-03-01T00:00:00Z",
   });
   await submission({
     appointmentId: draftAppointment,
     studentNumber: "TEST-PROFILE-0006",
     resultType: "LABORATORY",
     status: "DRAFT",
-    activityAt: "2099-01-10T00:00:00Z",
+    activityAt: "2027-06-10T00:00:00Z",
   });
 
   const rescheduled = await appointment({
     studentNumber: "TEST-PROFILE-0007",
     resultType: "PHYSICAL_EXAM",
-    date: "2098-07-10",
+    date: "2027-04-10",
     status: "RESCHEDULED",
-    createdAt: "2098-07-01T00:00:00Z",
+    createdAt: "2027-04-01T00:00:00Z",
   });
   rescheduledReplacementId = await appointment({
     studentNumber: "TEST-PROFILE-0007",
     resultType: "PHYSICAL_EXAM",
-    date: "2098-07-17",
+    date: "2027-04-17",
     status: "PENDING",
-    createdAt: "2098-07-02T00:00:00Z",
+    createdAt: "2027-04-02T00:00:00Z",
     rescheduledFrom: rescheduled,
-  });
-  await submission({
-    appointmentId: rescheduled,
-    studentNumber: "TEST-PROFILE-0007",
-    resultType: "PHYSICAL_EXAM",
-    status: "FINALIZED",
-    activityAt: "2099-01-02T00:00:00Z",
   });
 
   const editingAppointment = await appointment({
     studentNumber: "TEST-PROFILE-0009",
     resultType: "LABORATORY",
-    date: "2098-09-10",
-    createdAt: "2098-09-01T00:00:00Z",
+    date: "2027-05-10",
+    createdAt: "2027-05-01T00:00:00Z",
   });
   editingCurrentFinalizedId = await submission({
     appointmentId: editingAppointment,
     studentNumber: "TEST-PROFILE-0009",
     resultType: "LABORATORY",
     status: "FINALIZED",
-    activityAt: "2099-01-04T00:00:00Z",
+    activityAt: "2027-06-04T00:00:00Z",
   });
   await file({
     submissionId: editingCurrentFinalizedId,
     name: "current-official.pdf",
     byteSize: 110,
-    uploadedAt: "2099-01-04T00:00:01Z",
+    uploadedAt: "2027-06-04T00:00:01Z",
   });
   editingSupersededId = await submission({
     appointmentId: editingAppointment,
     studentNumber: "TEST-PROFILE-0009",
     resultType: "LABORATORY",
     status: "SUPERSEDED",
-    activityAt: "2099-01-01T00:00:00Z",
-    supersededAt: "2099-01-03T00:00:00Z",
+    activityAt: "2027-06-01T00:00:00Z",
+    supersededAt: "2027-06-03T00:00:00Z",
     supersededBySubmissionId: editingCurrentFinalizedId,
   });
   editingSupersededFileId = await file({
     submissionId: editingSupersededId,
     name: "superseded-official.pdf",
     byteSize: 120,
-    uploadedAt: "2099-01-01T00:00:01Z",
+    uploadedAt: "2027-06-01T00:00:01Z",
   });
   editingInvalidatedId = await submission({
     appointmentId: editingAppointment,
     studentNumber: "TEST-PROFILE-0009",
     resultType: "LABORATORY",
     status: "INVALIDATED",
-    activityAt: "2099-01-02T00:00:00Z",
+    activityAt: "2027-06-02T00:00:00Z",
     invalidationReason: "Document belongs to another student",
   });
   editingInvalidatedFileId = await file({
     submissionId: editingInvalidatedId,
     name: "invalidated-document.pdf",
     byteSize: 130,
-    uploadedAt: "2099-01-02T00:00:01Z",
+    uploadedAt: "2027-06-02T00:00:01Z",
   });
   activeEditDraftId = await submission({
     appointmentId: editingAppointment,
     studentNumber: "TEST-PROFILE-0009",
     resultType: "LABORATORY",
     status: "DRAFT",
-    activityAt: "2099-01-05T00:00:00Z",
+    activityAt: "2027-06-05T00:00:00Z",
     basedOnSubmissionId: editingCurrentFinalizedId,
   });
   await file({
     submissionId: activeEditDraftId,
     name: "active-edit-private.pdf",
     byteSize: 140,
-    uploadedAt: "2099-01-05T00:00:01Z",
+    uploadedAt: "2027-06-05T00:00:01Z",
   });
   discardedEditDraftId = await submission({
     appointmentId: editingAppointment,
     studentNumber: "TEST-PROFILE-0009",
     resultType: "LABORATORY",
     status: "DRAFT",
-    activityAt: "2099-01-06T00:00:00Z",
+    activityAt: "2027-06-06T00:00:00Z",
     basedOnSubmissionId: editingCurrentFinalizedId,
-    discardedAt: "2099-01-06T01:00:00Z",
+    discardedAt: "2027-06-06T01:00:00Z",
   });
   await file({
     submissionId: discardedEditDraftId,
     name: "discarded-edit-private.pdf",
     byteSize: 150,
-    uploadedAt: "2099-01-06T00:00:01Z",
+    uploadedAt: "2027-06-06T00:00:01Z",
   });
 });
 
 afterAll(async () => {
-  await cleanupTestFixtures(studentNumberPattern, batchNamePattern);
+  await cleanupTestFixtures(studentNumberPattern, batchNamePattern, batchNamePattern);
+  if (createdAcademicYears.length) {
+    await pool.query("DELETE FROM academic_years WHERE start_year=ANY($1::integer[])", [createdAcademicYears]);
+  }
   await pool.end();
 });
 
@@ -455,11 +478,11 @@ describe("administrator student result profile repository", () => {
     expect(listed.items[0]).toMatchObject({
       progress: "FULLY_SUBMITTED",
       laboratory: { state: "FINALIZED", fileCount: 1 },
-      physicalExam: { state: "FINALIZED", fileCount: 1 },
+      physicalExam: { state: "NOT_SUBMITTED", fileCount: 0 },
     });
     expect(listed.items[1]).toMatchObject({
       studentName: "Partial, Ana",
-      progress: "PARTIALLY_SUBMITTED",
+      progress: "FULLY_SUBMITTED",
       laboratory: { state: "FINALIZED", fileCount: 2 },
       physicalExam: { state: "NOT_SUBMITTED", fileCount: 0 },
     });
@@ -474,8 +497,7 @@ describe("administrator student result profile repository", () => {
       });
     expect(fixtureItems.find((item) => item.studentNumber === "TEST-PROFILE-0004"))
       .toMatchObject({ laboratory: { state: "NOT_SUBMITTED", fileCount: 0 } });
-    expect(fixtureItems.find((item) => item.studentNumber === "TEST-PROFILE-0007"))
-      .toMatchObject({ physicalExam: { state: "NOT_SUBMITTED", fileCount: 0 } });
+    expect(fixtureItems.map((item) => item.studentNumber)).not.toContain("TEST-PROFILE-0007");
   });
 
   it("uses current appointments and moves older or superseded submissions into deterministic history", async () => {
@@ -486,7 +508,7 @@ describe("administrator student result profile repository", () => {
       submission: null,
     });
     expect(newCycle?.history.find((item) => item.id === oldFinalizedId)).toMatchObject({
-      appointmentDate: "2097-04-10",
+      appointmentDate: "2026-04-10",
     });
 
     const replacement = await getAdminStudentResultProfileRow("TEST-PROFILE-0005");
@@ -529,7 +551,7 @@ describe("administrator student result profile repository", () => {
     ]);
     expect(profile?.history[0]).toMatchObject({
       status: "SUPERSEDED",
-      supersededAt: new Date("2099-01-03T00:00:00Z"),
+      supersededAt: new Date("2027-06-03T00:00:00Z"),
       supersededBySubmissionId: editingCurrentFinalizedId,
       files: [{ originalFilename: "superseded-official.pdf", byteSize: 120 }],
     });
@@ -559,7 +581,7 @@ describe("administrator student result profile repository", () => {
       totalBytes: 120,
       files: [],
     });
-    expect(profile?.latestActivityAt).toEqual(new Date("2099-01-06T00:00:00Z"));
+    expect(profile?.latestActivityAt).toEqual(new Date("2027-06-06T00:00:00Z"));
   });
 
   it("splits administrator official-history access from the current student file query", async () => {

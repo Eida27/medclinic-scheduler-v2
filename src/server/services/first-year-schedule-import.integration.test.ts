@@ -80,6 +80,14 @@ async function cleanup() {
            OR student_number LIKE $1`,
       [studentPattern],
     );
+    await client.query("ALTER TABLE laboratory_checklist_events DISABLE TRIGGER laboratory_checklist_events_immutable");
+    await client.query("ALTER TABLE laboratory_checklist_appointments DISABLE TRIGGER laboratory_checklist_links_immutable");
+    await client.query("ALTER TABLE laboratory_checklists DISABLE TRIGGER laboratory_checklist_identity_immutable");
+    await client.query(`DELETE FROM laboratory_checklist_events WHERE appointment_id IN (SELECT id FROM first_year_test_appointments)`);
+    await client.query(`DELETE FROM laboratory_checklist_items WHERE checklist_id IN
+      (SELECT checklist_id FROM laboratory_checklist_appointments WHERE appointment_id IN (SELECT id FROM first_year_test_appointments))`);
+    await client.query(`DELETE FROM laboratory_checklist_appointments WHERE appointment_id IN (SELECT id FROM first_year_test_appointments)`);
+    await client.query(`DELETE FROM laboratory_checklists WHERE root_appointment_id IN (SELECT id FROM first_year_test_appointments)`);
     await client.query(
       `DELETE FROM appointment_reschedule_event_unavailable_dates
         WHERE event_id IN (
@@ -132,6 +140,10 @@ async function cleanup() {
     await client.query("ALTER TABLE student_academic_snapshots ENABLE TRIGGER student_academic_snapshots_immutable");
     await client.query("DELETE FROM schedule_import_groups WHERE id IN (SELECT id FROM first_year_test_imports)");
     await client.query("DELETE FROM students WHERE student_number LIKE $1", [studentPattern]);
+    await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+    await client.query("ALTER TABLE laboratory_checklist_events ENABLE TRIGGER laboratory_checklist_events_immutable");
+    await client.query("ALTER TABLE laboratory_checklist_appointments ENABLE TRIGGER laboratory_checklist_links_immutable");
+    await client.query("ALTER TABLE laboratory_checklists ENABLE TRIGGER laboratory_checklist_identity_immutable");
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");
@@ -300,7 +312,7 @@ describe("First Year schedule imports", () => {
       { quickStatusAction: "MARK_COMPLETED", expectedStatus: "PENDING" },
       admin,
     )).rejects.toMatchObject({
-      code: "OVPSA_PHYSICAL_EXAM_REQUIRES_LAB_VERIFICATION",
+      code: "CLINICAL_COMPLETION_RETIRED",
     });
   });
 

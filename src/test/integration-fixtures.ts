@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { pool, transaction } from "@/server/db/pool";
 
@@ -52,6 +53,44 @@ export async function insertTestScheduleImportGroup(
     ],
   );
   return result.rows[0].id;
+}
+
+export async function insertTestAcademicSnapshot(client: PoolClient, input: {
+  studentNumber: string;
+  academicYearStart: number;
+  importName: string;
+  actor: string;
+  importMode?: "STANDARD" | "FIRST_YEAR_OVPSA";
+}) {
+  const existing = await client.query<{ id: string }>(
+    `SELECT id::text FROM student_academic_snapshots
+      WHERE student_number=$1 AND academic_year_start=$2`,
+    [input.studentNumber, input.academicYearStart],
+  );
+  if (existing.rows[0]) return existing.rows[0].id;
+  const importId = await insertTestScheduleImportGroup(client, {
+    name: input.importName,
+    sourceFilename: `${randomUUID()}.csv`,
+    academicYearStart: input.academicYearStart,
+    importMode: input.importMode ?? "STANDARD",
+    actor: input.actor,
+  });
+  const snapshot = await client.query<{ id: string }>(
+    `INSERT INTO student_academic_snapshots
+      (student_number,academic_year_start,student_name,college_id,college_name,
+       program_id,program_code,program_name,year_level,source_import_group_id)
+     SELECT student.student_number,$2,
+            CONCAT_WS(' ',student.first_name,student.middle_name,student.last_name,student.suffix),
+            student.college_id,college.name,student.program_id,program.code,program.name,
+            student.year_level,$3
+       FROM students student
+       JOIN colleges college ON college.id=student.college_id
+       JOIN programs program ON program.id=student.program_id
+      WHERE student.student_number=$1 RETURNING id::text`,
+    [input.studentNumber, input.academicYearStart, importId],
+  );
+  if (!snapshot.rows[0]) throw new Error(`Test student ${input.studentNumber} was not found.`);
+  return snapshot.rows[0].id;
 }
 
 type TestStudent = {
@@ -202,6 +241,19 @@ export async function cleanupTestFixtures(
                JOIN test_fixture_batches fixture_batch ON fixture_batch.id::text=metadata_batch.id
            )`,
     );
+    await client.query("ALTER TABLE laboratory_checklist_events DISABLE TRIGGER laboratory_checklist_events_immutable");
+    await client.query("ALTER TABLE laboratory_checklist_appointments DISABLE TRIGGER laboratory_checklist_links_immutable");
+    await client.query("ALTER TABLE laboratory_checklists DISABLE TRIGGER laboratory_checklist_identity_immutable");
+    await client.query("ALTER TABLE clinical_mutation_requests DISABLE TRIGGER clinical_mutation_requests_immutable");
+    await client.query("ALTER TABLE medical_certificate_revisions DISABLE TRIGGER medical_certificate_revision_immutable");
+    await client.query("ALTER TABLE medical_certificate_events DISABLE TRIGGER medical_certificate_events_immutable");
+    await client.query(`DELETE FROM clinical_mutation_requests WHERE outcome->>'appointmentId' IN
+      (SELECT id::text FROM test_fixture_appointments)`);
+    await client.query(`DELETE FROM medical_certificate_events WHERE revision_id IN
+      (SELECT id FROM medical_certificate_revisions WHERE appointment_id IN
+        (SELECT id FROM test_fixture_appointments))`);
+    await client.query(`DELETE FROM medical_certificate_revisions WHERE appointment_id IN
+      (SELECT id FROM test_fixture_appointments)`);
     await client.query(
       `DELETE FROM student_result_submissions
         WHERE student_number IN (SELECT student_number FROM test_fixture_students)
@@ -233,6 +285,15 @@ export async function cleanupTestFixtures(
         WHERE student_number IN (SELECT student_number FROM test_fixture_students)
            OR appointment_id IN (SELECT id FROM test_fixture_appointments)`,
     );
+    await client.query(`DELETE FROM laboratory_checklist_events
+      WHERE appointment_id IN (SELECT id FROM test_fixture_appointments)`);
+    await client.query(`DELETE FROM laboratory_checklist_items WHERE checklist_id IN
+      (SELECT checklist_id FROM laboratory_checklist_appointments WHERE appointment_id IN
+        (SELECT id FROM test_fixture_appointments))`);
+    await client.query(`DELETE FROM laboratory_checklist_appointments
+      WHERE appointment_id IN (SELECT id FROM test_fixture_appointments)`);
+    await client.query(`DELETE FROM laboratory_checklists
+      WHERE root_appointment_id IN (SELECT id FROM test_fixture_appointments)`);
     await client.query(
       "DELETE FROM appointment_status_logs WHERE appointment_id IN (SELECT id FROM test_fixture_appointments)",
     );
@@ -257,5 +318,12 @@ export async function cleanupTestFixtures(
     );
     await client.query("DELETE FROM schedule_import_groups WHERE id IN (SELECT id FROM test_fixture_import_groups)");
     await client.query("DELETE FROM students WHERE student_number IN (SELECT student_number FROM test_fixture_students)");
+    await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+    await client.query("ALTER TABLE laboratory_checklist_events ENABLE TRIGGER laboratory_checklist_events_immutable");
+    await client.query("ALTER TABLE laboratory_checklist_appointments ENABLE TRIGGER laboratory_checklist_links_immutable");
+    await client.query("ALTER TABLE laboratory_checklists ENABLE TRIGGER laboratory_checklist_identity_immutable");
+    await client.query("ALTER TABLE clinical_mutation_requests ENABLE TRIGGER clinical_mutation_requests_immutable");
+    await client.query("ALTER TABLE medical_certificate_revisions ENABLE TRIGGER medical_certificate_revision_immutable");
+    await client.query("ALTER TABLE medical_certificate_events ENABLE TRIGGER medical_certificate_events_immutable");
   });
 }

@@ -19,6 +19,7 @@ describe("DashboardPage", () => {
       pendingAppointments: 4,
       completedPhysicalExams: 3,
       completedLaboratory: 2,
+      finalizedLaboratoryDocuments: 1,
       noShows: 1,
       rescheduled: 1,
       capacityConflicts: 0,
@@ -42,6 +43,7 @@ describe("DashboardPage", () => {
       pendingAppointments: 4,
       completedPhysicalExams: 3,
       completedLaboratory: 2,
+      finalizedLaboratoryDocuments: 1,
       noShows: 1,
       rescheduled: 1,
       capacityConflicts: 0,
@@ -55,6 +57,14 @@ describe("DashboardPage", () => {
     render(await DashboardPage());
 
     expect(screen.queryByText("Unpublished batches")).not.toBeInTheDocument();
+  });
+
+  it("labels clinical completion, certificate issue, and document submission separately", async () => {
+    render(await DashboardPage());
+
+    expect(screen.getByText("Physical examinations completed with certificate")).toBeVisible();
+    expect(screen.getByText("Laboratory tests complete")).toBeVisible();
+    expect(screen.getByText("Laboratory documents finalized")).toBeVisible();
   });
 
   it("describes the one-confirmation Students & Schedules workflow", async () => {

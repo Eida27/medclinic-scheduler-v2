@@ -10,7 +10,7 @@ import {
   RESULT_SUBMISSION_MAX_FILES,
   validateResultFile,
 } from "@/server/files/result-file-validation";
-import { transaction } from "@/server/db/pool";
+import { query, transaction } from "@/server/db/pool";
 import { lockSchedulingMutationQueue } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import {
   deleteRetiredStudentResultDraftIfClean,
@@ -61,6 +61,21 @@ type CopiedResultFile = {
   byteSize: number;
   checksumSha256: string;
 };
+
+async function assertLaboratoryResultAppointment(studentNumber: string, appointmentId: string) {
+  const result = await query<{ scheduleType: string }>(
+    `SELECT schedule_type AS "scheduleType" FROM appointments
+      WHERE id=$1 AND student_number=$2 AND is_published=TRUE`,
+    [appointmentId, studentNumber],
+  );
+  if (result.rows[0]?.scheduleType === "PHYSICAL_EXAM") {
+    throw new AppError("PHYSICAL_EXAM_UPLOAD_RETIRED",
+      "Physical Examination results are issued as medical certificates by clinic staff.", 422);
+  }
+  if (result.rows[0]?.scheduleType !== "LABORATORY") {
+    throw new AppError("RESULT_APPOINTMENT_NOT_FOUND", "Laboratory appointment not found.", 404);
+  }
+}
 
 async function cleanupArmedResultStorageKeys(
   armedStorageKeys: string[],
@@ -127,6 +142,7 @@ function beginEditError(type: "not_found" | "unavailable" | "no_official" | "con
 }
 
 export async function getStudentResultSubmission(studentNumber: string, appointmentId: string) {
+  await assertLaboratoryResultAppointment(studentNumber, appointmentId);
   const existing = await getStudentResultSubmissionRow(studentNumber, appointmentId);
   if (existing) return existing;
   return transaction(async (client) => {
@@ -146,6 +162,7 @@ export async function beginStudentResultEdit(
   appointmentId: string,
   storage: ResultStorage = localResultStorage,
 ) {
+  await assertLaboratoryResultAppointment(studentNumber, appointmentId);
   const candidateDraftId = randomUUID();
   const armedStorageKeys = Array.from(
     { length: RESULT_SUBMISSION_MAX_FILES },
@@ -258,6 +275,7 @@ export async function cancelStudentResultEdit(
   submissionId: string,
   storage: ResultStorage = localResultStorage,
 ) {
+  await assertLaboratoryResultAppointment(studentNumber, appointmentId);
   const retired = await transaction(async (client) => {
     await lockSchedulingMutationQueue(client);
     const outcome = await lockExpectedStudentResultDraft(
@@ -309,6 +327,7 @@ export async function addStudentResultFiles(
   uploads: Upload[],
   storage: ResultStorage = localResultStorage,
 ) {
+  await assertLaboratoryResultAppointment(studentNumber, appointmentId);
   if (!uploads.length) {
     throw new AppError("RESULT_FILES_REQUIRED", "Select at least one result file to upload.", 400);
   }
@@ -373,6 +392,7 @@ export async function removeStudentResultFile(
   fileId: string,
   storage: ResultStorage = localResultStorage,
 ) {
+  await assertLaboratoryResultAppointment(studentNumber, appointmentId);
   const file = await transaction(async (client) => {
     await lockSchedulingMutationQueue(client);
     const outcome = await lockExpectedStudentResultDraft(
@@ -406,6 +426,7 @@ export async function finalizeStudentResultSubmission(
   submissionId: string,
   storage: ResultStorage = localResultStorage,
 ) {
+  await assertLaboratoryResultAppointment(studentNumber, appointmentId);
   return transaction(async (client) => {
     await lockSchedulingMutationQueue(client);
     const outcome = await lockExpectedStudentResultDraft(
@@ -462,6 +483,7 @@ export async function submitStudentResultChanges(
   submissionId: string,
   storage: ResultStorage = localResultStorage,
 ) {
+  await assertLaboratoryResultAppointment(studentNumber, appointmentId);
   return transaction(async (client) => {
     await lockSchedulingMutationQueue(client);
     const outcome = await lockExpectedStudentResultDraft(

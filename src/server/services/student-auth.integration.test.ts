@@ -1,11 +1,13 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { pool } from "@/server/db/pool";
-import { cleanupTestFixtures, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
+import { pool, transaction } from "@/server/db/pool";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
+import { cleanupTestFixtures, insertTestAcademicSnapshot, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import { getStudentPortalSchedule } from "@/server/repositories/student-portal.repository";
 import { authenticateStudent } from "./student-auth.service";
 
 const studentPattern = "99-96%";
+let createdYear = false;
 
 async function cleanup() {
   await cleanupTestFixtures(studentPattern, "TEST-STUDENT-PORTAL%", "TEST-STUDENT-PORTAL%");
@@ -15,6 +17,7 @@ beforeAll(cleanup);
 afterEach(cleanup);
 afterAll(async () => {
   await cleanup();
+  if (createdYear) await pool.query("DELETE FROM academic_years WHERE start_year=2027");
   await pool.end();
 });
 
@@ -226,6 +229,10 @@ describe("student authentication", () => {
   });
 
   it("returns only the authenticated student's published schedule and history", async () => {
+    const year = await pool.query(`INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+      VALUES (2027,'2028-07-31',$1,$1) ON CONFLICT (start_year) DO NOTHING RETURNING start_year`,
+    [TEST_REFERENCE_IDS.adminUser]);
+    createdYear = Boolean(year.rowCount);
     for (const [studentNumber, firstName] of [["99-9610-10", "Owner"], ["99-9611-11", "Other"]]) {
       await insertTestStudent({
         studentNumber,
@@ -234,13 +241,23 @@ describe("student authentication", () => {
         yearLevel: 3,
         dateOfBirth: "2003-05-06",
       });
-      await pool.query(
+      await transaction(async (client) => {
+        await insertTestAcademicSnapshot(client, {
+          studentNumber,
+          academicYearStart: 2027,
+          importName: `TEST-STUDENT-PORTAL ${studentNumber}`,
+          actor: TEST_REFERENCE_IDS.adminUser,
+        });
+        const appointment = await client.query<{ id: string }>(
         `INSERT INTO appointments (
            clinic_id, student_number, schedule_type, appointment_date,
-           status, is_published, created_by
-         ) VALUES ($1,$2,'LABORATORY','2027-08-02','PENDING',TRUE,$3)`,
+           status, is_published, schedule_cycle_start, scheduling_category, created_by
+         ) VALUES ($1,$2,'LABORATORY','2027-08-02','PENDING',TRUE,2027,'REGULAR',$3)
+         RETURNING id::text`,
         [TEST_REFERENCE_IDS.laboratoryClinic, studentNumber, TEST_REFERENCE_IDS.adminUser],
-      );
+        );
+        await linkPublishedLaboratoryAppointments(client, [appointment.rows[0].id]);
+      });
     }
     const portal = await getStudentPortalSchedule("99-9610-10");
     expect(portal).not.toBeNull();

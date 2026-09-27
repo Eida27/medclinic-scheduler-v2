@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 
 import { AppError } from "@/lib/errors";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import { query, transaction } from "@/server/db/pool";
 import { writeAudit } from "@/server/repositories/audit.repository";
 import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
@@ -517,12 +518,12 @@ export async function rescheduleOvpsaFirstYearBatch(
          clinic_id,student_number,schedule_type,appointment_date,status,is_published,
          notes,rescheduled_from,created_by,updated_by,schedule_pair_id,
          schedule_cycle_start,ovpsa_batch_id,ovpsa_revision_id,
-         ovpsa_service_reservation_id
+         ovpsa_service_reservation_id,scheduling_category
        )
        SELECT CASE row.schedule_type
                 WHEN 'LABORATORY' THEN $2::uuid ELSE $3::uuid END,
               row.student_number,row.schedule_type,row.date,'PENDING',TRUE,$4,
-              row.old_id,$5,$5,row.pair_id,$6,$7,$8,row.reservation_id
+              row.old_id,$5,$5,row.pair_id,$6,$7,$8,row.reservation_id,'REGULAR'
          FROM jsonb_to_recordset($1::jsonb) AS row(
            student_number text,schedule_type text,date date,pair_id uuid,
            old_id uuid,reservation_id uuid
@@ -539,6 +540,7 @@ export async function rescheduleOvpsaFirstYearBatch(
         revisionId,
       ],
     );
+    await linkPublishedLaboratoryAppointments(client, inserted.rows.map((appointment) => appointment.id));
     await client.query(
       `INSERT INTO appointment_status_logs (
          appointment_id,old_status,new_status,notes,changed_by

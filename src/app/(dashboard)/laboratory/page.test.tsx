@@ -182,7 +182,7 @@ describe("LaboratoryPage", () => {
       "/laboratory?studentNumber=Ana+Santos&sort=latest&appointmentDate=2026-08-18&status=COMPLETED&page=1",
     );
     expect(screen.queryByRole("link", { name: "Next page" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Pending — click to mark completed" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /mark completed/i })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Ana Santos" })).toHaveAttribute(
       "href",
       "/laboratory/laboratory-appointment-151",

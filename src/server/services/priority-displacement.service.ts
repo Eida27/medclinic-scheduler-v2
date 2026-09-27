@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
 import { AppError } from "@/lib/errors";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import type {
   GeneratePairedScheduleInput,
   GeneratePairedScheduleOutput,
@@ -381,6 +382,7 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
       (assignment) => candidateByStudent.get(assignment.studentNumber)!.laboratoryAppointmentId,
     ),
   );
+  await linkPublishedLaboratoryAppointments(client, laboratory.rows.map((appointment) => appointment.id));
   const physical = await insertReplacements(
     "PHYSICAL_EXAM",
     physicalExamCapacity.clinic_id,

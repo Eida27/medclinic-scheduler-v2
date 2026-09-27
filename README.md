@@ -274,10 +274,11 @@ The ignored state is `.data/browser-clinic-scheduler-ux/state.json`. `stage`, `s
 3. Confirm the import is `PUBLISHED`, dates are date-only, Laboratory precedes PE, and overflow/displacement totals are visible.
 4. Import an OJT or Tour category against constrained capacity and review the Regular student's linked replacement history and notification.
 5. As administrator, add CPU and KABALAKA unavailable dates and confirm their PE-only/pair rules.
-6. As KABALAKA clinic staff, complete a Laboratory appointment.
-7. Use **Student sign in** with that Student Number/DOB, upload multiple synthetic PDF/PNG files, finalize, and download them.
-8. As administrator, open **Student result submissions**, download the file/ZIP, invalidate with a reason, and confirm the student sees a notification and reopened draft.
-9. Confirm the Browser console is free of warnings/errors, then remove only the targeted synthetic fixtures and restore capacity settings.
+6. As KABALAKA clinic staff, verify CBC, Urine, Stool, and applicable X-ray individually; confirm partial work survives an explicit replacement and full verification completes Laboratory.
+7. As CPU Clinic staff, select an Administrator-configured physician, enter the recorded Class A–D finding and examination details, preview the marked certificate, then save once to issue the JPG.
+8. Use **Student sign in** with that Student Number/DOB; download the certificate. Upload, finalize, revise, and download only Laboratory documents. Confirm a forged Physical Examination upload is rejected.
+9. Select two eligible appointments in one clinic list, preview one replacement date and aggregate capacity, save both, and check the calendar day details and historical academic-year view.
+10. Confirm the Browser console is free of errors, then remove only the targeted synthetic fixtures and restore capacity settings.
 
 ## Architecture and Security
 

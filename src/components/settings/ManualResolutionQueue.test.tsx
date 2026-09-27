@@ -28,6 +28,7 @@ const manualCase: ClinicManualCaseDto = {
   ovpsaBatchId: null,
   ovpsaBatchOptimisticToken: null,
   currentAssignmentBlock: null,
+  academicYearStart: 2026,
 };
 
 function jsonResponse(body: unknown, status = 200) {
@@ -39,6 +40,69 @@ function jsonResponse(body: unknown, status = 200) {
 
 describe("ManualResolutionQueue", () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it("opens a selected academic year as read-only history", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ data: { page: 1, pageSize: 20, total: 0, items: [] } }))
+      .mockResolvedValueOnce(jsonResponse({ data: { page: 1, pageSize: 20, total: 1,
+        selectedYearState: "ENDED", items: [{ ...manualCase, academicYearStart: 2024 }] } }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ManualResolutionQueue />);
+    const user = userEvent.setup();
+    await screen.findByText("No manual cases match these filters.");
+
+    await user.type(screen.getByLabelText("Academic year"), "2024");
+    await user.click(screen.getByRole("button", { name: "Apply filters" }));
+
+    expect(await screen.findByRole("heading", { name: "Santos, Ana M." })).toBeVisible();
+    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain("academicYearStart=2024");
+    expect(String(fetchMock.mock.calls.at(-1)?.[0])).not.toContain("status=OPEN");
+    expect(screen.getByText("Read-only academic year 2024–2025 history")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Assign replacement for 24-0001" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Keep current replacement for 24-0001" })).not.toBeInTheDocument();
+  });
+
+  it("keeps a selected active academic year actionable and refreshes it on focus", async () => {
+    const currentPage = { page: 1, pageSize: 20, total: 1,
+      selectedYearState: "CURRENT", items: [manualCase] };
+    const endedPage = { ...currentPage, selectedYearState: "ENDED" };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ data: { page: 1, pageSize: 20, total: 0, items: [] } }))
+      .mockResolvedValueOnce(jsonResponse({ data: currentPage }))
+      .mockResolvedValueOnce(jsonResponse({ data: endedPage }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ManualResolutionQueue />);
+    const user = userEvent.setup();
+    await screen.findByText("No manual cases match these filters.");
+    await user.type(screen.getByLabelText("Academic year"), "2026");
+    await user.click(screen.getByRole("button", { name: "Apply filters" }));
+    expect(await screen.findByRole("button", { name: "Assign replacement for 24-0001" })).toBeVisible();
+    expect(screen.queryByText(/Read-only academic year/)).not.toBeInTheDocument();
+
+    window.dispatchEvent(new Event("focus"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(screen.queryByRole("button", {
+      name: "Assign replacement for 24-0001",
+    })).not.toBeInTheDocument());
+    expect(screen.getByText("Read-only academic year 2026–2027 history")).toBeVisible();
+    expect(String(fetchMock.mock.calls[2][0])).toContain("academicYearStart=2026");
+  });
+
+  it("keeps a selected upcoming academic year actionable for planned recovery", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ data: { page: 1, pageSize: 20, total: 0, items: [] } }))
+      .mockResolvedValueOnce(jsonResponse({ data: { page: 1, pageSize: 20, total: 1,
+        selectedYearState: "UPCOMING", items: [{ ...manualCase, academicYearStart: 2027 }] } }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ManualResolutionQueue />);
+    const user = userEvent.setup();
+    await screen.findByText("No manual cases match these filters.");
+    await user.type(screen.getByLabelText("Academic year"), "2027");
+    await user.click(screen.getByRole("button", { name: "Apply filters" }));
+    expect(await screen.findByText("Upcoming academic year 2027–2028.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Assign replacement for 24-0001" }))
+      .toBeVisible();
+  });
 
   it("loads searchable closure cases with dates, service state, and history", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: {

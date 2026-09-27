@@ -4,11 +4,13 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 
-import { insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
-import { pool } from "./pool";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
+import { cleanupTestFixtures, insertTestAcademicSnapshot, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
+import { pool, transaction } from "./pool";
 
 const studentNumber = "MIG-025-CASE";
 const closureReason = "MIG-025 fixture";
+let createdYear = false;
 
 async function cleanup() {
   await pool.query(
@@ -19,14 +21,14 @@ async function cleanup() {
     "DELETE FROM clinic_closure_manual_cases WHERE student_number=$1",
     [studentNumber],
   );
-  await pool.query("DELETE FROM appointments WHERE student_number=$1", [studentNumber]);
+  await cleanupTestFixtures("MIG-025-%", "MIG-025%", "MIG-025%");
   await pool.query("DELETE FROM clinic_closure_groups WHERE reason=$1", [closureReason]);
-  await pool.query("DELETE FROM students WHERE student_number=$1", [studentNumber]);
 }
 
 afterEach(cleanup);
 afterAll(async () => {
   await cleanup();
+  if (createdYear) await pool.query("DELETE FROM academic_years WHERE start_year=2049");
   await pool.end();
 });
 
@@ -38,15 +40,27 @@ describe("scheduling integrity hardening migration", () => {
       lastName: "Integrity",
       yearLevel: 4,
     });
+    const year = await pool.query(`INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+      VALUES (2049,'2050-07-31',$1,$1) ON CONFLICT (start_year) DO NOTHING RETURNING start_year`,
+    [TEST_REFERENCE_IDS.adminUser]);
+    createdYear = Boolean(year.rowCount);
     const pairId = randomUUID();
-    const appointment = await pool.query<{ id: string }>(
+    const appointment = await transaction(async (client) => {
+      await insertTestAcademicSnapshot(client, {
+        studentNumber, academicYearStart: 2049,
+        importName: "MIG-025 fixture provenance", actor: TEST_REFERENCE_IDS.adminUser,
+      });
+      const inserted = await client.query<{ id: string }>(
       `INSERT INTO appointments (
          clinic_id,student_number,schedule_type,appointment_date,status,is_published,
-         schedule_pair_id,schedule_cycle_start
-       ) VALUES ($1,$2,'LABORATORY','2049-08-12','PENDING',TRUE,$3,2049)
+         schedule_pair_id,schedule_cycle_start,scheduling_category
+       ) VALUES ($1,$2,'LABORATORY','2049-08-12','PENDING',TRUE,$3,2049,'REGULAR')
        RETURNING id::text`,
       [TEST_REFERENCE_IDS.laboratoryClinic, studentNumber, pairId],
-    );
+      );
+      await linkPublishedLaboratoryAppointments(client, [inserted.rows[0].id]);
+      return inserted;
+    });
     const closure = await pool.query<{ id: string }>(
       `INSERT INTO clinic_closure_groups (
          start_date,end_date,category,reason,created_by,creation_batch_id

@@ -27,6 +27,9 @@ export type HistoricalComplianceReportItem = {
   physicalExamAppointmentId: string | null;
   physicalExamAppointmentDate: string | null;
   physicalExamStatus: HistoricalRequirementStatus;
+  laboratoryDocumentsFinalized?: boolean;
+  certificateIssued?: boolean;
+  certificateClassification?: string | null;
   overallStatus: HistoricalComplianceClassification;
 };
 
@@ -39,6 +42,8 @@ export type HistoricalComplianceSummary = {
   laboratoryIncomplete: number;
   physicalExamIncomplete: number;
   bothIncomplete: number;
+  laboratoryDocumentsFinalized?: number;
+  certificatesIssued?: number;
 };
 
 type BreakdownMetrics = {
@@ -184,7 +189,15 @@ export async function historicalComplianceReportRepository(
               COALESCE(laboratory.status,'UNSCHEDULED') AS "laboratoryStatus",
               physical.id AS "physicalExamAppointmentId",
               physical.appointment_date::text AS "physicalExamAppointmentDate",
-              COALESCE(physical.status,'UNSCHEDULED') AS "physicalExamStatus"
+              COALESCE(physical.status,'UNSCHEDULED') AS "physicalExamStatus",
+              EXISTS (
+                SELECT 1 FROM student_result_submissions submission
+                 WHERE submission.appointment_id=laboratory.id
+                   AND submission.result_type='LABORATORY'
+                   AND submission.status='FINALIZED'
+              ) AS "laboratoryDocumentsFinalized",
+              certificate.classification AS "certificateClassification",
+              (certificate.id IS NOT NULL) AS "certificateIssued"
          FROM student_academic_snapshots snapshot
          JOIN published_population population
            ON population.student_number=snapshot.student_number
@@ -194,6 +207,12 @@ export async function historicalComplianceReportRepository(
          LEFT JOIN effective_appointments physical
            ON physical.student_number=snapshot.student_number
           AND physical.schedule_type='PHYSICAL_EXAM'
+         LEFT JOIN LATERAL (
+           SELECT revision.id,revision.classification
+             FROM medical_certificate_revisions revision
+            WHERE revision.appointment_id=physical.id AND revision.status='ISSUED'
+            LIMIT 1
+         ) certificate ON TRUE
         WHERE snapshot.academic_year_start=$1
      ),
      classified_rows AS (
@@ -227,6 +246,9 @@ export async function historicalComplianceReportRepository(
                       'physicalExamAppointmentId',row."physicalExamAppointmentId",
                       'physicalExamAppointmentDate',row."physicalExamAppointmentDate",
                       'physicalExamStatus',row."physicalExamStatus",
+                      'laboratoryDocumentsFinalized',row."laboratoryDocumentsFinalized",
+                      'certificateIssued',row."certificateIssued",
+                      'certificateClassification',row."certificateClassification",
                       'overallStatus',row."overallStatus"
                     ) AS item,
                     ROW_NUMBER() OVER (ORDER BY ${ordering}) AS row_order
@@ -249,7 +271,9 @@ export async function historicalComplianceReportRepository(
            'physicalExamIncomplete',COUNT(*) FILTER (WHERE row."physicalExamStatus"<>'COMPLETED')::integer,
            'bothIncomplete',COUNT(*) FILTER (
              WHERE row."laboratoryStatus"<>'COMPLETED' AND row."physicalExamStatus"<>'COMPLETED'
-           )::integer
+           )::integer,
+           'laboratoryDocumentsFinalized',COUNT(*) FILTER (WHERE row."laboratoryDocumentsFinalized")::integer,
+           'certificatesIssued',COUNT(*) FILTER (WHERE row."certificateIssued")::integer
          ) FROM filtered_rows row
        ),
        'breakdowns',jsonb_build_object(

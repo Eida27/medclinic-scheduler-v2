@@ -1,10 +1,11 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { pool } from "@/server/db/pool";
+import { pool, transaction } from "@/server/db/pool";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import { getPublishedAppointment, listAppointments } from "@/server/repositories/appointments.repository";
-import { cleanupTestFixtures, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
+import { cleanupTestFixtures, insertTestAcademicSnapshot, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import type { SessionUser } from "@/types/roles";
 import { updateAppointment } from "./appointments.service";
 import { getStudentResultSubmission } from "./student-result-submissions.service";
@@ -36,14 +37,21 @@ async function createAppointment(studentNumber: string) {
     lastName: "Locking",
     yearLevel: 4,
   });
-  const result = await pool.query<{ id: string }>(
+  return transaction(async (client) => {
+    await insertTestAcademicSnapshot(client, { studentNumber,
+      academicYearStart: 2026, importName: `LOCK-${studentNumber}`,
+      actor: TEST_REFERENCE_IDS.adminUser });
+    const result = await client.query<{ id: string }>(
     `INSERT INTO appointments (
-       clinic_id,student_number,schedule_type,appointment_date,status,is_published,created_by,updated_by
-     ) VALUES ($1,$2,'LABORATORY','2049-08-18','PENDING',TRUE,$3,$3)
+       clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+       schedule_cycle_start,scheduling_category,created_by,updated_by
+     ) VALUES ($1,$2,'LABORATORY','2026-10-18','PENDING',TRUE,2026,'REGULAR',$3,$3)
      RETURNING id::text`,
     [TEST_REFERENCE_IDS.laboratoryClinic, studentNumber, TEST_REFERENCE_IDS.adminUser],
-  );
-  return result.rows[0].id;
+    );
+    await linkPublishedLaboratoryAppointments(client, [result.rows[0].id]);
+    return result.rows[0].id;
+  });
 }
 
 async function waitForSchedulingQueueWaiter() {
@@ -89,7 +97,7 @@ beforeAll(async () => {
   await cleanup();
   const academicYear = await pool.query<{ start_year: number }>(
     `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
-     VALUES (2049,'2050-07-31',$1,$1)
+     VALUES (2026,'2027-07-31',$1,$1)
      ON CONFLICT (start_year) DO NOTHING
      RETURNING start_year`,
     [TEST_REFERENCE_IDS.adminUser],
@@ -99,7 +107,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await cleanup();
   if (createdAcademicYear) {
-    await pool.query("DELETE FROM academic_years WHERE start_year=2049");
+    await pool.query("DELETE FROM academic_years WHERE start_year=2026");
   }
   await pool.end();
 });
@@ -143,17 +151,17 @@ describe("appointment locking and inheritance", () => {
     }, laboratoryStaff)).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
 
     await pool.query(
-      "UPDATE appointments SET status='COMPLETED',updated_by=$2 WHERE id=$1",
+      "UPDATE appointments SET status='NO_SHOW',updated_by=$2 WHERE id=$1",
       [appointmentId, TEST_REFERENCE_IDS.clinicStaffUser],
     );
-    const completed = await getPublishedAppointment(appointmentId);
-    if (!completed) throw new Error("Expected the completed locked appointment.");
+    const noShow = await getPublishedAppointment(appointmentId);
+    if (!noShow) throw new Error("Expected the no-show locked appointment.");
     await updateAppointment(appointmentId, {
       lockAction: "UNLOCK",
-      expectedUpdatedAt: completed.updatedAt.toISOString(),
+      expectedUpdatedAt: noShow.updatedAt.toISOString(),
     }, admin);
     await expect(getPublishedAppointment(appointmentId)).resolves.toMatchObject({
-      status: "COMPLETED",
+      status: "NO_SHOW",
       isManuallyLocked: false,
       lockReason: null,
       lockedById: null,
@@ -190,7 +198,7 @@ describe("appointment locking and inheritance", () => {
     }, admin);
 
     const replacement = await updateAppointment(appointmentId, {
-      appointmentDate: "2049-08-19",
+      appointmentDate: "2026-10-19",
       notes: "Clinic staff selected a replacement",
     }, laboratoryStaff);
     expect(replacement).toMatchObject({
@@ -364,7 +372,7 @@ describe("appointment locking and inheritance", () => {
     `);
     try {
       await expect(updateAppointment(appointmentId, {
-        appointmentDate: "2049-08-20",
+        appointmentDate: "2026-10-20",
         notes: "This replacement must fail",
       }, admin)).rejects.toThrow(/TEST inherited replacement failure/);
     } finally {

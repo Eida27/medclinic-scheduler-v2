@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 
 import { AppError, isPostgresUniqueViolation } from "@/lib/errors";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import { transaction } from "@/server/db/pool";
 import { applyOvpsaLowerPriorityDisplacements, planOvpsaLowerPriorityDisplacementsForServiceDates } from "@/server/ovpsa/ovpsa-first-year-displacement";
 import { planFirstYearScheduleImport, type FirstYearImportPlan, type FirstYearUnavailableReason } from "@/server/ovpsa/ovpsa-first-year-import-planner";
@@ -798,6 +799,7 @@ export async function publishFirstYearScheduleImport(
           acceptedAt,
         ],
       );
+      await linkPublishedLaboratoryAppointments(client, appointments.rows.map((appointment) => appointment.id));
       await client.query(
         `INSERT INTO appointment_status_logs (appointment_id,old_status,new_status,notes,changed_by)
          SELECT id,NULL,'PENDING','Published by First Year schedule import.',$2

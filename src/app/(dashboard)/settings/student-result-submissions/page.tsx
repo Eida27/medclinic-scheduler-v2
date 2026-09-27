@@ -66,7 +66,9 @@ export default async function AdminStudentResultSubmissionsPage({
               </div>
               <div className="grid gap-2 text-sm text-muted sm:grid-cols-2">
                 <p>{serviceSummary("Laboratory", item.laboratory.state, item.laboratory.fileCount)}</p>
-                <p>{serviceSummary("Physical Exam", item.physicalExam.state, item.physicalExam.fileCount)}</p>
+                <p>Physical Examination certificate: {item.certificate?.status === "ISSUED"
+                  ? `Issued · Class ${item.certificate.classification}`
+                  : item.certificate?.status === "REVOKED" ? "Revoked" : "Not issued"}</p>
               </div>
               <p className="text-xs text-muted">
                 Latest activity: {formatResultDateTime(item.latestActivityAt)}

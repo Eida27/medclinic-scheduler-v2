@@ -14,6 +14,7 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Local implementation-plan evidence and acceptance helpers are not product code.
     ".superpowers/**",
+    ".data/**",
   ]),
 ]);
 

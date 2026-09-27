@@ -2,8 +2,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { pool, transaction } from "@/server/db/pool";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import {
   cleanupTestFixtures,
+  insertTestAcademicSnapshot,
   insertTestStudent,
   TEST_REFERENCE_IDS,
 } from "@/test/integration-fixtures";
@@ -16,6 +18,7 @@ let preferredPhysicalId: string;
 let preferredLaboratoryId: string;
 let fallbackPhysicalId: string;
 let fallbackLaboratoryId: string;
+let createdYear = false;
 
 async function insertAppointment(input: {
   studentNumber: string;
@@ -24,11 +27,12 @@ async function insertAppointment(input: {
   status: "PENDING" | "COMPLETED" | "NO_SHOW" | "RESCHEDULED" | "CANCELLED";
   schedulePairId?: string | null;
 }) {
-  const result = await pool.query<{ id: string }>(
+  return transaction(async (client) => {
+  const result = await client.query<{ id: string }>(
     `INSERT INTO appointments (
        clinic_id,student_number,schedule_type,appointment_date,status,is_published,
-       schedule_pair_id,schedule_cycle_start,created_by,updated_by
-     ) VALUES ($1,$2,$3,$4,$5,TRUE,$6,2045,$7,$7)
+       schedule_pair_id,schedule_cycle_start,scheduling_category,created_by,updated_by
+     ) VALUES ($1,$2,$3,$4,$5,TRUE,$6,2045,'REGULAR',$7,$7)
      RETURNING id::text`,
     [
       input.scheduleType === "LABORATORY"
@@ -42,11 +46,25 @@ async function insertAppointment(input: {
       TEST_REFERENCE_IDS.adminUser,
     ],
   );
+  if (input.scheduleType === "LABORATORY") {
+    await linkPublishedLaboratoryAppointments(client, [result.rows[0].id]);
+    if (input.status === "COMPLETED") {
+      await client.query(`UPDATE laboratory_checklist_items
+        SET verified_at=NOW(),verified_by=$2,verification_source='INTERNAL'
+        WHERE checklist_id=(SELECT checklist_id FROM laboratory_checklist_appointments WHERE appointment_id=$1)`,
+      [result.rows[0].id, TEST_REFERENCE_IDS.adminUser]);
+    }
+  }
   return result.rows[0].id;
+  });
 }
 
 beforeAll(async () => {
-  await cleanupTestFixtures(studentPattern, batchPattern);
+  await cleanupTestFixtures(studentPattern, batchPattern, batchPattern);
+  const year = await pool.query(`INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+    VALUES (2045,'2046-07-31',$1,$1) ON CONFLICT (start_year) DO NOTHING RETURNING start_year`,
+  [TEST_REFERENCE_IDS.adminUser]);
+  createdYear = Boolean(year.rowCount);
   for (const studentNumber of ["TEST-PAIR-R-LINEAGE", "TEST-PAIR-R-FALLBK"]) {
     await insertTestStudent({
       studentNumber,
@@ -55,6 +73,15 @@ beforeAll(async () => {
       yearLevel: 3,
     });
   }
+  await transaction(async (client) => {
+    for (const studentNumber of ["TEST-PAIR-R-LINEAGE", "TEST-PAIR-R-FALLBK"]) {
+      await insertTestAcademicSnapshot(client, {
+        studentNumber, academicYearStart: 2045,
+        importName: `TEST pair resolver provenance ${studentNumber}`,
+        actor: TEST_REFERENCE_IDS.adminUser,
+      });
+    }
+  });
 
   preferredLaboratoryId = await insertAppointment({
     studentNumber: "TEST-PAIR-R-LINEAGE",
@@ -105,7 +132,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await cleanupTestFixtures(studentPattern, batchPattern);
+  await cleanupTestFixtures(studentPattern, batchPattern, batchPattern);
+  if (createdYear) await pool.query("DELETE FROM academic_years WHERE start_year=2045");
   await pool.end();
 });
 

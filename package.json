@@ -20,7 +20,6 @@
     "admin:bootstrap": "node --conditions=react-server --import tsx --env-file=.env.local scripts/admin-bootstrap.ts",
     "acceptance:clinic-ux": "tsx --env-file=.env.local scripts/browser-clinic-scheduler-ux-fixture.ts",
     "acceptance:appointment-protection": "tsx --env-file=.env.local scripts/browser-appointment-protection-fixture.ts",
-    "acceptance:student-result-editing": "tsx --env-file=.env.local scripts/browser-student-result-editing-fixture.ts",
     "acceptance:student-auth": "tsx --env-file=.env.local scripts/browser-student-middle-name-auth-fixture.ts",
     "acceptance:unified-clinic-calendar": "tsx --env-file=.env.local scripts/browser-unified-clinic-calendar-fixture.ts",
     "acceptance:clinic-closure-recovery:setup": "tsx --env-file=.env.local scripts/browser-clinic-closure-recovery-fixture.ts setup",
@@ -61,6 +60,7 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "server-only": "^0.0.1",
+    "sharp": "0.35.4",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -83,7 +83,6 @@
     "jsdom": "^29.1.1",
     "jszip": "^3.10.1",
     "pdfjs-dist": "4.8.69",
-    "sharp": "0.35.4",
     "smtp-server": "^3.19.9",
     "tailwindcss": "^4",
     "tsx": "^4.22.4",

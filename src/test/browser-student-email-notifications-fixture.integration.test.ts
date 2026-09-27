@@ -1,6 +1,6 @@
 import { queueCurrentAdminEmailDelivery,retryAdminEmailDelivery } from "@/server/services/admin-email-deliveries.service";
 import { verifyStudentEmail } from "@/server/services/student-email.service";
-import { mkdir,readFile,rename,rm,writeFile } from "node:fs/promises";
+import { mkdir,readdir,readFile,rename,rm,writeFile } from "node:fs/promises";
 import { dirname,resolve } from "node:path";
 import { Pool } from "pg";
 import { describe,expect,it } from "vitest";
@@ -49,6 +49,33 @@ describe.skipIf(!runLifecycle)("student email notifications Browser acceptance f
       )).rows[0].count).toBe(1);
     } finally {
       await pool.query("DELETE FROM users WHERE id=$1", [STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.staff.admin.id]);
+      await pool.end();
+    }
+  }, 45_000);
+
+  it("preserves a preexisting academic year when cleaning fixture provenance", async () => {
+    const identity = assertSafeStudentEmailNotificationsAcceptanceDatabase(databaseUrl, "1");
+    const pool = new Pool({ connectionString: databaseUrl });
+    const referenceAdminId = "00000000-0000-4000-8000-000000000001";
+    let insertedYear = false;
+    try {
+      await cleanupStudentEmailNotificationsFixture(pool, identity);
+      const created = await pool.query(
+        `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+         VALUES (2026,'2027-07-31',$1,$1) ON CONFLICT (start_year) DO NOTHING RETURNING start_year`,
+        [referenceAdminId],
+      );
+      insertedYear = Boolean(created.rowCount);
+      await prepareStudentEmailNotificationsFixture(pool, identity, { encryptionKey: TEST_ENCRYPTION_KEY });
+      expect((await getStudentEmailNotificationsFixtureStatus(pool, identity)).residue.academicYears).toBe(0);
+      const cleanup = await cleanupStudentEmailNotificationsFixture(pool, identity);
+      expect(cleanup.residue.academicYears).toBe(0);
+      expect((await pool.query<{ count: number }>(
+        "SELECT COUNT(*)::int AS count FROM academic_years WHERE start_year=2026",
+      )).rows[0].count).toBe(1);
+    } finally {
+      await cleanupStudentEmailNotificationsFixture(pool, identity).catch(() => undefined);
+      if (insertedYear) await pool.query("DELETE FROM academic_years WHERE start_year=2026 AND created_by=$1", [referenceAdminId]);
       await pool.end();
     }
   });
@@ -221,6 +248,9 @@ describe.skipIf(!runLifecycle)("student email notifications Browser acceptance f
           users: 2,
           colleges: 1,
           programs: 1,
+          academicYears: 1,
+          importGroups: 1,
+          academicSnapshots: 5,
           students: 6,
           loginAttempts: 0,
           emailVerifications: 1,
@@ -241,6 +271,10 @@ describe.skipIf(!runLifecycle)("student email notifications Browser acceptance f
           laboratoryResults: 0,
           examResults: 0,
           storageCleanupIntents: 0,
+          laboratoryChecklists: 5,
+          laboratoryChecklistItems: 15,
+          laboratoryChecklistLinks: 6,
+          laboratoryChecklistEvents: 0,
           storageObjects: 0,
           stateFiles: 1,
         },
@@ -248,6 +282,17 @@ describe.skipIf(!runLifecycle)("student email notifications Browser acceptance f
       expect(state.rawVerificationToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
       expect(JSON.stringify(setup)).not.toContain(state.rawVerificationToken);
       expect(JSON.stringify(firstStatus)).not.toContain(state.rawVerificationToken);
+      const provenance = await pool.query<{ snapshots: number; publishedLaboratory: number; linkedLaboratory: number }>(
+        `SELECT
+           (SELECT COUNT(*)::int FROM student_academic_snapshots
+             WHERE student_number LIKE 'B-SEN-%' AND academic_year_start=2026) AS snapshots,
+           (SELECT COUNT(*)::int FROM appointments
+             WHERE student_number LIKE 'B-SEN-%' AND schedule_type='LABORATORY' AND is_published) AS "publishedLaboratory",
+           (SELECT COUNT(*)::int FROM laboratory_checklist_appointments link
+             JOIN appointments appointment ON appointment.id=link.appointment_id
+             WHERE appointment.student_number LIKE 'B-SEN-%' AND appointment.is_published) AS "linkedLaboratory"`,
+      );
+      expect(provenance.rows[0]).toEqual({ snapshots: 5, publishedLaboratory: 6, linkedLaboratory: 6 });
 
       const databasePlaintext = await pool.query<{ containsToken: boolean }>(
         `SELECT EXISTS (
@@ -324,7 +369,7 @@ describe.skipIf(!runLifecycle)("student email notifications Browser acceptance f
       );
       await pool.query(
         `INSERT INTO exam_results (id,student_number,appointment_id,result_status)
-         VALUES ($1,$2,$3,'PENDING_UPLOAD')`,
+         VALUES ($1,$2,$3,'REQUIRES_FOLLOW_UP')`,
         [
           EXPANDED_EXAM_RESULT_ID,
           STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.students.confirmationCatchUp.studentNumber,
@@ -358,6 +403,7 @@ describe.skipIf(!runLifecycle)("student email notifications Browser acceptance f
       const rerunStatus = await getStudentEmailNotificationsFixtureStatus(pool, identity);
       expect(rerunStatus.residue).toEqual(firstStatus.residue);
       await expect(readFile(EXPANDED_STORAGE_PATH)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(readdir(dirname(EXPANDED_STORAGE_PATH))).rejects.toMatchObject({ code: "ENOENT" });
 
       const firstCleanup = await cleanupStudentEmailNotificationsFixture(pool, identity);
       expect(assertZeroStudentEmailNotificationsResidue(firstCleanup.residue)).toBe(firstCleanup.residue);

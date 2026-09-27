@@ -87,8 +87,8 @@ function generationLabel(value: Date) {
   }).format(value);
 }
 
-function appointmentLabel(date: string | null, status: HistoricalRequirementStatus) {
-  return `${date ? dateLabel(date) : "No appointment"}\n${requirementLabels[status]}`;
+function appointmentLabel(date: string | null, status: HistoricalRequirementStatus, detail?: string) {
+  return `${date ? dateLabel(date) : "No appointment"}\n${requirementLabels[status]}${detail ? `\n${detail}` : ""}`;
 }
 
 function overallFilterLabel(value: HistoricalReportFilters["overallStatus"]) {
@@ -226,8 +226,12 @@ export function buildHistoricalCompliancePdfModel(
       college: row.collegeName,
       program: `${row.programCode ? `${row.programCode} - ` : ""}${row.programName}`,
       yearLevel: row.yearLevel?.toString() ?? "Not recorded",
-      laboratory: appointmentLabel(row.laboratoryAppointmentDate, row.laboratoryStatus),
-      physicalExam: appointmentLabel(row.physicalExamAppointmentDate, row.physicalExamStatus),
+      laboratory: appointmentLabel(row.laboratoryAppointmentDate, row.laboratoryStatus,
+        row.laboratoryDocumentsFinalized === undefined ? undefined
+          : row.laboratoryDocumentsFinalized ? "Document finalized" : "No finalized document"),
+      physicalExam: appointmentLabel(row.physicalExamAppointmentDate, row.physicalExamStatus,
+        row.certificateIssued === undefined ? undefined
+          : row.certificateIssued ? `Certificate issued${row.certificateClassification ? ` - Class ${row.certificateClassification}` : ""}` : "No certificate"),
       overall: historicalComplianceLabel(row.overallStatus),
     })),
   };

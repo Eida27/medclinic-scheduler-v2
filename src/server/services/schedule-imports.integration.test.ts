@@ -1,8 +1,10 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { pool } from "@/server/db/pool";
+import { pool, transaction } from "@/server/db/pool";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import {
   cleanupTestFixtures,
+  insertTestAcademicSnapshot,
   insertTestStudent,
   TEST_REFERENCE_IDS,
 } from "@/test/integration-fixtures";
@@ -51,9 +53,6 @@ function input(contents: string, overrides: Record<string, unknown> = {}) {
 }
 
 async function cleanup() {
-  await pool.query("ALTER TABLE student_academic_snapshots DISABLE TRIGGER student_academic_snapshots_immutable");
-  await pool.query("DELETE FROM student_academic_snapshots WHERE student_number LIKE $1", [studentPattern]);
-  await pool.query("ALTER TABLE student_academic_snapshots ENABLE TRIGGER student_academic_snapshots_immutable");
   await cleanupTestFixtures(studentPattern, importPattern, importPattern);
   await pool.query(
     `DELETE FROM clinic_unavailable_dates
@@ -153,7 +152,7 @@ describe("student scheduling imports", () => {
     expect(writes.rows[0]).toEqual({ students: 0, imports: 0, appointments: 0 });
   });
 
-  it("upserts demographics in bulk and preserves an existing same-cycle appointment", async () => {
+  it("rejects a mixed import that would rewrite a published academic snapshot", async () => {
     const existingStudentNumber = "99-9101-01";
     const newStudentNumber = "99-9102-02";
     await insertTestStudent({
@@ -165,21 +164,60 @@ describe("student scheduling imports", () => {
       yearLevel: 1,
       dateOfBirth: "2000-01-01",
     });
-    const appointment = await pool.query<{ id: string }>(
-      `INSERT INTO appointments (
-         clinic_id, student_number, schedule_type, appointment_date, status,
-         is_published, created_by, schedule_pair_id, schedule_cycle_start
-       ) VALUES ($1,$2,'LABORATORY','2026-09-15','PENDING',TRUE,$3,gen_random_uuid(),2026)
-       RETURNING id`,
-      [TEST_REFERENCE_IDS.laboratoryClinic, existingStudentNumber, TEST_REFERENCE_IDS.adminUser],
-    );
+    const appointmentId = await transaction(async (client) => {
+      await insertTestAcademicSnapshot(client, {
+        studentNumber: existingStudentNumber,
+        academicYearStart: 2026,
+        importName: "Fixture - TEST-AY existing appointment provenance",
+        actor: TEST_REFERENCE_IDS.adminUser,
+      });
+      const inserted = await client.query<{ id: string }>(
+        "INSERT INTO appointments (clinic_id,student_number,schedule_type,appointment_date,status,is_published,created_by,schedule_pair_id,schedule_cycle_start,scheduling_category) VALUES ($1,$2,'LABORATORY','2026-09-15','PENDING',TRUE,$3,gen_random_uuid(),2026,'REGULAR') RETURNING id",
+        [TEST_REFERENCE_IDS.laboratoryClinic, existingStudentNumber, TEST_REFERENCE_IDS.adminUser],
+      );
+      await linkPublishedLaboratoryAppointments(client, [inserted.rows[0].id]);
+      return inserted.rows[0].id;
+    });
 
     const contents = csv(
+      existingStudentNumber + ",Updated,Alex,Q.,Jr.,College of Computer Studies,BSIT,3,2003-05-06",
+      newStudentNumber + ",New,Bea,Rosa,,College of Computer Studies,BSIT,3,2004-07-08",
+    );
+    await expect(acceptAndScheduleImport(input(contents), admin)).rejects.toMatchObject({
+      code: "SNAPSHOT_CONFLICT",
+      status: 409,
+    });
+    expect((await pool.query(
+      "SELECT first_name,last_name,year_level FROM students WHERE student_number=$1",
+      [existingStudentNumber],
+    )).rows).toEqual([{ first_name: "Old", last_name: "Profile", year_level: 1 }]);
+    expect((await pool.query(
+      "SELECT COUNT(*)::int AS count FROM students WHERE student_number=$1",
+      [newStudentNumber],
+    )).rows[0].count).toBe(0);
+    expect((await pool.query(
+      "SELECT appointment_date::text,status FROM appointments WHERE id=$1",
+      [appointmentId],
+    )).rows).toEqual([{ appointment_date: "2026-09-15", status: "PENDING" }]);
+  });
+
+  it("publishes a mixed import for an unpublished existing student and a new student", async () => {
+    const existingStudentNumber = "99-9109-09";
+    const newStudentNumber = "99-9110-10";
+    await insertTestStudent({
+      studentNumber: existingStudentNumber,
+      firstName: "Old",
+      middleName: null,
+      lastName: "Profile",
+      suffix: null,
+      yearLevel: 1,
+      dateOfBirth: "2000-01-01",
+    });
+
+    const created = await acceptAndScheduleImport(input(csv(
       `${existingStudentNumber},Updated,Alex,Q.,Jr.,College of Computer Studies,BSIT,3,2003-05-06`,
       `${newStudentNumber},New,Bea,Rosa,,College of Computer Studies,BSIT,3,2004-07-08`,
-    );
-    const created = await acceptAndScheduleImport(input(contents), admin);
-
+    )), admin);
     expect(created).toEqual({
       importId: expect.any(String),
       outcome: "PUBLISHED",
@@ -187,108 +225,85 @@ describe("student scheduling imports", () => {
       totalRows: 2,
       insertedStudentCount: 1,
       updatedStudentCount: 1,
-      skippedStudentCount: 1,
-      laboratoryItemCount: 1,
-      physicalExaminationItemCount: 1,
-      publishedAppointmentCount: 2,
+      skippedStudentCount: 0,
+      laboratoryItemCount: 2,
+      physicalExaminationItemCount: 2,
+      publishedAppointmentCount: 4,
       generatedRange: { startDate: expect.any(String), endDate: expect.any(String) },
       overflow: { pairCountBeyondPreferredWindow: 0, unscheduledStudentCount: 0 },
       displacementTotal: 0,
       batchIds: [expect.any(String), expect.any(String)],
     });
+
     const students = await pool.query(
-      `SELECT student_number, first_name, middle_name, last_name, suffix,
-              year_level, date_of_birth::text
-         FROM students WHERE student_number = ANY($1::varchar[])
-        ORDER BY student_number`,
+      `SELECT student_number,first_name,middle_name,last_name,suffix,year_level,date_of_birth::text
+         FROM students WHERE student_number=ANY($1::varchar[]) ORDER BY student_number`,
       [[existingStudentNumber, newStudentNumber]],
     );
     expect(students.rows).toEqual([
       {
-        student_number: existingStudentNumber,
-        first_name: "Alex",
-        middle_name: "Q.",
-        last_name: "Updated",
-        suffix: "Jr.",
-        year_level: 3,
-        date_of_birth: "2003-05-06",
+        student_number: existingStudentNumber, first_name: "Alex", middle_name: "Q.",
+        last_name: "Updated", suffix: "Jr.", year_level: 3, date_of_birth: "2003-05-06",
       },
       {
-        student_number: newStudentNumber,
-        first_name: "Bea",
-        middle_name: "Rosa",
-        last_name: "New",
-        suffix: null,
-        year_level: 3,
-        date_of_birth: "2004-07-08",
+        student_number: newStudentNumber, first_name: "Bea", middle_name: "Rosa",
+        last_name: "New", suffix: null, year_level: 3, date_of_birth: "2004-07-08",
       },
     ]);
-    const unchanged = await pool.query(
-      "SELECT appointment_date::text, status FROM appointments WHERE id=$1",
-      [appointment.rows[0].id],
-    );
-    expect(unchanged.rows).toEqual([{ appointment_date: "2026-09-15", status: "PENDING" }]);
-
     const group = await pool.query(
-      `SELECT student_category, academic_year_start, preferred_month,
-              accepted_at IS NOT NULL AS accepted
+      `SELECT student_category,academic_year_start,preferred_month,accepted_at IS NOT NULL AS accepted
          FROM schedule_import_groups WHERE id=$1`,
       [created.importId],
     );
     expect(group.rows).toEqual([{
-      student_category: "REGULAR",
-      academic_year_start: 2026,
-      preferred_month: null,
-      accepted: true,
+      student_category: "REGULAR", academic_year_start: 2026,
+      preferred_month: null, accepted: true,
     }]);
-    const lineage = await pool.query(
-      `SELECT appointment.schedule_type,
-              appointment.scheduling_category,
-              appointment.scheduling_accepted_at=import.accepted_at AS accepted_matches,
-              appointment.scheduling_source_row_order,
-              appointment.scheduling_window_start IS NOT NULL AS has_window_start,
-              appointment.scheduling_window_end::text
-         FROM appointments appointment
-         JOIN schedule_import_groups import ON import.id=$2
-        WHERE appointment.student_number=$1
-        ORDER BY appointment.schedule_type`,
-      [newStudentNumber, created.importId],
-    );
-    expect(lineage.rows).toEqual([
-      {
-        schedule_type: "LABORATORY",
-        scheduling_category: "REGULAR",
-        accepted_matches: true,
-        scheduling_source_row_order: 2,
-        has_window_start: true,
-        scheduling_window_end: "2027-03-31",
-      },
-      {
-        schedule_type: "PHYSICAL_EXAM",
-        scheduling_category: "REGULAR",
-        accepted_matches: true,
-        scheduling_source_row_order: 2,
-        has_window_start: true,
-        scheduling_window_end: "2027-03-31",
-      },
-    ]);
-    const publishedPair = await pool.query<{
+
+    const appointments = await pool.query<{
+      student_number: string;
       schedule_type: string;
       appointment_date: string;
+      schedule_pair_id: string;
+      scheduling_source_row_order: number;
+      scheduling_category: string;
+      accepted_matches: boolean;
+      has_window_start: boolean;
+      scheduling_window_end: string;
       status: string;
       is_published: boolean;
     }>(
-      `SELECT schedule_type,appointment_date::text,status,is_published
-         FROM appointments
-        WHERE student_number=$1
-        ORDER BY appointment_date,schedule_type`,
-      [newStudentNumber],
+      `SELECT appointment.student_number,appointment.schedule_type,
+              appointment.appointment_date::text,appointment.schedule_pair_id::text,
+              appointment.scheduling_source_row_order,appointment.scheduling_category,
+              appointment.scheduling_accepted_at=import.accepted_at AS accepted_matches,
+              appointment.scheduling_window_start IS NOT NULL AS has_window_start,
+              appointment.scheduling_window_end::text,appointment.status,appointment.is_published
+         FROM appointments appointment JOIN schedule_import_groups import ON import.id=$2
+        WHERE appointment.student_number=ANY($1::varchar[])
+        ORDER BY appointment.student_number,appointment.appointment_date`,
+      [[existingStudentNumber, newStudentNumber], created.importId],
     );
-    expect(publishedPair.rows).toEqual([
-      expect.objectContaining({ schedule_type: "LABORATORY", status: "PENDING", is_published: true }),
-      expect.objectContaining({ schedule_type: "PHYSICAL_EXAM", status: "PENDING", is_published: true }),
-    ]);
-    expect(publishedPair.rows[0].appointment_date < publishedPair.rows[1].appointment_date).toBe(true);
+    expect(appointments.rows).toHaveLength(4);
+    for (const [index, studentNumber] of [existingStudentNumber, newStudentNumber].entries()) {
+      const pair = appointments.rows.filter((row) => row.student_number === studentNumber);
+      expect(pair).toHaveLength(2);
+      expect(pair.map((row) => row.schedule_type)).toEqual(["LABORATORY", "PHYSICAL_EXAM"]);
+      expect(pair[0].appointment_date < pair[1].appointment_date).toBe(true);
+      expect(pair[0].schedule_pair_id).toBe(pair[1].schedule_pair_id);
+      for (const row of pair) {
+        expect(row).toMatchObject({
+          scheduling_source_row_order: index + 1,
+          scheduling_category: "REGULAR",
+          accepted_matches: true,
+          has_window_start: true,
+          scheduling_window_end: "2027-03-31",
+          status: "PENDING",
+          is_published: true,
+        });
+      }
+    }
+
     const snapshots = await pool.query(
       `SELECT student_number,student_name,college_name,program_code,program_name,
               year_level,source_import_group_id::text
@@ -299,39 +314,29 @@ describe("student scheduling imports", () => {
     );
     expect(snapshots.rows).toEqual([
       {
-        student_number: existingStudentNumber,
-        student_name: "Updated, Alex Q. (Jr.)",
-        college_name: "College of Computer Studies",
-        program_code: "BSIT",
-        program_name: "Bachelor of Science in Information Technology",
-        year_level: 3,
+        student_number: existingStudentNumber, student_name: "Updated, Alex Q. (Jr.)",
+        college_name: "College of Computer Studies", program_code: "BSIT",
+        program_name: "Bachelor of Science in Information Technology", year_level: 3,
         source_import_group_id: created.importId,
       },
       {
-        student_number: newStudentNumber,
-        student_name: "New, Bea Rosa",
-        college_name: "College of Computer Studies",
-        program_code: "BSIT",
-        program_name: "Bachelor of Science in Information Technology",
-        year_level: 3,
+        student_number: newStudentNumber, student_name: "New, Bea Rosa",
+        college_name: "College of Computer Studies", program_code: "BSIT",
+        program_name: "Bachelor of Science in Information Technology", year_level: 3,
         source_import_group_id: created.importId,
       },
     ]);
     await pool.query(
-      `UPDATE students SET college_id=$2,program_id=$3,year_level=4
-        WHERE student_number=$1`,
-      [newStudentNumber, TEST_REFERENCE_IDS.college, TEST_REFERENCE_IDS.program],
+      "UPDATE students SET last_name='Live Profile',year_level=4 WHERE student_number=$1",
+      [newStudentNumber],
     );
     const historicalAfterProfileEdit = await pool.query(
-      `SELECT student_name,college_name,program_code,year_level
+      `SELECT student_name,year_level,source_import_group_id::text
          FROM student_academic_snapshots WHERE student_number=$1 AND academic_year_start=2026`,
       [newStudentNumber],
     );
     expect(historicalAfterProfileEdit.rows).toEqual([{
-      student_name: "New, Bea Rosa",
-      college_name: "College of Computer Studies",
-      program_code: "BSIT",
-      year_level: 3,
+      student_name: "New, Bea Rosa", year_level: 3, source_import_group_id: created.importId,
     }]);
   });
 

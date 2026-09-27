@@ -4,7 +4,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { pool } from "@/server/db/pool";
+import { pool, transaction } from "@/server/db/pool";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import {
   claimStudentResultStorageCleanupIntentForEagerDeletion,
@@ -19,7 +20,7 @@ import {
   removeStudentResultFile,
 } from "@/server/services/student-result-submissions.service";
 import { LocalResultStorage } from "@/server/storage/local-result-storage";
-import { cleanupTestFixtures, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
+import { cleanupTestFixtures, insertTestAcademicSnapshot, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import {
   cleanupExpiredResultDrafts,
   RESULT_DRAFT_CLEANUP_INTERVAL_MS,
@@ -29,6 +30,7 @@ import {
 const studentPattern = "99-93%";
 let storageRoot = "";
 let storage: LocalResultStorage;
+let ownsAcademicYear = false;
 
 type CleanupGlobal = typeof globalThis & { __medclinicResultDraftCleanupWorkerStarted?: boolean };
 const admin = {
@@ -50,17 +52,35 @@ async function cleanup() {
 
 async function draft(studentNumber: string, filename = "draft.pdf") {
   await insertTestStudent({ studentNumber, firstName: "Cleanup", lastName: "Student", yearLevel: 3 });
-  const appointment = await pool.query<{ id: string }>(
-    `INSERT INTO appointments (
-       clinic_id, student_number, schedule_type, appointment_date,
-       status, is_published, created_by
-     ) VALUES ($1,$2,'LABORATORY','2027-08-02','COMPLETED',TRUE,$3) RETURNING id`,
-    [TEST_REFERENCE_IDS.laboratoryClinic, studentNumber, TEST_REFERENCE_IDS.adminUser],
-  );
-  const draft = await getStudentResultSubmission(studentNumber, appointment.rows[0].id);
+  const appointmentId = await transaction(async (client) => {
+    await insertTestAcademicSnapshot(client, {
+      studentNumber,
+      academicYearStart: 2026,
+      importName: `TEST-DRAFT-CLEANUP-${studentNumber}`,
+      actor: TEST_REFERENCE_IDS.adminUser,
+    });
+    const appointment = await client.query<{ id: string }>(
+      `INSERT INTO appointments (
+         clinic_id, student_number, schedule_type, appointment_date,
+         status, is_published, schedule_cycle_start, scheduling_category, created_by
+       ) VALUES ($1,$2,'LABORATORY','2026-08-03','COMPLETED',TRUE,2026,'REGULAR',$3)
+       RETURNING id`,
+      [TEST_REFERENCE_IDS.laboratoryClinic, studentNumber, TEST_REFERENCE_IDS.adminUser],
+    );
+    await linkPublishedLaboratoryAppointments(client, [appointment.rows[0].id]);
+    await client.query(
+      `UPDATE laboratory_checklist_items SET verified_at=clock_timestamp(),
+              verified_by=$2,verification_source='INTERNAL'
+        WHERE checklist_id=(SELECT checklist_id FROM laboratory_checklist_appointments
+                             WHERE appointment_id=$1)`,
+      [appointment.rows[0].id, TEST_REFERENCE_IDS.clinicStaffUser],
+    );
+    return appointment.rows[0].id;
+  });
+  const draft = await getStudentResultSubmission(studentNumber, appointmentId);
   const refreshed = await addStudentResultFiles(
     studentNumber,
-    appointment.rows[0].id,
+    appointmentId,
     draft.id,
     [{
       filename,
@@ -70,7 +90,7 @@ async function draft(studentNumber: string, filename = "draft.pdf") {
     storage,
   );
   const file = refreshed.files[0];
-  return { appointmentId: appointment.rows[0].id, file };
+  return { appointmentId, file };
 }
 
 async function editDraft(studentNumber: string) {
@@ -104,6 +124,13 @@ beforeAll(async () => {
   storageRoot = await mkdtemp(join(tmpdir(), "medclinic-draft-cleanup-"));
   storage = new LocalResultStorage(storageRoot);
   await cleanup();
+  const year = await pool.query(
+    `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+     VALUES (2026,'2027-07-31',$1,$1)
+     ON CONFLICT (start_year) DO NOTHING RETURNING start_year`,
+    [TEST_REFERENCE_IDS.adminUser],
+  );
+  ownsAcademicYear = year.rowCount === 1;
 });
 beforeEach(() => {
   delete (globalThis as CleanupGlobal).__medclinicResultDraftCleanupWorkerStarted;
@@ -111,6 +138,7 @@ beforeEach(() => {
 afterEach(cleanup);
 afterAll(async () => {
   await cleanupTestFixtures(studentPattern, "TEST-DRAFT-CLEANUP%", "TEST-DRAFT-CLEANUP%");
+  if (ownsAcademicYear) await pool.query("DELETE FROM academic_years WHERE start_year=2026");
   await rm(storageRoot, { recursive: true, force: true });
   await pool.end();
 });
@@ -118,10 +146,10 @@ afterAll(async () => {
 describe("result draft cleanup", () => {
   it("expires exactly seven inactive days, deletes private bytes, audits aggregates, and is idempotent", async () => {
     const fixture = await draft("99-9301-01");
-    const now = new Date("2027-09-08T00:00:00.000Z");
+    const now = new Date("2026-10-08T00:00:00.000Z");
     await pool.query(
       "UPDATE student_result_submissions SET last_activity_at=$2 WHERE id=$1",
-      [fixture.file.submissionId, new Date("2027-09-01T00:00:00.000Z")],
+      [fixture.file.submissionId, new Date("2026-10-01T00:00:00.000Z")],
     );
     await expect(cleanupExpiredResultDrafts(now, storage)).resolves.toEqual({ expiredDraftCount: 1, deletionFailureCount: 0 });
     await expect(storage.read(fixture.file.storageKey)).rejects.toThrow();
@@ -143,7 +171,7 @@ describe("result draft cleanup", () => {
       finalized.file.submissionId,
       storage,
     );
-    const now = new Date("2027-09-08T00:00:00.000Z");
+    const now = new Date("2026-10-08T00:00:00.000Z");
     await pool.query(
       `UPDATE student_result_submissions
           SET last_activity_at=CASE WHEN id=$1 THEN $3::timestamptz ELSE $4::timestamptz END
@@ -151,8 +179,8 @@ describe("result draft cleanup", () => {
       [
         active.file.submissionId,
         [active.file.submissionId, finalized.file.submissionId],
-        new Date("2027-09-01T00:00:01.000Z"),
-        new Date("2027-08-01T00:00:00.000Z"),
+        new Date("2026-10-01T00:00:01.000Z"),
+        new Date("2026-09-01T00:00:00.000Z"),
       ],
     );
     await expect(cleanupExpiredResultDrafts(now, storage)).resolves.toEqual({ expiredDraftCount: 0, deletionFailureCount: 0 });
@@ -162,9 +190,9 @@ describe("result draft cleanup", () => {
 
   it("leaves failed deletions retryable and succeeds on a later idempotent pass", async () => {
     const fixture = await draft("99-9304-04", "retry.pdf");
-    const now = new Date("2027-09-08T00:00:00.000Z");
+    const now = new Date("2026-10-08T00:00:00.000Z");
     await pool.query(
-      "UPDATE student_result_submissions SET last_activity_at='2027-09-01T00:00:00Z' WHERE id=$1",
+      "UPDATE student_result_submissions SET last_activity_at='2026-10-01T00:00:00Z' WHERE id=$1",
       [fixture.file.submissionId],
     );
     const failingStorage = {
@@ -472,9 +500,9 @@ describe("result draft cleanup", () => {
 
   it("retires a seven-day edit before retrying cleanup without touching its official submission", async () => {
     const fixture = await editDraft("99-9307-07");
-    const now = new Date("2027-09-08T00:00:00.000Z");
+    const now = new Date("2026-10-08T00:00:00.000Z");
     await pool.query(
-      "UPDATE student_result_submissions SET last_activity_at='2027-09-01T00:00:00Z' WHERE id=$1",
+      "UPDATE student_result_submissions SET last_activity_at='2026-10-01T00:00:00Z' WHERE id=$1",
       [fixture.edit.id],
     );
     const failingStorage = {
@@ -542,12 +570,12 @@ describe("result draft cleanup", () => {
   it("commits one expired scope before waiting on another scope's advisory lock", async () => {
     const first = await draft("99-9308-08", "first-scope.pdf");
     const second = await draft("99-9309-09", "second-scope.pdf");
-    const now = new Date("2027-09-08T00:00:00.000Z");
+    const now = new Date("2026-10-08T00:00:00.000Z");
     await pool.query(
       `UPDATE student_result_submissions
           SET last_activity_at=CASE
-            WHEN id=$1 THEN '2027-08-30T00:00:00Z'::timestamptz
-            ELSE '2027-08-31T00:00:00Z'::timestamptz
+            WHEN id=$1 THEN '2026-09-30T00:00:00Z'::timestamptz
+            ELSE '2026-10-01T00:00:00Z'::timestamptz
           END
         WHERE id = ANY($2::uuid[])`,
       [first.file.submissionId, [first.file.submissionId, second.file.submissionId]],

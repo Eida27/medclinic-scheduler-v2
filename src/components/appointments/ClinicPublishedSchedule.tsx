@@ -1,6 +1,10 @@
+"use client";
+
 import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 import { AppointmentPagination } from "@/components/appointments/AppointmentPagination";
-import { AppointmentQuickStatusButton } from "@/components/appointments/AppointmentQuickStatusButton";
+import { BulkReplacementDialog, type SelectedReplacement } from "@/components/appointments/BulkReplacementDialog";
+import { LaboratoryChecklist } from "@/components/appointments/LaboratoryChecklist";
 import type { AppointmentListSort } from "@/components/appointments/appointment-list-sort";
 import { operationalStatusLabel } from "@/components/appointments/status-labels";
 import { Card } from "@/components/ui/Card";
@@ -18,9 +22,13 @@ type ClinicAppointment = {
   isManuallyLocked: boolean;
   completedFromStatus: "PENDING" | "NO_SHOW" | null;
   laboratoryStatus?: "PENDING" | "COMPLETED" | "NO_SHOW" | null;
+  laboratoryVerifiedTests?: number | null;
+  laboratoryRequiredTests?: number | null;
   locationName?: string;
   isOvpsaFirstYear?: boolean;
   displayStatus?: string;
+  academicYearEnded?: boolean;
+  updatedAt?: Date | string;
 };
 
 type ClinicPublishedScheduleProps = {
@@ -35,9 +43,11 @@ type ClinicPublishedScheduleProps = {
     appointmentDate?: string;
     status?: string;
     sort?: AppointmentListSort;
+    academicYearStart?: string;
   };
   appointments: ClinicAppointment[];
   showLaboratoryStatus?: boolean;
+  canBulkReplace?: boolean;
 };
 
 function laboratoryStatusBadge(status: ClinicAppointment["laboratoryStatus"]) {
@@ -67,12 +77,51 @@ export function ClinicPublishedSchedule({
   filters,
   appointments,
   showLaboratoryStatus = false,
+  canBulkReplace = false,
 }: ClinicPublishedScheduleProps) {
+  const filterKey = useMemo(() => JSON.stringify({ basePath, studentNumber: filters.studentNumber,
+    appointmentDate: filters.appointmentDate, status: filters.status,
+    academicYearStart: filters.academicYearStart }), [basePath, filters.studentNumber,
+      filters.appointmentDate, filters.status, filters.academicYearStart]);
+  const selectionStorageKey = `bulk-replacements:${basePath}`;
+  const [selection, setSelection] = useState<{
+    filterKey: string; rows: Record<string, SelectedReplacement>;
+  }>({ filterKey, rows: {} });
+  const selected = selection.filterKey === filterKey ? selection.rows : {};
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      try {
+        const saved = sessionStorage.getItem(selectionStorageKey);
+        const parsed = saved ? JSON.parse(saved) as { filterKey: string;
+          rows: Record<string, SelectedReplacement> } : null;
+        const next = parsed?.filterKey === filterKey && parsed.rows
+          ? parsed : { filterKey, rows: {} };
+        setSelection(next);
+        if (parsed?.filterKey !== filterKey) {
+          sessionStorage.setItem(selectionStorageKey, JSON.stringify(next));
+        }
+      } catch { setSelection({ filterKey, rows: {} }); }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [filterKey, selectionStorageKey]);
+  function updateSelection(next: Record<string, SelectedReplacement>) {
+    const value = { filterKey, rows: next };
+    setSelection(value);
+    try { sessionStorage.setItem(selectionStorageKey, JSON.stringify(value)); } catch { /* private browsing */ }
+  }
+  const eligible = appointments.filter((item) => canBulkReplace
+    && ["PENDING", "NO_SHOW"].includes(item.status) && !item.isOvpsaFirstYear
+    && !item.academicYearEnded && item.updatedAt);
+  const selectedRows = Object.values(selected);
   return (
     <>
       <PageHeader title={title} description={description} />
       <Card>
-        <form className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <form className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+          <label className="grid gap-1.5 text-sm font-bold text-ink">
+            <span>Academic year (blank for current)</span>
+            <Input name="academicYearStart" type="number" min="1900" max="9999" defaultValue={filters.academicYearStart} placeholder="Current" />
+          </label>
           <label className="grid gap-1.5 text-sm font-bold text-ink">
             <span>Student name or number</span>
             <Input
@@ -110,6 +159,26 @@ export function ClinicPublishedSchedule({
           </button>
         </form>
       </Card>
+      {filters.academicYearStart ? <p className="text-sm font-semibold text-muted">Academic year {filters.academicYearStart}–{Number(filters.academicYearStart) + 1} · historical records may be shown.</p> : null}
+      {canBulkReplace ? <Card className="space-y-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <button type="button" className="rounded-xl border border-line px-4 py-2 text-sm font-semibold"
+            onClick={() => {
+              const next = { ...selected };
+              for (const item of eligible) {
+                if (Object.keys(next).length >= 100) break;
+                next[item.id] = { id: item.id, expectedUpdatedAt: new Date(item.updatedAt!).toISOString() };
+              }
+              updateSelection(next);
+            }}>Select eligible on this page</button>
+          <button type="button" className="text-sm font-semibold text-cpu-navy underline"
+            onClick={() => updateSelection({})}>Clear selection</button>
+          <span className="text-sm text-muted">{selectedRows.length} selected (maximum 100)</span>
+        </div>
+        {selectedRows.length ? <BulkReplacementDialog key={JSON.stringify(selectedRows)} selected={selectedRows}
+          onRemove={(id) => { const next = { ...selected }; delete next[id]; updateSelection(next); }}
+          onDone={() => updateSelection({})} /> : null}
+      </Card> : null}
       <Card className="overflow-hidden p-0">
         {appointments.length === 0 ? (
           <p className="p-8 text-center text-sm text-muted">{emptyMessage}</p>
@@ -118,6 +187,7 @@ export function ClinicPublishedSchedule({
             <table className="w-full text-left text-sm">
               <thead className="bg-cpu-navy-soft/70">
                 <tr>
+                  {canBulkReplace ? <th className="px-3 py-3">Select</th> : null}
                   <th className="px-5 py-3">Student</th>
                   <th className="px-5 py-3">Service</th>
                   <th className="px-5 py-3">Date</th>
@@ -130,13 +200,23 @@ export function ClinicPublishedSchedule({
               <tbody className="divide-y divide-line">
                 {appointments.map((appointment) => {
                   const laboratoryStatus = laboratoryStatusBadge(appointment.laboratoryStatus);
-                  const completionBlockReason = appointment.scheduleType === "PHYSICAL_EXAM"
-                    && ["PENDING", "NO_SHOW"].includes(appointment.status)
-                    && appointment.laboratoryStatus !== "COMPLETED"
-                    ? physicalCompletionBlockReason
-                    : undefined;
                   return (
                     <tr key={appointment.id} className="transition hover:bg-cpu-navy-soft/35">
+                    {canBulkReplace ? <td className="px-3 py-4">
+                      <input type="checkbox" aria-label={`Select ${appointment.studentName} for replacement`}
+                        checked={Boolean(selected[appointment.id])}
+                        disabled={!eligible.some((item) => item.id === appointment.id) || (!selected[appointment.id] && selectedRows.length >= 100)}
+                        title={appointment.academicYearEnded ? "Academic year ended" : appointment.isOvpsaFirstYear
+                          ? "Use OVPSA batch reschedule" : !["PENDING", "NO_SHOW"].includes(appointment.status)
+                            ? "This appointment cannot be replaced" : undefined}
+                        onChange={(event) => {
+                          const next = { ...selected };
+                          if (event.target.checked) next[appointment.id] = { id: appointment.id,
+                            expectedUpdatedAt: new Date(appointment.updatedAt!).toISOString() };
+                          else delete next[appointment.id];
+                          updateSelection(next);
+                        }} />
+                    </td> : null}
                     <td className="px-5 py-4">
                       <Link
                         className="block font-bold text-cpu-navy hover:underline"
@@ -158,6 +238,9 @@ export function ClinicPublishedSchedule({
                         <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${laboratoryStatus.className}`}>
                           {laboratoryStatus.label}
                         </span>
+                        {appointment.laboratoryRequiredTests ? <p className="mt-1 text-xs text-muted">
+                          {appointment.laboratoryVerifiedTests ?? 0}/{appointment.laboratoryRequiredTests} verified
+                        </p> : null}
                       </td>
                     ) : null}
                     <td className="px-5 py-4">
@@ -166,12 +249,22 @@ export function ClinicPublishedSchedule({
                           <span className="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-950">
                             {appointment.displayStatus ?? operationalStatusLabel(appointment.status)}
                           </span>
-                        ) : <AppointmentQuickStatusButton
-                            appointmentId={appointment.id}
-                            status={appointment.status}
-                            completedFromStatus={appointment.completedFromStatus}
-                            completionBlockReason={completionBlockReason}
-                          />}
+                        ) : appointment.scheduleType === "LABORATORY" ? (
+                          <LaboratoryChecklist appointmentId={appointment.id} compact />
+                        ) : (
+                          <>
+                            <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-800">
+                              {operationalStatusLabel(appointment.status)}
+                            </span>
+                            {appointment.status !== "COMPLETED" ? (
+                              appointment.laboratoryStatus === "COMPLETED" ? (
+                                <Link className="text-xs font-semibold text-cpu-navy underline" href={`${basePath}/${appointment.id}`}>
+                                  Complete examination
+                                </Link>
+                              ) : <span className="text-xs text-muted">{physicalCompletionBlockReason}</span>
+                            ) : null}
+                          </>
+                        )}
                         {appointment.isManuallyLocked ? (
                           <span
                             aria-label="Appointment manually locked"

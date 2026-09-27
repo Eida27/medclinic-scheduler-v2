@@ -7,6 +7,8 @@ npm run db:migrate
 npm run db:seed
 ```
 
+Migration `028_final_defense_clinical_workflows.sql` is for a fresh clinical database. It rejects preexisting appointment/result data because CBC, Urine, Stool, X-ray, physician findings, and certificate signatures cannot be inferred. It adds immutable Laboratory checklist lineage, physician profile revisions, certificate JPEG revisions, and atomic clinical request outcomes. Student result submissions are Laboratory-only. Validate a clean installation with `npm run test:migrations:empty` against a disposable database; the runner must apply 28 migrations first and 0 on replay.
+
 ## CPU reference catalog migration
 
 Migration `012_cpu_reference_catalog.sql` makes the 13-college/48-program CPU workbook catalog authoritative, deletes noncanonical catalog rows, removes `Graduating`, and ranks OJT/Tour/Regular as 1/2/3. For an existing database, back up both PostgreSQL and `RESULT_UPLOAD_ROOT`, stop application/worker writes, and run the guarded cleanup during an exclusive maintenance window:

@@ -1,10 +1,12 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { pool } from "@/server/db/pool";
+import { pool, transaction } from "@/server/db/pool";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import { loadAuthoritativeScheduleState } from "@/server/repositories/schedule-state.repository";
 import { fingerprintScheduleState } from "@/server/schedule/schedule-notifications";
 import {
   cleanupTestFixtures,
+  insertTestAcademicSnapshot,
   insertTestStudent,
   TEST_REFERENCE_IDS,
 } from "@/test/integration-fixtures";
@@ -15,6 +17,7 @@ import {
 } from "./admin-email-deliveries.service";
 
 const studentPattern = "ADM-DEL-%";
+const createdYears: number[] = [];
 
 async function cleanup() {
   await pool.query("DELETE FROM clinic_closure_manual_cases WHERE student_number LIKE $1", [studentPattern]);
@@ -67,6 +70,25 @@ async function verifiedStudent(studentNumber: string) {
   );
 }
 
+async function publishedLaboratory(studentNumber: string, appointmentDate: string, cycleStart: number) {
+  return transaction(async (client) => {
+    await insertTestAcademicSnapshot(client, {
+      studentNumber, academicYearStart: cycleStart,
+      importName: `ADM-DEL-${studentNumber} provenance`,
+      actor: TEST_REFERENCE_IDS.adminUser,
+    });
+    const appointment = await client.query<{ id: string }>(
+      `INSERT INTO appointments (
+         clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+         schedule_cycle_start,scheduling_category
+       ) VALUES ($1,$2,'LABORATORY',$3,'PENDING',TRUE,$4,'REGULAR') RETURNING id::text`,
+      [TEST_REFERENCE_IDS.laboratoryClinic, studentNumber, appointmentDate, cycleStart],
+    );
+    await linkPublishedLaboratoryAppointments(client, [appointment.rows[0].id]);
+    return appointment;
+  });
+}
+
 async function currentScheduleFingerprint(studentNumber: string) {
   const client = await pool.connect();
   try {
@@ -95,12 +117,7 @@ async function failedSchedule(studentNumber: string, fingerprint: string, error 
 }
 
 async function openManualResolutionFixture(studentNumber: string, appointmentDate: string) {
-  const appointment = await pool.query<{ id: string }>(
-    `INSERT INTO appointments (
-       clinic_id,student_number,schedule_type,appointment_date,status,is_published,schedule_cycle_start
-     ) VALUES ($1,$2,'LABORATORY',$3,'PENDING',TRUE,2096) RETURNING id::text`,
-    [TEST_REFERENCE_IDS.laboratoryClinic, studentNumber, appointmentDate],
-  );
+  const appointment = await publishedLaboratory(studentNumber, appointmentDate, 2096);
   const closure = await pool.query<{ id: string }>(
     `INSERT INTO clinic_closure_groups (
        start_date,end_date,category,reason,created_by,creation_batch_id,recovery_mode
@@ -119,10 +136,21 @@ async function openManualResolutionFixture(studentNumber: string, appointmentDat
   return { appointmentId: appointment.rows[0].id, manualCaseId: manualCase.rows[0].id };
 }
 
-beforeAll(cleanup);
+beforeAll(async () => {
+  await cleanup();
+  const years = await pool.query<{ start_year: number }>(
+    `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+     VALUES (2094,'2095-07-31',$1,$1),(2095,'2096-07-31',$1,$1),
+            (2096,'2097-07-31',$1,$1)
+     ON CONFLICT (start_year) DO NOTHING RETURNING start_year`,
+    [TEST_REFERENCE_IDS.adminUser],
+  );
+  createdYears.push(...years.rows.map((row) => row.start_year));
+});
 afterEach(cleanup);
 afterAll(async () => {
   await cleanup();
+  if (createdYears.length) await pool.query("DELETE FROM academic_years WHERE start_year=ANY($1::int[])", [createdYears]);
   await pool.end();
 });
 
@@ -243,12 +271,7 @@ describe("administrator email-delivery service", () => {
 
   it("rejects a stale schedule retry with safe current state and queues one idempotent replacement", async () => {
     await verifiedStudent("ADM-DEL-STALE");
-    await pool.query(
-      `INSERT INTO appointments (
-         clinic_id,student_number,schedule_type,appointment_date,status,is_published,schedule_cycle_start
-       ) VALUES ($1,'ADM-DEL-STALE','LABORATORY','2094-09-11','PENDING',TRUE,2094)`,
-      [TEST_REFERENCE_IDS.laboratoryClinic],
-    );
+    await publishedLaboratory("ADM-DEL-STALE", "2094-09-11", 2094);
     const id = await failedSchedule("ADM-DEL-STALE", "c".repeat(64), "connect ECONNREFUSED smtp.internal:587");
 
     await expect(retryAdminEmailDelivery(id, TEST_REFERENCE_IDS.adminUser)).rejects.toMatchObject({
@@ -459,12 +482,7 @@ describe("administrator email-delivery service", () => {
   it("waits for a schedule mutation and rechecks the fingerprint before resetting", async () => {
     const studentNumber = "ADM-DEL-SRACE";
     await verifiedStudent(studentNumber);
-    const appointment = await pool.query<{ id: string }>(
-      `INSERT INTO appointments (
-         clinic_id,student_number,schedule_type,appointment_date,status,is_published,schedule_cycle_start
-       ) VALUES ($1,$2,'LABORATORY','2095-03-03','PENDING',TRUE,2095) RETURNING id::text`,
-      [TEST_REFERENCE_IDS.laboratoryClinic, studentNumber],
-    );
+    const appointment = await publishedLaboratory(studentNumber, "2095-03-03", 2095);
     const fingerprint = await currentScheduleFingerprint(studentNumber);
     const outboxId = await failedSchedule(studentNumber, fingerprint);
     const blocker = await pool.connect();
@@ -498,12 +516,7 @@ describe("administrator email-delivery service", () => {
   it("waits for a schedule mutation before queueing the authoritative current state", async () => {
     const studentNumber = "ADM-DEL-QRACE";
     await verifiedStudent(studentNumber);
-    const appointment = await pool.query<{ id: string }>(
-      `INSERT INTO appointments (
-         clinic_id,student_number,schedule_type,appointment_date,status,is_published,schedule_cycle_start
-       ) VALUES ($1,$2,'LABORATORY','2095-04-04','PENDING',TRUE,2095) RETURNING id::text`,
-      [TEST_REFERENCE_IDS.laboratoryClinic, studentNumber],
-    );
+    const appointment = await publishedLaboratory(studentNumber, "2095-04-04", 2095);
     const fingerprint = await currentScheduleFingerprint(studentNumber);
     const outboxId = await failedSchedule(studentNumber, fingerprint);
     const blocker = await pool.connect();

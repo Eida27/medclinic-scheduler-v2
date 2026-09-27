@@ -2,6 +2,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { AppError } from "@/lib/errors";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import type { AppointmentScheduleType, ClinicCode } from "@/server/clinics";
 import { query, transaction } from "@/server/db/pool";
 import { writeAudit } from "@/server/repositories/audit.repository";
@@ -758,6 +759,7 @@ export async function createScheduleImport(
       "PHYSICAL_EXAM",
       assignments.assignments.map((assignment) => assignment.physicalExamDate),
     );
+    await linkPublishedLaboratoryAppointments(client, appointmentIds);
     if (appointmentIds.length) {
       await client.query(
         `INSERT INTO appointment_status_logs (appointment_id, old_status, new_status, changed_by)

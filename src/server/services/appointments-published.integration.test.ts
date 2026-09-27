@@ -1,6 +1,8 @@
 // @vitest-environment node
+import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
-import { pool } from "@/server/db/pool";
+import { pool, transaction } from "@/server/db/pool";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import {
   getPublishedAppointment,
   listAppointments,
@@ -10,6 +12,7 @@ import { getStudentPortalSchedule } from "@/server/repositories/student-portal.r
 import {
   cleanupTestFixtures,
   insertTestStudent,
+  insertTestScheduleImportGroup,
   TEST_REFERENCE_IDS,
 } from "@/test/integration-fixtures";
 import type { SessionUser } from "@/types/roles";
@@ -29,14 +32,37 @@ const studentNumber = "TEST-PUB-0001";
 const studentPattern = "TEST-PUB-%";
 const batchPattern = "TEST published guards%";
 const importPattern = "TEST published guards%";
+const createdYears = new Set<number>();
 async function cleanup() {
   await cleanupTestFixtures(studentPattern, batchPattern, importPattern);
+}
+async function addAcademicSnapshot(student: string, year: number) {
+  const created = await pool.query(`INSERT INTO academic_years
+    (start_year,closing_date,created_by,updated_by)
+    VALUES ($1,$2,$3,$3) ON CONFLICT (start_year) DO NOTHING RETURNING start_year`,
+  [year, `${year + 1}-07-31`, admin.userId]);
+  if (created.rowCount) createdYears.add(year);
+  await transaction(async (client) => {
+    const importId = await insertTestScheduleImportGroup(client, {
+      name: `TEST published guards ${year}`, sourceFilename: `${randomUUID()}.csv`,
+      academicYearStart: year, importMode: "STANDARD", actor: admin.userId,
+    });
+    await client.query(`INSERT INTO student_academic_snapshots
+      (student_number,academic_year_start,student_name,college_id,college_name,
+       program_id,program_code,program_name,year_level,source_import_group_id)
+      SELECT student_number,$2,first_name || ' ' || last_name,college_id,
+             'College of Computer Studies',program_id,'BSIT','BSIT',year_level,$3
+        FROM students WHERE student_number=$1`, [student, year, importId]);
+  });
 }
 
 beforeEach(cleanup);
 afterEach(cleanup);
 afterAll(async () => {
   await cleanup();
+  for (const year of createdYears) {
+    await pool.query("DELETE FROM academic_years WHERE start_year=$1", [year]);
+  }
   await pool.end();
 });
 
@@ -49,21 +75,24 @@ describe("published-only appointment access", () => {
       lastName: "Student",
       yearLevel: 4,
     });
-    await pool.query(
+    await addAcademicSnapshot(pairedStudent, 2034);
+    await addAcademicSnapshot(pairedStudent, 2035);
+    await transaction(async (client) => {
+    await client.query(
       `INSERT INTO appointments (
          id,clinic_id,student_number,schedule_type,appointment_date,status,is_published,
-         schedule_pair_id,schedule_cycle_start,rescheduled_from,created_by,updated_by,created_at
+         schedule_pair_id,schedule_cycle_start,scheduling_category,rescheduled_from,created_by,updated_by,created_at
        ) VALUES
-         ('10000000-0000-4000-8000-000000000001',$2,$1,'PHYSICAL_EXAM','2035-08-10','COMPLETED',TRUE,'30000000-0000-4000-8000-000000000001',2035,NULL,$3,$3,'2035-01-01T00:00:00Z'),
-         ('10000000-0000-4000-8000-000000000002',$2,$1,'PHYSICAL_EXAM','2035-08-11','COMPLETED',TRUE,'30000000-0000-4000-8000-000000000002',2035,NULL,$3,$3,'2035-01-01T00:00:00Z'),
-         ('10000000-0000-4000-8000-000000000003',$2,$1,'PHYSICAL_EXAM','2035-08-12','NO_SHOW',TRUE,NULL,2035,NULL,$3,$3,'2035-01-01T00:00:00Z'),
-         ('10000000-0000-4000-8000-000000000004',$2,$1,'PHYSICAL_EXAM','2035-08-13','PENDING',TRUE,'30000000-0000-4000-8000-000000000003',2035,NULL,$3,$3,'2035-01-01T00:00:00Z'),
-         ('20000000-0000-4000-8000-000000000001',$4,$1,'LABORATORY','2035-08-01','PENDING',TRUE,'30000000-0000-4000-8000-000000000001',2035,NULL,$3,$3,'2035-01-01T00:00:00Z'),
-         ('20000000-0000-4000-8000-000000000002',$4,$1,'LABORATORY','2035-08-02','NO_SHOW',TRUE,'30000000-0000-4000-8000-000000000002',2035,NULL,$3,$3,'2035-01-01T00:00:00Z'),
-         ('20000000-0000-4000-8000-000000000003',$4,$1,'LABORATORY','2035-08-03','COMPLETED',TRUE,'30000000-0000-4000-8000-000000000002',2035,'20000000-0000-4000-8000-000000000002',$3,$3,'2035-01-02T00:00:00Z'),
-         ('20000000-0000-4000-8000-000000000004',$4,$1,'LABORATORY','2035-08-04','COMPLETED',TRUE,NULL,2035,NULL,$3,$3,'2035-01-01T00:00:00Z'),
-         ('20000000-0000-4000-8000-000000000005',$4,$1,'LABORATORY','2035-08-04','NO_SHOW',TRUE,NULL,2035,NULL,$3,$3,'2035-01-03T00:00:00Z'),
-         ('20000000-0000-4000-8000-000000000006',$4,$1,'LABORATORY','2035-08-04','PENDING',TRUE,NULL,2034,NULL,$3,$3,'2035-01-04T00:00:00Z')`,
+         ('10000000-0000-4000-8000-000000000001',$2,$1,'PHYSICAL_EXAM','2035-08-10','NO_SHOW',TRUE,'30000000-0000-4000-8000-000000000001',2035,'REGULAR',NULL,$3,$3,'2035-01-01T00:00:00Z'),
+         ('10000000-0000-4000-8000-000000000002',$2,$1,'PHYSICAL_EXAM','2035-08-11','NO_SHOW',TRUE,'30000000-0000-4000-8000-000000000002',2035,'REGULAR',NULL,$3,$3,'2035-01-01T00:00:00Z'),
+         ('10000000-0000-4000-8000-000000000003',$2,$1,'PHYSICAL_EXAM','2035-08-12','NO_SHOW',TRUE,NULL,2035,'REGULAR',NULL,$3,$3,'2035-01-01T00:00:00Z'),
+         ('10000000-0000-4000-8000-000000000004',$2,$1,'PHYSICAL_EXAM','2035-08-13','PENDING',TRUE,'30000000-0000-4000-8000-000000000003',2035,'REGULAR',NULL,$3,$3,'2035-01-01T00:00:00Z'),
+         ('20000000-0000-4000-8000-000000000001',$4,$1,'LABORATORY','2035-08-01','PENDING',TRUE,'30000000-0000-4000-8000-000000000001',2035,'REGULAR',NULL,$3,$3,'2035-01-01T00:00:00Z'),
+         ('20000000-0000-4000-8000-000000000002',$4,$1,'LABORATORY','2035-08-02','NO_SHOW',TRUE,'30000000-0000-4000-8000-000000000002',2035,'REGULAR',NULL,$3,$3,'2035-01-01T00:00:00Z'),
+         ('20000000-0000-4000-8000-000000000003',$4,$1,'LABORATORY','2035-08-03','COMPLETED',TRUE,'30000000-0000-4000-8000-000000000002',2035,'REGULAR','20000000-0000-4000-8000-000000000002',$3,$3,'2035-01-02T00:00:00Z'),
+         ('20000000-0000-4000-8000-000000000004',$4,$1,'LABORATORY','2035-08-04','COMPLETED',TRUE,NULL,2035,'REGULAR',NULL,$3,$3,'2035-01-01T00:00:00Z'),
+         ('20000000-0000-4000-8000-000000000005',$4,$1,'LABORATORY','2035-08-04','NO_SHOW',TRUE,NULL,2035,'REGULAR',NULL,$3,$3,'2035-01-03T00:00:00Z'),
+         ('20000000-0000-4000-8000-000000000006',$4,$1,'LABORATORY','2035-08-04','PENDING',TRUE,NULL,2034,'REGULAR',NULL,$3,$3,'2035-01-04T00:00:00Z')`,
       [
         pairedStudent,
         TEST_REFERENCE_IDS.physicalExamClinic,
@@ -71,8 +100,21 @@ describe("published-only appointment access", () => {
         TEST_REFERENCE_IDS.laboratoryClinic,
       ],
     );
+    await linkPublishedLaboratoryAppointments(client, [
+      "20000000-0000-4000-8000-000000000001", "20000000-0000-4000-8000-000000000002",
+      "20000000-0000-4000-8000-000000000004", "20000000-0000-4000-8000-000000000005",
+      "20000000-0000-4000-8000-000000000006",
+    ]);
+    await linkPublishedLaboratoryAppointments(client, ["20000000-0000-4000-8000-000000000003"]);
+    await client.query(`UPDATE laboratory_checklist_items SET verified_at='2035-08-03',
+      verified_by=$1,verification_source='INTERNAL' WHERE checklist_id IN
+      (SELECT checklist_id FROM laboratory_checklist_appointments WHERE appointment_id IN
+       ('20000000-0000-4000-8000-000000000003','20000000-0000-4000-8000-000000000004'))`,
+    [admin.userId]);
+    });
 
     const physicalExams = await listAppointments({
+      academicYearStart: 2035,
       clinicCode: "CPU_CLINIC",
       scheduleType: "PHYSICAL_EXAM",
       studentNumber: pairedStudent,
@@ -89,18 +131,19 @@ describe("published-only appointment access", () => {
       ["2035-08-13", null],
     ]);
 
-    const completedPhysicalExams = await listAppointments({
+    const noShowPhysicalExams = await listAppointments({
+      academicYearStart: 2035,
       clinicCode: "CPU_CLINIC",
       scheduleType: "PHYSICAL_EXAM",
-      status: "COMPLETED",
+      status: "NO_SHOW",
       studentNumber: pairedStudent,
       page: 1,
       limit: 1,
       offset: 1,
       includeLaboratoryStatus: true,
     });
-    expect(completedPhysicalExams.total).toBe(2);
-    expect(completedPhysicalExams.items).toEqual([
+    expect(noShowPhysicalExams.total).toBe(3);
+    expect(noShowPhysicalExams.items).toEqual([
       expect.objectContaining({ appointmentDate: "2035-08-11", laboratoryStatus: "COMPLETED" }),
     ]);
   });
@@ -112,13 +155,14 @@ describe("published-only appointment access", () => {
       lastName: "Student",
       yearLevel: 4,
     });
-    const awaiting = await pool.query<{ id: string }>(
+    await addAcademicSnapshot(studentNumber, 2047);
+    const awaiting = await transaction(async (client) => client.query<{ id: string }>(
       `INSERT INTO appointments (
          clinic_id,student_number,schedule_type,appointment_date,status,is_published,
-         schedule_cycle_start,created_by,updated_by
+         schedule_cycle_start,scheduling_category,created_by,updated_by
        ) VALUES
-         ($1,$3,'LABORATORY','2047-08-05','AWAITING_RESCHEDULE',TRUE,2047,$4,$4),
-         ($2,$3,'PHYSICAL_EXAM','2047-08-06','NO_SHOW',TRUE,2047,$4,$4)
+         ($1,$3,'LABORATORY','2047-08-05','AWAITING_RESCHEDULE',TRUE,2047,'REGULAR',$4,$4),
+         ($2,$3,'PHYSICAL_EXAM','2047-08-06','NO_SHOW',TRUE,2047,'REGULAR',$4,$4)
        RETURNING id::text`,
       [
         TEST_REFERENCE_IDS.laboratoryClinic,
@@ -126,8 +170,12 @@ describe("published-only appointment access", () => {
         studentNumber,
         admin.userId,
       ],
-    );
+    ).then(async (result) => {
+      await linkPublishedLaboratoryAppointments(client, [result.rows[0].id]);
+      return result;
+    }));
     const operational = await listAppointments({
+      academicYearStart: 2047,
       studentNumber,
       page: 1,
       limit: 20,

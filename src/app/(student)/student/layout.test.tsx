@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { optionalStudent } = vi.hoisted(() => ({ optionalStudent: vi.fn() }));
 vi.mock("@/server/auth/current-student", () => ({ optionalStudent }));
 vi.mock("@/components/branding/BrandMark", () => ({ BrandMark: () => <span>MedClinic</span> }));
+vi.mock("@/components/layout/ManilaBoundaryRefresh", () => ({ ManilaBoundaryRefresh: () => null }));
 vi.mock("@/components/student/StudentLogoutButton", () => ({
   StudentLogoutButton: () => <button>Log out</button>,
 }));

@@ -85,7 +85,7 @@ Receive the message through the configured SMTP destination, open the staff veri
 
 In **Administration → Academic years**, create the intended academic-year start and its actual closing date. An empty installation intentionally has no arbitrary current-year row, and schedule imports are unavailable until the selected year is configured.
 
-Review **Daily capacity** and **Reference data** for the intended operation. Add or activate required college/program values before importing students. Use the unified **Clinic calendar** for dates that apply to scheduling across both services.
+Review **Daily capacity** and **Reference data** for the intended operation. Add or activate required college/program values before importing students. Use the unified **Clinic calendar** for dates that apply to scheduling across both services. In **Medical certificate physicians**, create an active physician profile with the authorized name, license number, and PNG/JPEG signature supplied by the Administrator. Examination completion is unavailable until a profile is configured.
 
 ## 6. Onboard staff and publish the first student import
 
@@ -97,11 +97,15 @@ As the Coordinator, export the provided workbook as a supported CSV, select the 
 
 Use an imported synthetic or authorized acceptance student. Sign in with Student Number, date of birth, and complete Middle Name. Register an email address, receive the student verification message, and verify it before expecting portal access.
 
-Confirm the student can view the published schedule and notifications. As the appropriate clinic staff, complete attendance for Laboratory and Physical Examination. As the student, upload valid private PDF/JPEG/PNG result files, finalize the result, enter edit mode, submit a corrected official revision, and download the official files. As the Administrator, verify authorized individual/ZIP downloads and the retained revision history. Confirm schedule/result notifications reach the portal and, for the verified address, the SMTP sink or configured mail service.
+Confirm the student can view the published schedule and notifications. KABALAKA Clinic staff verify CBC, Urine, Stool, and the applicable X-ray one test at a time. A checked test records staff confirmation; a document upload never checks a test. If an unfinished Laboratory visit must move, use Manual Resolution or the reviewed bulk replacement flow and confirm its verified tests remain attached to the replacement. CPU Clinic staff enter the physician's actual Class A–D finding, remarks, examination date, sex, and physician in the examination completion form, preview the marked JPG, then save once to complete the appointment and issue the certificate. Confirm the student can download the issued JPG, and that another student cannot.
+
+The student may upload, revise, finalize, and download **Laboratory** PDF/JPEG/PNG documents. Physical Examination student uploads are retired. The Administrator may download Laboratory files/ZIPs, invalidate a finalized Laboratory submission with a reason, and inspect its retained revisions. The CPU Clinic or Administrator may correct an issued certificate through a new immutable revision; an Administrator may revoke it with a reason. Confirm the student sees the current certificate status and previous academic-year downloads.
 
 Finalized results are not permanently immutable to the student: editing creates a separate draft based on the official revision, and submitting changes creates a new official revision while authorized history remains. Administrator invalidation retains history, records a reason, notifies the student, and opens the replacement path.
 
-Clinic unavailable dates use one unified calendar. CPU Clinic closures recover active PE work while retaining its paired Laboratory appointment; KABALAKA Clinic closures recover the active pair. Protected or exhausted cases enter **Manual Resolution Required** without discarding unrelated calendar changes. Reopening a date permits future scheduling there and never restores earlier appointments automatically.
+The **Clinic calendar** shows Laboratory and Physical Examination used/maximum capacity and day details grouped by college and service. Red means at least one internal service is full. Closure drafts and impact review remain separate from occupancy. CPU Clinic closures recover active PE work while retaining its paired Laboratory appointment; KABALAKA Clinic closures recover the active pair. Partially verified Laboratory work and other protected cases enter **Manual Resolution Required**. Reopening a date permits future scheduling there and never restores earlier appointments automatically.
+
+After an academic year's Manila closing date, its appointments leave current lists and remain in the explicit year/history views. Clinical changes and replacements are closed for that year; authorized Laboratory documents and issued certificates remain downloadable.
 
 ## Deployment runtime and recovery contract
 

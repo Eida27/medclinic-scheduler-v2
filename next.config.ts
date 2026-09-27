@@ -2,8 +2,9 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   experimental: { authInterrupts: true },
-  serverExternalPackages: ["dejavu-fonts-ttf", "pdfkit"],
+  serverExternalPackages: ["pdfkit"],
   outputFileTracingRoot: process.cwd(),
+  outputFileTracingIncludes: { "/*": ["./node_modules/dejavu-fonts-ttf/ttf/*.ttf"] },
   turbopack: { root: process.cwd() },
 };
 

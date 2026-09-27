@@ -5,7 +5,7 @@ import type {
 
 const progressLabels = {
   AWAITING_RESUBMISSION: "Awaiting resubmission",
-  FULLY_SUBMITTED: "Fully submitted",
+  FULLY_SUBMITTED: "Laboratory submitted",
   PARTIALLY_SUBMITTED: "Partially submitted",
   NOT_SUBMITTED: "Not submitted",
 } as const satisfies Record<AdminSubmissionProgress, string>;

@@ -52,7 +52,7 @@ const baseProfile = {
   studentName: "Abad, Aaron",
   collegeName: "College of Computer Studies",
   programName: "BS Computer Science",
-  progress: "PARTIALLY_SUBMITTED" as const,
+  progress: "FULLY_SUBMITTED" as const,
   latestActivityAt: new Date("2026-08-18T16:00:00.000Z"),
   laboratory: {
     resultType: "LABORATORY" as const,
@@ -72,6 +72,7 @@ const baseProfile = {
     submission: null,
     editingInProgress: false,
   },
+  certificate: { id: "", status: null, classification: null, examinationDate: null },
   history: [],
 };
 
@@ -92,7 +93,7 @@ describe("AdminStudentResultProfilePage", () => {
     expect(screen.getByRole("heading", { name: "Abad, Aaron", level: 1 })).toBeVisible();
     expect(screen.getByText("23/8200 01")).toBeVisible();
     expect(screen.getByText("College of Computer Studies · BS Computer Science")).toBeVisible();
-    expect(screen.getByText("Partially submitted")).toBeVisible();
+    expect(screen.getByText("Laboratory submitted")).toBeVisible();
     expect(screen.getByRole("link", { name: "Back to student result submissions" })).toHaveAttribute(
       "href",
       "/settings/student-result-submissions",
@@ -183,64 +184,29 @@ describe("AdminStudentResultProfilePage", () => {
     expect(link.parentElement).toHaveClass("@sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]");
   });
 
-  it("renders an unscheduled, not-submitted Physical Exam without file or mutation controls", async () => {
+  it("shows certificate availability without a Physical Examination upload control", async () => {
     render(await AdminStudentResultProfilePage({
       params: Promise.resolve({ studentNumber: "23%2F8200%2001" }),
     }));
 
-    const section = screen.getByRole("region", { name: "Physical Exam results" });
-    expect(within(section).getByText("Appointment: Unscheduled")).toBeVisible();
-    expect(within(section).getByText("Not submitted yet")).toBeVisible();
-    expect(within(section).queryByRole("link")).not.toBeInTheDocument();
-    expect(within(section).queryByLabelText("Physical Exam invalidation reason")).not.toBeInTheDocument();
+    expect(screen.getByText("No certificate issued.")).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Physical Exam results" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Physical Exam invalidation reason")).not.toBeInTheDocument();
   });
 
-  it("keeps invalidation awareness current while presenting rejected documents only in history", async () => {
+  it("shows an issued certificate download without a Physical Examination result submission", async () => {
     getAdminStudentResultProfile.mockResolvedValue({
       ...baseProfile,
-      progress: "AWAITING_RESUBMISSION",
-      physicalExam: {
-        resultType: "PHYSICAL_EXAM",
-        appointment: {
-          id: "exam-appointment",
-          appointmentDate: "2026-08-19",
-          status: "COMPLETED",
-        },
-        state: "INVALIDATED",
-        submission: null,
-        editingInProgress: false,
-      },
-      history: [{
-        id: "exam-invalidated",
-        appointmentId: "exam-appointment",
-        appointmentDate: "2026-08-19",
-        resultType: "PHYSICAL_EXAM",
-        status: "INVALIDATED",
-        finalizedAt: new Date("2026-08-19T16:00:00.000Z"),
-        invalidatedAt: new Date("2026-08-20T16:00:00.000Z"),
-        invalidationReason: "Incorrect patient document",
-        supersededAt: null,
-        supersededBySubmissionId: null,
-        lastActivityAt: new Date("2026-08-20T16:00:00.000Z"),
-        fileCount: 2,
-        totalBytes: 3072,
-        files: [],
-      }],
+      certificate: { id: "certificate-1", status: "ISSUED", classification: "B", examinationDate: "2026-08-19" },
     });
 
     render(await AdminStudentResultProfilePage({
       params: Promise.resolve({ studentNumber: "23%2F8200%2001" }),
     }));
 
-    const section = screen.getByRole("region", { name: "Physical Exam results" });
-    expect(within(section).getByText("Invalidated — awaiting resubmission")).toBeVisible();
-    expect(within(section).queryByText("Reason: Incorrect patient document")).not.toBeInTheDocument();
-    expect(within(section).queryByRole("link", { name: /download/i })).not.toBeInTheDocument();
-    expect(within(section).queryByLabelText("Physical Exam invalidation reason")).not.toBeInTheDocument();
-    const history = screen.getByRole("region", { name: "Submission history" });
-    expect(within(history).getByText("Invalidated: Aug 21, 2026, 12:00 AM")).toBeVisible();
-    expect(within(history).getByText("Reason: Incorrect patient document")).toBeVisible();
-    expect(within(history).getByText("2 files · 3 KB")).toBeVisible();
+    expect(screen.getByText("Class B · Examined 2026-08-19")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Download medical certificate JPG" })).toHaveAttribute("href", "/api/medical-certificates/certificate-1/download");
+    expect(screen.queryByLabelText("Physical Exam invalidation reason")).not.toBeInTheDocument();
   });
 
   it("renders finalized and invalidated history with status-appropriate download access", async () => {

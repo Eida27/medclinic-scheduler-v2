@@ -86,6 +86,13 @@ export async function lockEligibleRegularPairs(
         AND laboratory.appointment_date > (NOW() AT TIME ZONE 'Asia/Manila')::date
         AND physical.appointment_date > (NOW() AT TIME ZONE 'Asia/Manila')::date
         AND laboratory.status='PENDING' AND physical.status='PENDING'
+        AND NOT EXISTS (
+          SELECT 1 FROM laboratory_checklist_appointments checklist_link
+          JOIN laboratory_checklist_items checklist_item
+            ON checklist_item.checklist_id=checklist_link.checklist_id
+          WHERE checklist_link.appointment_id=laboratory.id
+            AND checklist_item.verified_at IS NOT NULL
+        )
         AND laboratory.is_published=TRUE AND physical.is_published=TRUE
         AND laboratory.is_manually_locked=FALSE
         AND physical.is_manually_locked=FALSE

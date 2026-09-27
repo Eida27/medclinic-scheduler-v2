@@ -2,8 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { operationalStatusLabel, push, refresh } = vi.hoisted(() => ({
-  operationalStatusLabel: vi.fn((value: string) => `Readable ${value}`),
+const { push, refresh } = vi.hoisted(() => ({
   push: vi.fn(),
   refresh: vi.fn(),
 }));
@@ -11,7 +10,6 @@ const { operationalStatusLabel, push, refresh } = vi.hoisted(() => ({
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push, refresh }),
 }));
-vi.mock("@/components/appointments/status-labels", () => ({ operationalStatusLabel }));
 
 import type { ComponentProps } from "react";
 import { AppointmentActions as LiveAppointmentActions } from "./AppointmentActions";
@@ -30,7 +28,7 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
-describe("AppointmentActions automatic no-show correction", () => {
+describe("AppointmentActions cancellation and replacement", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -42,17 +40,17 @@ describe("AppointmentActions automatic no-show correction", () => {
   it("does not offer manual no-show for a pending appointment", () => {
     render(<AppointmentActions id="appointment-1" status="PENDING" />);
 
-    const status = screen.getByRole("combobox");
-    expect(status).toHaveValue("COMPLETED");
-    expect(screen.getByRole("option", { name: "Readable COMPLETED" })).toHaveValue("COMPLETED");
-    expect(screen.getByRole("option", { name: "Readable CANCELLED" })).toHaveValue("CANCELLED");
-    expect(screen.queryByRole("option", { name: "Readable NO_SHOW" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel appointment" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Create replacement" })).toBeVisible();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /complet|no-show/i })).not.toBeInTheDocument();
   });
 
-  it("uses the shared operational label for a draft cancellation target", () => {
+  it("offers only cancellation for a draft appointment", () => {
     render(<AppointmentActions id="appointment-1" status="DRAFT" />);
 
-    expect(screen.getByRole("option", { name: "Readable CANCELLED" })).toHaveValue("CANCELLED");
+    expect(screen.getByRole("button", { name: "Cancel appointment" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Create replacement" })).not.toBeInTheDocument();
   });
 
   it("does not place completed-status corrections in ordinary actions", () => {
@@ -63,7 +61,7 @@ describe("AppointmentActions automatic no-show correction", () => {
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
-  it("shows a required correction form only for an eligible no-show", () => {
+  it("offers replacement but no clinical completion for a no-show", () => {
     render(
       <AppointmentActions
         id="appointment-1"
@@ -72,12 +70,8 @@ describe("AppointmentActions automatic no-show correction", () => {
       />,
     );
 
-    const button = screen.getByRole("button", { name: "Correct to completed" });
-    const form = button.closest("form");
-    expect(form).not.toBeNull();
-    expect(form).toHaveFormValues({ status: "COMPLETED" });
-    expect(screen.getByLabelText("Correction reason")).toBeRequired();
     expect(screen.getByRole("button", { name: "Create replacement" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /complete/i })).not.toBeInTheDocument();
   });
 
   it.each([
@@ -94,40 +88,6 @@ describe("AppointmentActions automatic no-show correction", () => {
     );
 
     expect(screen.queryByRole("button", { name: "Correct to completed" })).not.toBeInTheDocument();
-  });
-
-  it("sends completed status and the entered correction reason", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
-      data: { id: "appointment-1", status: "COMPLETED" },
-    }));
-    vi.stubGlobal("fetch", fetchMock);
-    const user = userEvent.setup();
-    render(
-      <AppointmentActions
-        id="appointment-1"
-        status="NO_SHOW"
-        canCorrectNoShow
-      />,
-    );
-
-    await user.type(
-      screen.getByLabelText("Correction reason"),
-      "Signed clinic record confirms completion",
-    );
-    await user.click(screen.getByRole("button", { name: "Correct to completed" }));
-
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
-      "/api/appointments/appointment-1",
-      {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          status: "COMPLETED",
-          notes: "Signed clinic record confirms completion",
-        }),
-      },
-    ));
-    expect(refresh).toHaveBeenCalledOnce();
   });
 
   it("warns about lock inheritance and navigates to the replacement detail", async () => {
@@ -213,11 +173,11 @@ describe("AppointmentActions automatic no-show correction", () => {
     const user = userEvent.setup();
     render(<AppointmentActions id="appointment-1" status="PENDING" />);
     await user.type(screen.getByPlaceholderText("Status note"), "Keep this note");
-    await user.click(screen.getByRole("button", { name: "Update status" }));
+    await user.click(screen.getByRole("button", { name: "Cancel appointment" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(`Appointment ${status}.`);
     expect(screen.getByPlaceholderText("Status note")).toHaveValue("Keep this note");
-    expect(screen.getByRole("button", { name: "Update status" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Cancel appointment" })).toBeEnabled();
   });
 
   it.each([
@@ -227,10 +187,10 @@ describe("AppointmentActions automatic no-show correction", () => {
     vi.stubGlobal("fetch", vi.fn().mockImplementation(result));
     const user = userEvent.setup();
     render(<AppointmentActions id="appointment-1" status="PENDING" />);
-    await user.click(screen.getByRole("button", { name: "Update status" }));
+    await user.click(screen.getByRole("button", { name: "Cancel appointment" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/check your connection and try again/i);
-    expect(screen.getByRole("button", { name: "Update status" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Cancel appointment" })).toBeEnabled();
   });
 
   it("blocks duplicate appointment mutations synchronously", async () => {
@@ -239,7 +199,7 @@ describe("AppointmentActions automatic no-show correction", () => {
     const fetchMock = vi.fn().mockReturnValue(pending);
     vi.stubGlobal("fetch", fetchMock);
     render(<AppointmentActions id="appointment-1" status="PENDING" />);
-    const form = screen.getByRole("button", { name: "Update status" }).closest("form")!;
+    const form = screen.getByRole("button", { name: "Cancel appointment" }).closest("form")!;
 
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
