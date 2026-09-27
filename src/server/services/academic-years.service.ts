@@ -1,6 +1,7 @@
 import "server-only";
 import { z } from "zod";
-import { academicYearLabel, academicYearState } from "@/lib/academic-year";
+import { academicYearLabel, academicYearState, manilaCalendarDate } from "@/lib/academic-year";
+import type { PoolClient } from "pg";
 import {
   AppError,
   isPostgresForeignKeyViolation,
@@ -11,10 +12,14 @@ import { writeAudit } from "@/server/repositories/audit.repository";
 import {
   createAcademicYearWithClient,
   deleteAcademicYearWithClient,
+  getAcademicYearSchedulingBoundary,
   listAcademicYearRecords,
+  listImportAcademicYearBoundaries,
+  lockAcademicYearSchedulingBoundary,
   lockAcademicYearWithSnapshotCount,
   updateAcademicYearClosingDateWithClient,
   type AcademicYearRecord,
+  type AcademicYearSchedulingBoundary,
 } from "@/server/repositories/academic-years.repository";
 
 const startYearSchema = z.coerce.number().int().min(2020).max(2100);
@@ -80,6 +85,38 @@ function isSnapshotForeignKeyViolation(error: unknown) {
 export async function listAcademicYears(now: Date = new Date()) {
   const records = await listAcademicYearRecords();
   return records.map((record) => present(record, now));
+}
+
+export async function listImportAcademicYears(now: Date = new Date()) {
+  const records = await listImportAcademicYearBoundaries();
+  return records.map((record) => {
+    const state = academicYearState(record.closingDate, now);
+    return {
+      ...record,
+      label: academicYearLabel(record.startYear),
+      state,
+      selectable: state !== "CLOSED",
+    };
+  });
+}
+
+export async function assertImportAcademicYear(
+  startYear: number,
+  client?: PoolClient,
+  now: Date = new Date(),
+): Promise<AcademicYearSchedulingBoundary> {
+  const year = client
+    ? await lockAcademicYearSchedulingBoundary(client, startYear)
+    : await getAcademicYearSchedulingBoundary(startYear);
+  if (!year) {
+    throw new AppError("ACADEMIC_YEAR_NOT_CONFIGURED", "Select a configured academic year.", 409,
+      { academicYearStart: ["Select a configured academic year."] });
+  }
+  if (year.closingDate < manilaCalendarDate(now)) {
+    throw new AppError("ACADEMIC_YEAR_ENDED", "This academic year is closed for imports.", 409,
+      { academicYearStart: ["This academic year is closed for imports."] });
+  }
+  return year;
 }
 
 export async function createAcademicYear(raw: unknown, actorUserId: string) {

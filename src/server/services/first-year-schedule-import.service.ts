@@ -185,8 +185,7 @@ async function assertAcademicCycle(
             closing_date::text
        FROM academic_years
       WHERE start_year=$1
-        AND closing_date >= (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date
-      ${forUpdate ? "FOR KEY SHARE" : ""}`,
+      ${forUpdate ? "FOR SHARE" : ""}`,
     [input.academicYearStart],
   );
   if (!result.rowCount) {
@@ -194,7 +193,12 @@ async function assertAcademicCycle(
       "ACADEMIC_YEAR_NOT_CONFIGURED",
       "Select an open configured academic year.",
       409,
+      { academicYearStart: ["Select a configured academic year."] },
     );
+  }
+  if (result.rows[0].closing_date < result.rows[0].today) {
+    throw new AppError("ACADEMIC_YEAR_ENDED", "This academic year is closed for imports.", 409,
+      { academicYearStart: ["This academic year is closed for imports."] });
   }
   const cycleStartDate = `${input.academicYearStart}-08-01`;
   const cycleEndDate = result.rows[0].closing_date;

@@ -21,6 +21,7 @@ import {
   type FirstYearScheduleImportReview,
 } from "./first-year-schedule-import.service";
 import { validateScheduleImportYearCategory } from "./schedule-import-year-category-policy";
+import { assertImportAcademicYear } from "./academic-years.service";
 
 const importMetadataSchema = z.object({
   importMode: z.enum(["STANDARD", "FIRST_YEAR_OVPSA"]).default("STANDARD"),
@@ -167,7 +168,8 @@ export async function preflightScheduleImport(
   actor: SessionUser,
 ): Promise<{ valid: true }> {
   assertImportOperator(actor);
-  prepareScheduleImportRequest(raw);
+  const { metadata } = prepareScheduleImportRequest(raw);
+  await assertImportAcademicYear(metadata.academicYearStart);
   return { valid: true };
 }
 
@@ -177,6 +179,7 @@ export async function reviewFirstYearScheduleImport(
 ): Promise<FirstYearScheduleImportReview> {
   assertImportOperator(actor);
   const { file, metadata, rows } = prepareScheduleImportRequest(raw);
+  await assertImportAcademicYear(metadata.academicYearStart);
   if (metadata.importMode !== "FIRST_YEAR_OVPSA" || !metadata.firstYearLaboratoryDate) {
     throw new AppError(
       "FIRST_YEAR_IMPORT_REQUIRED",
@@ -222,6 +225,7 @@ export async function acceptAndScheduleImport(
 ): Promise<ScheduleImportResult> {
   assertImportOperator(actor);
   const { file, metadata, rows } = prepareScheduleImportRequest(raw);
+  await assertImportAcademicYear(metadata.academicYearStart);
   if (metadata.importMode === "FIRST_YEAR_OVPSA") {
     return publishFirstYearScheduleImport({
       sourceFilename: file.fileName,

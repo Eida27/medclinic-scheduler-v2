@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Card, CardTitle } from "@/components/ui/Card";
@@ -9,6 +9,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Field } from "@/components/ui/Field";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
+import { manilaCalendarDate } from "@/lib/academic-year";
 
 type StudentCategory = "REGULAR" | "OJT" | "TOUR";
 type VisibleCategory = StudentCategory | "FIRST_YEAR";
@@ -33,11 +34,18 @@ const categoryLabels: Record<VisibleCategory, string> = {
   TOUR: "Tour",
 };
 
-function currentManilaYear() {
-  return Number(new Intl.DateTimeFormat("en-US", {
-    year: "numeric",
-    timeZone: "Asia/Manila",
-  }).format(new Date()));
+type ImportAcademicYear = {
+  startYear: number;
+  label: string;
+  closingDate: string;
+  state: "OPEN" | "CLOSING_SOON" | "CLOSED";
+  selectable: boolean;
+};
+
+function defaultYear(years: ImportAcademicYear[], today: string) {
+  const selectable = years.filter((year) => year.selectable);
+  return String(selectable.find((year) => `${year.startYear}-08-01` <= today)?.startYear
+    ?? selectable.at(-1)?.startYear ?? "");
 }
 
 function fieldLabel(field: string) {
@@ -46,14 +54,22 @@ function fieldLabel(field: string) {
   return field.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, (letter) => letter.toUpperCase());
 }
 
-export function ScheduleImportForm() {
+export function ScheduleImportForm({ initialAcademicYears, initialManilaToday, role, initialCatalogUnavailable = false }: {
+  initialAcademicYears: ImportAcademicYear[];
+  initialManilaToday: string;
+  role: "ADMIN" | "COORDINATOR";
+  initialCatalogUnavailable?: boolean;
+}) {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const currentYear = currentManilaYear();
-  const academicYears = Array.from({ length: 7 }, (_, index) => currentYear - 1 + index);
+  const [academicYears, setAcademicYears] = useState(initialAcademicYears);
+  const [catalogState, setCatalogState] = useState<"ready" | "error">(initialCatalogUnavailable ? "error" : "ready");
+  const refreshVersion = useRef(0);
   const [visibleCategory, setVisibleCategory] = useState<VisibleCategory>("REGULAR");
-  const [academicYearStart, setAcademicYearStart] = useState(String(currentYear));
+  const [academicYearStart, setAcademicYearStart] = useState(() => defaultYear(initialAcademicYears, initialManilaToday));
+  const selectedYearRef = useRef(academicYearStart);
+  const academicYearsRef = useRef(initialAcademicYears);
   const [selectedFileName, setSelectedFileName] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [pending, setPending] = useState(false);
@@ -66,9 +82,59 @@ export function ScheduleImportForm() {
     setFirstYearReview(undefined);
   }
 
+  const refreshYears = useCallback(async () => {
+    const version = ++refreshVersion.current;
+    try {
+      const response = await fetch("/api/schedule-imports/academic-years", { cache: "no-store" });
+      if (!response.ok) throw new Error("Unable to load academic years");
+      const payload = await response.json();
+      if (!Array.isArray(payload.data?.years)) throw new Error("Unable to load academic years");
+      if (version !== refreshVersion.current) return;
+      const years = payload.data.years as ImportAcademicYear[];
+      const choice = selectedYearRef.current;
+      const previous = academicYearsRef.current.find((year) => String(year.startYear) === choice);
+      const next = years.find((year) => String(year.startYear) === choice);
+      academicYearsRef.current = years;
+      setAcademicYears(years);
+      setCatalogState("ready");
+      if (choice && (!next?.selectable || previous?.closingDate !== next.closingDate)) {
+        setConfirmOpen(false);
+        setFirstYearReview(undefined);
+      }
+      if (choice && !next?.selectable) {
+        selectedYearRef.current = "";
+        setAcademicYearStart("");
+      }
+    } catch {
+      if (version === refreshVersion.current) {
+        setCatalogState("error");
+        setConfirmOpen(false);
+        setFirstYearReview(undefined);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const onFocus = () => { void refreshYears(); };
+    const onVisible = () => { if (document.visibilityState === "visible") void refreshYears(); };
+    let lastManilaDay = initialManilaToday;
+    const rollover = window.setInterval(() => {
+      const day = manilaCalendarDate(new Date());
+      if (day !== lastManilaDay) { lastManilaDay = day; void refreshYears(); }
+    }, 60_000);
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      refreshVersion.current += 1;
+      window.clearInterval(rollover);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [initialManilaToday, refreshYears]);
+
   async function review(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (pending || !formRef.current) return;
+    if (pending || catalogState !== "ready" || !academicYearStart || !formRef.current) return;
     const preflightFormData = new FormData(formRef.current);
     const firstYearReviewFormData = new FormData(formRef.current);
     setError(undefined);
@@ -117,7 +183,7 @@ export function ScheduleImportForm() {
   }
 
   async function submit() {
-    if (!formRef.current || pending) return;
+    if (!formRef.current || pending || catalogState !== "ready" || !academicYearStart) return;
     setPending(true);
     setError(undefined);
     try {
@@ -260,15 +326,24 @@ export function ScheduleImportForm() {
                 name="academicYearStart"
                 value={academicYearStart}
                 required
-                disabled={pending}
+                disabled={pending || catalogState !== "ready" || !academicYears.some((year) => year.selectable)}
                 onChange={(event) => {
+                  selectedYearRef.current = event.target.value;
                   setAcademicYearStart(event.target.value);
                   clearStaleReviewState();
                 }}
               >
-                {academicYears.map((year) => <option key={year} value={year}>{year}–{year + 1}</option>)}
+                {!academicYearStart ? <option value="">Select academic year</option> : null}
+                {academicYears.map((year) => <option key={year.startYear} value={year.startYear} disabled={!year.selectable}>
+                  {year.label}{year.selectable ? "" : " — Closed"}
+                </option>)}
               </Select>
             </Field>
+            {catalogState === "error" ? <Alert tone="danger">Unable to load academic years <Button type="button" onClick={() => void refreshYears()}>Retry</Button></Alert>
+              : academicYears.length === 0 ? <Alert tone="warning">No academic years are configured. {role === "ADMIN"
+                ? <a href="/settings/academic-years" className="underline">Configure academic years</a>
+                : "Ask an Administrator to configure an academic year."}</Alert>
+                : !academicYears.some((year) => year.selectable) ? <Alert tone="warning">No configured academic year is open for imports.</Alert> : null}
             {visibleCategory === "FIRST_YEAR" ? (
               <Field label="Laboratory date">
                 <div className="grid gap-1.5">
@@ -304,7 +379,7 @@ export function ScheduleImportForm() {
             )}
           </div>
 
-          <Button type="submit" disabled={pending} className="justify-self-start">Review import</Button>
+          <Button type="submit" disabled={pending || catalogState !== "ready" || !academicYearStart} className="justify-self-start">Review import</Button>
         </Card>
       </form>
       <ConfirmDialog

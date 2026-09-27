@@ -20,6 +20,7 @@ import { studentDisplayNameSql } from "@/server/students/student-display-name";
 import { queueAuthoritativeScheduleNotification } from "@/server/schedule/schedule-notification-hooks";
 import { buildInitialPublicationNotification } from "@/server/schedule/schedule-notifications";
 import { lockAcademicYearSchedulingBoundary } from "./academic-years.repository";
+import { manilaCalendarDate } from "@/lib/academic-year";
 import { ensureStudentAcademicSnapshotsWithClient } from "./student-academic-snapshots.repository";
 import { loadSchedulingBlockedDates } from "./scheduling-blocked-dates.repository";
 import type { HistoricalStaffActor, UserRole } from "@/types/roles";
@@ -375,9 +376,12 @@ export async function createScheduleImport(
         "ACADEMIC_YEAR_NOT_CONFIGURED",
         "Configure the academic year before importing schedules.",
         409,
-        undefined,
-        { academicYearStart: [input.academicYearStart] },
+        { academicYearStart: ["Select a configured academic year."] },
       );
+    }
+    if (academicYear.closingDate < manilaCalendarDate(new Date())) {
+      throw new AppError("ACADEMIC_YEAR_ENDED", "This academic year is closed for imports.", 409,
+        { academicYearStart: ["This academic year is closed for imports."] });
     }
     const accepted = await client.query<{ acceptedAt: Date }>(
       `SELECT clock_timestamp() AS "acceptedAt"`,

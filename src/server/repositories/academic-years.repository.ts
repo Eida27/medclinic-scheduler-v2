@@ -17,6 +17,25 @@ export type AcademicYearSchedulingBoundary = {
   closingDate: string;
 };
 
+export async function listImportAcademicYearBoundaries(): Promise<AcademicYearSchedulingBoundary[]> {
+  const result = await query<AcademicYearSchedulingBoundary>(
+    `SELECT start_year AS "startYear", closing_date::text AS "closingDate"
+       FROM academic_years ORDER BY start_year DESC`,
+  );
+  return result.rows;
+}
+
+export async function getAcademicYearSchedulingBoundary(
+  startYear: number,
+): Promise<AcademicYearSchedulingBoundary | undefined> {
+  const result = await query<AcademicYearSchedulingBoundary>(
+    `SELECT start_year AS "startYear", closing_date::text AS "closingDate"
+       FROM academic_years WHERE start_year=$1`,
+    [startYear],
+  );
+  return result.rows[0];
+}
+
 function run<T extends QueryResultRow>(
   client: PoolClient | undefined,
   sql: string,

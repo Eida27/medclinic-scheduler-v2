@@ -5,11 +5,13 @@ import JSZip from "jszip";
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { requireUser } = vi.hoisted(() => ({
+const { requireUser, listImportAcademicYears } = vi.hoisted(() => ({
   requireUser: vi.fn(),
+  listImportAcademicYears: vi.fn(),
 }));
 
 vi.mock("@/server/auth/current-user", () => ({ requireUser }));
+vi.mock("@/server/services/academic-years.service", () => ({ listImportAcademicYears }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
 }));
@@ -45,6 +47,7 @@ describe("NewScheduleImportPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     requireUser.mockResolvedValue({ userId: "admin-user", role: "ADMIN" });
+    listImportAcademicYears.mockResolvedValue([{ startYear: 2026, label: "2026–2027", closingDate: "2027-07-31", state: "OPEN", selectable: true }]);
   });
 
   it("allows administrators and coordinators and renders the academic-year importer", async () => {
@@ -54,6 +57,8 @@ describe("NewScheduleImportPage", () => {
     expect(screen.getByRole("heading", { name: "Import schedule CSV" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Academic-year student CSV" })).toBeVisible();
     expect(screen.getByRole("option", { name: "Regular" })).toHaveValue("REGULAR");
+    expect(screen.getByRole("option", { name: "2026–2027" })).toBeVisible();
+    expect(listImportAcademicYears).toHaveBeenCalledOnce();
     expect(screen.queryByText(/manual schedule encoder/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/legacy coordinator importer/i)).not.toBeInTheDocument();
   });

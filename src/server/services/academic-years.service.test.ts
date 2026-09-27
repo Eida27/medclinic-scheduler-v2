@@ -1,12 +1,15 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppError } from "@/lib/errors";
+import type { PoolClient } from "pg";
 
 const {
   client,
   createAcademicYearWithClient,
   deleteAcademicYearWithClient,
   listAcademicYearRecords,
+  listImportAcademicYearBoundaries,
+  lockAcademicYearSchedulingBoundary,
   lockAcademicYearWithSnapshotCount,
   transaction,
   updateAcademicYearClosingDateWithClient,
@@ -16,6 +19,8 @@ const {
   createAcademicYearWithClient: vi.fn(),
   deleteAcademicYearWithClient: vi.fn(),
   listAcademicYearRecords: vi.fn(),
+  listImportAcademicYearBoundaries: vi.fn(),
+  lockAcademicYearSchedulingBoundary: vi.fn(),
   lockAcademicYearWithSnapshotCount: vi.fn(),
   transaction: vi.fn(),
   updateAcademicYearClosingDateWithClient: vi.fn(),
@@ -27,6 +32,8 @@ vi.mock("@/server/repositories/academic-years.repository", () => ({
   createAcademicYearWithClient,
   deleteAcademicYearWithClient,
   listAcademicYearRecords,
+  listImportAcademicYearBoundaries,
+  lockAcademicYearSchedulingBoundary,
   lockAcademicYearWithSnapshotCount,
   updateAcademicYearClosingDateWithClient,
 }));
@@ -36,6 +43,8 @@ import {
   createAcademicYear,
   deleteAcademicYear,
   listAcademicYears,
+  listImportAcademicYears,
+  assertImportAcademicYear,
   updateAcademicYear,
 } from "./academic-years.service";
 
@@ -72,6 +81,30 @@ describe("academic-year administration service", () => {
       label: "2025–2026",
       state: "CLOSING_SOON",
     }]);
+  });
+
+  it("lists only configured import years and marks a closing date selectable through Manila today", async () => {
+    listImportAcademicYearBoundaries.mockResolvedValue([
+      { startYear: 2030, closingDate: "2031-07-31" },
+      { startYear: 2026, closingDate: "2026-09-27" },
+      { startYear: 2025, closingDate: "2026-07-31" },
+    ]);
+
+    await expect(listImportAcademicYears(new Date("2026-09-26T16:00:00.000Z"))).resolves.toEqual([
+      { startYear: 2030, label: "2030–2031", closingDate: "2031-07-31", state: "OPEN", selectable: true },
+      { startYear: 2026, label: "2026–2027", closingDate: "2026-09-27", state: "CLOSING_SOON", selectable: true },
+      { startYear: 2025, label: "2025–2026", closingDate: "2026-07-31", state: "CLOSED", selectable: false },
+    ]);
+    expect(listImportAcademicYearBoundaries).toHaveBeenCalledOnce();
+  });
+
+  it("distinguishes missing and ended import years before scheduling", async () => {
+    lockAcademicYearSchedulingBoundary.mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ startYear: 2025, closingDate: "2026-07-31" });
+    await expect(assertImportAcademicYear(2026, client as unknown as PoolClient, new Date("2026-09-27T00:00:00.000Z")))
+      .rejects.toMatchObject({ code: "ACADEMIC_YEAR_NOT_CONFIGURED", fields: { academicYearStart: expect.any(Array) } });
+    await expect(assertImportAcademicYear(2025, client as unknown as PoolClient, new Date("2026-09-27T00:00:00.000Z")))
+      .rejects.toMatchObject({ code: "ACADEMIC_YEAR_ENDED", fields: { academicYearStart: expect.any(Array) } });
   });
 
   it.each(["2025-08-01", "2026-07-31"])("accepts the closing-date boundary %s", async (closingDate) => {

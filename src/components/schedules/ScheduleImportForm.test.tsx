@@ -23,6 +23,11 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+const configuredYear = { startYear: 2026, label: "2026–2027", closingDate: "2027-07-31", state: "OPEN" as const, selectable: true };
+function renderImportForm() {
+  return render(<ScheduleImportForm initialAcademicYears={[configuredYear]} initialManilaToday="2026-09-27" role="ADMIN" />);
+}
+
 describe("ScheduleImportForm", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -30,8 +35,50 @@ describe("ScheduleImportForm", () => {
     refresh.mockReset();
   });
 
+  it("offers only configured years and defaults to the most recent selectable cycle already started", () => {
+    render(<ScheduleImportForm initialAcademicYears={[
+      { startYear: 2030, label: "2030–2031", closingDate: "2031-07-31", state: "OPEN", selectable: true },
+      { startYear: 2026, label: "2026–2027", closingDate: "2027-07-31", state: "OPEN", selectable: true },
+      { startYear: 2025, label: "2025–2026", closingDate: "2026-07-31", state: "CLOSED", selectable: false },
+    ]} initialManilaToday="2026-09-27" role="ADMIN" />);
+    const select = screen.getByLabelText("Academic year");
+    expect(select).toHaveValue("2026");
+    expect(within(select).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "2030–2031", "2026–2027", "2025–2026 — Closed",
+    ]);
+    expect(within(select).getByRole("option", { name: "2025–2026 — Closed" })).toBeDisabled();
+    expect(within(select).queryByRole("option", { name: "2027–2028" })).not.toBeInTheDocument();
+  });
+
+  it("blocks review and shows configuration guidance when no year exists", () => {
+    render(<ScheduleImportForm initialAcademicYears={[]} initialManilaToday="2026-09-27" role="COORDINATOR" />);
+    expect(screen.getByRole("alert")).toHaveTextContent("No academic years are configured.");
+    expect(screen.getByRole("alert")).toHaveTextContent("Ask an Administrator to configure an academic year.");
+    expect(screen.getByRole("button", { name: "Review import" })).toBeDisabled();
+  });
+
+  it("keeps a reviewed year on an unchanged refresh and invalidates it when the closing date changes", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ data: { valid: true } }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ data: { years: [configuredYear], today: "2026-09-27" } }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ data: { years: [{ ...configuredYear, closingDate: "2027-07-30" }], today: "2026-09-27" } }) });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderImportForm();
+    await user.upload(screen.getByLabelText("CSV file"), csvFile());
+    fireEvent.submit(screen.getByRole("button", { name: "Review import" }).closest("form")!);
+    expect(await screen.findByRole("dialog", { name: "Import and publish this CSV?" })).toBeVisible();
+    fireEvent.focus(window);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("dialog", { name: "Import and publish this CSV?" })).toBeVisible();
+    fireEvent.focus(window);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByLabelText("Academic year")).toHaveValue("2026");
+  });
+
   it("shows the exact workbook headers, academic year controls, and seven-day notice", () => {
-    render(<ScheduleImportForm />);
+    renderImportForm();
     expect(screen.getByText(headers)).toBeVisible();
     expect(screen.getByLabelText("Student category")).toHaveValue("REGULAR");
     expect(screen.getByLabelText("Academic year")).toBeRequired();
@@ -71,7 +118,7 @@ describe("ScheduleImportForm", () => {
 
   it("requires and clears preferred month for priority categories", async () => {
     const user = userEvent.setup();
-    render(<ScheduleImportForm />);
+    renderImportForm();
     await user.selectOptions(screen.getByLabelText("Student category"), "OJT");
     expect(screen.getByLabelText("Preferred month")).toBeRequired();
     await user.selectOptions(screen.getByLabelText("Preferred month"), "9");
@@ -112,7 +159,7 @@ describe("ScheduleImportForm", () => {
       });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
-    render(<ScheduleImportForm />);
+    renderImportForm();
 
     await user.selectOptions(screen.getByLabelText("Student category"), "FIRST_YEAR");
     expect(screen.queryByLabelText("Preferred month")).not.toBeInTheDocument();
@@ -164,7 +211,7 @@ describe("ScheduleImportForm", () => {
       });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
-    render(<ScheduleImportForm />);
+    renderImportForm();
     await user.upload(screen.getByLabelText("CSV file"), csvFile());
     await user.selectOptions(screen.getByLabelText("Student category"), "TOUR");
     await user.selectOptions(screen.getByLabelText("Academic year"), "2026");
@@ -200,7 +247,7 @@ describe("ScheduleImportForm", () => {
       .mockReturnValueOnce(request.promise);
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
-    render(<ScheduleImportForm />);
+    renderImportForm();
     await user.upload(screen.getByLabelText("CSV file"), csvFile());
     fireEvent.submit(screen.getByRole("button", { name: "Review import" }).closest("form")!);
     const confirmButton = await screen.findByRole("button", { name: "Agree and import" });
@@ -228,7 +275,7 @@ describe("ScheduleImportForm", () => {
         json: async () => ({ error: { message: "The CSV could not be imported." } }),
       }));
     const user = userEvent.setup();
-    render(<ScheduleImportForm />);
+    renderImportForm();
     await user.upload(screen.getByLabelText("CSV file"), csvFile());
     fireEvent.submit(screen.getByRole("button", { name: "Review import" }).closest("form")!);
     await user.click(await screen.findByRole("button", { name: "Agree and import" }));
@@ -254,7 +301,7 @@ describe("ScheduleImportForm", () => {
       }),
     }));
     const user = userEvent.setup();
-    render(<ScheduleImportForm />);
+    renderImportForm();
     await user.upload(screen.getByLabelText("CSV file"), csvFile());
     fireEvent.submit(screen.getByRole("button", { name: "Review import" }).closest("form")!);
 
