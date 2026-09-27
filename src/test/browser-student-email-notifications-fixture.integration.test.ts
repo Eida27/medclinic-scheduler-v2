@@ -225,6 +225,11 @@ describe.skipIf(!runLifecycle)("student email notifications Browser acceptance f
     const pool = new Pool({ connectionString: databaseUrl });
     try {
       await cleanupStudentEmailNotificationsFixture(pool, identity);
+      const existingAcademicYear = await pool.query<{ createdBy: string }>(
+        `SELECT created_by AS "createdBy" FROM academic_years WHERE start_year=2026`,
+      );
+      expect(existingAcademicYear.rows[0]?.createdBy)
+        .not.toBe(STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.staff.admin.id);
       const setup = await prepareStudentEmailNotificationsFixture(pool, identity, {
         encryptionKey: TEST_ENCRYPTION_KEY,
       });
@@ -248,7 +253,7 @@ describe.skipIf(!runLifecycle)("student email notifications Browser acceptance f
           users: 2,
           colleges: 1,
           programs: 1,
-          academicYears: 1,
+          academicYears: existingAcademicYear.rowCount === 0 ? 1 : 0,
           importGroups: 1,
           academicSnapshots: 5,
           students: 6,
