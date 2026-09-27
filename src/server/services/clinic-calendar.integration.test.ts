@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { pool, transaction } from "@/server/db/pool";
 import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import { lockEligibleRegularPairs } from "@/server/repositories/priority-displacement.repository";
+import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import {
   cleanupTestFixtures,
   insertTestAcademicSnapshot,
@@ -24,6 +25,7 @@ import {
   previewOvpsaClinicClosureBatchRecovery,
   confirmOvpsaClinicClosureBatchRecovery,
   resolveClinicClosureManualCase,
+  resolveClinicClosureManualCaseWithClient,
   saveClinicCalendarChanges,
 } from "./clinic-calendar.service";
 
@@ -433,6 +435,48 @@ afterAll(async () => {
 });
 
 describe("unified clinic calendar lifecycle", () => {
+  it("keeps manual resolution writes inside the caller transaction", async () => {
+    const manualCase = await createAutomaticManualCase({ studentNumber: "UCAL-TX-ROLLBACK", awaitingType: "LABORATORY" });
+    await expect(transaction(async (client) => {
+      await resolveClinicClosureManualCaseWithClient(client, manualCase.id, {
+        action: "ASSIGN_REPLACEMENT", expectedOptimisticToken: manualCase.optimisticToken,
+        laboratoryDate: "2049-08-13", preservePhysicalExam: true, reason: "Transactional resolution rollback proof.",
+      }, admin);
+      throw new Error("rollback caller");
+    })).rejects.toThrow("rollback caller");
+    expect((await pool.query("SELECT status,optimistic_token::text FROM clinic_closure_manual_cases WHERE id=$1", [manualCase.id])).rows[0])
+      .toEqual({ status: "OPEN", optimistic_token: manualCase.optimisticToken });
+    expect((await pool.query("SELECT id FROM appointments WHERE student_number=$1 AND rescheduled_from IS NOT NULL", ["UCAL-TX-ROLLBACK"])).rowCount).toBe(0);
+  });
+
+  it("waits for an effective-scope writer before locking the case and rechecks manual protection", async () => {
+    const studentNumber = "UCAL-SCOPE-RACE";
+    const manualCase = await createAutomaticManualCase({ studentNumber, awaitingType: "LABORATORY" });
+    const blocker = await pool.connect();
+    let pending: Promise<unknown> | undefined;
+    try {
+      await blocker.query("BEGIN");
+      await lockEffectiveAppointmentScopes(blocker, [{ studentNumber, scheduleType: "LABORATORY" }]);
+      let settled = false;
+      pending = resolveClinicClosureManualCase(manualCase.id, {
+        action: "ASSIGN_REPLACEMENT", expectedOptimisticToken: manualCase.optimisticToken,
+        laboratoryDate: "2049-08-13", preservePhysicalExam: true, reason: "Concurrent clinical protection proof.",
+      }, admin).then((result) => ({ result }), (error: unknown) => ({ error })).finally(() => { settled = true; });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(settled).toBe(false);
+      // A clinical writer can still take row locks: resolver has not inverted scope/row order.
+      await blocker.query("SELECT id FROM clinic_closure_manual_cases WHERE id=$1 FOR UPDATE NOWAIT", [manualCase.id]);
+      await blocker.query("UPDATE appointments SET is_manually_locked=TRUE WHERE student_number=$1 AND schedule_type='LABORATORY'", [studentNumber]);
+      await blocker.query("COMMIT");
+      expect(await pending).toMatchObject({ error: { status: 409 } });
+      expect((await pool.query("SELECT status FROM clinic_closure_manual_cases WHERE id=$1", [manualCase.id])).rows[0].status).toBe("OPEN");
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      blocker.release();
+      await pending;
+    }
+  });
+
   it("keeps ended-cycle manual cases in an explicit read-only year view", async () => {
     const created = await pool.query(
       `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
