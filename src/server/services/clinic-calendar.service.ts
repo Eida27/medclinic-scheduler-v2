@@ -1551,6 +1551,7 @@ export async function listClinicClosureManualCases(
     reasonCode?: string;
     status?: string;
     closureGroupId?: string;
+    importGroupId?: string;
     date?: string;
     service?: string;
     academicYearStart?: number;
@@ -1563,6 +1564,8 @@ export async function listClinicClosureManualCases(
   const search = raw.search?.trim() || null;
   const reasonCode = raw.reasonCode?.trim() || null;
   const closureGroupId = raw.closureGroupId?.trim() || null;
+  const importGroupId = raw.importGroupId?.trim() || null;
+  if (importGroupId && !z.uuid().safeParse(importGroupId).success) throw validationError("Choose a valid import group.");
   const date = raw.date?.trim() || null;
   const service = raw.service?.trim() || null;
   const academicYearStart = raw.academicYearStart ?? null;
@@ -1662,6 +1665,12 @@ export async function listClinicClosureManualCases(
         AND ($2::text IS NULL OR manual_case.reason_code=$2)
         AND ($3::text IS NULL OR manual_case.status=$3)
         AND ($4::uuid IS NULL OR manual_case.closure_group_id=$4)
+        AND ($10::uuid IS NULL OR EXISTS (
+          SELECT 1 FROM appointments source LEFT JOIN schedule_batches source_batch ON source_batch.id=source.batch_id
+            LEFT JOIN ovpsa_first_year_batches source_ovpsa ON source_ovpsa.id=source.ovpsa_batch_id
+            JOIN schedule_import_groups import_group ON import_group.id=COALESCE(source_batch.import_group_id,source_ovpsa.source_import_group_id)
+          WHERE source.id IN (manual_case.affected_laboratory_appointment_id,manual_case.affected_physical_exam_appointment_id)
+            AND import_group.id=$10 AND import_group.academic_year_start=manual_case.schedule_cycle_start))
         AND ($5::date IS NULL OR $5 BETWEEN closure.start_date AND closure.end_date
              OR laboratory.appointment_date=$5 OR physical.appointment_date=$5)
         AND ($6::text IS NULL
@@ -1676,7 +1685,7 @@ export async function listClinicClosureManualCases(
       ORDER BY manual_case.created_at,manual_case.id
       LIMIT $8 OFFSET $9`,
     [search, reasonCode, status || null, closureGroupId, date, service,
-      academicYearStart, pageSize, (page - 1) * pageSize],
+      academicYearStart, pageSize, (page - 1) * pageSize, importGroupId],
     );
     const appointmentIds = result.rows.flatMap((row) =>
       [
@@ -1817,6 +1826,7 @@ export async function assertAutomaticManualDateAvailable(
   appointment: AppointmentState,
   date: string,
   scheduleCycleStart: number,
+  projectedUsedCapacity?: number,
 ) {
   const isBlocked = await isSchedulingDateBlocked(client, {
     scheduleType: appointment.scheduleType,
@@ -1851,7 +1861,7 @@ export async function assertAutomaticManualDateAvailable(
     cycleStartDate: `${scheduleCycleStart}-08-01`,
     cycleClosingDate: destination.cycleClosingDate,
     isBlocked,
-    usedCapacity: destination.usedCapacity,
+    usedCapacity: projectedUsedCapacity ?? destination.usedCapacity,
     maxDailyCapacity: destination.maxDailyCapacity,
   });
 }
@@ -1875,6 +1885,7 @@ export async function resolveClinicClosureManualCaseWithClient(
   caseId: string,
   request: ClinicManualCaseResolutionRequest,
   actor: SessionUser,
+  options?: { projectedUsedCapacity: ReadonlyMap<string, number> },
 ) {
   assertAdmin(actor);
   await lockClinicManualResolutionCases(client, [caseId]);
@@ -1982,7 +1993,8 @@ export async function resolveClinicClosureManualCaseWithClient(
     }
     for (const appointment of moving) {
       const date = dateByType[appointment.scheduleType]!;
-      await assertAutomaticManualDateAvailable(client, appointment, date, manualCase.schedule_cycle_start);
+      await assertAutomaticManualDateAvailable(client, appointment, date, manualCase.schedule_cycle_start,
+        options?.projectedUsedCapacity.get(appointment.id));
     }
     await client.query(
       `UPDATE appointments

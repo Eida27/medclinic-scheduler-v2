@@ -13,6 +13,7 @@ export async function GET(request: Request) {
       reasonCode: search.get("reasonCode") ?? undefined,
       status: search.get("status") ?? undefined,
       closureGroupId: search.get("closureGroupId") ?? undefined,
+      importGroupId: search.get("importGroupId") ?? undefined,
       date: search.get("date") ?? undefined,
       service: search.get("service") ?? undefined,
       academicYearStart: search.has("academicYearStart")
