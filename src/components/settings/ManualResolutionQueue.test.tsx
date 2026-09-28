@@ -41,6 +41,48 @@ function jsonResponse(body: unknown, status = 200) {
 describe("ManualResolutionQueue", () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it("retains ordinary selection across pages and clears it when filters change", async () => {
+    const second = { ...manualCase, id: "80000000-0000-4000-8000-000000000002", studentNumber: "24-0002", studentName: "Reyes, Bea" };
+    const fetchMock = vi.fn().mockImplementation((url: string) => jsonResponse({ data: {
+      page: url.includes("page=2") ? 2 : 1, pageSize: 20, total: 21,
+      items: [url.includes("page=2") ? second : manualCase],
+    } }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ManualResolutionQueue />);
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "Santos, Ana M." });
+    await user.click(screen.getByRole("checkbox", { name: "Select 24-0001" }));
+    expect(screen.getByText("1 selected")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await screen.findByRole("heading", { name: "Reyes, Bea" });
+    await user.click(screen.getByRole("checkbox", { name: "Select 24-0002" }));
+    expect(screen.getByText("2 selected")).toBeVisible();
+    await user.type(screen.getByLabelText("Search manual cases"), "Reyes");
+    await user.click(screen.getByRole("button", { name: "Apply filters" }));
+    expect(screen.getByText("0 selected")).toBeVisible();
+  });
+
+  it("selects the full server group and reports blocked cases", async () => {
+    const second = { ...manualCase, id: "80000000-0000-4000-8000-000000000002", studentNumber: "24-0002" };
+    const fetchMock = vi.fn().mockImplementation((url: string) => Promise.resolve(jsonResponse({ data:
+      url.includes("/selection?") ? {
+        total: 3, eligibleCount: 2, blockedCount: 1, blockedReasons: { PROTECTED_RESULTS_EXIST: 1 }, tooMany: false,
+        items: [manualCase, second].map((item) => ({ caseId: item.id, expectedOptimisticToken: item.optimisticToken,
+          studentNumber: item.studentNumber, academicYearStart: 2026, laboratory: { status: "AWAITING_RESCHEDULE" }, physicalExam: { status: "AWAITING_RESCHEDULE" } })),
+      } : { page: 1, pageSize: 20, total: 1, selectedYearState: "CURRENT", items: [manualCase] },
+    })));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ManualResolutionQueue />);
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "Santos, Ana M." });
+    await user.type(screen.getByLabelText("Academic year"), "2026");
+    await user.click(screen.getByRole("button", { name: "Apply filters" }));
+    await user.click(screen.getByRole("button", { name: "Select eligible in this group" }));
+    expect(await screen.findByText("2 selected")).toBeVisible();
+    expect(screen.getByText(/3 matching; 2 eligible; 1 blocked/)).toBeVisible();
+    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain("academicYearStart=2026");
+  });
+
   it("opens a selected academic year as read-only history", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ data: { page: 1, pageSize: 20, total: 0, items: [] } }))
@@ -308,7 +350,11 @@ describe("ManualResolutionQueue", () => {
       allocations: [],
     };
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(jsonResponse({ data: { page: 1, pageSize: 20, total: 2, items: ovpsaCases } }))
+      .mockResolvedValueOnce(jsonResponse({ data: { page: 1, pageSize: 20, total: 21, items: [ovpsaCases[0]] } }))
+      .mockResolvedValueOnce(jsonResponse({ data: { batchId: ovpsaCases[0].ovpsaBatchId,
+        optimisticToken: ovpsaCases[0].ovpsaBatchOptimisticToken,
+        cases: ovpsaCases.map((item) => ({ caseId: item.id, expectedOptimisticToken: item.optimisticToken,
+          studentNumber: item.studentNumber, studentName: item.studentName })) } }))
       .mockResolvedValueOnce(jsonResponse({ data: batchPreview }))
       .mockResolvedValueOnce(jsonResponse({ data: { ...batchPreview, revisionId: "revision-2", revisionNumber: 2 } }))
       .mockResolvedValueOnce(jsonResponse({ data: { page: 1, pageSize: 20, total: 0, items: [] } }));
@@ -316,13 +362,14 @@ describe("ManualResolutionQueue", () => {
     render(<ManualResolutionQueue />);
     const user = userEvent.setup();
     expect(await screen.findByRole("heading", { name: "Coordinated OVPSA batch recovery" })).toBeVisible();
+    await screen.findByText("2 linked students · Mission Hospital Laboratory coordination required");
     await user.type(screen.getByLabelText("Replacement Mission Hospital Laboratory date"), "2026-09-01");
     await user.click(screen.getByRole("button", { name: "Preview OVPSA batch recovery" }));
     expect(await screen.findByText("1 Physical Examination preserved; 1 moved.")).toBeVisible();
     await user.type(screen.getByLabelText("OVPSA batch recovery reason"), "Mission Hospital date approved");
     await user.click(screen.getByRole("button", { name: "Confirm OVPSA batch recovery" }));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
-    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toMatchObject({
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5));
+    expect(JSON.parse(String(fetchMock.mock.calls[3][1]?.body))).toMatchObject({
       caseTokens: ovpsaCases.map((item) => ({
         caseId: item.id,
         expectedOptimisticToken: item.optimisticToken,

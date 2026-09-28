@@ -14,6 +14,8 @@ import type {
   ClinicManualCasePageDto,
   OvpsaClosureBatchRecoveryPreview,
 } from "@/types/clinic-calendar";
+import type { ManualSelectionResult, SelectedManualCase } from "@/types/manual-resolution-batch";
+import { ManualResolutionBatchDialog } from "./ManualResolutionBatchDialog";
 
 type AppointmentSummary = NonNullable<ClinicManualCaseDto["laboratory"]>;
 type ManualCase = ClinicManualCaseDto;
@@ -23,6 +25,7 @@ type Filters = {
   search: string;
   reasonCode: string;
   closureGroupId: string;
+  importGroupId: string;
   date: string;
   service: string;
   status: string;
@@ -33,6 +36,7 @@ const initialFilters: Filters = {
   search: "",
   reasonCode: "",
   closureGroupId: "",
+  importGroupId: "",
   date: "",
   service: "",
   status: "OPEN",
@@ -80,10 +84,12 @@ function AppointmentLine({ service, appointment }: {
   );
 }
 
-function CaseResolutionCard({ manualCase, onResolved, readOnly = false }: {
+function CaseResolutionCard({ manualCase, onResolved, readOnly = false, selected = false, onSelect }: {
   manualCase: ManualCase;
   onResolved(message: string): Promise<void>;
   readOnly?: boolean;
+  selected?: boolean;
+  onSelect?(): void;
 }) {
   const [laboratoryDate, setLaboratoryDate] = useState("");
   const [physicalExamDate, setPhysicalExamDate] = useState("");
@@ -130,6 +136,7 @@ function CaseResolutionCard({ manualCase, onResolved, readOnly = false }: {
   return (
     <Card className="grid gap-4 p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
+        {onSelect ? <label className="flex items-center gap-2 text-sm font-semibold"><input type="checkbox" aria-label={`Select ${manualCase.studentNumber}`} checked={selected} onChange={onSelect} />Select for batch</label> : null}
         <div>
           <h3 className="text-lg font-bold text-ink">{manualCase.studentName}</h3>
           <p className="font-mono text-sm font-semibold text-muted">{manualCase.studentNumber}</p>
@@ -287,23 +294,35 @@ function OvpsaBatchRecoveryCard({ cases, onResolved }: {
   onResolved(message: string): Promise<void>;
 }) {
   const batchId = cases[0].ovpsaBatchId!;
-  const optimisticToken = cases[0].ovpsaBatchOptimisticToken!;
   const [laboratoryDate, setLaboratoryDate] = useState("");
   const [reason, setReason] = useState("");
   const [preview, setPreview] = useState<OvpsaClosureBatchRecoveryPreview>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [context, setContext] = useState<{ batchId: string; optimisticToken: string; cases: Array<{ caseId: string; expectedOptimisticToken: string; studentNumber: string; studentName: string }> }>();
+
+  useEffect(() => {
+    let active = true;
+    void fetch(`/api/clinic-unavailable-dates/manual-cases/ovpsa-batches/${batchId}`, { cache: "no-store" })
+      .then(async (response) => {
+        const payload = await response.json() as { data?: typeof context; error?: { message?: string } };
+        if (!response.ok || !payload.data) throw new Error(payload.error?.message ?? "Unable to load the full OVPSA batch.");
+        if (active) setContext(payload.data);
+      }).catch((caught) => { if (active) setError(caught instanceof Error ? caught.message : "Unable to load the full OVPSA batch."); });
+    return () => { active = false; };
+  }, [batchId]);
 
   async function previewBatch() {
     setBusy(true);
     setError(undefined);
     try {
+      if (!context) throw new Error("Wait for the full OVPSA batch to load.");
       const response = await fetch(
         `/api/clinic-unavailable-dates/manual-cases/ovpsa-batches/${batchId}/preview`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ optimisticToken, replacementLaboratoryDate: laboratoryDate }),
+          body: JSON.stringify({ optimisticToken: context.optimisticToken, replacementLaboratoryDate: laboratoryDate }),
         },
       );
       const payload = await response.json() as { data?: OvpsaClosureBatchRecoveryPreview; error?: { message?: string } };
@@ -317,7 +336,7 @@ function OvpsaBatchRecoveryCard({ cases, onResolved }: {
   }
 
   async function confirmBatch() {
-    if (!preview) return;
+    if (!preview || !context) return;
     setBusy(true);
     setError(undefined);
     try {
@@ -327,19 +346,16 @@ function OvpsaBatchRecoveryCard({ cases, onResolved }: {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            optimisticToken,
+            optimisticToken: context.optimisticToken,
             replacementLaboratoryDate: laboratoryDate,
-            caseTokens: cases.map((item) => ({
-              caseId: item.id,
-              expectedOptimisticToken: item.optimisticToken,
-            })),
+            caseTokens: context.cases.map((item) => ({ caseId: item.caseId, expectedOptimisticToken: item.expectedOptimisticToken })),
             reason,
           }),
         },
       );
       const payload = await response.json() as { error?: { message?: string } };
       if (!response.ok) throw new Error(payload.error?.message ?? "Unable to confirm OVPSA recovery.");
-      await onResolved(`Recovered ${cases.length} linked OVPSA cases atomically.`);
+      await onResolved(`Recovered ${context.cases.length} linked OVPSA cases atomically.`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to confirm OVPSA recovery.");
     } finally {
@@ -351,10 +367,10 @@ function OvpsaBatchRecoveryCard({ cases, onResolved }: {
     <Card className="grid gap-4 border-cpu-gold/50 p-5">
       <div>
         <h3 className="text-lg font-bold text-ink">Coordinated OVPSA batch recovery</h3>
-        <p className="text-sm text-muted">{cases.length} linked students · Mission Hospital Laboratory coordination required</p>
+        <p className="text-sm text-muted">{context?.cases.length ?? "Loading"} linked students · Mission Hospital Laboratory coordination required</p>
       </div>
       <div className="grid gap-1 text-sm">
-        {cases.map((item) => <p key={item.id}>{item.studentNumber} · {item.studentName}</p>)}
+        {(context?.cases ?? []).map((item) => <p key={item.caseId}>{item.studentNumber} · {item.studentName}</p>)}
       </div>
       <label className="grid gap-1 text-sm font-semibold">
         Replacement Mission Hospital Laboratory date
@@ -365,12 +381,13 @@ function OvpsaBatchRecoveryCard({ cases, onResolved }: {
           onInput={(event) => { setLaboratoryDate(event.currentTarget.value); setPreview(undefined); }}
         />
       </label>
-      <Button disabled={busy || !laboratoryDate} onClick={() => { void previewBatch(); }} aria-label="Preview OVPSA batch recovery">
+      <Button disabled={busy || !context || !laboratoryDate} onClick={() => { void previewBatch(); }} aria-label="Preview OVPSA batch recovery">
         {busy ? "Checking…" : "Preview coordinated recovery"}
       </Button>
       {preview ? (
         <div className="grid gap-3 rounded-xl border border-line bg-canvas/60 p-3 text-sm">
           <p>{preview.preservedPhysicalExamCount} Physical Examination preserved; {preview.movedPhysicalExamCount} moved.</p>
+          <div className="max-h-48 overflow-auto">{preview.allocations.map((item) => <p key={item.studentNumber}>{item.studentNumber}: {item.physicalExamAction} Physical Examination {item.currentPhysicalExamDate} → {item.proposedPhysicalExamDate}</p>)}</div>
           <label className="grid gap-1 font-semibold">
             Confirmation reason
             <Input aria-label="OVPSA batch recovery reason" value={reason} onChange={(event) => setReason(event.target.value)} />
@@ -393,6 +410,9 @@ export function ManualResolutionQueue() {
   const [busy, setBusy] = useState(true);
   const [message, setMessage] = useState<string>();
   const [error, setError] = useState<string>();
+  const [selected, setSelected] = useState<Record<string, SelectedManualCase>>({});
+  const [batchOpen, setBatchOpen] = useState(false);
+  const [selectionSummary, setSelectionSummary] = useState<string>();
   const loadedDay = useRef<string | null>(null);
   const requestVersion = useRef(0);
 
@@ -408,7 +428,18 @@ export function ManualResolutionQueue() {
       const response = await fetch(`/api/clinic-unavailable-dates/manual-cases?${params}`, { cache: "no-store" });
       const payload = await response.json() as { data?: ManualCasePage; error?: { message?: string } };
       if (!response.ok || !payload.data) throw new Error(payload.error?.message ?? "Unable to load manual cases.");
-      if (version === requestVersion.current) setData(payload.data);
+      if (version === requestVersion.current) {
+        setData(payload.data);
+        setSelected((current) => {
+          if (payload.data?.selectedYearState === "ENDED" || payload.data?.selectedYearState === "UNKNOWN") return {};
+          const next = { ...current };
+          for (const item of payload.data?.items ?? []) {
+            if (next[item.id] && (item.status !== "OPEN" || item.optimisticToken !== next[item.id].expectedOptimisticToken || item.currentAssignmentBlock)) delete next[item.id];
+          }
+          return next;
+        });
+        setBatchOpen(false);
+      }
     } catch (caught) {
       if (version === requestVersion.current) {
         setError(caught instanceof Error ? caught.message : "Unable to load manual cases.");
@@ -451,6 +482,9 @@ export function ManualResolutionQueue() {
     setData(undefined);
     setBusy(true);
     setMessage(undefined);
+    if (Object.keys(filters).some((key) => filters[key as keyof Filters] !== draftFilters[key as keyof Filters])) {
+      setSelected({}); setBatchOpen(false); setSelectionSummary(undefined);
+    }
     if (repeat) void load();
   }
 
@@ -466,6 +500,37 @@ export function ManualResolutionQueue() {
   }
   const individualCases = (data?.items ?? []).filter((item) =>
     readOnlySelection || !item.ovpsaBatchId || item.status !== "OPEN");
+  const selectedCases = Object.values(selected);
+  const eligiblePageCases = individualCases.filter((item) => item.status === "OPEN" && !item.currentAssignmentBlock && !item.ovpsaBatchId
+    && (!selectedCases.length || selectedCases[0].academicYearStart === item.academicYearStart));
+  function selectCase(item: ManualCase) {
+    setSelected((current) => {
+      const next = { ...current };
+      if (next[item.id]) delete next[item.id];
+      else next[item.id] = { caseId: item.id, expectedOptimisticToken: item.optimisticToken, studentNumber: item.studentNumber,
+        academicYearStart: item.academicYearStart, needsLaboratory: Boolean(item.laboratory?.affected), needsPhysicalExam: Boolean(item.physicalExam?.affected),
+        hasLaboratory: Boolean(item.laboratory), hasPhysicalExam: Boolean(item.physicalExam) };
+      return next;
+    });
+    setBatchOpen(false);
+  }
+  async function selectGroup() {
+    if (!filters.academicYearStart) { setError("Choose an academic year before selecting a full group."); return; }
+    try {
+      const params = new URLSearchParams({ academicYearStart: filters.academicYearStart });
+      for (const [key, value] of Object.entries(filters)) if (value && key !== "academicYearStart") params.set(key, value);
+      const response = await fetch(`/api/clinic-unavailable-dates/manual-cases/selection?${params}`, { cache: "no-store" });
+      const payload = await response.json() as { data?: ManualSelectionResult; error?: { message?: string } };
+      if (!response.ok || !payload.data) throw new Error(payload.error?.message ?? "Unable to select this group.");
+      const result = payload.data;
+      setSelectionSummary(`${result.total} matching; ${result.eligibleCount} eligible; ${result.blockedCount} blocked${Object.keys(result.blockedReasons).length ? ` (${Object.entries(result.blockedReasons).map(([reason, count]) => `${reason}: ${count}`).join(", ")})` : ""}.`);
+      if (result.tooMany) { setSelected({}); setBatchOpen(false); setError("More than 100 eligible cases match. Narrow the group or select an explicit subset."); return; }
+      setSelected(Object.fromEntries(result.items.map((item) => [item.caseId, { ...item,
+        needsLaboratory: item.laboratory?.status === "AWAITING_RESCHEDULE", needsPhysicalExam: item.physicalExam?.status === "AWAITING_RESCHEDULE",
+        hasLaboratory: Boolean(item.laboratory), hasPhysicalExam: Boolean(item.physicalExam) }])));
+      setBatchOpen(false);
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Unable to select this group."); }
+  }
 
   return (
     <div className="grid gap-5">
@@ -488,6 +553,9 @@ export function ManualResolutionQueue() {
               onChange={(event) => setDraftFilters((current) => ({ ...current, closureGroupId: event.target.value }))}
               placeholder="Closure group ID"
             />
+          </label>
+          <label className="grid gap-1 text-sm font-semibold">Import batch
+            <Input aria-label="Import batch filter" value={draftFilters.importGroupId} onChange={(event) => setDraftFilters((current) => ({ ...current, importGroupId: event.target.value }))} placeholder="Import group ID" />
           </label>
           <label className="grid gap-1 text-sm font-semibold">
             Date
@@ -557,6 +625,18 @@ export function ManualResolutionQueue() {
 
       {message ? <Alert tone="success">{message}</Alert> : null}
       {error ? <Alert tone="danger">{error}</Alert> : null}
+      {!readOnlySelection ? <Card className="grid gap-3 p-4">
+        <p className="font-bold">{selectedCases.length} selected</p>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" disabled={!eligiblePageCases.length || selectedCases.length + eligiblePageCases.filter((item) => !selected[item.id]).length > 100}
+            onClick={() => { setSelected((current) => ({ ...current, ...Object.fromEntries(eligiblePageCases.map((item) => [item.id, { caseId: item.id, expectedOptimisticToken: item.optimisticToken, studentNumber: item.studentNumber, academicYearStart: item.academicYearStart, needsLaboratory: Boolean(item.laboratory?.affected), needsPhysicalExam: Boolean(item.physicalExam?.affected), hasLaboratory: Boolean(item.laboratory), hasPhysicalExam: Boolean(item.physicalExam) }])) })); setBatchOpen(false); }}>Select eligible on this page</Button>
+          <Button variant="secondary" disabled={!filters.academicYearStart || !data?.items.length} onClick={() => { void selectGroup(); }}>Select eligible in this group</Button>
+          <Button variant="secondary" disabled={!selectedCases.length} onClick={() => { setSelected({}); setBatchOpen(false); }}>Clear selection</Button>
+          <Button disabled={!selectedCases.length} onClick={() => setBatchOpen(true)}>Assign schedules ({selectedCases.length})</Button>
+        </div>
+        {selectionSummary ? <p className="text-sm">{selectionSummary}</p> : null}
+      </Card> : null}
+      {batchOpen && selectedCases.length ? <ManualResolutionBatchDialog cases={selectedCases} onClose={() => setBatchOpen(false)} onResolved={async (nextMessage) => { setMessage(nextMessage); setSelected({}); setBatchOpen(false); await load(); }} /> : null}
       {readOnlySelection && data?.selectedYearState !== "UPCOMING" ? (
         <Alert tone="warning">Read-only academic year {filters.academicYearStart}–{Number(filters.academicYearStart) + 1} history</Alert>
       ) : filters.academicYearStart && data?.selectedYearState === "UPCOMING" ? (
@@ -581,6 +661,8 @@ export function ManualResolutionQueue() {
           key={manualCase.id}
           manualCase={manualCase}
           readOnly={readOnlySelection}
+          selected={Boolean(selected[manualCase.id])}
+          onSelect={!readOnlySelection && manualCase.status === "OPEN" && !manualCase.currentAssignmentBlock && !manualCase.ovpsaBatchId && (!selectedCases.length || selectedCases[0].academicYearStart === manualCase.academicYearStart) && (Boolean(selected[manualCase.id]) || selectedCases.length < 100) ? () => selectCase(manualCase) : undefined}
           onResolved={async (nextMessage) => {
             setMessage(nextMessage);
             await load();
