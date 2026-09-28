@@ -186,7 +186,7 @@ describe("PhysicalExamPage", () => {
       "/physical-exam?studentNumber=Ben+Reyes&sort=latest&appointmentDate=2026-08-19&status=NO_SHOW&page=1",
     );
     expect(screen.queryByRole("link", { name: "Next page" })).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Complete examination" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Complete Physical Examination" })).toBeVisible();
     expect(screen.getByRole("columnheader", { name: "Laboratory Status" })).toBeVisible();
     expect(screen.getByText("Completed", { selector: "td span" })).toHaveClass("bg-emerald-100");
     expect(screen.getByRole("link", { name: "Ben Reyes" })).toHaveAttribute(

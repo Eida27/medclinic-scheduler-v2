@@ -6,9 +6,9 @@ const transactionControl = /^\s*(BEGIN|START\s+TRANSACTION|COMMIT|ROLLBACK)\s*;\
 describe("migration transaction ownership", () => {
   it("keeps migration transaction ownership in the TypeScript runner", async () => {
     const migrations = await sqlFiles(projectPath("database", "migrations"));
-    expect(migrations).toHaveLength(28);
+    expect(migrations).toHaveLength(29);
     expect(migrations[0]?.name.startsWith("001_")).toBe(true);
-    expect(migrations.at(-1)?.name).toBe("028_final_defense_clinical_workflows.sql");
+    expect(migrations.at(-1)?.name).toBe("029_manual_resolution_batch_requests.sql");
 
     const violations = migrations.flatMap((migration) =>
       [...migration.sql.matchAll(transactionControl)].map((match) => ({
