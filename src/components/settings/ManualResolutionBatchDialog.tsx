@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -22,6 +22,9 @@ export function ManualResolutionBatchDialog({ cases, onClose, onResolved, initia
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const opener = useRef<HTMLElement | null>(typeof document !== "undefined" && document.activeElement instanceof HTMLElement
+    ? document.activeElement : null);
+  useEffect(() => () => opener.current?.focus(), []);
   const tokens = useMemo(() => cases.map(({ caseId, expectedOptimisticToken }) => ({ caseId, expectedOptimisticToken })), [cases]);
   const needsLaboratory = cases.some((item) => item.needsLaboratory || (replaceRelatedServices && item.hasLaboratory));
   const needsPhysicalExam = cases.some((item) => item.needsPhysicalExam || (replaceRelatedServices && item.hasPhysicalExam));
@@ -47,8 +50,10 @@ export function ManualResolutionBatchDialog({ cases, onClose, onResolved, initia
     } finally { setBusy(false); }
   }
 
-  return <div role="dialog" aria-modal="true" aria-label="Assign schedules to selected cases" onKeyDown={(event) => { if (event.key === "Escape") onClose(); }} className="grid gap-4 rounded-xl border border-cpu-navy bg-surface p-5 shadow-lg">
-    <div className="flex items-start justify-between gap-3"><div><h2 className="text-lg font-bold">Assign schedules</h2><p>{cases.length} selected students share the dates below.</p></div><Button variant="secondary" autoFocus onClick={onClose}>Close</Button></div>
+  return <div role="dialog" aria-label="Assign schedules to selected cases" onKeyDown={(event) => {
+    if (event.key === "Escape") { event.preventDefault(); if (!busy) onClose(); }
+  }} className="grid gap-4 rounded-xl border border-cpu-navy bg-surface p-5 shadow-lg">
+    <div className="flex items-start justify-between gap-3"><div><h2 className="text-lg font-bold">Assign schedules</h2><p>{cases.length} selected students share the dates below.</p></div><Button variant="secondary" autoFocus disabled={busy} onClick={onClose}>Close</Button></div>
     {hasRelated ? <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={replaceRelatedServices} onChange={(event) => { setReplaceRelatedServices(event.target.checked); setLaboratoryDate(""); setPhysicalExamDate(""); setPreview(undefined); setRequestId(crypto.randomUUID()); }} />Move related unaffected services too</label> : null}
     {needsLaboratory ? <ManualResolutionDatePicker service="LABORATORY" cases={tokens} replaceRelatedServices={replaceRelatedServices} value={laboratoryDate} initialMonth={initialMonth} onChange={(date) => { setLaboratoryDate(date); setPreview(undefined); setRequestId(crypto.randomUUID()); }} /> : null}
     {needsPhysicalExam ? <ManualResolutionDatePicker service="PHYSICAL_EXAM" cases={tokens} replaceRelatedServices={replaceRelatedServices} value={physicalExamDate} initialMonth={initialMonth} onChange={(date) => { setPhysicalExamDate(date); setPreview(undefined); setRequestId(crypto.randomUUID()); }} /> : null}

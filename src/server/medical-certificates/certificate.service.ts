@@ -186,7 +186,18 @@ export async function completePhysicalExam(appointmentId: string, raw: unknown, 
   if (replay) return replay;
   const certificateId = randomUUID();
   const certificateNumber = `MC-${input.examinationDate.slice(0, 4)}-${certificateId.slice(0, 8).toUpperCase()}`;
-  const prepared = await transaction((client) => clinicalContext(client, appointmentId, input, actor, certificateNumber));
+  let prepared: Context;
+  try {
+    prepared = await transaction((client) => clinicalContext(client, appointmentId, input, actor, certificateNumber));
+  } catch (error) {
+    // Another identical request can commit after the first replay lookup but before preparation.
+    const committed = await transaction(async (client) => {
+      await currentCpuActor(client, actor);
+      return replayRequest<Outcome>(client, actor, input.requestId, "ISSUE_CERTIFICATE", hash);
+    });
+    if (committed) return committed;
+    throw error;
+  }
   const jpeg = await renderMedicalCertificate(prepared.render, "issued");
   const digest = createHash("sha256").update(jpeg).digest("hex");
   return transaction(async (client) => {

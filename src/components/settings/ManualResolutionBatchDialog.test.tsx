@@ -28,3 +28,22 @@ it("requires a reviewed preview and invalidates it when the reason changes", asy
   await user.type(screen.getByLabelText("Batch resolution reason"), " today");
   await waitFor(() => expect(screen.queryByRole("button", { name: "Confirm assignments" })).not.toBeInTheDocument());
 });
+
+it("restores focus to the opener when the inline batch dialog closes", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: {
+    month: "2026-10", service: "PHYSICAL_EXAM", required: 0, days: [],
+  } }), { status: 200 })));
+  const opener = document.createElement("button");
+  opener.textContent = "Open batch";
+  document.body.append(opener);
+  opener.focus();
+  const onClose = vi.fn();
+  const { unmount } = render(<ManualResolutionBatchDialog cases={[]} onClose={onClose} onResolved={vi.fn()} />);
+  expect(screen.getByRole("dialog", { name: "Assign schedules to selected cases" })).not.toHaveAttribute("aria-modal", "true");
+  expect(screen.getByRole("button", { name: "Close" })).toHaveFocus();
+  await userEvent.setup().keyboard("{Escape}");
+  expect(onClose).toHaveBeenCalledOnce();
+  unmount();
+  expect(opener).toHaveFocus();
+  opener.remove();
+});

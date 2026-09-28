@@ -335,4 +335,3 @@ export async function getManualResolutionAvailability(raw: unknown, actor: Sessi
     return { month: input.month, service: input.service, required: moving.length, days };
   });
 }
-

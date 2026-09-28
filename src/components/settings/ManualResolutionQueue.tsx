@@ -640,7 +640,7 @@ export function ManualResolutionQueue() {
         </div>
         {selectionSummary ? <p className="text-sm">{selectionSummary}</p> : null}
       </Card> : null}
-      {batchOpen && selectedCases.length ? <ManualResolutionBatchDialog cases={selectedCases} onClose={() => setBatchOpen(false)} onResolved={async (nextMessage) => { setMessage(nextMessage); setSelected({}); setBatchOpen(false); await load(); }} /> : null}
+      {batchOpen && selectedCases.length ? <ManualResolutionBatchDialog cases={selectedCases} onClose={() => setBatchOpen(false)} onResolved={async (nextMessage) => { setMessage(nextMessage); setSelected({}); setSelectionSummary(undefined); setBatchOpen(false); await load(); }} /> : null}
       {readOnlySelection && data?.selectedYearState !== "UPCOMING" ? (
         <Alert tone="warning">Read-only academic year {filters.academicYearStart}–{Number(filters.academicYearStart) + 1} history</Alert>
       ) : filters.academicYearStart && data?.selectedYearState === "UPCOMING" ? (
@@ -656,6 +656,7 @@ export function ManualResolutionQueue() {
           cases={cases}
           onResolved={async (nextMessage) => {
             setMessage(nextMessage);
+            setSelected({}); setSelectionSummary(undefined); setBatchOpen(false);
             await load();
           }}
         />
@@ -669,6 +670,7 @@ export function ManualResolutionQueue() {
           onSelect={!readOnlySelection && manualCase.status === "OPEN" && !manualCase.currentAssignmentBlock && !manualCase.ovpsaBatchId && (!selectedCases.length || selectedCases[0].academicYearStart === manualCase.academicYearStart) && (Boolean(selected[manualCase.id]) || selectedCases.length < 100) ? () => selectCase(manualCase) : undefined}
           onResolved={async (nextMessage) => {
             setMessage(nextMessage);
+            setSelected({}); setSelectionSummary(undefined); setBatchOpen(false);
             await load();
           }}
         />
