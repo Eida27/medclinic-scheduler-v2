@@ -51,6 +51,7 @@ export default async function PhysicalExamPage({
   return (
     <ClinicPublishedSchedule
       canBulkReplace
+      canCompletePhysicalExam={user.role === "ADMIN" || (user.role === "CLINIC_STAFF" && user.clinicCode === "CPU_CLINIC")}
       basePath="/physical-exam"
       title="Published physical examination schedule"
       description={`${result.total} published CPU Clinic physical examination appointment${singular ? "" : "s"} ${singular ? "matches" : "match"} the current filters.`}

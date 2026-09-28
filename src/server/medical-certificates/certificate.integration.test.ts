@@ -137,4 +137,21 @@ describe("atomic examination and certificate issuance", () => {
     }, admin)).rejects.toMatchObject({ code: "CERTIFICATE_ALREADY_ISSUED", status: 409 });
     expect((await getLaboratoryChecklist(labId, admin)).verifiedCount).toBe(3);
   });
+
+  it("returns one certificate for two concurrent identical completion requests", async () => {
+    const { labId, peId } = await fixture();
+    let checklist = await getLaboratoryChecklist(labId, admin);
+    for (const testCode of ["CBC", "URINE", "STOOL"] as const) {
+      checklist = await setLaboratoryTestVerification(labId,
+        { testCode, checked: true, expectedVersion: checklist.version }, admin);
+    }
+    const input = { requestId: randomUUID(), physicianId, physicianVersion: 1,
+      examinationDate: "2026-09-23", sex: "Female", classification: "C", remarks: "Requires follow-up",
+      lateReason: "Encoding the examination after the scheduled visit", attested: true };
+    const outcomes = await Promise.all([completePhysicalExam(peId, input, admin), completePhysicalExam(peId, input, admin)]);
+    expect(outcomes[1]).toEqual(outcomes[0]);
+    const stored = await pool.query<{ count: number }>(
+      "SELECT count(*)::int AS count FROM medical_certificate_revisions WHERE appointment_id=$1", [peId]);
+    expect(stored.rows[0].count).toBe(1);
+  });
 });

@@ -134,14 +134,25 @@ describe("ClinicPublishedSchedule", () => {
     expect(within(laboratoryCell).queryByRole("button", { name: label })).not.toBeInTheDocument();
     expect(within(laboratoryCell).queryByRole("link", { name: label })).not.toBeInTheDocument();
     if (laboratoryStatus === "COMPLETED") {
-      expect(within(row).getByRole("link", { name: "Complete examination" })).toHaveAttribute("href", "/physical-exam/appointment-1");
+      expect(within(row).queryByRole("button", { name: "Complete Physical Examination" })).not.toBeInTheDocument();
       expect(within(row).queryByText(/Laboratory must be completed/)).not.toBeInTheDocument();
     } else {
       within(row).getByText(
         "Laboratory must be completed before Physical Examination can be marked completed.",
       );
-      expect(within(row).queryByRole("link", { name: "Complete examination" })).not.toBeInTheDocument();
+      expect(within(row).queryByRole("button", { name: "Complete Physical Examination" })).not.toBeInTheDocument();
     }
+  });
+
+  it("shows an authorized completion button without navigating and opens the dialog", () => {
+    render(<ClinicPublishedSchedule basePath="/physical-exam" title="Physical Examination"
+      description="Current appointments" emptyMessage="No appointments" page={1} total={1}
+      filters={{}} showLaboratoryStatus canCompletePhysicalExam appointments={[{ ...appointment,
+        scheduleType: "PHYSICAL_EXAM", laboratoryStatus: "COMPLETED", isManuallyLocked: false }]} />);
+    expect(screen.getByRole("link", { name: "Ana Maria Santos Jr." })).toHaveAttribute("href", "/physical-exam/appointment-1");
+    fireEvent.click(screen.getByRole("button", { name: "Complete Physical Examination" }));
+    expect(screen.getByRole("dialog")).toBeVisible();
+    expect(window.location.pathname).not.toContain("appointment-1");
   });
 
   it("shows read-only Laboratory test progress on a Physical Examination row", () => {

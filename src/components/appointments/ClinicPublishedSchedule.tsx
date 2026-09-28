@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { AppointmentPagination } from "@/components/appointments/AppointmentPagination";
 import { BulkReplacementDialog, type SelectedReplacement } from "@/components/appointments/BulkReplacementDialog";
+import { PhysicalExamCompletionDialog } from "@/components/appointments/PhysicalExamCompletionDialog";
+import { CertificateDownload } from "@/components/medical-certificates/CertificateDownload";
 import { LaboratoryChecklist } from "@/components/appointments/LaboratoryChecklist";
 import type { AppointmentListSort } from "@/components/appointments/appointment-list-sort";
 import { operationalStatusLabel } from "@/components/appointments/status-labels";
@@ -48,6 +50,7 @@ type ClinicPublishedScheduleProps = {
   appointments: ClinicAppointment[];
   showLaboratoryStatus?: boolean;
   canBulkReplace?: boolean;
+  canCompletePhysicalExam?: boolean;
 };
 
 function laboratoryStatusBadge(status: ClinicAppointment["laboratoryStatus"]) {
@@ -78,7 +81,10 @@ export function ClinicPublishedSchedule({
   appointments,
   showLaboratoryStatus = false,
   canBulkReplace = false,
+  canCompletePhysicalExam = false,
 }: ClinicPublishedScheduleProps) {
+  const [completionId, setCompletionId] = useState<string>();
+  const [completion, setCompletion] = useState<{ certificateId: string; classification: string }>();
   const filterKey = useMemo(() => JSON.stringify({ basePath, studentNumber: filters.studentNumber,
     appointmentDate: filters.appointmentDate, status: filters.status,
     academicYearStart: filters.academicYearStart }), [basePath, filters.studentNumber,
@@ -116,6 +122,13 @@ export function ClinicPublishedSchedule({
   return (
     <>
       <PageHeader title={title} description={description} />
+      {completion ? <div role="status" className="rounded-xl border border-emerald-300 bg-emerald-50 p-4 font-semibold">
+        Physical Examination completed — Class {completion.classification}.{" "}
+        <CertificateDownload certificateId={completion.certificateId} audience="staff" />
+      </div> : null}
+      {completionId ? <PhysicalExamCompletionDialog key={completionId} appointmentId={completionId}
+        onClose={() => setCompletionId(undefined)}
+        onCompleted={(issue, classification) => setCompletion({ certificateId: issue.certificateId, classification })} /> : null}
       <Card>
         <form className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
           <label className="grid gap-1.5 text-sm font-bold text-ink">
@@ -256,12 +269,13 @@ export function ClinicPublishedSchedule({
                             <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-800">
                               {operationalStatusLabel(appointment.status)}
                             </span>
-                            {appointment.status !== "COMPLETED" ? (
-                              appointment.laboratoryStatus === "COMPLETED" ? (
-                                <Link className="text-xs font-semibold text-cpu-navy underline" href={`${basePath}/${appointment.id}`}>
-                                  Complete examination
-                                </Link>
-                              ) : <span className="text-xs text-muted">{physicalCompletionBlockReason}</span>
+                            {appointment.status !== "COMPLETED" && !appointment.academicYearEnded ? (
+                              appointment.laboratoryStatus !== "COMPLETED" ?
+                                <span className="text-xs text-muted">{physicalCompletionBlockReason}</span>
+                              : canCompletePhysicalExam ? (
+                                <button type="button" className="text-xs font-semibold text-cpu-navy underline"
+                                  onClick={() => setCompletionId(appointment.id)}>Complete Physical Examination</button>
+                              ) : null
                             ) : null}
                           </>
                         )}

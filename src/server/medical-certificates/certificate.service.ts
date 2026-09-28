@@ -199,9 +199,12 @@ export async function completePhysicalExam(appointmentId: string, raw: unknown, 
       { studentNumber: scope.studentNumber, scheduleType: "LABORATORY" },
       { studentNumber: scope.studentNumber, scheduleType: "PHYSICAL_EXAM" },
     ]);
+    // An identical request may have committed while this transaction waited for the scope lock.
+    const committed = await replayRequest<Outcome>(client, actor, input.requestId, "ISSUE_CERTIFICATE", hash);
+    if (committed) return committed;
     const current = await clinicalContext(client, appointmentId, input, actor, certificateNumber);
     if (!sameContext(prepared, current)) {
-      throw new AppError("EXAMINATION_STALE", "The appointment or clinical record changed. Refresh and preview again.", 409);
+      throw new AppError("EXAMINATION_STALE", "The record changed. Refresh and review the details.", 409);
     }
     const revisionId = randomUUID();
     await client.query(`INSERT INTO medical_certificate_revisions

@@ -13,6 +13,7 @@ import { requireUser } from "@/server/auth/current-user";
 import { transaction } from "@/server/db/pool";
 import { loadLaboratoryChecklist } from "@/server/laboratory/laboratory-checklist.repository";
 import { certificateHistoryForAppointment, issuedCertificateForAppointment } from "@/server/medical-certificates/certificate.service";
+import { loadPhysicalExamCompletionContext } from "@/server/medical-certificates/physical-exam-completion-context.service";
 import { listPhysicians } from "@/server/medical-certificates/physician.service";
 import { getPublishedAppointment } from "@/server/repositories/appointments.repository";
 import type { HistoricalStaffActor } from "@/types/roles";
@@ -62,6 +63,9 @@ export async function AppointmentDetail({
   const pairedLaboratoryChecklist = appointment.scheduleType === "PHYSICAL_EXAM" && appointment.pairedLaboratoryAppointmentId
     ? await transaction((client) => loadLaboratoryChecklist(client, appointment.pairedLaboratoryAppointmentId!))
     : null;
+  const completionContext = appointment.scheduleType === "PHYSICAL_EXAM" && !issuedCertificate
+    && !appointment.academicYearEnded && ["PENDING", "NO_SHOW"].includes(appointment.status)
+    ? await loadPhysicalExamCompletionContext(appointmentId, user) : null;
 
   return (
     <>
@@ -119,21 +123,7 @@ export async function AppointmentDetail({
           {issuedCertificate ? <CertificateRevisionPanel certificate={issuedCertificate}
             physicians={physicians} canRevoke={user.role === "ADMIN"} canCorrect={!appointment.academicYearEnded} />
           : !appointment.academicYearEnded && ["PENDING", "NO_SHOW"].includes(appointment.status) ? (
-            <PhysicalExamCompletionForm
-              appointmentId={appointmentId}
-              studentName={String(appointment.studentName)}
-              studentNumber={String(appointment.studentNumber)}
-              appointmentDate={String(appointment.appointmentDate)}
-              scheduleCycleStart={appointment.scheduleCycleStart}
-              dateOfBirth={appointment.dateOfBirth}
-              studentAcademicSnapshot={appointment.certificateStudentName ? {
-                studentName: appointment.certificateStudentName,
-                collegeName: appointment.certificateCollegeName ?? "",
-                programName: appointment.certificateProgramName ?? "",
-                yearLevel: appointment.certificateYearLevel,
-              } : null}
-              physicians={physicians}
-            />
+            <PhysicalExamCompletionForm {...completionContext!} />
           ) : <p className="text-sm text-muted">No issued certificate is available.</p>}
           {certificateHistory.length ? <div className="mt-6 border-t border-line pt-4">
             <h3 className="font-semibold">Certificate history</h3>
