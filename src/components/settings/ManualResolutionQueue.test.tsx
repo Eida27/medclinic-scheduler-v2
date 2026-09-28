@@ -41,6 +41,25 @@ function jsonResponse(body: unknown, status = 200) {
 describe("ManualResolutionQueue", () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it("requires replacement for an awaiting-reschedule service in both individual and page batch controls", async () => {
+    const displaced = { ...manualCase, caseSource: "AUTOMATIC_DISPLACEMENT" as const,
+      closureGroupId: null, groupStartDate: null, groupEndDate: null, category: null, closureReason: null,
+      laboratory: { ...manualCase.laboratory!, status: "PENDING", affected: false },
+      physicalExam: { ...manualCase.physicalExam!, status: "AWAITING_RESCHEDULE", affected: false } };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ data: {
+      page: 1, pageSize: 20, total: 1, items: [displaced],
+    } })));
+    render(<ManualResolutionQueue />);
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "Santos, Ana M." });
+    expect(screen.getByLabelText("Physical Examination replacement date for 24-0001")).toBeVisible();
+    expect(screen.queryByRole("radio", { name: "Preserve current Physical Examination" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Select eligible on this page" }));
+    await user.click(screen.getByRole("button", { name: "Assign schedules (1)" }));
+    expect(screen.getByLabelText("Physical Examination month")).toBeVisible();
+    expect(screen.queryByLabelText("Laboratory month")).not.toBeInTheDocument();
+  });
+
   it("retains ordinary selection across pages and clears it when filters change", async () => {
     const second = { ...manualCase, id: "80000000-0000-4000-8000-000000000002", studentNumber: "24-0002", studentName: "Reyes, Bea" };
     const fetchMock = vi.fn().mockImplementation((url: string) => jsonResponse({ data: {

@@ -21,6 +21,10 @@ type AppointmentSummary = NonNullable<ClinicManualCaseDto["laboratory"]>;
 type ManualCase = ClinicManualCaseDto;
 type ManualCasePage = ClinicManualCasePageDto;
 
+function needsReplacement(appointment: AppointmentSummary | null) {
+  return Boolean(appointment && (appointment.affected || appointment.status === "AWAITING_RESCHEDULE"));
+}
+
 type Filters = {
   search: string;
   reasonCode: string;
@@ -73,11 +77,11 @@ function AppointmentLine({ service, appointment }: {
   return (
     <p className="grid gap-0.5 sm:grid-cols-[auto_1fr] sm:items-baseline sm:gap-2">
       <span className={`w-fit rounded-full px-2 py-0.5 text-xs font-bold ${
-        appointment.affected
+        needsReplacement(appointment)
           ? "bg-red-100 text-red-900"
           : "bg-slate-100 text-slate-700"
       }`}>
-        {appointment.affected ? "Affected" : "Related / currently unaffected"}
+        {needsReplacement(appointment) ? "Affected" : "Related / currently unaffected"}
       </span>
       <span>{service}: {appointment.date ?? "no current date"} - {operationalStatusLabel(appointment.status ?? "")}</span>
     </p>
@@ -127,7 +131,7 @@ function CaseResolutionCard({ manualCase, onResolved, readOnly = false, selected
     date: string,
     decision: "" | "PRESERVE" | "REPLACE",
   ) => !appointment
-    || (appointment.affected ? Boolean(date) : decision === "PRESERVE" || (decision === "REPLACE" && Boolean(date)));
+    || (needsReplacement(appointment) ? Boolean(date) : decision === "PRESERVE" || (decision === "REPLACE" && Boolean(date)));
   const assignmentReady = assignmentReason.trim().length >= 3
     && serviceReady(manualCase.laboratory, laboratoryDate, laboratoryDecision)
     && serviceReady(manualCase.physicalExam, physicalExamDate, physicalExamDecision);
@@ -193,7 +197,7 @@ function CaseResolutionCard({ manualCase, onResolved, readOnly = false, selected
                 ? "Dates are revalidated for future-day and cycle bounds, blocked dates, service capacity, and required-service order when submitted."
                 : "Dates are revalidated for closures, service capacity, and required-service order when submitted."}
             </p>
-            {manualCase.laboratory?.affected ? (
+            {needsReplacement(manualCase.laboratory) ? (
               <label className="grid gap-1 text-sm font-semibold">
                 Laboratory date
                 <Input
@@ -212,7 +216,7 @@ function CaseResolutionCard({ manualCase, onResolved, readOnly = false, selected
                 {laboratoryDecision === "REPLACE" ? <Input aria-label={`Laboratory replacement date for ${manualCase.studentNumber}`} type="date" value={laboratoryDate} disabled={resolutionBlocked} onInput={(event) => setLaboratoryDate(event.currentTarget.value)} /> : null}
               </fieldset>
             ) : null}
-            {manualCase.physicalExam?.affected ? (
+            {needsReplacement(manualCase.physicalExam) ? (
               <label className="grid gap-1 text-sm font-semibold">
                 Physical Examination date
                 <Input
@@ -508,7 +512,7 @@ export function ManualResolutionQueue() {
       const next = { ...current };
       if (next[item.id]) delete next[item.id];
       else next[item.id] = { caseId: item.id, expectedOptimisticToken: item.optimisticToken, studentNumber: item.studentNumber,
-        academicYearStart: item.academicYearStart, needsLaboratory: Boolean(item.laboratory?.affected), needsPhysicalExam: Boolean(item.physicalExam?.affected),
+        academicYearStart: item.academicYearStart, needsLaboratory: needsReplacement(item.laboratory), needsPhysicalExam: needsReplacement(item.physicalExam),
         hasLaboratory: Boolean(item.laboratory), hasPhysicalExam: Boolean(item.physicalExam) };
       return next;
     });
@@ -629,7 +633,7 @@ export function ManualResolutionQueue() {
         <p className="font-bold">{selectedCases.length} selected</p>
         <div className="flex flex-wrap gap-2">
           <Button variant="secondary" disabled={!eligiblePageCases.length || selectedCases.length + eligiblePageCases.filter((item) => !selected[item.id]).length > 100}
-            onClick={() => { setSelected((current) => ({ ...current, ...Object.fromEntries(eligiblePageCases.map((item) => [item.id, { caseId: item.id, expectedOptimisticToken: item.optimisticToken, studentNumber: item.studentNumber, academicYearStart: item.academicYearStart, needsLaboratory: Boolean(item.laboratory?.affected), needsPhysicalExam: Boolean(item.physicalExam?.affected), hasLaboratory: Boolean(item.laboratory), hasPhysicalExam: Boolean(item.physicalExam) }])) })); setBatchOpen(false); }}>Select eligible on this page</Button>
+            onClick={() => { setSelected((current) => ({ ...current, ...Object.fromEntries(eligiblePageCases.map((item) => [item.id, { caseId: item.id, expectedOptimisticToken: item.optimisticToken, studentNumber: item.studentNumber, academicYearStart: item.academicYearStart, needsLaboratory: needsReplacement(item.laboratory), needsPhysicalExam: needsReplacement(item.physicalExam), hasLaboratory: Boolean(item.laboratory), hasPhysicalExam: Boolean(item.physicalExam) }])) })); setBatchOpen(false); }}>Select eligible on this page</Button>
           <Button variant="secondary" disabled={!filters.academicYearStart || !data?.items.length} onClick={() => { void selectGroup(); }}>Select eligible in this group</Button>
           <Button variant="secondary" disabled={!selectedCases.length} onClick={() => { setSelected({}); setBatchOpen(false); }}>Clear selection</Button>
           <Button disabled={!selectedCases.length} onClick={() => setBatchOpen(true)}>Assign schedules ({selectedCases.length})</Button>

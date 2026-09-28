@@ -61,7 +61,7 @@ Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Bir
 - College names and course codes must match active reference data case-insensitively.
 - Files may contain up to 3,000 data rows and may not exceed 1 MB.
 - Student IDs must be valid and unique within the file after normalization.
-- Choose the student category and academic-year start. OJT and Tour imports also require a preferred month; Regular does not. First-Year/OVPSA imports use the guarded review with a Laboratory date.
+- Choose the student category and an Administrator-configured academic year. The import page lists only configured years, labels ended years, and disables them. An Administrator can add or update years under **Academic years**. An empty catalog disables review and publication. OJT and Tour imports also require a preferred month; Regular does not. First-Year/OVPSA imports use the guarded review with a Laboratory date. Import requests recheck the year and closing date at preflight and publication.
 - One POST validates references, acquires the scheduling lock, assigns acceptance order, upserts students, skips same-cycle duplicates, displaces only eligible Regular pairs when needed, creates both clinic batches, and publishes atomically.
 - A failed row or protected/capacity conflict rolls back the complete import. New uploads do not create manual review checkpoints.
 - Historical `DRAFT`, `VALIDATED`, and `GENERATED` imports remain readable, but no action can advance or publish them.
@@ -275,10 +275,11 @@ The ignored state is `.data/browser-clinic-scheduler-ux/state.json`. `stage`, `s
 4. Import an OJT or Tour category against constrained capacity and review the Regular student's linked replacement history and notification.
 5. As administrator, add CPU and KABALAKA unavailable dates and confirm their PE-only/pair rules.
 6. As KABALAKA clinic staff, verify CBC, Urine, Stool, and applicable X-ray individually; confirm partial work survives an explicit replacement and full verification completes Laboratory.
-7. As CPU Clinic staff, select an Administrator-configured physician, enter the recorded Class A–D finding and examination details, preview the marked certificate, then save once to issue the JPG.
+7. As CPU Clinic staff, use **Complete Physical Examination** in the published PE list. Select the physician and recorded Class A–D finding, enter the required certificate details and attestation, then **Submit**. Preview is optional. Class B, C, and D require remarks. Confirm the row becomes Completed and the JPG download appears. [Completed popup](docs/superpowers/evidence/pe-completed-browser.png) · [Synthetic issued certificate](docs/superpowers/evidence/pe-issued-certificate.jpg).
 8. Use **Student sign in** with that Student Number/DOB; download the certificate. Upload, finalize, revise, and download only Laboratory documents. Confirm a forged Physical Examination upload is rejected.
-9. Select two eligible appointments in one clinic list, preview one replacement date and aggregate capacity, save both, and check the calendar day details and historical academic-year view.
-10. Confirm the Browser console is free of errors, then remove only the targeted synthetic fixtures and restore capacity settings.
+9. For an ordinary manual resolution group, filter by academic year and import batch or closure group. Select eligible cases individually, on the page, or across the full server group. Use **Assign schedules** to choose shared replacement dates, review preserved services and aggregate capacity, preview every case, then confirm once. The group is applied atomically. [Two-case preview](docs/superpowers/evidence/manual-batch-preview-browser.png) · [Resolved queue](docs/superpowers/evidence/manual-batch-resolved-browser.png).
+10. Select two eligible appointments in one clinic list, preview one replacement date and aggregate capacity, save both, and check the calendar day details and historical academic-year view.
+11. Confirm the Browser console is free of errors, then remove only the targeted synthetic fixtures and restore capacity settings.
 
 ## Architecture and Security
 
