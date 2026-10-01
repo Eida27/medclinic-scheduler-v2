@@ -889,6 +889,12 @@ export async function promoteStudentResultEditDraft(
   );
 }
 
+const OFFICIAL_LABORATORY_FILE_PREDICATES = `
+  submission.status='FINALIZED' AND submission.discarded_at IS NULL
+  AND submission.result_type='LABORATORY' AND appointment.schedule_type='LABORATORY'
+  AND appointment.student_number=submission.student_number
+  AND file.deleted_at IS NULL AND file.storage_delete_pending=FALSE`;
+
 export async function getAccessibleStudentResultFileRow(
   fileId: string,
   studentNumber: string,
@@ -909,10 +915,9 @@ export async function getAccessibleStudentResultFileRow(
        FROM student_result_files file
        JOIN student_result_submissions submission ON submission.id=file.submission_id
        JOIN appointments appointment ON appointment.id=submission.appointment_id
-      WHERE file.id=$1 AND submission.status='FINALIZED'
-        AND submission.result_type='LABORATORY' AND appointment.schedule_type='LABORATORY'
-        AND submission.student_number=$2
-        AND file.deleted_at IS NULL AND file.storage_delete_pending=FALSE
+       JOIN academic_years academic_year ON academic_year.start_year=appointment.schedule_cycle_start
+      WHERE file.id=$1 AND submission.student_number=$2
+        AND ${OFFICIAL_LABORATORY_FILE_PREDICATES}
     `,
     [fileId, studentNumber],
   );
@@ -920,7 +925,7 @@ export async function getAccessibleStudentResultFileRow(
   return row ? { ...row, byteSize: Number(row.byteSize) } : null;
 }
 
-export async function listHistoricalLaboratoryDocuments(studentNumber: string) {
+async function listOfficialLaboratoryDocuments(studentNumber: string, historical: boolean) {
   const result = await query<{ submissionId: string; academicYearStart: number;
     appointmentDate: string; fileId: string; originalFilename: string }>(
     `SELECT submission.id::text AS "submissionId",appointment.schedule_cycle_start AS "academicYearStart",
@@ -930,14 +935,20 @@ export async function listHistoricalLaboratoryDocuments(studentNumber: string) {
        JOIN appointments appointment ON appointment.id=submission.appointment_id
        JOIN academic_years academic_year ON academic_year.start_year=appointment.schedule_cycle_start
        JOIN student_result_files file ON file.submission_id=submission.id
-      WHERE submission.student_number=$1 AND submission.result_type='LABORATORY'
-        AND submission.status='FINALIZED'
-        AND academic_year.closing_date < (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date
-        AND file.deleted_at IS NULL AND file.storage_delete_pending=FALSE
-      ORDER BY appointment.schedule_cycle_start DESC,appointment.appointment_date DESC,file.uploaded_at`,
+      WHERE submission.student_number=$1 AND ${OFFICIAL_LABORATORY_FILE_PREDICATES}
+        AND academic_year.closing_date ${historical ? "<" : ">="} (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date
+      ORDER BY appointment.schedule_cycle_start DESC,appointment.appointment_date DESC,file.uploaded_at,file.id`,
     [studentNumber],
   );
   return result.rows;
+}
+
+export async function listCurrentLaboratoryDocuments(studentNumber: string) {
+  return listOfficialLaboratoryDocuments(studentNumber, false);
+}
+
+export async function listHistoricalLaboratoryDocuments(studentNumber: string) {
+  return listOfficialLaboratoryDocuments(studentNumber, true);
 }
 
 export async function getAccessibleAdminResultFileRow(

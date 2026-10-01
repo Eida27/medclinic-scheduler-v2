@@ -1,13 +1,14 @@
 import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 import { CertificateDownload } from "@/components/medical-certificates/CertificateDownload";
-import { requireVerifiedStudentPage } from "@/server/auth/verified-student-page";
+import { requireStudentPage } from "@/server/auth/student-page";
+import { studentVerificationHref } from "@/lib/student-verification-return";
 import { studentCertificateHistory } from "@/server/medical-certificates/certificate.service";
 import {
   getCurrentEffectiveAppointmentsForStudent,
   type CurrentEffectiveAppointment,
 } from "@/server/repositories/current-effective-appointments.repository";
-import { listHistoricalLaboratoryDocuments } from "@/server/repositories/student-result-submissions.repository";
+import { listCurrentLaboratoryDocuments, listHistoricalLaboratoryDocuments } from "@/server/repositories/student-result-submissions.repository";
 
 type StudentCertificate = Awaited<ReturnType<typeof studentCertificateHistory>>[number];
 
@@ -22,7 +23,8 @@ function CertificateCard({ certificate }: { certificate: StudentCertificate }) {
 }
 
 export default async function StudentResultsPage() {
-  const student = await requireVerifiedStudentPage();
+  const student = await requireStudentPage();
+  const verified = Boolean(student.email && student.emailVerifiedAt);
   const current = await getCurrentEffectiveAppointmentsForStudent(student.studentNumber);
   const completed = [current.laboratory].filter(
     (appointment): appointment is CurrentEffectiveAppointment => appointment?.status === "COMPLETED",
@@ -31,19 +33,34 @@ export default async function StudentResultsPage() {
   const currentCertificates = certificates.filter((certificate) => !certificate.academicYearEnded);
   const historicalCertificates = certificates.filter((certificate) => certificate.academicYearEnded);
   const historicalDocuments = await listHistoricalLaboratoryDocuments(student.studentNumber);
+  const currentDocuments = await listCurrentLaboratoryDocuments(student.studentNumber);
   return (
     <section>
       <h1 className="text-3xl font-bold">Results</h1>
       <p className="mt-2 text-sm text-muted">Laboratory documents and issued Physical Examination certificates appear here.</p>
+      {!verified && <Card className="mt-4 p-5 text-sm">
+        <p>You can view and download your results. Verify your email before uploading or updating Laboratory documents.</p>
+        <Link className="mt-2 inline-block font-semibold text-cpu-navy underline"
+          href={studentVerificationHref("/student/results")}>Verify your email</Link>
+      </Card>}
       <h2 className="mt-6 text-xl font-bold">Laboratory documents</h2>
-      <div className="mt-6 grid gap-3">
+      <div className="mt-3 grid gap-3">
+        {currentDocuments.length ? currentDocuments.map((document) => <Card key={document.fileId} className="p-5">
+          <p className="font-semibold">Academic year {document.academicYearStart}–{document.academicYearStart + 1} · {document.appointmentDate}</p>
+          <a className="mt-2 inline-block break-words font-semibold text-cpu-navy underline"
+            href={`/api/student/result-files/${document.fileId}`}>Download {document.originalFilename}</a>
+        </Card>) : <Card className="p-5 text-sm text-muted">No current Laboratory documents are available yet.</Card>}
+      </div>
+      <div className="mt-3 grid gap-3">
         {completed.length ? completed.map((appointment) => (
-          <Link key={appointment.id} href={`/student/results/${appointment.id}`}>
-            <Card className="p-5 transition hover:border-cpu-navy/40">
+            <Card key={appointment.id} className="p-5">
               <p className="font-bold">Laboratory</p>
               <p className="text-sm text-muted">Completed appointment: {appointment.appointmentDate}</p>
+              <Link className="mt-2 inline-block font-semibold text-cpu-navy underline" prefetch={false}
+                href={verified ? `/student/results/${appointment.id}` : studentVerificationHref(`/student/results/${appointment.id}`)}>
+                {verified ? "Manage Laboratory documents" : "Verify email to upload or update"}
+              </Link>
             </Card>
-          </Link>
         )) : <Card className="p-5 text-sm text-muted">No completed Laboratory appointment is ready for document upload.</Card>}
       </div>
       <h2 className="mt-8 text-xl font-bold">Physical Examination certificates</h2>
@@ -64,7 +81,7 @@ export default async function StudentResultsPage() {
       <div className="mt-3 grid gap-3">
         {historicalDocuments.length ? historicalDocuments.map((document) => <Card key={document.fileId} className="p-5">
           <p className="font-semibold">Academic year {document.academicYearStart}–{document.academicYearStart + 1} · {document.appointmentDate}</p>
-          <a className="mt-2 inline-block font-semibold text-cpu-navy underline"
+          <a className="mt-2 inline-block break-words font-semibold text-cpu-navy underline"
             href={`/api/student/result-files/${document.fileId}`}>Download {document.originalFilename}</a>
         </Card>) : <Card className="p-5 text-sm text-muted">No previous Laboratory documents.</Card>}
       </div>
