@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 
@@ -31,7 +32,13 @@ export function EmailVerificationConfirmation({ token }: { token: string | null 
 
   if (!token) return <Alert tone="danger">This verification link is missing its token.</Alert>;
   if (success) {
-    return <p role="status" className="text-sm font-semibold text-success">Email verified successfully. You may return to the MedClinic student portal.</p>;
+    return (
+      <div className="grid gap-4">
+        <p role="status" className="text-sm font-semibold text-success">Email verified successfully.</p>
+        <p className="text-sm text-muted">You can return to your original tab to continue. If you opened this link in another browser, sign in to read your portal.</p>
+        <Link href="/student" className="text-sm font-semibold">Go to student portal</Link>
+      </div>
+    );
   }
   return (
     <div className="grid gap-4">

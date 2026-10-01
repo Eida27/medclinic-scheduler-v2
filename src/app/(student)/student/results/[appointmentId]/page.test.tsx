@@ -65,6 +65,14 @@ describe("StudentResultDraftPage", () => {
     await expect(StudentResultDraftPage({ params: Promise.resolve({ appointmentId: "appointment-1" }) })).rejects.toThrow("NEXT_REDIRECT:/student/email-verification");
     expect(getStudentResultSubmission).not.toHaveBeenCalled();
   });
+  it("passes the appointment continuation to the guard before initializing its workspace", async () => {
+    const appointmentId = "10000000-0000-4000-8000-000000000001";
+    await StudentResultDraftPage({ params: Promise.resolve({ appointmentId }) });
+    expect(requireVerifiedStudentPage).toHaveBeenCalledWith(`/student/results/${appointmentId}`);
+    expect(requireVerifiedStudentPage.mock.invocationCallOrder[0]).toBeLessThan(
+      getStudentResultSubmission.mock.invocationCallOrder[0],
+    );
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     requireVerifiedStudentPage.mockResolvedValue({ studentNumber: "23/8200 01" });

@@ -17,6 +17,8 @@ describe("EmailVerificationConfirmation", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Verify email" }));
     expect(await screen.findByRole("status")).toHaveTextContent("Email verified successfully");
+    expect(screen.getByRole("link", { name: "Go to student portal" })).toHaveAttribute("href", "/student");
+    expect(screen.getByText(/return to your original tab/i)).toBeVisible();
     expect(fetchMock).toHaveBeenCalledWith("/api/student/email/verify", expect.objectContaining({
       method: "POST",
       body: JSON.stringify({ token: "preview-safe-token" }),

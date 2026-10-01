@@ -46,6 +46,70 @@ describe("ResultDraftManager", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each(["upload", "remove", "edit", "cancel-edit", "finalize", "submit-changes"])(
+    "stops %s on a verification 403, clears files and offers the safe appointment continuation",
+    async (action) => {
+      const appointmentId = "10000000-0000-4000-8000-000000000001";
+      const message = "Verify your email address before uploading or updating Laboratory documents.";
+      const fetchMock = vi.fn().mockResolvedValue({ status: 403, ok: false,
+        json: async () => ({ error: { code: "STUDENT_EMAIL_VERIFICATION_REQUIRED", message } }),
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const user = userEvent.setup();
+      const currentDraft = draft({ appointmentId, fileCount: 1, totalBytes: 8,
+        files: [{ id: "file-1", originalFilename: "stored.pdf", byteSize: 8 }],
+        status: action === "edit" ? "FINALIZED" : "DRAFT",
+        basedOnSubmissionId: ["cancel-edit", "submit-changes"].includes(action) ? "official-1" : null,
+      });
+      const { rerender } = render(<ResultDraftManager draft={currentDraft} />);
+      if (action !== "edit") {
+        await user.upload(screen.getByLabelText("Choose result files"), pdfFile("selected.pdf"));
+      }
+      if (action === "upload") await user.click(screen.getByRole("button", { name: "Upload files" }));
+      if (action === "remove") await user.click(screen.getByRole("button", { name: "Remove stored.pdf" }));
+      if (action === "edit") await user.click(screen.getByRole("button", { name: "Edit submission" }));
+      if (action === "cancel-edit") {
+        await user.click(screen.getByRole("button", { name: "Cancel editing" }));
+        await user.click(screen.getByRole("button", { name: "Discard changes" }));
+      }
+      if (action === "finalize") {
+        await user.click(screen.getByRole("button", { name: "Final submit" }));
+        await user.click(screen.getByRole("button", { name: "Submit result" }));
+      }
+      if (action === "submit-changes") {
+        await user.click(screen.getByRole("button", { name: "Submit changes" }));
+        await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Submit changes" }));
+      }
+      expect(await screen.findByRole("link", { name: "Verify email" })).toHaveAttribute(
+        "href", `/student/email-verification?returnTo=${encodeURIComponent(`/student/results/${appointmentId}`)}`,
+      );
+      expect(screen.getByText(message)).toBeVisible();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(screen.queryByText("selected.pdf")).not.toBeInTheDocument();
+      if (action !== "edit") {
+        const input = screen.getByLabelText("Choose result files") as HTMLInputElement;
+        expect(input.files).toHaveLength(0);
+        expect(input).toBeDisabled();
+        fireEvent.submit(input.closest("form")!);
+      }
+      rerender(<ResultDraftManager draft={{ ...currentDraft }} />);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(refresh).not.toHaveBeenCalled();
+      for (const button of screen.getAllByRole("button")) expect(button).toBeDisabled();
+    }, 15_000,
+  );
+
+  it("uses the schedule fallback for an invalid stale workspace path", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 403, ok: false,
+      json: async () => ({ error: { code: "STUDENT_EMAIL_VERIFICATION_REQUIRED" } }),
+    }));
+    render(<ResultDraftManager draft={draft({ appointmentId: "//evil.test", status: "FINALIZED" })} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit submission" }));
+    expect(await screen.findByRole("link", { name: "Verify email" })).toHaveAttribute(
+      "href", "/student/email-verification?returnTo=%2Fstudent",
+    );
+  });
+
   it("shows draft totals and a multiple result-file chooser", () => {
     render(<ResultDraftManager draft={draft({
       fileCount: 2,

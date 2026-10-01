@@ -21,14 +21,61 @@ describe("EmailVerificationForm", () => {
       ok: true,
       json: async () => ({ data: { verified: true, verifiedEmail: "student@example.test" } }),
     }));
-    render(<EmailVerificationForm verifiedEmail={null} />);
+    render(<EmailVerificationForm verifiedEmail={null} returnTo="/student/results" />);
 
     expect(fetch).not.toHaveBeenCalled();
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
 
     expect(fetch).toHaveBeenCalledWith("/api/student/email/status", { cache: "no-store" });
-    expect(replace).toHaveBeenCalledWith("/student");
+    expect(replace).toHaveBeenCalledWith("/student/results");
     expect(refresh).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops polling on a non-JSON 401 and provides sign-in navigation", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 401, ok: false,
+      json: async () => { throw new SyntaxError("not json"); },
+    }));
+    render(<EmailVerificationForm verifiedEmail={null} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/student/login");
+    expect(screen.getByRole("button", { name: "Send verification link" })).toBeDisabled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("retries transient status errors without requesting mail", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValueOnce(new TypeError("offline"))
+      .mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({ error: {} }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ data: { verified: true } }) }));
+    render(<EmailVerificationForm verifiedEmail={null} />);
+    expect(screen.getByRole("link", { name: "Back to schedule" })).toHaveAttribute("href", "/student");
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(replace).toHaveBeenCalledWith("/student");
+    for (const [url] of vi.mocked(fetch).mock.calls) expect(url).toBe("/api/student/email/status");
+  });
+
+  it("allows only one status request in flight and ignores completion after unmount", async () => {
+    let resolve!: (value: unknown) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise((done) => { resolve = done; })));
+    const { unmount } = render(<EmailVerificationForm verifiedEmail={null} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    unmount();
+    await act(async () => { resolve({ ok: true, json: async () => ({ data: { verified: true } }) }); });
+    expect(replace).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("retains replacement-email behavior without polling for a verified address", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    render(<EmailVerificationForm verifiedEmail="verified@example.test" />);
+    expect(screen.getByLabelText("Replacement email")).toBeVisible();
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("shows server-provided cooldown timing after a request", async () => {

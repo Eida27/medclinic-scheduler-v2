@@ -1,4 +1,5 @@
 import { ResultDraftManager } from "@/components/student-results/ResultDraftManager";
+import { studentVerificationReturn } from "@/lib/student-verification-return";
 import { requireVerifiedStudentPage } from "@/server/auth/verified-student-page";
 import { getStudentResultSubmission } from "@/server/services/student-result-submissions.service";
 import { toStudentResultDraftView } from "@/server/student-results/student-result-draft-view";
@@ -6,8 +7,8 @@ import { toStudentResultDraftView } from "@/server/student-results/student-resul
 type Props = { params: Promise<{ appointmentId: string }> };
 
 export default async function StudentResultDraftPage({ params }: Props) {
-  const student = await requireVerifiedStudentPage();
   const { appointmentId } = await params;
+  const student = await requireVerifiedStudentPage(studentVerificationReturn(`/student/results/${appointmentId}`));
   const submission = await getStudentResultSubmission(student.studentNumber, appointmentId);
   return (
     <section>

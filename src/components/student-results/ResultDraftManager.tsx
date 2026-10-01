@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   useEffect,
   useRef,
@@ -14,6 +15,7 @@ import { Card } from "@/components/ui/Card";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Input } from "@/components/ui/Input";
 import { RESULT_FILE_ACCEPT } from "@/shared/student-result-file-rules";
+import { studentVerificationHref } from "@/lib/student-verification-return";
 import { validateResultFileSelection } from "./result-selection-validation";
 
 export type StudentResultDraftView = {
@@ -93,6 +95,8 @@ export function ResultDraftManager({ draft }: { draft: StudentResultDraftView })
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const inFlightRef = useRef(false);
+  const verificationRequiredRef = useRef(false);
+  const [verificationRequired, setVerificationRequired] = useState(false);
   const [mutationState, setMutationState] = useState<MutationState | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [error, setError] = useState<string>();
@@ -105,7 +109,7 @@ export function ResultDraftManager({ draft }: { draft: StudentResultDraftView })
   const pendingAction = mutationState !== null && !authoritativeRevisionArrived
     ? mutationState.action
     : null;
-  const pending = pendingAction !== null;
+  const pending = pendingAction !== null || verificationRequired;
   const selection = validateResultFileSelection(selectedFiles, {
     currentFileCount: draft.fileCount,
     currentTotalBytes: draft.totalBytes,
@@ -122,7 +126,7 @@ export function ResultDraftManager({ draft }: { draft: StudentResultDraftView })
     onSuccess?: () => void,
     uploadCount = 0,
   ) {
-    if (inFlightRef.current) return;
+    if (inFlightRef.current || verificationRequiredRef.current) return;
     const requestRevision = revision;
     let keepLockedForRefresh = false;
     inFlightRef.current = true;
@@ -139,6 +143,13 @@ export function ResultDraftManager({ draft }: { draft: StudentResultDraftView })
       const payload = await response.json().catch(() => undefined);
       if (!response.ok) {
         const apiError = responseError(payload);
+        if (response.status === 403 && apiError?.code === "STUDENT_EMAIL_VERIFICATION_REQUIRED") {
+          verificationRequiredRef.current = true;
+          setVerificationRequired(true);
+          clearSelection();
+          setConfirmation(null);
+          return;
+        }
         if (apiError?.code === "RESULT_EDIT_STALE") {
           keepLockedForRefresh = true;
           setError(staleEditMessage);
@@ -298,6 +309,12 @@ export function ResultDraftManager({ draft }: { draft: StudentResultDraftView })
         </Alert>
       ) : null}
       {error ? <Alert tone="danger">{error}</Alert> : null}
+      {verificationRequired ? (
+        <Alert tone="warning">
+          <p>Verify your email address before uploading or updating Laboratory documents.</p>
+          <Link href={studentVerificationHref(`/student/results/${draft.appointmentId}`)} className="font-semibold">Verify email</Link>
+        </Alert>
+      ) : null}
 
       {editing && draft.officialSubmission !== null ? (
         <Card className="grid gap-3 p-5">
