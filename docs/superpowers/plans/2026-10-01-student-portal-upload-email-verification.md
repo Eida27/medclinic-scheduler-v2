@@ -46,11 +46,11 @@
 - Produce `parseStudentVerificationReturn(value: unknown): string | null`, returning only valid exact paths; `studentVerificationReturn(value: unknown): string`, returning fallback `/student`; `studentVerificationHref(value: unknown): string`, building `/student/email-verification?returnTo=<encoded safe path>`.
 - Extend `requireVerifiedStudentPage(returnTo?: unknown)`; omitted argument preserves `/student/email-verification`, supplied argument uses the safe href.
 
-- [ ] Write failing behavioral tests: active unverified reading/nav; authenticated notification GET/PATCH/download success; 401 auth failures, scoped calls and existing 404/410/private responses; verified page denial before workspace service. Parameterize return helper allowed paths and malformed/external/encoded/backslash/array/query/fragment forms. Parameterize each write route's denial before body/service/storage work.
-- [ ] Run focused affected tests with `npm.cmd test -- --run <test paths> --maxWorkers=1 --no-file-parallelism --reporter=dot`; confirm expected failures.
-- [ ] Implement helper/guard/navigation/read-route changes, preserving error envelopes and domain checks. Refine the 403 text. Retain separate staff/student authentication contracts.
-- [ ] Run focused tests then `npm.cmd test -- --run --maxWorkers=1 --no-file-parallelism --testTimeout=15000 --hookTimeout=30000 --reporter=dot`; expect all passing.
-- [ ] Self-review, commit task changes, report RED/GREEN commands and final summaries.
+- [x] Write failing behavioral tests: active unverified reading/nav; authenticated notification GET/PATCH/download success; 401 auth failures, scoped calls and existing 404/410/private responses; verified page denial before workspace service. Parameterize return helper allowed paths and malformed/external/encoded/backslash/array/query/fragment forms. Parameterize each write route's denial before body/service/storage work.
+- [x] Run focused affected tests with `npm.cmd test -- --run <test paths> --maxWorkers=1 --no-file-parallelism --reporter=dot`; confirm expected failures.
+- [x] Implement helper/guard/navigation/read-route changes, preserving error envelopes and domain checks. Refine the 403 text. Retain separate staff/student authentication contracts.
+- [x] Run focused tests then `npm.cmd test -- --run --maxWorkers=1 --no-file-parallelism --testTimeout=15000 --hookTimeout=30000 --reporter=dot`; expect all passing.
+- [x] Self-review, commit task changes, report RED/GREEN commands and final summaries.
 
 ### Task 2: Official Laboratory projection and Results overview
 
@@ -62,11 +62,11 @@
 - Consume Task 1 page guard and safe verification href.
 - Produce `listCurrentLaboratoryDocuments(studentNumber: string)` with the same five-field shape as `listHistoricalLaboratoryDocuments()` (submissionId, academicYearStart, appointmentDate, fileId, originalFilename).
 
-- [ ] Write failing integration coverage for current/closing-today/historical classification, official revision during edit, and exclusion of discarded/draft/superseded/invalidated/deleted/pending-deletion/foreign/wrong-type records. Snapshot submission/draft activity/status/cleanup state around reads. Verify direct file access and listing agree. Write page tests for unverified current/historical downloads/certificates, empty states and verified/unverified management actions.
-- [ ] Run focused unit tests and new integration test through documented disposable runner; observe RED.
-- [ ] Implement read-only projection with submission AND appointment ownership and Laboratory type, FINALIZED and undiscarded submissions, eligible files and configured academic year. Current `closing_date >= Manila today`, historical `< today`. Deterministic year/date DESC, uploaded_at/file ID order. Align accessible download predicates. Do not use draft-preferred lookup.
-- [ ] Render official current downloads separately from management action; require completed current effective Laboratory eligibility for management. Disable workspace link prefetch; show nonblocking unverified explanation and safe verification entry. Preserve certificate cards/revocation and historical downloads. Do not mount ResultDraftManager.
-- [ ] Run focused unit/integration tests, typecheck and focused lint; expect green and no read side effects. Carry the complete ordinary serialized unit suite to final code. Self-review and commit.
+- [x] Write failing integration coverage for current/closing-today/historical classification, official revision during edit, and exclusion of discarded/draft/superseded/invalidated/deleted/pending-deletion/foreign/wrong-type records. Snapshot submission/draft activity/status/cleanup state around reads. Verify direct file access and listing agree. Write page tests for unverified current/historical downloads/certificates, empty states and verified/unverified management actions.
+- [x] Run focused unit tests and new integration test through documented disposable runner; observe RED.
+- [x] Implement read-only projection with submission AND appointment ownership and Laboratory type, FINALIZED and undiscarded submissions, eligible files and configured academic year. Current `closing_date >= Manila today`, historical `< today`. Deterministic year/date DESC, uploaded_at/file ID order. Align accessible download predicates. Do not use draft-preferred lookup.
+- [x] Render official current downloads separately from management action; require completed current effective Laboratory eligibility for management. Disable workspace link prefetch; show nonblocking unverified explanation and safe verification entry. Preserve certificate cards/revocation and historical downloads. Do not mount ResultDraftManager.
+- [x] Run focused unit/integration tests, typecheck and focused lint; expect green and no read side effects. Carry the complete ordinary serialized unit suite to final code. Self-review and commit.
 
 ### Task 3: Workspace interruption, verification return and polling lifecycle
 
@@ -77,11 +77,11 @@
 - Consume Task 1 return helper and optional verified-page guard argument.
 - Pass sanitized `returnTo: string` into `EmailVerificationForm`; default `/student` supports existing consumers.
 
-- [ ] Write failing tests for guard-before-submission ordering with appointment return path; explicit valid already-verified continuation versus ordinary replacement form; all invalid/array return values. Test five-second status continuation/refresh, unmount cleanup, transient errors, 401 sign-in and stopped polling, no automatic mail request. Test explicit token POST with success portal/original-tab links. Test stale workspace 403 on upload/remove/start-edit/cancel/finalize/submit-changes, selected-file clearing, safe verification action and no replay.
-- [ ] Run focused tests to expected RED.
-- [ ] Preserve verified-only workspace entry before service; sanitize route context. Implement page/form continuation and session handling; retain replacement-address behavior and existing token/request lifecycle. Provide Back to schedule. Confirmation stays explicit POST and grants no session.
-- [ ] Handle verification-required mutation responses across shared mutate handler with safe appointment verification link, stop action and clear selections; no automatic retry or file transfer.
-- [ ] Run focused tests, typecheck and focused lint; expect green. Carry the complete ordinary serialized unit suite to final code. Self-review and commit.
+- [x] Write failing tests for guard-before-submission ordering with appointment return path; explicit valid already-verified continuation versus ordinary replacement form; all invalid/array return values. Test five-second status continuation/refresh, unmount cleanup, transient errors, 401 sign-in and stopped polling, no automatic mail request. Test explicit token POST with success portal/original-tab links. Test stale workspace 403 on upload/remove/start-edit/cancel/finalize/submit-changes, selected-file clearing, safe verification action and no replay.
+- [x] Run focused tests to expected RED.
+- [x] Preserve verified-only workspace entry before service; sanitize route context. Implement page/form continuation and session handling; retain replacement-address behavior and existing token/request lifecycle. Provide Back to schedule. Confirmation stays explicit POST and grants no session.
+- [x] Handle verification-required mutation responses across shared mutate handler with safe appointment verification link, stop action and clear selections; no automatic retry or file transfer.
+- [x] Run focused tests, typecheck and focused lint; expect green. Carry the complete ordinary serialized unit suite to final code. Self-review and commit.
 
 ### Task 4: Active documentation and disposable Browser acceptance fixture
 
