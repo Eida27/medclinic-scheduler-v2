@@ -10,6 +10,7 @@ const owner = "TEST-LAB-READ-01";
 const foreign = "TEST-LAB-READ-02";
 const pattern = "TEST-LAB-READ-%";
 const years: number[] = [];
+let restoreAcademicYears: (() => Promise<void>) | undefined;
 const allowed: string[] = [];
 const excluded: string[] = [];
 let currentYear: number;
@@ -18,6 +19,34 @@ let officialAppointmentId: string;
 let officialDate: string;
 let historicalId: string;
 let newerHistoricalId: string;
+
+async function configureAcademicYears(boundaries: Array<{ year: number; closingDate: string }>) {
+  const saved = await transaction(async (client) => {
+    const existing = await client.query<{ year: number; closingDate: string }>(
+      `SELECT start_year AS year,closing_date::text AS "closingDate" FROM academic_years
+       WHERE start_year=ANY($1::int[]) FOR UPDATE`, [boundaries.map(({ year }) => year)],
+    );
+    const created: number[] = [];
+    for (const { year, closingDate } of boundaries) {
+      const inserted = await client.query<{ year: number }>(
+        `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+         VALUES ($1,$2,$3,$3) ON CONFLICT (start_year) DO NOTHING RETURNING start_year AS year`,
+        [year,closingDate,TEST_REFERENCE_IDS.adminUser],
+      );
+      created.push(...inserted.rows.map((row) => row.year));
+      await client.query(`UPDATE academic_years SET closing_date=$2
+        WHERE start_year=$1 AND closing_date<>$2::date`, [year,closingDate]);
+    }
+    return { existing: existing.rows, created };
+  });
+  return async () => transaction(async (client) => {
+    for (const { year, closingDate } of saved.existing) {
+      await client.query(`UPDATE academic_years SET closing_date=$2
+        WHERE start_year=$1 AND closing_date<>$2::date`, [year,closingDate]);
+    }
+    await client.query("DELETE FROM academic_years WHERE start_year=ANY($1::int[])",[saved.created]);
+  });
+}
 
 async function createSubmission(input: {
   year: number; name: string; status?: "DRAFT" | "FINALIZED" | "SUPERSEDED" | "INVALIDATED";
@@ -73,16 +102,17 @@ async function createSubmission(input: {
 beforeAll(async () => {
   await insertTestStudent({ studentNumber: owner, firstName: "Official", lastName: "Reader", yearLevel: 4 });
   await insertTestStudent({ studentNumber: foreign, firstName: "Foreign", lastName: "Reader", yearLevel: 4 });
-  const clock = await pool.query<{ year: number }>(`SELECT EXTRACT(YEAR FROM clock_timestamp() AT TIME ZONE 'Asia/Manila')::int AS year`);
+  const clock = await pool.query<{ year: number; today: string; yesterday: string }>(
+    `SELECT EXTRACT(YEAR FROM clock_timestamp() AT TIME ZONE 'Asia/Manila')::int AS year,
+      (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date::text AS today,
+      ((clock_timestamp() AT TIME ZONE 'Asia/Manila')::date-1)::text AS yesterday`);
   currentYear = clock.rows[0].year;
-  const inserted = await pool.query<{ start_year: number }>(
-    `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
-     VALUES ($1,(clock_timestamp() AT TIME ZONE 'Asia/Manila')::date - 1,$4,$4),
-       ($2,(clock_timestamp() AT TIME ZONE 'Asia/Manila')::date,$4,$4),
-       ($3,make_date($3+1,7,31),$4,$4) RETURNING start_year`,
-    [currentYear-1,currentYear,currentYear+1,TEST_REFERENCE_IDS.adminUser],
-  );
-  years.push(...inserted.rows.map((row) => row.start_year));
+  years.push(currentYear-1,currentYear,currentYear+1);
+  restoreAcademicYears = await configureAcademicYears([
+    { year: currentYear-1,closingDate: clock.rows[0].yesterday },
+    { year: currentYear,closingDate: clock.rows[0].today },
+    { year: currentYear+1,closingDate: `${currentYear+2}-07-31` },
+  ]);
   await transaction(async (client) => {
     for (const studentNumber of [owner,foreign]) for (const year of years) {
       await insertTestAcademicSnapshot(client, { studentNumber,academicYearStart: year,
@@ -132,12 +162,49 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await cleanupTestFixtures(pattern,"TEST laboratory read%","TEST laboratory read%");
-  await pool.query("DELETE FROM student_result_storage_cleanup_intents WHERE storage_key='laboratory-read/unrelated-cleanup'");
-  await pool.query("DELETE FROM academic_years WHERE start_year=ANY($1::int[])",[years]);
+  try {
+    await cleanupTestFixtures(pattern,"TEST laboratory read%","TEST laboratory read%");
+    await pool.query("DELETE FROM student_result_storage_cleanup_intents WHERE storage_key='laboratory-read/unrelated-cleanup'");
+  } finally {
+    try { await restoreAcademicYears?.(); }
+    finally { await pool.end(); }
+  }
 });
 
 describe("official Laboratory document reads", () => {
+  it("restores preexisting academic-year boundaries and removes only years inserted by the fixture", async () => {
+    const available = await pool.query<{ year: number }>(`SELECT year FROM generate_series(2050,2090) year
+      WHERE NOT EXISTS (SELECT 1 FROM academic_years WHERE start_year=year) ORDER BY year LIMIT 3`);
+    expect(available.rows).toHaveLength(3);
+    const [first,second,created] = available.rows.map(({ year }) => year);
+    await pool.query(`INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+      VALUES ($1,make_date($1+1,6,15),$3,$3),($2,make_date($2+1,7,15),$3,$3)`,
+    [first,second,TEST_REFERENCE_IDS.coordinatorUser]);
+    const preservedColumns = `start_year,closing_date::text,created_by,updated_by,created_at`;
+    const before = await pool.query(`SELECT ${preservedColumns} FROM academic_years
+      WHERE start_year=ANY($1::int[]) ORDER BY start_year`,[[first,second]]);
+    let restore: (() => Promise<void>) | undefined;
+    try {
+      restore = await configureAcademicYears([
+        { year: first,closingDate: `${first+1}-05-01` },
+        { year: second,closingDate: `${second+1}-05-01` },
+        { year: created,closingDate: `${created+1}-05-01` },
+      ]);
+      expect((await pool.query(`SELECT start_year,closing_date::text FROM academic_years
+        WHERE start_year=ANY($1::int[]) ORDER BY start_year`,[[first,second,created]])).rows).toEqual([
+        { start_year: first,closing_date: `${first+1}-05-01` },
+        { start_year: second,closing_date: `${second+1}-05-01` },
+        { start_year: created,closing_date: `${created+1}-05-01` },
+      ]);
+      await restore();
+      restore = undefined;
+      expect((await pool.query(`SELECT ${preservedColumns} FROM academic_years
+        WHERE start_year=ANY($1::int[]) ORDER BY start_year`,[[first,second,created]])).rows).toEqual(before.rows);
+    } finally {
+      await restore?.();
+      await pool.query("DELETE FROM academic_years WHERE start_year=ANY($1::int[])",[[first,second]]);
+    }
+  });
   it("rejects persisted submission ownership/type mismatches and Physical Examination uploads at the schema boundary", async () => {
     await expect(createSubmission({ year: currentYear,name: "foreign-appointment.pdf",appointmentOwner: foreign }))
       .rejects.toMatchObject({ code: "23514" });
