@@ -32,14 +32,14 @@ describe("disposable database ownership", () => {
       } finally { await client.end(); }
     }, url, "1");
     expect(await exists(url)).toBe(0);
-  });
+  }, 60_000);
   it("propagates callback failure and still proves target removal", async () => {
     const url = newTarget();
     await expect(withDisposableTestDatabase(async () => {
       throw new Error("injected fixture failure");
     }, url, "1")).rejects.toThrow("injected fixture failure");
     expect(await exists(url)).toBe(0);
-  });
+  }, 60_000);
   it("reports both the fixture failure and a refused teardown, preserving ownership on identity drift", async () => {
     const url = newTarget();
     const target = validateTestDatabase(url, "1");

@@ -466,7 +466,9 @@ describe("unified clinic calendar lifecycle", () => {
       expect(settled).toBe(false);
       // A clinical writer can still take row locks: resolver has not inverted scope/row order.
       await blocker.query("SELECT id FROM clinic_closure_manual_cases WHERE id=$1 FOR UPDATE NOWAIT", [manualCase.id]);
-      await blocker.query("UPDATE appointments SET is_manually_locked=TRUE WHERE student_number=$1 AND schedule_type='LABORATORY'", [studentNumber]);
+      await blocker.query(`UPDATE appointments SET is_manually_locked=TRUE,locked_by=$2,
+        locked_at=NOW(),lock_reason='Concurrent fixture protection'
+        WHERE student_number=$1 AND schedule_type='LABORATORY'`, [studentNumber, admin.userId]);
       await blocker.query("COMMIT");
       expect(await pending).toMatchObject({ error: { status: 409 } });
       expect((await pool.query("SELECT status FROM clinic_closure_manual_cases WHERE id=$1", [manualCase.id])).rows[0].status).toBe("OPEN");

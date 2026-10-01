@@ -14,7 +14,7 @@ See the [current policy index](docs/current-policies.md) before using historical
 - Future clinic unavailable dates: CPU Clinic moves PE only; KABALAKA Clinic replaces the pair
 - Administrator appointment locks that automatic moves cannot override
 - Published clinic schedules, next-midnight automatic no-shows, corrections, filters, and server-side sorting
-- Student schedules, mandatory email verification, notifications, and private result uploads
+- Student schedules, notifications, and official document downloads, with email verification for Laboratory uploads and editing
 - Administrator-only cross-student document/ZIP access and invalidation
 - Raw PostgreSQL migrations, reference seeds, targeted test cleanup, and privacy-conscious audits
 
@@ -38,7 +38,7 @@ Follow the complete [first-installation guide](docs/installation.md). It is the 
 4. Bootstrap the first Administrator, run the persistent application worker, receive the verification message, verify the account, and replace the temporary password.
 5. Create the intended academic year and closing date, then review capacity and reference data.
 6. Onboard the Coordinator and both clinic staffs, import a valid CSV, and confirm publication in both clinic views.
-7. Prove the student journey: mandatory email verification, schedule, attendance, result upload/finalization/edit, private download, and notifications.
+7. Prove the student journey: sign-in and schedule/notification/result reading without email verification, private downloads, then email verification before Laboratory upload/finalization/edit.
 
 Do not bootstrap before preflight passes. Bootstrap is serialized, refuses to run after a non-deleted Administrator exists, and queues the new Administrator's verification message. Keep `EMAIL_OUTBOX_ENCRYPTION_KEY` unchanged while encrypted pending messages exist.
 
@@ -90,9 +90,16 @@ Every student query is constrained to the session Student Number and revalidates
 
 - Published date-only schedule and reschedule history
 - Portal notifications with read state
-- Mandatory email verification before portal access
-- Laboratory and PE result drafts/downloads
+- Schedule, notification, and Results reading without email registration or verification
+- Own current and historical official Laboratory documents and issued Physical Examination certificate downloads
+- Email verification before entering Laboratory upload/edit workspaces or performing draft/upload/edit/finalization actions
 - Logout
+
+The Results overview is the read surface. Reading it does not initialize a draft, refresh draft activity, or write private files. A still-finalized official Laboratory revision remains downloadable while its edit draft exists. Draft, superseded, invalidated, deleted, and pending-deletion files remain inaccessible; revoked certificates remain visibly revoked and cannot be downloaded. Academic-year visibility uses the configured Manila closing date.
+
+Deliberate Laboratory management entry preserves its appointment through email verification. Only `/student`, `/student/results`, and `/student/results/<UUID>` are accepted return destinations; missing or rejected values return to `/student`. Opening the email link does not consume the token: confirmation requires an explicit action and creates no student session. The original signed-in tab polls for verification and returns to its intended workspace. Session expiry stops polling and requires sign-in. A stale workspace clears selected files when verification is required and never automatically replays an upload or mutation.
+
+Unverified Laboratory workspace/API operations return `STUDENT_EMAIL_VERIFICATION_REQUIRED` (HTTP 403): “Verify your email address before uploading or updating Laboratory documents.” Verification does not change ownership, clinical completion, academic-year eligibility, or file rules. A pending replacement email keeps the existing verified address and upload capability until the replacement is verified.
 
 ### Student middle-name Browser acceptance fixture
 
@@ -107,7 +114,7 @@ npm run acceptance:student-auth -- cleanup
 
 `cleanup` removes the synthetic student and login attempts, verifies that no matching student or import remains, and removes the temporary CSV and state file.
 
-Schedule changes and result invalidations create portal notifications in the business transaction. A verified email also creates an outbox item. Working SMTP is an installation prerequisite because staff and student verification is mandatory. After installation, a temporary delivery outage leaves mail queued for retry and does not roll back unrelated schedules, portal notices, or uploads.
+Schedule changes and result invalidations create portal notifications in the business transaction. Authenticated students can read their own notices and mark them read before verification. A verified email also creates an outbox item; first verification retains the current-state catch-up and deduplication. Working SMTP is an installation prerequisite for staff onboarding and student Laboratory upload verification. After installation, a temporary delivery outage leaves mail queued for retry and does not block sign-in, portal reading, or authorized downloads. It can delay verification and therefore a student's first Laboratory upload; already verified uploads and unrelated scheduling/notification transactions continue.
 
 To enable delivery, set:
 
@@ -127,7 +134,7 @@ exponential delay at one hour.
 
 ## Private Result Documents
 
-Completing an appointment creates the matching `PENDING_UPLOAD` result if none exists. Existing manually recorded result statuses are preserved. Only the completed service becomes uploadable.
+Completing Laboratory creates its matching `PENDING_UPLOAD` result if none exists. Existing manually recorded result statuses are preserved. Only an eligible completed current Laboratory appointment becomes uploadable, and email verification is required. Physical Examination student uploads are retired; clinical completion issues its private JPG certificate.
 
 - Allowed: PDF, JPG/JPEG, and PNG with matching extension, declared MIME, and file signature
 - Maximum 20 MB per file, 10 files per submission, and 50 MB combined
@@ -198,7 +205,7 @@ $env:TEST_DATABASE_URL = "postgresql://test_role:your_local_password@127.0.0.1:5
 npm run test:migrations:empty
 ```
 
-Both commands reject application names, remote destinations, URL overrides, and existing databases before fixtures. They create and verify their owned target, report cleanup, and drop it afterward. Integration tests apply migrations and reference seeds, then run staff fixtures and database tests serially. Child processes inherit that explicit target and synthetic application configuration. The migration-only proof checks exactly 27 migrations, a second zero-migration run, atomic rollback, and target removal. Neither command falls back to the application `DATABASE_URL`.
+Both commands reject application names, remote destinations, URL overrides, and existing databases before fixtures. They create and verify their owned target, report cleanup, and drop it afterward. Integration tests apply migrations and reference seeds, then run staff fixtures and database tests serially. Child processes inherit that explicit target and synthetic application configuration. The migration-only proof checks exactly 29 migrations through `029_manual_resolution_batch_requests.sql`, a second zero-migration run, the exact ledger, atomic rollback, connection reuse, and target removal. Neither command falls back to the application `DATABASE_URL`. This portal policy requires no new migration, role, cookie, environment variable, or student verification backfill; retain migrations 001–029 and their protections.
 
 Together, the unit and integration suites cover schema/backfills, the exact nine-column CSV, 3,000-row atomic imports, scheduling windows/capacity/concurrency, displacement, closure rollback, manual locks, date-only no-shows, separate sessions/throttling, strict ownership, file signatures/limits, finalization, ZIP access, invalidation, cleanup, outbox retry, and the full cross-feature scenario. Database-free CI runs on Windows and Linux.
 
@@ -276,7 +283,7 @@ The ignored state is `.data/browser-clinic-scheduler-ux/state.json`. `stage`, `s
 5. As administrator, add CPU and KABALAKA unavailable dates and confirm their PE-only/pair rules.
 6. As KABALAKA clinic staff, verify CBC, Urine, Stool, and applicable X-ray individually; confirm partial work survives an explicit replacement and full verification completes Laboratory.
 7. As CPU Clinic staff, use **Complete Physical Examination** in the published PE list. Select the physician and recorded Class A–D finding, enter the required certificate details and attestation, then **Submit**. Preview is optional. Class B, C, and D require remarks. Confirm the row becomes Completed and the JPG download appears. [Completed popup](docs/superpowers/evidence/pe-completed-browser.png) · [Synthetic issued certificate](docs/superpowers/evidence/pe-issued-certificate.jpg).
-8. Use **Student sign in** with that Student Number/DOB; download the certificate. Upload, finalize, revise, and download only Laboratory documents. Confirm a forged Physical Examination upload is rejected.
+8. Use **Student sign in** with that Student Number/DOB/complete Middle Name. Read Schedule, Notifications, and Results and download own official files/certificates before verification. Enter Laboratory management deliberately, verify through the real email token, and confirm continuation to the selected workspace. Upload, finalize, and revise only Laboratory documents; confirm a forged Physical Examination upload is rejected.
 9. For an ordinary manual resolution group, filter by academic year and import batch or closure group. Select eligible cases individually, on the page, or across the full server group. Use **Assign schedules** to choose shared replacement dates, review preserved services and aggregate capacity, preview every case, then confirm once. The group is applied atomically. [Two-case preview](docs/superpowers/evidence/manual-batch-preview-browser.png).
 10. Select two eligible appointments in one clinic list, preview one replacement date and aggregate capacity, save both, and check the calendar day details and historical academic-year view.
 11. Confirm the Browser console is free of errors, then remove only the targeted synthetic fixtures and restore capacity settings.
