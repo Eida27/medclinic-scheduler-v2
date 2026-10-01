@@ -84,6 +84,21 @@ function request(method: "POST" | "DELETE", body?: unknown) {
 }
 
 describe("/api/student/result-submissions/[appointmentId]/edit", () => {
+  it.each([
+    ["POST", 401, "UNAUTHENTICATED"], ["POST", 403, "STUDENT_EMAIL_VERIFICATION_REQUIRED"],
+    ["DELETE", 401, "UNAUTHENTICATED"], ["DELETE", 403, "STUDENT_EMAIL_VERIFICATION_REQUIRED"],
+  ] as const)("denies %s %s before parsing or changing an edit", async (method, status, code) => {
+    requireVerifiedStudent.mockRejectedValue(new AppError(code, "Access denied.", status));
+    const denied = request(method, { submissionId: draftId });
+    const json = vi.spyOn(denied, "json");
+    const response = method === "POST" ? await POST(denied, context) : await DELETE(denied, context);
+    expect(response.status).toBe(status);
+    expect(await response.json()).toEqual({ error: { code, message: "Access denied." } });
+    expect(json).not.toHaveBeenCalled();
+    expect(beginStudentResultEdit).not.toHaveBeenCalled();
+    expect(cancelStudentResultEdit).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     requireVerifiedStudent.mockResolvedValue(student);

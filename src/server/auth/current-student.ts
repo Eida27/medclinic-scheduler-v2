@@ -4,6 +4,8 @@ import { AppError } from "@/lib/errors";
 import { findActiveStudentIdentity } from "@/server/repositories/student-portal.repository";
 import { STUDENT_SESSION_COOKIE, verifyStudentSessionToken } from "./student-session";
 
+export type CurrentStudent = Awaited<ReturnType<typeof requireStudent>>;
+
 export async function requireStudent() {
   const token = (await cookies()).get(STUDENT_SESSION_COOKIE)?.value;
   if (!token) throw new AppError("UNAUTHENTICATED", "Please sign in to continue.", 401);
@@ -22,7 +24,7 @@ export async function requireVerifiedStudent() {
   if (!student.email || !student.emailVerifiedAt) {
     throw new AppError(
       "STUDENT_EMAIL_VERIFICATION_REQUIRED",
-      "Verify your email address to continue.",
+      "Verify your email address before uploading or updating Laboratory documents.",
       403,
     );
   }

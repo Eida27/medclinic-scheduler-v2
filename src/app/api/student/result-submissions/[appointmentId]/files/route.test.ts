@@ -73,6 +73,18 @@ function metadataFile(name: string, size: number, type: string) {
 }
 
 describe("POST /api/student/result-submissions/[appointmentId]/files", () => {
+  it.each([[401, "UNAUTHENTICATED"], [403, "STUDENT_EMAIL_VERIFICATION_REQUIRED"]])("denies %s before reading multipart data or buffering files", async (status, code) => {
+    requireVerifiedStudent.mockRejectedValue(new AppError(code, "Access denied.", status));
+    const denied = requestWith(new FormData());
+    const formData = vi.spyOn(denied, "formData");
+    const getReader = vi.spyOn(denied.body!, "getReader");
+    const response = await POST(denied, context);
+    expect(response.status).toBe(status);
+    expect(await response.json()).toEqual({ error: { code, message: "Access denied." } });
+    expect(formData).not.toHaveBeenCalled();
+    expect(getReader).not.toHaveBeenCalled();
+    expect(addStudentResultFiles).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     requireVerifiedStudent.mockResolvedValue(student);

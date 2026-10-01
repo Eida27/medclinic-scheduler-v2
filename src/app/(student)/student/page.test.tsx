@@ -1,20 +1,31 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-const { getStudentPortalSchedule, requireVerifiedStudentPage } = vi.hoisted(() => ({
+const { getStudentPortalSchedule, requireVerifiedStudentPage, requireStudentPage } = vi.hoisted(() => ({
   getStudentPortalSchedule: vi.fn(),
   requireVerifiedStudentPage: vi.fn(),
+  requireStudentPage: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
 vi.mock("@/server/auth/verified-student-page", () => ({ requireVerifiedStudentPage }));
+vi.mock("@/server/auth/student-page", () => ({ requireStudentPage }));
 vi.mock("@/server/repositories/student-portal.repository", () => ({ getStudentPortalSchedule }));
 
 import StudentSchedulePage from "./page";
 
 describe("StudentSchedulePage", () => {
+  it("reads the same schedule without forcing email verification", async () => {
+    requireStudentPage.mockResolvedValue({ studentNumber: "24-0001", studentName: "Santos, Ana M.", email: null, emailVerifiedAt: null });
+    requireVerifiedStudentPage.mockRejectedValue(new Error("Verification must not gate reading"));
+    getStudentPortalSchedule.mockResolvedValue({ studentNumber: "24-0001", studentName: "Santos, Ana M.", appointments: [], history: [], previousAcademicYears: [] });
+    render(await StudentSchedulePage());
+    expect(screen.getByRole("heading", { name: "Santos, Ana M." })).toBeVisible();
+    expect(screen.getByText("No published appointments yet.")).toBeVisible();
+    expect(getStudentPortalSchedule).toHaveBeenCalledWith("24-0001");
+  });
   it("shows the exact shared Schedule Notice", async () => {
-    requireVerifiedStudentPage.mockResolvedValue({ studentNumber: "24-0001" });
+    requireStudentPage.mockResolvedValue({ studentNumber: "24-0001" });
     getStudentPortalSchedule.mockResolvedValue({
       studentNumber: "24-0001",
       studentName: "Santos, Ana M.",
@@ -31,7 +42,7 @@ describe("StudentSchedulePage", () => {
   });
 
   it("shows readable appointment status labels", async () => {
-    requireVerifiedStudentPage.mockResolvedValue({ studentNumber: "24-0001" });
+    requireStudentPage.mockResolvedValue({ studentNumber: "24-0001" });
     getStudentPortalSchedule.mockResolvedValue({
       studentNumber: "24-0001",
       studentName: "Santos, Ana M.",
@@ -54,7 +65,7 @@ describe("StudentSchedulePage", () => {
   });
 
   it("splits unresolved current items from dated closure history", async () => {
-    requireVerifiedStudentPage.mockResolvedValue({ studentNumber: "24-0001" });
+    requireStudentPage.mockResolvedValue({ studentNumber: "24-0001" });
     getStudentPortalSchedule.mockResolvedValue({
       studentNumber: "24-0001",
       studentName: "Santos, Ana M.",
@@ -91,7 +102,7 @@ describe("StudentSchedulePage", () => {
   });
 
   it("labels current and prepared future academic years in the schedule", async () => {
-    requireVerifiedStudentPage.mockResolvedValue({ studentNumber: "24-0001" });
+    requireStudentPage.mockResolvedValue({ studentNumber: "24-0001" });
     getStudentPortalSchedule.mockResolvedValue({
       studentNumber: "24-0001",
       studentName: "Santos, Ana M.",
@@ -112,7 +123,7 @@ describe("StudentSchedulePage", () => {
   });
 
   it("places ended-year reschedule history with previous academic years", async () => {
-    requireVerifiedStudentPage.mockResolvedValue({ studentNumber: "24-0001" });
+    requireStudentPage.mockResolvedValue({ studentNumber: "24-0001" });
     getStudentPortalSchedule.mockResolvedValue({
       studentNumber: "24-0001",
       studentName: "Santos, Ana M.",

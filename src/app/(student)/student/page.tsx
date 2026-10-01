@@ -2,11 +2,11 @@ import { redirect } from "next/navigation";
 import { operationalStatusLabel } from "@/components/appointments/status-labels";
 import { Card } from "@/components/ui/Card";
 import { SCHEDULE_NOTICE } from "@/lib/schedule-notice";
-import { requireVerifiedStudentPage } from "@/server/auth/verified-student-page";
+import { requireStudentPage } from "@/server/auth/student-page";
 import { getStudentPortalSchedule } from "@/server/repositories/student-portal.repository";
 
 export default async function StudentSchedulePage() {
-  const student = await requireVerifiedStudentPage();
+  const student = await requireStudentPage();
   const portal = await getStudentPortalSchedule(student.studentNumber);
   if (!portal) redirect("/student/login");
   const currentHistory = portal.history.filter((appointment) => !appointment.isEndedAcademicYear);

@@ -14,14 +14,14 @@ import StudentLayout from "./layout";
 describe("StudentLayout", () => {
   beforeEach(() => vi.resetAllMocks());
 
-  it("exposes only mandatory verification and logout while onboarding is incomplete", async () => {
+  it("exposes reading navigation and logout before email verification", async () => {
     optionalStudent.mockResolvedValue({ email: null, emailVerifiedAt: null });
     render(await StudentLayout({ children: <p>Onboarding</p> }));
 
     expect(screen.getByRole("link", { name: "Email verification" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Log out" })).toBeVisible();
-    expect(screen.queryByRole("link", { name: "Schedule" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Notifications" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Results" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Schedule" })).toHaveAttribute("href", "/student");
+    expect(screen.getByRole("link", { name: "Notifications" })).toHaveAttribute("href", "/student/notifications");
+    expect(screen.getByRole("link", { name: "Results" })).toHaveAttribute("href", "/student/results");
   });
 });

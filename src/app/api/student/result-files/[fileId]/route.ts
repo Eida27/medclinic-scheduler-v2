@@ -1,12 +1,12 @@
 import { errorResponse } from "@/lib/api-response";
-import { requireVerifiedStudent } from "@/server/auth/current-student";
+import { requireStudent } from "@/server/auth/current-student";
 import { getStudentResultFile } from "@/server/services/student-result-submissions.service";
 
 type Context = { params: Promise<{ fileId: string }> };
 
 export async function GET(_request: Request, context: Context) {
   try {
-    const student = await requireVerifiedStudent();
+    const student = await requireStudent();
     const result = await getStudentResultFile(student.studentNumber, (await context.params).fileId);
     return new Response(Uint8Array.from(result.bytes), {
       headers: {

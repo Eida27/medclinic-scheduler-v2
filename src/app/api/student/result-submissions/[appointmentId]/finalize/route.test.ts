@@ -36,6 +36,17 @@ function request(body: unknown) {
 }
 
 describe("POST /api/student/result-submissions/[appointmentId]/finalize", () => {
+  it.each([[401, "UNAUTHENTICATED"], [403, "STUDENT_EMAIL_VERIFICATION_REQUIRED"]])("denies %s before parsing or finalization", async (status, code) => {
+    requireVerifiedStudent.mockRejectedValue(new AppError(code, "Access denied.", status));
+    const denied = request({ submissionId: draftId });
+    const json = vi.spyOn(denied, "json");
+    const response = await POST(denied, context);
+    expect(response.status).toBe(status);
+    expect(await response.json()).toEqual({ error: { code, message: "Access denied." } });
+    expect(json).not.toHaveBeenCalled();
+    expect(finalizeStudentResultSubmission).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     requireVerifiedStudent.mockResolvedValue(student);

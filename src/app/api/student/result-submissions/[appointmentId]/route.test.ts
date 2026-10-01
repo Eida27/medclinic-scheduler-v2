@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AppError } from "@/lib/errors";
 
 const { getStudentResultSubmission, requireVerifiedStudent } = vi.hoisted(() => ({
   getStudentResultSubmission: vi.fn(),
@@ -59,6 +60,13 @@ const rawSubmission = {
 };
 
 describe("GET /api/student/result-submissions/[appointmentId]", () => {
+  it.each([[401, "UNAUTHENTICATED"], [403, "STUDENT_EMAIL_VERIFICATION_REQUIRED"]])("denies %s before draft initialization", async (status, code) => {
+    requireVerifiedStudent.mockRejectedValue(new AppError(code, "Access denied.", status));
+    const response = await GET(new Request("http://localhost/submission"), { params: Promise.resolve({ appointmentId: "other-students-appointment" }) });
+    expect(response.status).toBe(status);
+    expect(await response.json()).toEqual({ error: { code, message: "Access denied." } });
+    expect(getStudentResultSubmission).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     requireVerifiedStudent.mockResolvedValue(student);

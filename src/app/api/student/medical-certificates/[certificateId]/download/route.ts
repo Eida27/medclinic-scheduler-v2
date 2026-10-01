@@ -1,6 +1,6 @@
 import { errorResponse } from "@/lib/api-response";
 import { AppError } from "@/lib/errors";
-import { requireVerifiedStudent } from "@/server/auth/current-student";
+import { requireStudent } from "@/server/auth/current-student";
 import { downloadMedicalCertificate } from "@/server/medical-certificates/certificate.service";
 
 type Context = { params: Promise<{ certificateId: string }> };
@@ -8,7 +8,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 export async function GET(_: Request, context: Context) {
   try {
-    const student = await requireVerifiedStudent();
+    const student = await requireStudent();
     const { certificateId } = await context.params;
     if (!UUID.test(certificateId)) throw new AppError("CERTIFICATE_NOT_FOUND", "Certificate not found.", 404);
     const result = await downloadMedicalCertificate(certificateId, { kind: "STUDENT", studentNumber: student.studentNumber });

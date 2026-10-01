@@ -60,6 +60,11 @@ const rawSubmission = {
 };
 
 describe("StudentResultDraftPage", () => {
+  it("does not initialize a workspace when verified-page access redirects", async () => {
+    requireVerifiedStudentPage.mockRejectedValue(new Error("NEXT_REDIRECT:/student/email-verification"));
+    await expect(StudentResultDraftPage({ params: Promise.resolve({ appointmentId: "appointment-1" }) })).rejects.toThrow("NEXT_REDIRECT:/student/email-verification");
+    expect(getStudentResultSubmission).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     requireVerifiedStudentPage.mockResolvedValue({ studentNumber: "23/8200 01" });

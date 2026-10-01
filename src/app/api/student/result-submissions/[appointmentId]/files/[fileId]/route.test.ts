@@ -36,6 +36,16 @@ function request(body: unknown) {
 }
 
 describe("DELETE /api/student/result-submissions/[appointmentId]/files/[fileId]", () => {
+  it.each([[401, "UNAUTHENTICATED"], [403, "STUDENT_EMAIL_VERIFICATION_REQUIRED"]])("denies %s before parsing or file mutation", async (status, code) => {
+    requireVerifiedStudent.mockRejectedValue(new AppError(code, "Access denied.", status));
+    const denied = request({ submissionId: draftId });
+    const json = vi.spyOn(denied, "json");
+    const response = await DELETE(denied, context);
+    expect(response.status).toBe(status);
+    expect(await response.json()).toEqual({ error: { code, message: "Access denied." } });
+    expect(json).not.toHaveBeenCalled();
+    expect(removeStudentResultFile).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     requireVerifiedStudent.mockResolvedValue(student);
