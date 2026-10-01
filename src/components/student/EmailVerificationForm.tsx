@@ -92,7 +92,7 @@ export function EmailVerificationForm({ verifiedEmail, returnTo = "/student" }: 
   return (
     <div className="grid gap-5">
       {verifiedEmail ? <Alert tone="success">Verified email: {verifiedEmail}</Alert> : (
-        <Alert tone="warning">Verify your email address before uploading or updating Laboratory documents.</Alert>
+        <Alert tone="warning">Verify your email to upload or update Laboratory documents. You can still view schedules, notifications, and existing results.</Alert>
       )}
       {sessionExpired ? (
         <Alert tone="warning">Your session expired. <Link href="/student/login">Sign in</Link> to continue.</Alert>

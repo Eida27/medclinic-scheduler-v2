@@ -16,6 +16,13 @@ describe("EmailVerificationForm", () => {
     vi.unstubAllGlobals();
   });
 
+  it("explains that verification gates Laboratory changes while reading remains available", () => {
+    render(<EmailVerificationForm verifiedEmail={null} />);
+    expect(screen.getByText(
+      "Verify your email to upload or update Laboratory documents. You can still view schedules, notifications, and existing results.",
+    )).toBeVisible();
+  });
+
   it("polls status every five seconds and continues the original onboarding session", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: true,
