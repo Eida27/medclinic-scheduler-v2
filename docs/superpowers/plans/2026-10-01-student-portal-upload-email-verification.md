@@ -20,7 +20,7 @@
 - The overview is the read surface; `/student/results/[appointmentId]` remains the upload/edit workspace.
 - Use Asia/Manila configured academic-year closing dates and private/no-store download responses.
 - Read installed Next.js guides under `node_modules/next/dist/docs/` before editing Next.js code.
-- Use test-first changes, focused RED/GREEN runs, one serialized database-free suite per task, and a read-only task review. Keep implementation in this checkout on `codex/student-portal-upload-email-verification`; no merge/push.
+- Use test-first changes, focused RED/GREEN runs, and a read-only task review. Run the complete ordinary serialized database-free suite on final code. Keep implementation in this checkout on `codex/student-portal-upload-email-verification`; no merge/push.
 
 ## Review Focus
 
@@ -66,7 +66,7 @@
 - [ ] Run focused unit tests and new integration test through documented disposable runner; observe RED.
 - [ ] Implement read-only projection with submission AND appointment ownership and Laboratory type, FINALIZED and undiscarded submissions, eligible files and configured academic year. Current `closing_date >= Manila today`, historical `< today`. Deterministic year/date DESC, uploaded_at/file ID order. Align accessible download predicates. Do not use draft-preferred lookup.
 - [ ] Render official current downloads separately from management action; require completed current effective Laboratory eligibility for management. Disable workspace link prefetch; show nonblocking unverified explanation and safe verification entry. Preserve certificate cards/revocation and historical downloads. Do not mount ResultDraftManager.
-- [ ] Run focused unit/integration tests and serialized unit suite; expect green and no read side effects. Self-review and commit.
+- [ ] Run focused unit/integration tests, typecheck and focused lint; expect green and no read side effects. Carry the complete ordinary serialized unit suite to final code. Self-review and commit.
 
 ### Task 3: Workspace interruption, verification return and polling lifecycle
 
@@ -81,7 +81,7 @@
 - [ ] Run focused tests to expected RED.
 - [ ] Preserve verified-only workspace entry before service; sanitize route context. Implement page/form continuation and session handling; retain replacement-address behavior and existing token/request lifecycle. Provide Back to schedule. Confirmation stays explicit POST and grants no session.
 - [ ] Handle verification-required mutation responses across shared mutate handler with safe appointment verification link, stop action and clear selections; no automatic retry or file transfer.
-- [ ] Run focused tests and serialized unit suite; expect green. Self-review and commit.
+- [ ] Run focused tests, typecheck and focused lint; expect green. Carry the complete ordinary serialized unit suite to final code. Self-review and commit.
 
 ### Task 4: Active documentation and disposable Browser acceptance fixture
 
