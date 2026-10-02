@@ -65,16 +65,25 @@ afterEach(async () => {
 });
 afterAll(async () => {
   if (!capacityFixture) return;
-  try {
-    await teardownCapacityFixtureLock(pool, capacityFixture, cleanup);
-  } finally {
-    if (createdAcademicYears.length) {
-      await pool.query(
-        "DELETE FROM academic_years WHERE start_year=ANY($1::integer[])",
-        [createdAcademicYears],
-      );
+  await teardownCapacityFixtureLock(pool, capacityFixture, async () => {
+    let failure: unknown;
+    try {
+      await cleanup();
+    } catch (error) {
+      failure = error;
     }
-  }
+    try {
+      if (createdAcademicYears.length) {
+        await pool.query(
+          "DELETE FROM academic_years WHERE start_year=ANY($1::integer[])",
+          [createdAcademicYears],
+        );
+      }
+    } catch (error) {
+      failure ??= error;
+    }
+    if (failure) throw failure;
+  });
 });
 
 describe("atomic academic-year import lifecycle", () => {
