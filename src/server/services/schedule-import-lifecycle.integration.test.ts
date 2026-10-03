@@ -90,7 +90,7 @@ describe("atomic academic-year import lifecycle", () => {
   it("fills imported schedules to maximum capacity before using the next date", async () => {
     await pool.query(
       `UPDATE clinic_capacity_settings
-          SET safe_daily_capacity=2, max_daily_capacity=2
+          SET max_daily_capacity=2
         WHERE id IN ($1,$2)`,
       [
         "40000000-0000-4000-8000-000000000001",
@@ -172,7 +172,7 @@ describe("atomic academic-year import lifecycle", () => {
   it("serializes simultaneous imports by immutable accepted_at FCFS order", async () => {
     await pool.query(
       `UPDATE clinic_capacity_settings
-          SET safe_daily_capacity=1, max_daily_capacity=1
+          SET max_daily_capacity=1
         WHERE id IN ($1,$2)`,
       [
         "40000000-0000-4000-8000-000000000001",

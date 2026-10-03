@@ -60,7 +60,7 @@ type DatabaseIdentity = {
 type State = {
   databaseIdentity: DatabaseIdentity;
   preparedAt: string;
-  originalCapacity: { safe: number; maximum: number };
+  originalCapacity: { maximum: number };
 };
 
 type Residue = {
@@ -418,9 +418,9 @@ async function deleteFixture(client: PoolClient, state: State | null) {
     await client.query("DELETE FROM students WHERE student_number=ANY($1::varchar[])", [FIXTURE_STUDENT_NUMBERS]);
     if (state) {
       await client.query(
-        `UPDATE clinic_capacity_settings SET safe_daily_capacity=$2,max_daily_capacity=$3
+        `UPDATE clinic_capacity_settings SET max_daily_capacity=$2
           WHERE clinic_id=$1 AND schedule_type='PHYSICAL_EXAM'`,
-        [PE_CLINIC_ID, state.originalCapacity.safe, state.originalCapacity.maximum],
+        [PE_CLINIC_ID, state.originalCapacity.maximum],
       );
     }
     await client.query("COMMIT");
@@ -442,8 +442,8 @@ async function setup(client: PoolClient, databaseIdentity: DatabaseIdentity) {
     }
   }
 
-  const capacity = await client.query<{ safe_daily_capacity: number; max_daily_capacity: number }>(
-    `SELECT safe_daily_capacity,max_daily_capacity FROM clinic_capacity_settings
+  const capacity = await client.query<{ max_daily_capacity: number }>(
+    `SELECT max_daily_capacity FROM clinic_capacity_settings
       WHERE clinic_id=$1 AND schedule_type='PHYSICAL_EXAM' AND is_active=TRUE`,
     [PE_CLINIC_ID],
   );
@@ -452,7 +452,6 @@ async function setup(client: PoolClient, databaseIdentity: DatabaseIdentity) {
     databaseIdentity,
     preparedAt: new Date().toISOString(),
     originalCapacity: {
-      safe: capacity.rows[0].safe_daily_capacity,
       maximum: capacity.rows[0].max_daily_capacity,
     },
   };
@@ -468,7 +467,7 @@ async function setup(client: PoolClient, databaseIdentity: DatabaseIdentity) {
     );
     if (!academicYear.rowCount) throw new Error("Configure the open 2026 academic year before preparing the fixture.");
     await client.query(
-      `UPDATE clinic_capacity_settings SET safe_daily_capacity=150,max_daily_capacity=150
+      `UPDATE clinic_capacity_settings SET max_daily_capacity=150
         WHERE clinic_id=$1 AND schedule_type='PHYSICAL_EXAM'`,
       [PE_CLINIC_ID],
     );

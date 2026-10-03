@@ -333,7 +333,7 @@ afterAll(async () => {
 
 
 async function setCapacity(closingDate = "2028-07-31", capacity = 1) {
-  await pool.query("UPDATE clinic_capacity_settings SET max_daily_capacity=$1,safe_daily_capacity=$1", [capacity]);
+  await pool.query("UPDATE clinic_capacity_settings SET max_daily_capacity=$1", [capacity]);
   await pool.query("UPDATE academic_years SET closing_date=$1 WHERE start_year=2027", [closingDate]);
 }
 

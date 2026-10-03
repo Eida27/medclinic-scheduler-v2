@@ -26,7 +26,7 @@ const admin: SessionUser = { userId: TEST_REFERENCE_IDS.adminUser, fullName: "Te
 const selected: Array<{ id: string; expectedUpdatedAt: string }> = [];
 let createdYear = false;
 let createdCapacity = false;
-let previousCapacity: { safe: number; maximum: number } | null = null;
+let previousCapacity: { maximum: number } | null = null;
 
 beforeAll(async () => {
   const year = await pool.query(`INSERT INTO academic_years(start_year,closing_date,created_by,updated_by)
@@ -34,16 +34,15 @@ beforeAll(async () => {
   [academicYearStart, `${academicYearStart + 1}-07-31`, admin.userId]);
   createdYear = Boolean(year.rowCount);
   const setting = await pool.query(`INSERT INTO clinic_capacity_settings
-    (clinic_id,schedule_type,safe_daily_capacity,max_daily_capacity,is_active)
-    VALUES ($1,'LABORATORY',2,2,TRUE) ON CONFLICT (clinic_id,schedule_type) DO NOTHING RETURNING id`,
+    (clinic_id,schedule_type,max_daily_capacity,is_active)
+    VALUES ($1,'LABORATORY',2,TRUE) ON CONFLICT (clinic_id,schedule_type) DO NOTHING RETURNING id`,
   [TEST_REFERENCE_IDS.laboratoryClinic]);
   createdCapacity = Boolean(setting.rowCount);
   if (!createdCapacity) {
-    const old = await pool.query<{ safe: number; maximum: number }>(`SELECT safe_daily_capacity AS safe,
-      max_daily_capacity AS maximum FROM clinic_capacity_settings
+    const old = await pool.query<{ maximum: number }>(`SELECT max_daily_capacity AS maximum FROM clinic_capacity_settings
       WHERE clinic_id=$1 AND schedule_type='LABORATORY'`, [TEST_REFERENCE_IDS.laboratoryClinic]);
     previousCapacity = old.rows[0];
-    await pool.query(`UPDATE clinic_capacity_settings SET safe_daily_capacity=2,max_daily_capacity=2
+    await pool.query(`UPDATE clinic_capacity_settings SET max_daily_capacity=2
       WHERE clinic_id=$1 AND schedule_type='LABORATORY'`, [TEST_REFERENCE_IDS.laboratoryClinic]);
   }
   for (let index = 1; index <= 2; index++) {
@@ -78,9 +77,9 @@ afterAll(async () => {
   if (createdCapacity) await pool.query(`DELETE FROM clinic_capacity_settings
     WHERE clinic_id=$1 AND schedule_type='LABORATORY'`, [TEST_REFERENCE_IDS.laboratoryClinic]);
   else if (previousCapacity) await pool.query(`UPDATE clinic_capacity_settings
-    SET safe_daily_capacity=$2,max_daily_capacity=$3
+    SET max_daily_capacity=$2
     WHERE clinic_id=$1 AND schedule_type='LABORATORY'`,
-  [TEST_REFERENCE_IDS.laboratoryClinic, previousCapacity.safe, previousCapacity.maximum]);
+  [TEST_REFERENCE_IDS.laboratoryClinic, previousCapacity.maximum]);
   if (createdYear) await pool.query("DELETE FROM academic_years WHERE start_year=$1", [academicYearStart]);
   await pool.end();
 });
@@ -105,7 +104,7 @@ describe("atomic bulk replacement", () => {
   });
 
   it("shows the aggregate capacity conflict without dropping selected students", async () => {
-    await pool.query(`UPDATE clinic_capacity_settings SET safe_daily_capacity=1,max_daily_capacity=1
+    await pool.query(`UPDATE clinic_capacity_settings SET max_daily_capacity=1
       WHERE clinic_id=$1 AND schedule_type='LABORATORY'`, [TEST_REFERENCE_IDS.laboratoryClinic]);
     try {
       const preview = await previewBulkReplacement({ appointments: selected, replacementDate,
@@ -115,7 +114,7 @@ describe("atomic bulk replacement", () => {
       expect(preview.rows.every((row) => row.issues.some((issue) => issue.code === "DAILY_CAPACITY_EXCEEDED"))).toBe(true);
       expect(preview.previewToken).toBeNull();
     } finally {
-      await pool.query(`UPDATE clinic_capacity_settings SET safe_daily_capacity=2,max_daily_capacity=2
+      await pool.query(`UPDATE clinic_capacity_settings SET max_daily_capacity=2
         WHERE clinic_id=$1 AND schedule_type='LABORATORY'`, [TEST_REFERENCE_IDS.laboratoryClinic]);
     }
   });

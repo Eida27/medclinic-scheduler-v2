@@ -626,7 +626,7 @@ export async function updateCapacitySetting(clinicCode: string, scheduleType: st
       409, undefined, { clinicCode, scheduleType, maxDailyCapacity: max, affectedDates: workload.rows });
   }
   return (await client.query(
-    `UPDATE clinic_capacity_settings SET safe_daily_capacity=$3, max_daily_capacity=$3
+    `UPDATE clinic_capacity_settings SET max_daily_capacity=$3
      WHERE clinic_id=(SELECT id FROM clinics WHERE code=$1) AND schedule_type=$2
      RETURNING schedule_type AS "scheduleType",
      max_daily_capacity AS "maxDailyCapacity"`, [clinicCode, scheduleType, max],

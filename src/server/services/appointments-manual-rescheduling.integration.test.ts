@@ -229,7 +229,7 @@ async function cleanup() {
   if (originalLaboratoryCapacity) {
     await pool.query(
       `UPDATE clinic_capacity_settings
-          SET safe_daily_capacity=$2,max_daily_capacity=$2
+          SET max_daily_capacity=$2
         WHERE clinic_id=$1 AND schedule_type='LABORATORY'`,
       [TEST_REFERENCE_IDS.laboratoryClinic, originalLaboratoryCapacity],
     );
@@ -320,7 +320,7 @@ describe("manual appointment rescheduling integrity", () => {
     await insertStandaloneLaboratory("TEST-MR-OCCUPANT", "2094-09-14");
     await pool.query(
       `UPDATE clinic_capacity_settings
-          SET safe_daily_capacity=1,max_daily_capacity=1
+          SET max_daily_capacity=1
         WHERE clinic_id=$1 AND schedule_type='LABORATORY'`,
       [TEST_REFERENCE_IDS.laboratoryClinic],
     );
@@ -344,7 +344,7 @@ describe("manual appointment rescheduling integrity", () => {
     await insertStandaloneLaboratory("TEST-MR-EXT-OVPSA", "2094-09-14", ovpsaLineage);
     await pool.query(
       `UPDATE clinic_capacity_settings
-          SET safe_daily_capacity=1,max_daily_capacity=1
+          SET max_daily_capacity=1
         WHERE clinic_id=$1 AND schedule_type='LABORATORY'`,
       [TEST_REFERENCE_IDS.laboratoryClinic],
     );
@@ -501,7 +501,7 @@ describe("manual appointment rescheduling integrity", () => {
     const second = await insertPair("TEST-MR-CONCURRENT-2");
     await pool.query(
       `UPDATE clinic_capacity_settings
-          SET safe_daily_capacity=1,max_daily_capacity=1
+          SET max_daily_capacity=1
         WHERE clinic_id=$1 AND schedule_type='LABORATORY'`,
       [TEST_REFERENCE_IDS.laboratoryClinic],
     );

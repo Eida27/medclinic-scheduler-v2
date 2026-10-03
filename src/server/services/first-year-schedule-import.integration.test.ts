@@ -171,7 +171,7 @@ beforeAll(async () => {
   );
   originalCapacity = capacity.rows[0].max_daily_capacity;
   await pool.query(
-    `UPDATE clinic_capacity_settings SET safe_daily_capacity=3,max_daily_capacity=3
+    `UPDATE clinic_capacity_settings SET max_daily_capacity=3
       WHERE clinic_id=$1 AND schedule_type='PHYSICAL_EXAM'`,
     [TEST_REFERENCE_IDS.physicalExamClinic],
   );
@@ -180,7 +180,7 @@ afterEach(cleanup);
 afterAll(async () => {
   await cleanup();
   await pool.query(
-    `UPDATE clinic_capacity_settings SET safe_daily_capacity=$2,max_daily_capacity=$2
+    `UPDATE clinic_capacity_settings SET max_daily_capacity=$2
       WHERE clinic_id=$1 AND schedule_type='PHYSICAL_EXAM'`,
     [TEST_REFERENCE_IDS.physicalExamClinic, originalCapacity],
   );

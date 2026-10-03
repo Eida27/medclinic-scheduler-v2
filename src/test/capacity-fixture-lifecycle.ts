@@ -55,8 +55,7 @@ export async function restoreCapacitySettings(
   if (!capacities.length) return;
   await pool.query(
     `UPDATE clinic_capacity_settings setting
-        SET safe_daily_capacity=fixture.max_daily_capacity,
-            max_daily_capacity=fixture.max_daily_capacity
+        SET max_daily_capacity=fixture.max_daily_capacity
        FROM UNNEST($1::uuid[], $2::integer[])
          AS fixture(id, max_daily_capacity)
       WHERE setting.id=fixture.id`,

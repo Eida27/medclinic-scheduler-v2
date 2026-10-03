@@ -421,8 +421,8 @@ describe("database constraints", () => {
       { code: "KABALAKA_CLINIC", name: "KABALAKA Clinic" },
     ]);
 
-    const capacity = await pool.query<{ code: string; schedule_type: string; safe_daily_capacity: number; max_daily_capacity: number }>(
-      `SELECT c.code, s.schedule_type, s.safe_daily_capacity, s.max_daily_capacity
+    const capacity = await pool.query<{ code: string; schedule_type: string; max_daily_capacity: number }>(
+      `SELECT c.code, s.schedule_type, s.max_daily_capacity
          FROM clinic_capacity_settings s
          JOIN clinics c ON c.id = s.clinic_id
         WHERE s.id IN (
@@ -432,8 +432,8 @@ describe("database constraints", () => {
         ORDER BY c.code, s.schedule_type`,
     );
     expect(capacity.rows).toEqual([
-      { code: "CPU_CLINIC", schedule_type: "PHYSICAL_EXAM", safe_daily_capacity: 150, max_daily_capacity: 150 },
-      { code: "KABALAKA_CLINIC", schedule_type: "LABORATORY", safe_daily_capacity: 150, max_daily_capacity: 150 },
+      { code: "CPU_CLINIC", schedule_type: "PHYSICAL_EXAM", max_daily_capacity: 150 },
+      { code: "KABALAKA_CLINIC", schedule_type: "LABORATORY", max_daily_capacity: 150 },
     ]);
 
     const users = await pool.query<{ full_name: string; email: string; role: string; clinic_code: string | null }>(

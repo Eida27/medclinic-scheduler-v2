@@ -21,7 +21,7 @@ async function cleanup() {
 beforeAll(async () => { fixture = await setupCapacityFixtureLock(pool, cleanup); });
 beforeEach(async () => {
   await pool.query("INSERT INTO academic_years(start_year,closing_date,created_by,updated_by) VALUES(2049,'2050-07-31',$1,$1)", [actor.userId]);
-  await pool.query("UPDATE clinic_capacity_settings SET max_daily_capacity=150,safe_daily_capacity=150");
+  await pool.query("UPDATE clinic_capacity_settings SET max_daily_capacity=150");
 });
 afterEach(async () => { await cleanupAndRestoreCapacitySettings(pool, fixture.originalCapacities, cleanup); });
 afterAll(async () => {
@@ -131,7 +131,7 @@ describe("transactional capacity integrity", () => {
   });
   it.each([true, false])("serializes a last-slot import and reduction with import first=%s", async (importFirst) => {
     await load(1);
-    await pool.query("UPDATE clinic_capacity_settings SET max_daily_capacity=2,safe_daily_capacity=2");
+    await pool.query("UPDATE clinic_capacity_settings SET max_daily_capacity=2");
     const blocker = await pool.connect();
     let first: ReturnType<typeof settled> | undefined;
     let second: ReturnType<typeof settled> | undefined;

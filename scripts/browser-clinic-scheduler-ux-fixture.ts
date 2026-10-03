@@ -130,7 +130,6 @@ export async function runGuardedAcceptanceDatabaseOperation<T>({
 type JsonObject = Record<string, unknown>;
 type CapacityBaseline = {
   id: string;
-  safeDailyCapacity: number;
   maxDailyCapacity: number;
 };
 type BaselineIds = Record<string, string[]>;
@@ -517,7 +516,7 @@ async function prepare(pool: Pool, databaseIdentity: AcceptanceDatabaseIdentity)
       [inspection.studentNumbers],
     );
     const capacities = await client.query<CapacityBaseline>(
-      `SELECT id::text, safe_daily_capacity AS "safeDailyCapacity", max_daily_capacity AS "maxDailyCapacity"
+      `SELECT id::text, max_daily_capacity AS "maxDailyCapacity"
          FROM clinic_capacity_settings ORDER BY id`,
     );
     const colleges = await client.query<{ id: string; name: string; isActive: boolean }>(
@@ -617,8 +616,7 @@ async function prepare(pool: Pool, databaseIdentity: AcceptanceDatabaseIdentity)
     }
     await client.query(
       `UPDATE clinic_capacity_settings
-          SET safe_daily_capacity=GREATEST(max_daily_capacity, $1),
-              max_daily_capacity=GREATEST(max_daily_capacity, $1)`,
+          SET max_daily_capacity=GREATEST(max_daily_capacity, $1)`,
       [EXPECTED_APPROVED_ROWS],
     );
     await client.query("COMMIT");
@@ -1365,7 +1363,7 @@ async function status(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) {
   try {
     const imported = await captureImport(client, state);
     const capacities = await client.query<CapacityBaseline>(
-      `SELECT id::text, safe_daily_capacity AS "safeDailyCapacity", max_daily_capacity AS "maxDailyCapacity"
+      `SELECT id::text, max_daily_capacity AS "maxDailyCapacity"
          FROM clinic_capacity_settings ORDER BY id`,
     );
     // Status deliberately includes fixture-owned active and historical soft-unblocked rows.
@@ -1914,9 +1912,9 @@ export async function deleteDatabaseManifestWithClient(
   for (const capacity of state.baseline.capacities) {
     await client.query(
       `UPDATE clinic_capacity_settings
-          SET safe_daily_capacity=$2, max_daily_capacity=$3
+          SET max_daily_capacity=$2
         WHERE id=$1`,
-      [capacity.id, capacity.safeDailyCapacity, capacity.maxDailyCapacity],
+      [capacity.id, capacity.maxDailyCapacity],
     );
   }
 }
@@ -1970,7 +1968,7 @@ async function cleanup(pool: Pool, currentIdentity: AcceptanceDatabaseIdentity) 
   const proofClient = await pool.connect();
   try {
     const capacities = await proofClient.query<CapacityBaseline>(
-      `SELECT id::text, safe_daily_capacity AS "safeDailyCapacity", max_daily_capacity AS "maxDailyCapacity"
+      `SELECT id::text, max_daily_capacity AS "maxDailyCapacity"
          FROM clinic_capacity_settings ORDER BY id`,
     );
     const baselineCapacityJson = JSON.stringify(state.baseline.capacities);

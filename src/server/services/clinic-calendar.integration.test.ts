@@ -893,7 +893,7 @@ describe("unified clinic calendar lifecycle", () => {
       });
       await pool.query(
         `UPDATE clinic_capacity_settings
-            SET safe_daily_capacity=1,max_daily_capacity=1
+            SET max_daily_capacity=1
           WHERE clinic_id=$1 AND schedule_type='LABORATORY'`,
         [TEST_REFERENCE_IDS.laboratoryClinic],
       );
@@ -922,7 +922,7 @@ describe("unified clinic calendar lifecycle", () => {
     });
     await pool.query(
       `UPDATE clinic_capacity_settings
-          SET safe_daily_capacity=1,max_daily_capacity=1
+          SET max_daily_capacity=1
         WHERE clinic_id=$1 AND schedule_type='LABORATORY'`,
       [TEST_REFERENCE_IDS.laboratoryClinic],
     );
@@ -1627,7 +1627,7 @@ describe("closure same-cycle integrity", () => {
     await createPair({ studentNumber: "UCAL-REUSE-B", laboratoryDate: "2049-08-08", physicalExamDate: "2049-08-10" });
     await pool.query("UPDATE appointments SET created_at='2049-07-01' WHERE student_number='UCAL-REUSE-A'");
     await pool.query("UPDATE appointments SET created_at='2049-07-02' WHERE student_number='UCAL-REUSE-B'");
-    await pool.query("UPDATE clinic_capacity_settings SET max_daily_capacity=1,safe_daily_capacity=1");
+    await pool.query("UPDATE clinic_capacity_settings SET max_daily_capacity=1");
     const request = { requestId: requestIds.pair, emergencyAcknowledged: false, recoveryMode: "AUTO_ELIGIBLE", changes: [
       { action: "BLOCK", date: "2049-08-09", category: "CLOSURE", reason: "TEST-UNIFIED reuse" },
       { action: "BLOCK", date: "2049-08-10", category: "CLOSURE", reason: "TEST-UNIFIED reuse" },
@@ -1750,7 +1750,7 @@ describe("closure recovery protected occupancy", () => {
     await createPair({ studentNumber: "UCAL-KEEP-B", laboratoryDate: "2049-08-08", physicalExamDate: "2049-08-10" });
     await insertPublishedCapacityOccupant({ studentNumber: "UCAL-KEEP-C", appointmentDate: "2049-08-11", status: "PENDING", scheduleType: "PHYSICAL_EXAM" });
     // Block B's otherwise earliest PE date with an occupied Physical Examination slot.
-    await pool.query("UPDATE clinic_capacity_settings SET max_daily_capacity=1,safe_daily_capacity=1");
+    await pool.query("UPDATE clinic_capacity_settings SET max_daily_capacity=1");
     await saveClinicCalendarChanges({ requestId: requestIds.pair, emergencyAcknowledged: false, recoveryMode: "AUTO_ELIGIBLE", changes: [
       { action: "BLOCK", date: "2049-08-09", category: "CLOSURE", reason: "TEST-UNIFIED preserved" },
       { action: "BLOCK", date: "2049-08-10", category: "CLOSURE", reason: "TEST-UNIFIED preserved" },
@@ -1763,7 +1763,7 @@ describe("closure recovery protected occupancy", () => {
   it("discards a failed student's simulated release and reservation", async () => {
     await createPair({ studentNumber: "UCAL-FAIL-A", laboratoryDate: "2049-08-09", physicalExamDate: "2049-08-11" });
     await createPair({ studentNumber: "UCAL-FAIL-B", laboratoryDate: "2049-08-08", physicalExamDate: "2049-08-10" });
-    await pool.query("UPDATE clinic_capacity_settings SET max_daily_capacity=1,safe_daily_capacity=1");
+    await pool.query("UPDATE clinic_capacity_settings SET max_daily_capacity=1");
     await pool.query(`CREATE FUNCTION task4_move_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
       IF OLD.student_number='UCAL-FAIL-A' AND NEW.status='RESCHEDULED' THEN RETURN NULL; END IF; RETURN NEW; END $$`);
     await pool.query("CREATE TRIGGER task4_move_failure BEFORE UPDATE ON appointments FOR EACH ROW EXECUTE FUNCTION task4_move_failure()");
