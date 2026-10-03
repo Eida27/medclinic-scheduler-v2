@@ -114,5 +114,5 @@ describe("predeployment scheduling schema", () => {
         }
       } finally { await client.end(); }
     }, target.toString(), "1");
-  });
+  }, 60_000);
 });

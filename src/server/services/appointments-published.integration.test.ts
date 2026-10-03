@@ -210,7 +210,7 @@ describe("published-only appointment access", () => {
     });
     const batch = await pool.query<{ id: string }>(
       `INSERT INTO schedule_batches (clinic_id, batch_name, status, created_by)
-       VALUES ($1,'TEST published guards historical generated','GENERATED',$2)
+       VALUES ($1,'TEST published guards unpublished holds','PUBLISHED',$2)
        RETURNING id`,
       [TEST_REFERENCE_IDS.laboratoryClinic, admin.userId],
     );

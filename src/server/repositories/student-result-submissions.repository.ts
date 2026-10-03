@@ -477,9 +477,6 @@ export async function lockExpectedStudentResultDraft(
   if (!draft || draft.id !== submissionId) return { type: "stale" as const };
 
   if (!finalized.rowCount) {
-    const resultTable = appointment.scheduleType === "LABORATORY"
-      ? "laboratory_results"
-      : "exam_results";
     const resultStatus = await client.query<{ resultStatus: string }>(
       `SELECT result_status AS "resultStatus" FROM laboratory_results WHERE appointment_id=$1`,
       [appointmentId],

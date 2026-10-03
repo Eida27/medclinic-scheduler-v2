@@ -1,5 +1,7 @@
 # Clinic Scheduler UI/UX Revision Implementation Plan
 
+> October 3 supersession: safe-capacity storage and the catalog-conversion command in this historical plan are retired by [predeployment cleanup](../specs/2026-10-03-predeployment-legacy-cleanup-design.md). Use the current installation guide and maximum capacity only. Other historical rationale is preserved.
+
 > **Historical:** Retained for implementation history. Use the [current policy index](../../current-policies.md) for current routes and navigation.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

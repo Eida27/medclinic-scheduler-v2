@@ -1,4 +1,4 @@
-name: Database-free unit tests
+name: Tests and deployment checks
 on:
   push:
   pull_request:
@@ -16,3 +16,55 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test -- --maxWorkers=1 --no-file-parallelism --testTimeout=15000 --hookTimeout=30000
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npx next typegen
+      - run: npx tsc --noEmit
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: medclinic_ci
+          POSTGRES_PASSWORD: synthetic-ci-postgres-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U medclinic_ci -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      TEST_DATABASE_DISPOSABLE: '1'
+      JWT_SECRET: synthetic-ci-jwt-secret-at-least-32-characters
+      EMAIL_OUTBOX_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      APP_URL: http://localhost:3000
+      APP_TIMEZONE: Asia/Manila
+      SMTP_HOST: ''
+      SMTP_FROM: ''
+      SMTP_USER: ''
+      SMTP_PASS: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Empty database migration and replay proof
+        run: npm run test:migrations:empty
+        env:
+          TEST_DATABASE_URL: postgresql://medclinic_ci:synthetic-ci-postgres-password@127.0.0.1:5432/medclinic_test_ci_migration_${{ github.run_id }}_${{ github.run_attempt }}
+      - name: Serialized disposable PostgreSQL integration suite
+        run: npm run test:integration -- --testTimeout=60000 --hookTimeout=60000
+        env:
+          TEST_DATABASE_URL: postgresql://medclinic_ci:synthetic-ci-postgres-password@127.0.0.1:5432/medclinic_test_ci_integration_${{ github.run_id }}_${{ github.run_attempt }}
