@@ -1,5 +1,3 @@
-import type { AcademicYearState } from "./academic-year";
-
 export const REPORT_PAGE_SIZE = 150;
 
 export const historicalReportSorts = [
@@ -119,20 +117,6 @@ export function parseHistoricalReportQuery(input: Record<string, unknown>): Hist
     limit: REPORT_PAGE_SIZE,
     offset: (page - 1) * REPORT_PAGE_SIZE,
   };
-}
-
-export function classifyHistoricalCompliance(
-  state: AcademicYearState,
-  laboratory: HistoricalRequirementStatus,
-  physicalExam: HistoricalRequirementStatus,
-): HistoricalComplianceClassification {
-  const laboratoryComplete = laboratory === "COMPLETED";
-  const physicalExamComplete = physicalExam === "COMPLETED";
-  if (laboratoryComplete && physicalExamComplete) return "COMPLIED";
-  if (state !== "CLOSED") return "PENDING_COMPLIANCE";
-  if (!laboratoryComplete && physicalExamComplete) return "DID_NOT_COMPLY_LABORATORY";
-  if (laboratoryComplete) return "DID_NOT_COMPLY_PHYSICAL_EXAM";
-  return "DID_NOT_COMPLY_BOTH";
 }
 
 export function historicalComplianceLabel(value: HistoricalComplianceClassification) {

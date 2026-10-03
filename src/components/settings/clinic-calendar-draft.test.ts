@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ClinicCalendarChange } from "@/types/clinic-calendar";
 import {
-  calendarDraftKey,
   resolveCalendarDateState,
   summarizeCalendarDraft,
   toggleCalendarDraft,
@@ -21,11 +20,6 @@ const persisted = {
 };
 
 describe("date-only annual calendar drafts", () => {
-  it("uses the ISO date itself as the stable cross-month and cross-year key", () => {
-    expect(calendarDraftKey("2027-08-11")).toBe("2027-08-11");
-    expect(calendarDraftKey("2028-01-02")).toBe("2028-01-02");
-  });
-
   it("stages BLOCK and REOPEN without clinicId or UNBLOCK", () => {
     let draft = new Map<string, ClinicCalendarChange>();
     draft = toggleCalendarDraft(draft, {

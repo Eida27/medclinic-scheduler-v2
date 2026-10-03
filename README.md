@@ -156,23 +156,7 @@ npm run db:seed
 
 Migrations 008 and 009 add academic-year ordering/cycles, displacement/closure metadata, student identity/notifications, private submission metadata, `PENDING_UPLOAD`, and the date-only appointment schema. Migration 010 normalizes the deprecated safe-capacity column to maximum capacity; application scheduling uses maximum capacity only. Migration 012 replaces the college/program catalog with the exact CPU workbook catalog. Migrations 020–025 consolidate First-Year/OVPSA imports, harden closure recovery, validate year/category policy, add verified student notifications, enforce clinic scope, and secure staff account lifecycles. Migration 026 removes configurable priority groups and the schedule-item priority-group column while preserving import, appointment, audit, and displacement history.
 
-Migration 012 is intentionally destructive when a database contains non-workbook reference data. Back up PostgreSQL and `RESULT_UPLOAD_ROOT`, stop the application and workers, and keep an exclusive maintenance window. Review the cleanup manifest first:
-
-```powershell
-npm run db:reference-catalog-cleanup -- plan
-```
-
-To remove affected students and whole affected atomic import groups, including their schedules, results, audit rows, and private result files, explicitly authorize cleanup and then verify its persisted status before migrating:
-
-```powershell
-$env:REFERENCE_CATALOG_CLEANUP_EXCLUSIVE_DATABASE="1"
-$env:REFERENCE_CATALOG_CLEANUP_CONFIRM="DELETE_NON_WORKBOOK_REFERENCE_DATA"
-npm run db:reference-catalog-cleanup -- apply
-npm run db:reference-catalog-cleanup -- status
-npm run db:migrate
-```
-
-If private-file removal fails after database deletion commits, correct the storage problem and rerun `apply`; the state file at `.data/reference-catalog-cleanup/state.json` resumes from file deletion without replaying database deletion. Migration 012 refuses to remove referenced noncanonical catalog rows until cleanup has completed.
+Migration 012 establishes the canonical CPU catalog on the supported fresh-install path. Its historical cleanup notice is retained in the migration; the obsolete catalog-conversion command has been retired. Existing noncanonical developer data requires a separately reviewed maintenance action.
 
 Reset is destructive and deliberately guarded:
 

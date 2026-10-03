@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  assertLaboratoryCompletionRollbackAllowed,
-  assertPhysicalExamCompletionAllowed,
   cancellationTargetsForPair,
   type EffectiveAppointmentPair,
 } from "./appointment-pair-integrity";
@@ -30,36 +28,6 @@ function pair(
 }
 
 describe("appointment pair lifecycle integrity", () => {
-  it("allows Physical Examination completion only after Laboratory completion", () => {
-    expect(() => assertPhysicalExamCompletionAllowed(
-      appointment("physical-id", "PHYSICAL_EXAM", "PENDING"),
-      pair("COMPLETED"),
-    )).not.toThrow();
-  });
-
-  it.each(["PENDING", "NO_SHOW", "CANCELLED", null] as const)(
-    "rejects Physical Examination completion when Laboratory is %s",
-    (laboratoryStatus) => {
-      expect(() => assertPhysicalExamCompletionAllowed(
-        appointment("physical-id", "PHYSICAL_EXAM", "PENDING"),
-        pair(laboratoryStatus),
-      )).toThrow(expect.objectContaining({
-        code: "LABORATORY_NOT_COMPLETED",
-        status: 409,
-      }));
-    },
-  );
-
-  it("rejects Laboratory completion rollback after Physical Examination completion", () => {
-    expect(() => assertLaboratoryCompletionRollbackAllowed(
-      appointment("laboratory-id", "LABORATORY", "COMPLETED"),
-      pair("COMPLETED", "COMPLETED"),
-    )).toThrow(expect.objectContaining({
-      code: "PHYSICAL_ALREADY_COMPLETED",
-      status: 409,
-    }));
-  });
-
   it.each(["PENDING", "NO_SHOW"] as const)(
     "cascades unfinished Laboratory cancellation to a %s Physical Examination",
     (physicalExamStatus) => {

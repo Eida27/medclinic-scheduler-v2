@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   REPORT_PAGE_SIZE,
-  classifyHistoricalCompliance,
   historicalComplianceLabel,
   parseHistoricalReportQuery,
 } from "./historical-compliance-report";
@@ -71,23 +70,6 @@ describe("historical report query parser", () => {
       offset: 0,
     });
   });
-});
-
-describe("historical compliance classification", () => {
-  it.each([
-    ["OPEN", "COMPLETED", "COMPLETED", "COMPLIED"],
-    ["OPEN", "PENDING", "COMPLETED", "PENDING_COMPLIANCE"],
-    ["CLOSING_SOON", "COMPLETED", "UNSCHEDULED", "PENDING_COMPLIANCE"],
-    ["CLOSED", "COMPLETED", "COMPLETED", "COMPLIED"],
-    ["CLOSED", "PENDING", "COMPLETED", "DID_NOT_COMPLY_LABORATORY"],
-    ["CLOSED", "COMPLETED", "NO_SHOW", "DID_NOT_COMPLY_PHYSICAL_EXAM"],
-    ["CLOSED", "UNSCHEDULED", "CANCELLED", "DID_NOT_COMPLY_BOTH"],
-  ] as const)(
-    "classifies %s with laboratory %s and physical exam %s as %s",
-    (state, laboratory, physicalExam, expected) => {
-      expect(classifyHistoricalCompliance(state, laboratory, physicalExam)).toBe(expected);
-    },
-  );
 });
 
 describe("historical report labels", () => {

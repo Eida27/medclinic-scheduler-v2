@@ -1,24 +1,5 @@
 import "server-only";
 
-export type AppointmentScheduleType = "PHYSICAL_EXAM" | "LABORATORY";
-export type CapacityStatus = "VALID" | "CONFLICT";
-
-export type CapacitySetting = {
-  clinicId: string;
-  scheduleType: AppointmentScheduleType;
-  maxDailyCapacity: number;
-};
-
-export type CapacityCheckResult = {
-  status: CapacityStatus;
-  clinicId: string;
-  date: string;
-  scheduleType: AppointmentScheduleType;
-  count: number;
-  maxCapacity: number;
-  message: string;
-};
-
 export type StudentCategory = "REGULAR" | "OJT" | "TOUR";
 
 export type PairedScheduleRequest = {

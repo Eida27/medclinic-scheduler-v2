@@ -101,7 +101,7 @@ describe("CPU reference catalog seed", () => {
 });
 
 describe("CPU reference catalog migration", () => {
-  it("reconciles existing databases through the guarded cleanup boundary", async () => {
+  it("preserves the historical guarded reference catalog migration", async () => {
     const path = resolve("database/migrations/012_cpu_reference_catalog.sql");
     expect(existsSync(path)).toBe(true);
     const migration = await readFile(path, "utf8");
@@ -113,11 +113,4 @@ describe("CPU reference catalog migration", () => {
     expect(migration).toContain("DELETE FROM colleges");
   });
 
-  it("exposes the guarded cleanup command through npm", async () => {
-    const packageJson = JSON.parse(await readFile(resolve("package.json"), "utf8")) as {
-      scripts: Record<string, string>;
-    };
-    expect(packageJson.scripts["db:reference-catalog-cleanup"])
-      .toBe("tsx --env-file=.env.local scripts/db-reference-catalog-cleanup.ts");
-  });
 });

@@ -1,8 +1,6 @@
 import { AppError } from "@/lib/errors";
 
 export type LaboratoryTestCode = "CBC" | "URINE" | "STOOL" | "XRAY";
-export const LABORATORY_REQUIREMENTS_VERSION = 1;
-
 export function requiredLaboratoryTests(context: {
   yearLevel: number | null | undefined;
   schedulingCategory: string | null | undefined;

@@ -651,5 +651,3 @@ export async function publishDisplacedRegularReplacementsWithLockedScopes(
     })),
   ];
 }
-
-export const nextDateAfter = (date: string) => addDays(date, 1);

@@ -22,32 +22,6 @@ export type EffectiveAppointmentPair<T extends PairAppointment = PairAppointment
   physicalExam: T | null;
 };
 
-export function assertPhysicalExamCompletionAllowed(
-  appointment: PairAppointment,
-  pair: EffectiveAppointmentPair,
-) {
-  if (appointment.scheduleType !== "PHYSICAL_EXAM") return;
-  if (pair.laboratory?.status === "COMPLETED") return;
-  throw new AppError(
-    "LABORATORY_NOT_COMPLETED",
-    "Physical Examination cannot be completed until the student's Laboratory appointment is completed.",
-    409,
-  );
-}
-
-export function assertLaboratoryCompletionRollbackAllowed(
-  appointment: PairAppointment,
-  pair: EffectiveAppointmentPair,
-) {
-  if (appointment.scheduleType !== "LABORATORY") return;
-  if (pair.physicalExam?.status !== "COMPLETED") return;
-  throw new AppError(
-    "PHYSICAL_ALREADY_COMPLETED",
-    "Laboratory completion cannot be reversed because the paired Physical Examination has already been completed.",
-    409,
-  );
-}
-
 export function cancellationTargetsForPair<T extends PairAppointment>(
   appointment: T,
   pair: EffectiveAppointmentPair<T>,

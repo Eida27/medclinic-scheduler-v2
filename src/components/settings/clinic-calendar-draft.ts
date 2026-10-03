@@ -13,10 +13,6 @@ export type CalendarDateState =
   | { state: "STAGED_REOPEN"; record: ClinicUnavailableDateRecord; change: ClinicCalendarReopenChange }
   | { state: "CONFLICT"; messages: string[] };
 
-export function calendarDraftKey(date: string) {
-  return date;
-}
-
 export function toggleCalendarDraft(
   draft: Map<string, ClinicCalendarChange>,
   input: {
