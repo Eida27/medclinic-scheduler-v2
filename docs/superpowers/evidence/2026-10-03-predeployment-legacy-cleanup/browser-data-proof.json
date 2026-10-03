@@ -1,0 +1,31 @@
+[
+  {
+    "kind": "imports",
+    "proof": [
+      {
+        "import_mode": "STANDARD",
+        "scheduled_items": 2,
+        "student_category": "REGULAR",
+        "published_batches": 2,
+        "academic_year_start": 2027
+      },
+      {
+        "import_mode": "FIRST_YEAR_OVPSA",
+        "scheduled_items": 2,
+        "student_category": "REGULAR",
+        "published_batches": 2,
+        "academic_year_start": 2027
+      }
+    ]
+  },
+  {
+    "kind": "certificate_separation",
+    "proof": {
+      "files": 0,
+      "cleanup": 0,
+      "submissions": 0,
+      "certificates": 1,
+      "verifications": 0
+    }
+  }
+]

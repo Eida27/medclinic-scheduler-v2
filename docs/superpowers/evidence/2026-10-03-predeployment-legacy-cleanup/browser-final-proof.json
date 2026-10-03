@@ -1,0 +1,24 @@
+{
+  "submissions": [
+    {
+      "result_type": "LABORATORY",
+      "status": "FINALIZED",
+      "discarded": false,
+      "count": 1
+    },
+    {
+      "result_type": "LABORATORY",
+      "status": "INVALIDATED",
+      "discarded": false,
+      "count": 1
+    },
+    {
+      "result_type": "LABORATORY",
+      "status": "SUPERSEDED",
+      "discarded": false,
+      "count": 1
+    }
+  ],
+  "certificatePreserved": "e6b0fd4c-ca67-499f-8ac7-198ffd2620cd",
+  "activeDrafts": 0
+}

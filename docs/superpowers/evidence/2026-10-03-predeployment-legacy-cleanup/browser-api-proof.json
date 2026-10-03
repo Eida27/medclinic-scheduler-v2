@@ -1,0 +1,74 @@
+{
+  "unverified": {
+    "status": 403,
+    "error": "STUDENT_EMAIL_VERIFICATION_REQUIRED",
+    "zeroStateChanges": true,
+    "counters": {
+      "submissions": 0,
+      "files": 0,
+      "cleanup": 0,
+      "exam_results": 1,
+      "notifications": 3
+    }
+  },
+  "firstYearLifecycle": {
+    "rescheduleWithoutClosure": 409,
+    "closure": 200,
+    "reschedule": 200,
+    "staleReplay": 409,
+    "cancel": 200,
+    "laboratoryDate": "2027-09-06",
+    "physicalExamDate": "2027-09-13",
+    "finalStatus": "CANCELLED"
+  },
+  "data": {
+    "manualRecovery": [
+      {
+        "student_number": "BMR-20260928-0",
+        "schedule_type": "LABORATORY",
+        "status": "PENDING",
+        "appointment_date": "2098-09-01"
+      },
+      {
+        "student_number": "BMR-20260928-0",
+        "schedule_type": "PHYSICAL_EXAM",
+        "status": "PENDING",
+        "appointment_date": "2098-09-03"
+      },
+      {
+        "student_number": "BMR-20260928-1",
+        "schedule_type": "LABORATORY",
+        "status": "PENDING",
+        "appointment_date": "2098-09-01"
+      },
+      {
+        "student_number": "BMR-20260928-1",
+        "schedule_type": "PHYSICAL_EXAM",
+        "status": "PENDING",
+        "appointment_date": "2098-09-03"
+      }
+    ],
+    "removedColumns": 0,
+    "migrations": 31,
+    "unverifiedReading": {
+      "submissions": 0,
+      "files": 0,
+      "cleanup": 0,
+      "verifications": 0
+    }
+  },
+  "forged": {
+    "status": 422,
+    "uploadStatus": 422,
+    "error": "PHYSICAL_EXAM_UPLOAD_RETIRED",
+    "zeroStateChanges": true,
+    "zeroStorageChanges": true,
+    "counters": {
+      "submissions": 1,
+      "files": 0,
+      "cleanup": 0,
+      "exam_results": 1,
+      "notifications": 9
+    }
+  }
+}

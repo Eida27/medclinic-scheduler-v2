@@ -1,0 +1,17 @@
+{
+  "sourceRevision": "b7e7d06a2225214e17b4ec507b3ef50bd83ca993",
+  "nodeVersion": "24.19.0",
+  "nextVersion": "16.3.5",
+  "localPostgresqlMajor": 18,
+  "npmCi": { "exitCode": 0, "installedPackages": 643 },
+  "typegen": { "exitCode": 0 },
+  "typecheck": { "exitCode": 0 },
+  "lint": { "exitCode": 0, "warnings": 0 },
+  "unit": { "exitCode": 0, "files": 213, "tests": 1224, "durationSeconds": 1402.02 },
+  "integration": { "exitCode": 0, "files": 70, "tests": 580, "durationSeconds": 525.43, "databaseResidue": 0, "storageResidueBeforeRemoval": 0 },
+  "emptyMigrations": { "exitCode": 0, "applied": 31, "replayApplied": 0, "atomicRollback": true, "connectionReuse": true, "databaseResidue": 0 },
+  "build": { "exitCode": 0, "storageResidueBeforeRemoval": 0 },
+  "historicalMigrations001To029Changed": 0,
+  "gitDiffCheck": { "exitCode": 0 },
+  "hostedCiExecuted": false
+}

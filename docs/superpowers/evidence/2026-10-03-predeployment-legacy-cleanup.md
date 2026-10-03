@@ -1,0 +1,87 @@
+# Predeployment legacy cleanup implementation evidence
+
+Plan: [approved implementation plan](../plans/2026-10-03-predeployment-legacy-cleanup.md). Authority: [approved design](../specs/2026-10-03-predeployment-legacy-cleanup-design.md).
+
+Implementation branch: `codex/predeployment-legacy-cleanup`, based on clean `main` at `5955082058e3e808fa91e5228bfc305219d4693f`. The earlier review baseline was `f202e5eda2a3a705b886cad2d268b894986abddc`; the intervening changes were the approved plan/design documents. Final source revision: `b7e7d06a2225214e17b4ec507b3ef50bd83ca993` (subsequent evidence-only commits do not change tested runtime code).
+
+## Removal ledger
+
+| Finding | Implemented evidence | Retained behavior / verification |
+| --- | --- | --- |
+| L01 | Deleted `scripts/browser-automated-scheduling-fixture.ts`; no supported command references it. | Current guarded fixtures remain, including clinical, manual recovery and import acceptance. |
+| L02 | Deleted the catalog-conversion script, package command and two dedicated tests; removed current runbook. | Historical migration 012 and canonical 13-college/48-program reference tests remain. Its historical notice has an explicit supersession annotation. |
+| L03 | Submission/draft/file DTOs and finalization/invalidation SQL are Laboratory-only. Removed PE submission joins/counts and the profile's PE upload section. | Forged repository calls and real PE draft/multipart requests reject before mutation/storage. Independent PE certificate projection/download and shared clinical protection remain. |
+| L04 | Shared seven-value attendance tuple, current overall vocabulary and `latestAppointmentStatus` internal name. | Obsolete filters return 422 without repository calls. Mixed-pair integration preserves latest versus either-service behavior, clinic/year/search/pagination. |
+| L05 | Forward migration 030 removes safe capacity, with explicit positive maximum constraint; seed/writers/fixture restoration are maximum-only. | Maximum 1 accepted; 0/negative rejected. Capacity/concurrency, Standard/First-Year and closure integration coverage retained. |
+| L06 | Forward migration 031 requires group category/year and item date, narrows generic states, drops manual override/week/failed-validation fields; DTOs/UI match. | Thirteen unsupported-row cases refuse atomically; valid history/provenance/order/actors/timestamps survive. OVPSA construction states, appointment capacity holds, Laboratory drafts and defensive unpublished rendering remain. |
+| L07 | Deleted `retired-workflows.ts`, unused `nextDateAfter` export and requirements version. | Live priority displacement/date helpers and current Laboratory checklist remain. |
+| L08 | Deleted two unused pair completion assertions, `calendarDraftKey`, duplicate historical compliance classifier and obsolete direct tests. | Live clinical checklist/certificate protections, calendar draft operations, pair cancellation and all five repository compliance classifications retain coverage. |
+| L09 | Deleted four unused generic capacity types. | Paired scheduler types and active maximum-capacity checks remain. |
+| L10 | Removed obsolete 24-hour no-show recognition and encryption aliases; migrated all live callers. Renamed initial-name SQL helper/aliases. | Current midnight note and actor/status checks pass; deterministic v1 ciphertext and tamper rejection retained. Name/initial/suffix search and email/outbox tests retained. |
+| L11 | Guarded developer reset delegates to canonical transaction-owning migration runner. | Separate owned CLI databases prove consent/protected-name refusal before connecting, two explicit resets, exact ledger/reference seed and zero operational people; injected ledger failure rolls back DDL and permits connection reuse. |
+| L12 | Removed direct `@vitejs/plugin-react` dependency and five unused starter SVGs; regenerated lockfile without unrelated upgrades. | Locked installation succeeds; current Vitest/Next configuration retained. |
+| L13 | Current installation, database, E2E, README and policy authority index agree on 31/031 and supported commands. Added September 27 authority and precise historical supersession notice. | Windows/Linux unit CI retained; Linux lint/typecheck and PostgreSQL jobs use synthetic configuration, consent and different fresh target names per invocation. Hosted CI has not run locally. |
+
+## Verification environment and baseline
+
+Windows local verification uses installed PostgreSQL 18 and bundled Node 24.19.0. The user-supplied application role lacked CREATE DATABASE permission. Tests instead use an owned cluster bound to `127.0.0.1:55439`; the application database on port 5432 and root checkout were not reset or migrated. Each migration/integration runner creates a new named `medclinic_test_*` database with explicit consent, verifies database identity/OID, and removes that owned target and private storage afterward. Reset and migration-isolation tests own separately named nested targets.
+
+The first worktree baseline overlapped edits and was discarded as a baseline. On the untouched root, lint/typecheck and 46 clinical integration tests passed. The Node 26 unit baseline reported 210 passing files/1214 tests plus one worker startup error. The unchanged calendar file later passed all 9 tests on Node 24 at the planned 15-second timeout. These are baseline observations, not implementation completion proof.
+
+Focused task verification established failures before behavior changes: wrong-service repository inputs, obsolete no-show recognition, obsolete compliance filters, absent capacity/import constraints, and reset partial-DDL rollback. Their matching green runs covered the actual clinical, import, ownership, history and storage paths. The 13-case pre-031 migration guard proved schema/data/ledger unchanged on refusal. Empty rehearsals progressed from 30/0 after task 5 to 31/0 after task 6. Developer reset CLI verification passed six tests with zero owned residue.
+
+## Final gates
+
+All commands run from the isolated worktree with synthetic configuration; no environment file, real credential or verification token is part of the evidence.
+
+| Command | Result |
+| --- | --- |
+| `npm ci` | Exit 0; 643 packages installed from the lockfile on Node 24.19.0. Native upload/certificate functionality also exercised. |
+| `npx next typegen` | Exit 0, using the installed Next 16.3.5 documentation. |
+| `npx tsc --noEmit --incremental false` | Exit 0. |
+| `npm run lint` | Exit 0, zero warnings after removing the last unused impossible PE selector. |
+| `npm test -- --maxWorkers=1 --no-file-parallelism --testTimeout=15000 --hookTimeout=30000 --reporter=dot` | Exit 0: 213/213 files, 1224/1224 tests, 1402.02 seconds, with default forks and unchanged assertion/time limits. Earlier concurrent run: 212 files/1201 tests passed plus one worker startup error (exit 1); skipped file retry passed 23 tests (exit 0). The fresh isolated gate supersedes those partial runs. |
+| `npm run test:integration -- --testTimeout=60000 --hookTimeout=60000 --reporter=dot` | Exit 0: 70/70 files, 580/580 tests, 525.43 seconds. Owned target removed (residue 0), storage residue 0 before removal. Earlier concurrent 15-second run: 63/70 files and 566/580 tests passed (exit 1); final isolated run supersedes it. The obsolete GENERATED parent fixture was corrected to PUBLISHED while retaining DRAFT/unpublished denial coverage. |
+| `npm run test:migrations:empty` | Exit 0: 31 first / 0 replay, exact ledger/final schema, injected atomic DDL/history rollback, post-rollback connection reuse and owned target residue 0. |
+| `npm run build` | Exit 0: Next 16.3.5 Turbopack production compilation, TypeScript, page data, prerendering and final route inventory completed. Dedicated private storage outside the repository removed, with residue 0 before removal. |
+| `git diff --check` | Exit 0. |
+| Historical migrations 001–029 comparison with base | No changes. Only forward migrations 030/031 added. |
+
+## Actual Browser and HTTP acceptance
+
+Browser work used the requested in-app Browser at `http://127.0.0.1:3001`, with a separate owned database, synthetic identities and reserved `.test` mail delivered only to a loopback SMTP sink. Staff onboarding used the real confirmation and temporary-password replacement endpoints; administrator confirmation and ordinary sign-in were also exercised in Browser. No verification timestamp or session bypass was written to the database. The dated PE fixture was adapted only in ignored scratch to the current examination date and complete synthetic middle name; the committed fixture was unchanged.
+
+| Journey | Observed result | Representative artifact |
+| --- | --- | --- |
+| Standard Schedule Import | Chose configured 2027–2028/Regular/CSV, reviewed, agreed and published atomically. Two PUBLISHED service batches, two SCHEDULED date-only items and non-null category/year. | [Standard import](2026-10-03-predeployment-legacy-cleanup/standard-import.jpg) |
+| First-Year import | Reviewed Laboratory September 2 and capacity-aware PE September 9; published complete pair with FIRST_YEAR_OVPSA lineage. No retired persisted metadata appears. | [First-Year import](2026-10-03-predeployment-legacy-cleanup/first-year-import.jpg) |
+| First-Year lifecycle (supplemental real HTTP) | Reschedule without official closure rejects 409. Official MANUAL_ALL closure, reschedule to September 6/13 and cancellation return 200; stale token rejects 409. Final batch CANCELLED. The current detail UI has no lifecycle controls, so this proof is API acceptance. | [API proof](2026-10-03-predeployment-legacy-cleanup/browser-api-proof.json) |
+| Checklist and PE completion | Incomplete Stool checklist (2/3) blocked PE completion; restoring 3/3 enabled it. Administrator reviewed watermarked preview, attested, issued Class A with completion atomically. | [Preview](2026-10-03-predeployment-legacy-cleanup/pe-certificate-preview.jpg), [completed](2026-10-03-predeployment-legacy-cleanup/pe-completed.jpg) |
+| Certificate download | Authorized staff and unverified owner downloaded byte-identical 519096-byte JPG. Visually inspected 3508×2480 landscape A4 at 300 DPI. | [Certificate JPG](2026-10-03-predeployment-legacy-cleanup/medical-certificate.jpg) |
+| Manual batch recovery | Selected two ordinary recovery cases, previewed September 3 replacements at maximum capacity, acknowledged preserved Laboratory dates and confirmed. Exactly two PE replacements published; both September 1 Laboratories retained. | [Resolved batch](2026-10-03-predeployment-legacy-cleanup/manual-batch-resolved.jpg), [data proof](2026-10-03-predeployment-legacy-cleanup/browser-api-proof.json) |
+| Unverified student reading | Real student identity login allowed Schedule, Results, Notifications, mark-own-notice-read and official certificate download. Before explicit verification: zero submissions/files/cleanup intents/verification requests. Draft GET rejects 403 without state changes. | [Unverified Results](2026-10-03-predeployment-legacy-cleanup/unverified-results.jpg) |
+| Verification and return | Requested reserved-test mail from the Laboratory return flow, opened the captured real token and explicitly confirmed it; returned to the Laboratory draft. GET alone did not consume the token. | [Verified email](2026-10-03-predeployment-legacy-cleanup/email-verified.jpg), [draft](2026-10-03-predeployment-legacy-cleanup/verified-laboratory-draft.jpg) |
+| Forged PE upload (supplemental real HTTP) | Verified student's PE draft GET and multipart file POST reject 422 / PHYSICAL_EXAM_UPLOAD_RETIRED. Submission/file/exam/cleanup/notification counts and recursive private-storage entries are identical before/after. | [API proof](2026-10-03-predeployment-legacy-cleanup/browser-api-proof.json) |
+| Laboratory document lifecycle | Initial file uploaded/finalized/downloaded; edit with additional file discarded without changing official file; second edit promoted replacement with old official superseded. Staff invalidation reopened empty student draft; corrected upload resubmitted/finalized. Current finalized/invalidated/superseded records are all Laboratory, no active edit draft, same issued PE certificate. | [Edit](2026-10-03-predeployment-legacy-cleanup/laboratory-edit.jpg), [invalidation](2026-10-03-predeployment-legacy-cleanup/laboratory-invalidated.jpg), [final profile](2026-10-03-predeployment-legacy-cleanup/laboratory-profile-final.jpg), [final data](2026-10-03-predeployment-legacy-cleanup/browser-final-proof.json) |
+| Admin Laboratory profile/download | Only Laboratory submission actions/history plus independent Physical Examination certificate card. Student/admin promoted-revision downloads match byte-for-byte. | [Download comparison](2026-10-03-predeployment-legacy-cleanup/laboratory-download-proof.json) |
+| Reports / PDF | Actual Reports route/filter shows 1 complied student, 1 finalized Laboratory document and 1 separate certificate. Browser Export PDF requested the real route successfully (200); Browser download-event capture timed out. Same authenticated endpoint downloaded through HTTP for complete two-page rendering/visual inspection. No clipped/overlapping table content observed. | [Reports PDF](2026-10-03-predeployment-legacy-cleanup/historical-report.pdf) |
+
+Final staff and student console error/warning lists were empty. Cold Next compilation occasionally exceeded Browser navigation/control timeouts; returned page state and server responses were checked before continuing, without repeating mutations. After interruption, the owned services were restarted against the same owned acceptance target; no user service was changed.
+
+The requested 390×844 viewport override reported actual inner width 668 / client width 653. [First-Year narrow](2026-10-03-predeployment-legacy-cleanup/first-year-narrow.jpg) and [verification narrow](2026-10-03-predeployment-legacy-cleanup/verification-narrow.jpg) therefore demonstrate the available sub-768 layout, not a 390-pixel phone.
+
+Acceptance app process tree stopped; owned Browser database and private storage removed, and exact owned fixture state files removed. Read-only checks after the final integration, migration and build gates found zero test databases in the owned cluster and zero Browser fixture state files; [cleanup proof](2026-10-03-predeployment-legacy-cleanup/cleanup-proof.json). Final clinical checks proved one current Laboratory submission, one invalidated revision, one superseded revision, no active drafts and the original issued certificate identity. Integration/build storage reported residue 0 before removal. Root `main` remains clean at the original base. No real SMTP, production storage, hosted Node 22/Linux CI or deployed persistent-worker acceptance is claimed.
+
+## Execution rulings
+
+1. Discard the overlapped worktree baseline and rerun from pristine root. Cost if wrong: environment failures could mask a skipped regression; exact-file retry and fresh final run are required.
+2. Use owned loopback PostgreSQL 18 because the application role lacks CREATE DATABASE permission. Cost if wrong: local PostgreSQL version differences remain a deployment caveat.
+3. Use already installed Node 24.19.0 for final gates after pristine Node 26 worker/calendar problems. Cost if wrong: declared hosted Node 22 CI remains unexecuted locally.
+4. Required provenance follows section 6.4; retain nullable `import_group_id` on otherwise valid historical batches. Cost if wrong: prohibiting standalone batches later needs a separate guard/migration.
+5. Date-adapt the PE fixture only in ignored scratch and supply the login-required synthetic middle name. Cost if wrong: acceptance covers the adapted fixture rather than the September 28 command verbatim.
+6. Run integration alone with 60-second test/hook limits; keep assertions/behavioral deadlines unchanged and explicitly bound the 13-case guard at 60 seconds. Repair only the obsolete parent-batch state in the published-access fixture. Cost if wrong: slower hangs take longer to report.
+7. Close earlier focused task ledgers with the shared fresh full gates instead of repeating identical suites per task; task-done wraps actual integration/build runs. Cost if wrong: final evidence proves the combined branch rather than reconstructing every intermediate commit.
+
+## Final review and disposition
+
+Fresh whole-branch review and final clean-tree/cleanup proof pending. Branch/worktree are retained for the user's integration decision; no push, PR or merge is part of this implementation request.
