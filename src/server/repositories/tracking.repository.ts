@@ -5,6 +5,7 @@ import {
 } from "@/components/appointments/appointment-summary";
 import { query } from "@/server/db/pool";
 import type { ClinicCode } from "@/server/clinics";
+import type { AttendanceStatus } from "./current-effective-appointments.repository";
 import { appointmentSummaryReport } from "./appointment-summary.repository";
 
 const currentOperationalYearPredicate = `make_date(y.start_year, 8, 1) <= (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date
@@ -12,14 +13,14 @@ const currentOperationalYearPredicate = `make_date(y.start_year, 8, 1) <= (clock
 
 export async function complianceReport(filters: {
   clinicCode?: ClinicCode;
-  collegeId?: string; programId?: string; physicalExamStatus?: string;
-  laboratoryStatus?: string; appointmentStatus?: string; appointmentDate?: string; overallStatus?: OverallStatus;
+  collegeId?: string; programId?: string; physicalExamStatus?: AttendanceStatus;
+  laboratoryStatus?: AttendanceStatus; appointmentStatus?: AttendanceStatus; appointmentDate?: string; overallStatus?: OverallStatus;
   search?: string; sort?: string; page: number; limit: number; offset: number;
 }) {
   const { appointmentStatus, ...summaryFilters } = filters;
   return appointmentSummaryReport({
     ...summaryFilters,
-    legacyAppointmentStatus: appointmentStatus,
+    latestAppointmentStatus: appointmentStatus,
     sort: parseAppointmentSummarySort(filters.sort),
   });
 }

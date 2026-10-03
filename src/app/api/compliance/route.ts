@@ -2,6 +2,7 @@ import { dataResponse, errorResponse, pagination } from "@/lib/api-response";
 import { parseAppointmentSummarySort } from "@/components/appointments/appointment-summary";
 import { requireUser } from "@/server/auth/current-user";
 import { complianceReport } from "@/server/repositories/tracking.repository";
+import { ATTENDANCE_STATUSES } from "@/server/repositories/current-effective-appointments.repository";
 import { z } from "zod";
 
 const complianceQuerySchema = z.object({
@@ -9,10 +10,10 @@ const complianceQuerySchema = z.object({
   collegeId: z.string().uuid().optional(),
   programId: z.string().uuid().optional(),
   appointmentDate: z.iso.date().optional(),
-  appointmentStatus: z.enum(["PENDING", "COMPLETED", "NO_SHOW"]).optional(),
-  physicalExamStatus: z.enum(["PENDING_UPLOAD", "COMPLETED", "REQUIRES_FOLLOW_UP", "NOT_APPLICABLE"]).optional(),
-  laboratoryStatus: z.enum(["PENDING_UPLOAD", "COMPLETED", "REQUIRES_FOLLOW_UP", "NOT_APPLICABLE"]).optional(),
-  overallStatus: z.enum(["FOLLOW_UP", "INCOMPLETE", "COMPLETE"]).optional(),
+  appointmentStatus: z.enum(ATTENDANCE_STATUSES).optional(),
+  physicalExamStatus: z.enum(ATTENDANCE_STATUSES).optional(),
+  laboratoryStatus: z.enum(ATTENDANCE_STATUSES).optional(),
+  overallStatus: z.enum(["INCOMPLETE", "COMPLETE"]).optional(),
   search: z.string().trim().max(100).optional(),
 });
 

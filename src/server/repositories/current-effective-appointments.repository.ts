@@ -3,14 +3,11 @@ import { query } from "@/server/db/pool";
 import type { AppointmentVisibilityScope } from "@/server/appointments/academic-year-visibility";
 
 export type ScheduleType = "LABORATORY" | "PHYSICAL_EXAM";
-export type OperationalAttendanceStatus =
-  | "PENDING"
-  | "COMPLETED"
-  | "NO_SHOW"
-  | "RESCHEDULED"
-  | "CANCELLED"
-  | "AWAITING_RESCHEDULE";
-export type AttendanceStatus = OperationalAttendanceStatus | "UNSCHEDULED";
+export const ATTENDANCE_STATUSES = [
+  "PENDING", "COMPLETED", "NO_SHOW", "RESCHEDULED", "CANCELLED", "AWAITING_RESCHEDULE", "UNSCHEDULED",
+] as const;
+export type AttendanceStatus = typeof ATTENDANCE_STATUSES[number];
+export type OperationalAttendanceStatus = Exclude<AttendanceStatus, "UNSCHEDULED">;
 
 export type CurrentEffectiveAppointment = {
   id: string;

@@ -8,7 +8,7 @@ export const APPOINTMENT_SUMMARY_SORTS = [
 ] as const;
 
 export type AppointmentSummarySort = typeof APPOINTMENT_SUMMARY_SORTS[number];
-export type OverallStatus = "FOLLOW_UP" | "COMPLETE" | "INCOMPLETE";
+export type OverallStatus = "COMPLETE" | "INCOMPLETE";
 export type AppointmentsOverallStatus = "COMPLETE" | "INCOMPLETE";
 
 export function parseAppointmentSummarySort(value?: string): AppointmentSummarySort {

@@ -36,12 +36,12 @@ export type AppointmentSummaryFilters = {
   clinicCode?: ClinicCode;
   search?: string;
   appointmentDate?: string;
-  appointmentStatus?: string;
-  legacyAppointmentStatus?: string;
+  appointmentStatus?: AttendanceStatus;
+  latestAppointmentStatus?: AttendanceStatus;
   collegeId?: string;
   programId?: string;
-  physicalExamStatus?: string;
-  laboratoryStatus?: string;
+  physicalExamStatus?: AttendanceStatus;
+  laboratoryStatus?: AttendanceStatus;
   overallStatus?: OverallStatus;
   sort: AppointmentSummarySort;
   page: number;
@@ -175,8 +175,8 @@ export async function appointmentSummaryReport(filters: AppointmentSummaryFilter
       filters.appointmentStatus,
     );
   }
-  if (filters.legacyAppointmentStatus) {
-    add(`summary_rows."appointmentStatus"=?`, filters.legacyAppointmentStatus);
+  if (filters.latestAppointmentStatus) {
+    add(`summary_rows."appointmentStatus"=?`, filters.latestAppointmentStatus);
   }
   if (filters.collegeId) add(`summary_rows."collegeId"=?::uuid`, filters.collegeId);
   if (filters.programId) add(`summary_rows."programId"=?::uuid`, filters.programId);
