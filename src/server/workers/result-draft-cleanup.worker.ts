@@ -23,7 +23,7 @@ type CleanupCandidate = {
   id: string;
   appointmentId: string;
   studentNumber: string;
-  resultType: "LABORATORY" | "PHYSICAL_EXAM";
+  resultType: "LABORATORY";
 };
 
 async function lockExpiredDrafts(client: PoolClient, now: Date) {

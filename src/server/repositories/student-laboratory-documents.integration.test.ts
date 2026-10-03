@@ -172,6 +172,28 @@ afterAll(async () => {
 });
 
 describe("official Laboratory document reads", () => {
+  it.each(["finalize", "invalidate"] as const)("rejects forged PE %s input without changing documents or clinical data", async (operation) => {
+    async function snapshot() {
+      return (await pool.query(`SELECT
+        (SELECT jsonb_agg(to_jsonb(s) ORDER BY s.id) FROM student_result_submissions s WHERE student_number LIKE $1) submissions,
+        (SELECT jsonb_agg(to_jsonb(f) ORDER BY f.id) FROM student_result_files f JOIN student_result_submissions s ON s.id=f.submission_id WHERE s.student_number LIKE $1) files,
+        (SELECT jsonb_agg(to_jsonb(r) ORDER BY r.id) FROM laboratory_results r WHERE student_number LIKE $1) laboratory,
+        (SELECT jsonb_agg(to_jsonb(r) ORDER BY r.id) FROM exam_results r WHERE student_number LIKE $1) examination,
+        (SELECT count(*) FROM student_result_storage_cleanup_intents) cleanup,
+        (SELECT count(*) FROM student_portal_notifications) notifications,
+        (SELECT count(*) FROM email_outbox) outbox`, [pattern])).rows[0];
+    }
+    const before = await snapshot();
+    await transaction(async (client) => {
+      const forged = { id: officialId, appointmentId: officialAppointmentId, studentNumber: owner, resultType: "PHYSICAL_EXAM" } as unknown as Parameters<typeof repository.finalizeStudentResultDraft>[1];
+      await expect(operation === "finalize"
+        ? repository.finalizeStudentResultDraft(client, forged, 1, 10)
+        : repository.invalidateFinalizedSubmissionMetadata(client, forged, TEST_REFERENCE_IDS.adminUser, "Wrong service"))
+        .rejects.toMatchObject({ code: "PHYSICAL_EXAM_UPLOAD_RETIRED", status: 422 });
+    });
+    expect(await snapshot()).toEqual(before);
+  });
+
   it("restores preexisting academic-year boundaries and removes only years inserted by the fixture", async () => {
     const available = await pool.query<{ year: number }>(`SELECT year FROM generate_series(2050,2090) year
       WHERE NOT EXISTS (SELECT 1 FROM academic_years WHERE start_year=year) ORDER BY year LIMIT 3`);

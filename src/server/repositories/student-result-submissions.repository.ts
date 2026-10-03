@@ -27,7 +27,7 @@ export type AppointmentResultCorrectionState =
   | {
     type: "PENDING_PLACEHOLDER";
     resultId: string;
-    table: "laboratory_results" | "exam_results";
+    table: "laboratory_results";
   }
   | {
     type: "PROTECTED";
@@ -50,7 +50,7 @@ export type StudentResultSubmission = {
   id: string;
   appointmentId: string;
   studentNumber: string;
-  resultType: "LABORATORY" | "PHYSICAL_EXAM";
+  resultType: "LABORATORY";
   status: "DRAFT" | "FINALIZED";
   basedOnSubmissionId: string | null;
   administratorReplacementReason: string | null;
@@ -70,7 +70,7 @@ type DraftRow = {
   id: string;
   appointmentId: string;
   studentNumber: string;
-  resultType: "LABORATORY" | "PHYSICAL_EXAM";
+  resultType: "LABORATORY";
   status: "DRAFT";
   basedOnSubmissionId: string | null;
   lastActivityAt: Date;
@@ -80,7 +80,7 @@ type FinalizedRow = {
   id: string;
   appointmentId: string;
   studentNumber: string;
-  resultType: "LABORATORY" | "PHYSICAL_EXAM";
+  resultType: "LABORATORY";
   status: "FINALIZED";
 };
 
@@ -183,8 +183,8 @@ export async function loadAppointmentResultProtectionStates(
       verifiedResult: resultId && resultStatus && resultStatus !== "PENDING_UPLOAD"
         ? { resultId, resultTable }
         : null,
-      pendingPlaceholder: resultId && resultStatus === "PENDING_UPLOAD"
-        ? { resultId, resultTable }
+      pendingPlaceholder: row.scheduleType === "LABORATORY" && resultId && resultStatus === "PENDING_UPLOAD"
+        ? { resultId, resultTable: "laboratory_results" }
         : null,
     });
     states.set(row.appointmentId, ordinaryState.type === "PROTECTED" || !row.verifiedCount
@@ -246,15 +246,10 @@ export async function deletePendingResultPlaceholder(
   client: PoolClient,
   state: Extract<AppointmentResultCorrectionState, { type: "PENDING_PLACEHOLDER" }>,
 ): Promise<void> {
-  const deleted = state.table === "laboratory_results"
-    ? await client.query(
-      "DELETE FROM laboratory_results WHERE id=$1 AND result_status='PENDING_UPLOAD' RETURNING id",
-      [state.resultId],
-    )
-    : await client.query(
-      "DELETE FROM exam_results WHERE id=$1 AND result_status='PENDING_UPLOAD' RETURNING id",
-      [state.resultId],
-    );
+  const deleted = await client.query(
+    "DELETE FROM laboratory_results WHERE id=$1 AND result_status='PENDING_UPLOAD' RETURNING id",
+    [state.resultId],
+  );
   if (deleted.rowCount !== 1) {
     throw new AppError(
       "APPOINTMENT_RESULT_CONFLICT",
@@ -486,7 +481,7 @@ export async function lockExpectedStudentResultDraft(
       ? "laboratory_results"
       : "exam_results";
     const resultStatus = await client.query<{ resultStatus: string }>(
-      `SELECT result_status AS "resultStatus" FROM ${resultTable} WHERE appointment_id=$1`,
+      `SELECT result_status AS "resultStatus" FROM laboratory_results WHERE appointment_id=$1`,
       [appointmentId],
     );
     if (resultStatus.rowCount && resultStatus.rows[0].resultStatus !== "PENDING_UPLOAD") {
@@ -583,7 +578,7 @@ export async function lockExpiredStudentResultDraftForRetirement(
     id: string;
     appointmentId: string;
     studentNumber: string;
-    resultType: "LABORATORY" | "PHYSICAL_EXAM";
+    resultType: "LABORATORY";
   },
   now: Date,
 ) {
@@ -703,7 +698,7 @@ export async function getStudentResultSubmissionRow(
     id: string;
     appointmentId: string;
     studentNumber: string;
-    resultType: "LABORATORY" | "PHYSICAL_EXAM";
+    resultType: "LABORATORY";
     status: "DRAFT" | "FINALIZED";
     basedOnSubmissionId: string | null;
     administratorReplacementReason: string | null;
@@ -798,26 +793,28 @@ export async function markStudentResultFileForDeletion(
 
 export async function finalizeStudentResultDraft(
   client: PoolClient,
-  submission: { id: string; appointmentId: string; studentNumber: string; resultType: string },
+  submission: { id: string; appointmentId: string; studentNumber: string; resultType: "LABORATORY" },
   fileCount: number,
   totalBytes: number,
-) {
+): Promise<void> {
+  if (submission.resultType !== "LABORATORY") {
+    throw new AppError("PHYSICAL_EXAM_UPLOAD_RETIRED", "Physical Examination uploads are not available.", 422);
+  }
   await client.query(
     `UPDATE student_result_submissions
         SET status='FINALIZED', finalized_at=NOW(), last_activity_at=NOW()
       WHERE id=$1 AND status='DRAFT'`,
     [submission.id],
   );
-  const resultTable = submission.resultType === "LABORATORY" ? "laboratory_results" : "exam_results";
   const changed = await client.query(
-    `INSERT INTO ${resultTable} (
+    `INSERT INTO laboratory_results (
        student_number, appointment_id, result_status, completed_at, encoded_by
      ) VALUES ($1,$2,'COMPLETED',(NOW() AT TIME ZONE 'Asia/Manila')::date,NULL)
      ON CONFLICT (appointment_id) DO UPDATE
        SET result_status='COMPLETED',
            completed_at=(NOW() AT TIME ZONE 'Asia/Manila')::date,
            encoded_by=NULL
-       WHERE ${resultTable}.result_status='PENDING_UPLOAD'
+       WHERE laboratory_results.result_status='PENDING_UPLOAD'
      RETURNING id`,
     [submission.studentNumber, submission.appointmentId],
   );
@@ -1037,8 +1034,6 @@ type AdminProfileListRow = {
   latestActivityAt: Date;
   laboratorySubmissionStatus: "FINALIZED" | "INVALIDATED" | null;
   laboratoryFileCount: number | null;
-  physicalExamSubmissionStatus: "FINALIZED" | "INVALIDATED" | null;
-  physicalExamFileCount: number | null;
   certificateStatus: "ISSUED" | "REVOKED" | null;
   certificateClassification: string | null;
 };
@@ -1067,8 +1062,6 @@ export async function listAdminStudentResultProfileRows(input: {
               activity.latest_activity_at AS "latestActivityAt",
               laboratory_submission.status AS "laboratorySubmissionStatus",
               laboratory_submission.file_count AS "laboratoryFileCount",
-              physical_submission.status AS "physicalExamSubmissionStatus",
-              physical_submission.file_count AS "physicalExamFileCount",
               certificate.status AS "certificateStatus",
               certificate.classification AS "certificateClassification"
          FROM submission_students activity
@@ -1078,9 +1071,6 @@ export async function listAdminStudentResultProfileRows(input: {
          LEFT JOIN current_effective_appointments laboratory_appointment
            ON laboratory_appointment."studentNumber"=student.student_number
           AND laboratory_appointment."scheduleType"='LABORATORY'
-         LEFT JOIN current_effective_appointments physical_appointment
-           ON physical_appointment."studentNumber"=student.student_number
-          AND physical_appointment."scheduleType"='PHYSICAL_EXAM'
          LEFT JOIN LATERAL (
            SELECT submission.id, submission.status,
                   COUNT(file.id) FILTER (
@@ -1101,26 +1091,6 @@ export async function listAdminStudentResultProfileRows(input: {
                      submission.id DESC
             LIMIT 1
          ) laboratory_submission ON TRUE
-         LEFT JOIN LATERAL (
-           SELECT submission.id, submission.status,
-                  COUNT(file.id) FILTER (
-                    WHERE submission.status='INVALIDATED'
-                       OR (file.deleted_at IS NULL AND file.storage_delete_pending=FALSE)
-                  )::int AS file_count
-             FROM student_result_submissions submission
-             LEFT JOIN student_result_files file ON file.submission_id=submission.id
-            WHERE submission.appointment_id=physical_appointment.id
-              AND submission.status IN ('FINALIZED','INVALIDATED')
-            GROUP BY submission.id
-            ORDER BY GREATEST(
-                       COALESCE(submission.invalidated_at, '-infinity'::timestamptz),
-                       COALESCE(submission.finalized_at, '-infinity'::timestamptz),
-                       submission.last_activity_at
-                     ) DESC,
-                     submission.created_at DESC,
-                     submission.id DESC
-            LIMIT 1
-         ) physical_submission ON TRUE
          LEFT JOIN LATERAL (
            SELECT status,classification
              FROM medical_certificate_revisions
@@ -1158,11 +1128,6 @@ export async function listAdminStudentResultProfileRows(input: {
           ? { status: row.laboratorySubmissionStatus }
           : null,
       );
-      const physicalExamState = currentSubmissionState(
-        row.physicalExamSubmissionStatus
-          ? { status: row.physicalExamSubmissionStatus }
-          : null,
-      );
       return {
         studentNumber: row.studentNumber,
         studentName: row.studentName,
@@ -1173,10 +1138,6 @@ export async function listAdminStudentResultProfileRows(input: {
         laboratory: {
           state: laboratoryState,
           fileCount: row.laboratoryFileCount ?? 0,
-        },
-        physicalExam: {
-          state: physicalExamState,
-          fileCount: row.physicalExamFileCount ?? 0,
         },
         certificate: {
           status: row.certificateStatus,
@@ -1195,9 +1156,6 @@ type AdminProfileDetailRow = {
   laboratoryAppointmentId: string | null;
   laboratoryAppointmentDate: string | null;
   laboratoryAppointmentStatus: Exclude<AttendanceStatus, "UNSCHEDULED"> | null;
-  physicalExamAppointmentId: string | null;
-  physicalExamAppointmentDate: string | null;
-  physicalExamAppointmentStatus: Exclude<AttendanceStatus, "UNSCHEDULED"> | null;
   certificateId: string | null;
   certificateStatus: "ISSUED" | "REVOKED" | null;
   certificateClassification: string | null;
@@ -1205,7 +1163,7 @@ type AdminProfileDetailRow = {
   submissionId: string | null;
   submissionAppointmentId: string | null;
   submissionAppointmentDate: string | null;
-  submissionResultType: ScheduleType | null;
+  submissionResultType: "LABORATORY" | null;
   submissionStatus: "FINALIZED" | "INVALIDATED" | "SUPERSEDED" | null;
   submissionFinalizedAt: Date | null;
   submissionInvalidatedAt: Date | null;
@@ -1243,9 +1201,6 @@ export async function getAdminStudentResultProfileRow(
             laboratory_appointment.id AS "laboratoryAppointmentId",
             laboratory_appointment.appointment_date::text AS "laboratoryAppointmentDate",
             laboratory_appointment.status AS "laboratoryAppointmentStatus",
-            physical_appointment.id AS "physicalExamAppointmentId",
-            physical_appointment.appointment_date::text AS "physicalExamAppointmentDate",
-            physical_appointment.status AS "physicalExamAppointmentStatus",
             certificate.certificate_id::text AS "certificateId",
             certificate.status AS "certificateStatus",
             certificate.classification AS "certificateClassification",
@@ -1282,9 +1237,6 @@ export async function getAdminStudentResultProfileRow(
        LEFT JOIN current_effective_appointments laboratory_appointment
          ON laboratory_appointment."studentNumber"=student.student_number
         AND laboratory_appointment."scheduleType"='LABORATORY'
-       LEFT JOIN current_effective_appointments physical_appointment
-         ON physical_appointment."studentNumber"=student.student_number
-        AND physical_appointment."scheduleType"='PHYSICAL_EXAM'
        LEFT JOIN LATERAL (
          SELECT certificate_id,status,classification,examination_date
            FROM medical_certificate_revisions
@@ -1396,15 +1348,6 @@ export async function getAdminStudentResultProfileRow(
       status: first.laboratoryAppointmentStatus,
     }
     : null;
-  const physicalExamAppointment = first.physicalExamAppointmentId
-    && first.physicalExamAppointmentDate
-    && first.physicalExamAppointmentStatus
-    ? {
-      id: first.physicalExamAppointmentId,
-      appointmentDate: first.physicalExamAppointmentDate,
-      status: first.physicalExamAppointmentStatus,
-    }
-    : null;
   const currentSubmission = (appointmentId: string | undefined) => (
     appointmentId
       ? submissionEntries.find(({ submission }) => (
@@ -1422,17 +1365,12 @@ export async function getAdminStudentResultProfileRow(
       : null
   );
   const laboratoryCurrent = currentSubmission(laboratoryAppointment?.id);
-  const physicalExamCurrent = currentSubmission(physicalExamAppointment?.id);
   const laboratorySubmission = laboratoryCurrent?.submission ?? null;
-  const physicalExamSubmission = physicalExamCurrent?.submission ?? null;
   const laboratoryState = currentSubmissionState(
     laboratorySubmission ?? currentInvalidatedSubmission(laboratoryAppointment?.id),
   );
-  const physicalExamState = currentSubmissionState(
-    physicalExamSubmission ?? currentInvalidatedSubmission(physicalExamAppointment?.id),
-  );
   const currentIds = new Set(
-    [laboratorySubmission?.id, physicalExamSubmission?.id].filter(
+    [laboratorySubmission?.id].filter(
       (id): id is string => Boolean(id),
     ),
   );
@@ -1454,13 +1392,6 @@ export async function getAdminStudentResultProfileRow(
       state: laboratoryState,
       submission: laboratorySubmission,
       editingInProgress: laboratoryCurrent?.editingInProgress ?? false,
-    },
-    physicalExam: {
-      resultType: "PHYSICAL_EXAM",
-      appointment: physicalExamAppointment,
-      state: physicalExamState,
-      submission: physicalExamSubmission,
-      editingInProgress: physicalExamCurrent?.editingInProgress ?? false,
     },
     certificate: {
       id: first.certificateId ?? "",
@@ -1487,7 +1418,7 @@ export async function getAdminStudentResultSubmissionRow(submissionId: string) {
     id: string;
     appointmentId: string;
     studentNumber: string;
-    resultType: string;
+    resultType: "LABORATORY";
     status: string;
     finalizedAt: Date | null;
     invalidatedAt: Date | null;
@@ -1522,7 +1453,7 @@ export async function lockCurrentFinalizedSubmissionForInvalidation(
     id: string;
     appointmentId: string;
     studentNumber: string;
-    resultType: "LABORATORY" | "PHYSICAL_EXAM";
+    resultType: "LABORATORY";
   }>(
     `SELECT id, appointment_id AS "appointmentId", student_number AS "studentNumber",
             result_type AS "resultType"
@@ -1552,7 +1483,7 @@ export async function lockCurrentFinalizedSubmissionForInvalidation(
     id: string;
     appointmentId: string;
     studentNumber: string;
-    resultType: "LABORATORY" | "PHYSICAL_EXAM";
+    resultType: "LABORATORY";
     status: "DRAFT" | "FINALIZED" | "INVALIDATED";
     isCurrent: boolean;
   }>(
@@ -1623,10 +1554,13 @@ export async function lockCurrentFinalizedSubmissionForInvalidation(
 
 export async function invalidateFinalizedSubmissionMetadata(
   client: PoolClient,
-  submission: { id: string; appointmentId: string; resultType: string },
+  submission: { id: string; appointmentId: string; resultType: "LABORATORY" },
   actorUserId: string,
   reason: string,
-) {
+): Promise<void> {
+  if (submission.resultType !== "LABORATORY") {
+    throw new AppError("PHYSICAL_EXAM_UPLOAD_RETIRED", "Physical Examination uploads are not available.", 422);
+  }
   await client.query(
     `UPDATE student_result_submissions
         SET status='INVALIDATED', invalidated_at=NOW(), invalidated_by=$2,
@@ -1639,9 +1573,8 @@ export async function invalidateFinalizedSubmissionMetadata(
       WHERE submission_id=$1 AND deleted_at IS NULL`,
     [submission.id],
   );
-  const resultTable = submission.resultType === "LABORATORY" ? "laboratory_results" : "exam_results";
   await client.query(
-    `UPDATE ${resultTable}
+    `UPDATE laboratory_results
         SET result_status='PENDING_UPLOAD', completed_at=NULL, encoded_by=NULL
       WHERE appointment_id=$1`,
     [submission.appointmentId],

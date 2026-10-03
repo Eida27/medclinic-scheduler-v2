@@ -6,10 +6,6 @@ import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import type { AdminResultSubmission } from "@/server/student-results/admin-student-result-profile";
 
-function resultLabel(resultType: AdminResultSubmission["resultType"]) {
-  return resultType === "LABORATORY" ? "Laboratory" : "Physical Exam";
-}
-
 function historyStatusLabel(status: AdminResultSubmission["status"]) {
   if (status === "SUPERSEDED") return "Superseded";
   if (status === "INVALIDATED") return "Invalidated";
@@ -29,7 +25,7 @@ export function SubmissionHistory({ submissions }: { submissions: AdminResultSub
       {submissions.length ? (
         <div className="grid gap-4">
           {submissions.map((submission, submissionIndex) => {
-            const label = resultLabel(submission.resultType);
+            const label = "Laboratory";
             const mayDownload = (
               submission.status === "FINALIZED" || submission.status === "SUPERSEDED"
             ) && submission.files.length > 0;

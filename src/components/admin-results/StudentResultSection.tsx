@@ -9,12 +9,8 @@ import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import type { AdminCurrentResultSection } from "@/server/student-results/admin-student-result-profile";
 
-function resultLabel(resultType: AdminCurrentResultSection["resultType"]) {
-  return resultType === "LABORATORY" ? "Laboratory" : "Physical Exam";
-}
-
 export function StudentResultSection({ section }: { section: AdminCurrentResultSection }) {
-  const label = resultLabel(section.resultType);
+  const label = "Laboratory";
   const headingId = `current-${section.resultType.toLowerCase()}-results`;
   const submission = section.submission;
 

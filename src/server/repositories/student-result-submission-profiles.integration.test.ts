@@ -32,7 +32,6 @@ let newerLaboratoryId: string;
 let oldFinalizedId: string;
 let invalidatedReplacementId: string;
 let replacementFinalizedId: string;
-let rescheduledReplacementId: string;
 let editingCurrentFinalizedId: string;
 let editingSupersededId: string;
 let editingInvalidatedId: string;
@@ -362,7 +361,7 @@ beforeAll(async () => {
     status: "RESCHEDULED",
     createdAt: "2027-04-01T00:00:00Z",
   });
-  rescheduledReplacementId = await appointment({
+  await appointment({
     studentNumber: "TEST-PROFILE-0007",
     resultType: "PHYSICAL_EXAM",
     date: "2027-04-17",
@@ -478,13 +477,11 @@ describe("administrator student result profile repository", () => {
     expect(listed.items[0]).toMatchObject({
       progress: "FULLY_SUBMITTED",
       laboratory: { state: "FINALIZED", fileCount: 1 },
-      physicalExam: { state: "NOT_SUBMITTED", fileCount: 0 },
     });
     expect(listed.items[1]).toMatchObject({
       studentName: "Partial, Ana",
       progress: "FULLY_SUBMITTED",
       laboratory: { state: "FINALIZED", fileCount: 2 },
-      physicalExam: { state: "NOT_SUBMITTED", fileCount: 0 },
     });
 
     const allFixtures = await listAdminStudentResultProfileRows({ limit: 20, offset: 0 });
@@ -524,11 +521,8 @@ describe("administrator student result profile repository", () => {
       .toMatchObject({ status: "INVALIDATED", files: [] });
 
     const rescheduled = await getAdminStudentResultProfileRow("TEST-PROFILE-0007");
-    expect(rescheduled?.physicalExam).toMatchObject({
-      appointment: { id: rescheduledReplacementId, status: "PENDING" },
-      state: "NOT_SUBMITTED",
-      submission: null,
-    });
+    expect(rescheduled?.certificate.status).toBeNull();
+    expect(rescheduled?.history).toEqual([]);
   });
 
   it("keeps the finalized official current while projecting only official history and edit provenance", async () => {
@@ -624,7 +618,6 @@ describe("administrator student result profile repository", () => {
       studentNumber: "TEST-PROFILE-0008",
       progress: "NOT_SUBMITTED",
       laboratory: { appointment: null, state: "NOT_SUBMITTED", submission: null },
-      physicalExam: { appointment: null, state: "NOT_SUBMITTED", submission: null },
       history: [],
     });
     await expect(getAdminStudentResultProfileRow("TEST-PROFILE-UNKNOWN"))

@@ -28,7 +28,6 @@ const listItem = {
   progress: "FULLY_SUBMITTED" as const,
   latestActivityAt: new Date("2026-08-19T16:00:00.000Z"),
   laboratory: { state: "FINALIZED" as const, fileCount: 2 },
-  physicalExam: { state: "NOT_SUBMITTED" as const, fileCount: 0 },
   certificate: { status: null, classification: null },
 };
 

@@ -7,6 +7,7 @@ import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laborat
 import { getLaboratoryChecklist, setLaboratoryTestVerification } from "@/server/laboratory/laboratory-checklist.service";
 import { cleanupTestFixtures, insertTestScheduleImportGroup, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import { addStudentResultFiles, beginStudentResultEdit, getStudentResultSubmission } from "@/server/services/student-result-submissions.service";
+import { getAdminStudentResultProfileRow } from "@/server/repositories/student-result-submissions.repository";
 import type { ResultStorage } from "@/server/storage/result-storage";
 import type { SessionUser } from "@/types/roles";
 import { completePhysicalExam, correctMedicalCertificate, downloadMedicalCertificate, revokeMedicalCertificate } from "./certificate.service";
@@ -65,10 +66,20 @@ afterAll(async () => {
 });
 
 describe("atomic examination and certificate issuance", () => {
-  it("requires the full Laboratory checklist", async () => {
+  it("rejects PE uploads without state changes and requires the full Laboratory checklist", async () => {
     const { peId } = await fixture();
     const studentNumber = `CERT-${String(sequence).padStart(4, "0")}`;
     const storage = { write: vi.fn(), read: vi.fn(), delete: vi.fn() } as unknown as ResultStorage;
+    async function snapshot() {
+      return (await pool.query(`SELECT
+        (SELECT count(*) FROM student_result_submissions) submissions,
+        (SELECT count(*) FROM student_result_files) files,
+        (SELECT count(*) FROM exam_results) examinations,
+        (SELECT count(*) FROM student_result_storage_cleanup_intents) cleanup,
+        (SELECT count(*) FROM student_portal_notifications) notifications,
+        (SELECT count(*) FROM email_outbox) outbox`)).rows[0];
+    }
+    const before = await snapshot();
     await expect(getStudentResultSubmission(studentNumber, peId)).rejects.toMatchObject({
       code: "PHYSICAL_EXAM_UPLOAD_RETIRED", status: 422,
     });
@@ -79,6 +90,8 @@ describe("atomic examination and certificate issuance", () => {
       filename: "forged.pdf", declaredMimeType: "application/pdf", bytes: Buffer.from("%PDF-1.7")
     }], storage)).rejects.toMatchObject({ code: "PHYSICAL_EXAM_UPLOAD_RETIRED", status: 422 });
     expect(storage.write).not.toHaveBeenCalled();
+    expect(storage.delete).not.toHaveBeenCalled();
+    expect(await snapshot()).toEqual(before);
     expect((await pool.query("SELECT 1 FROM student_result_submissions WHERE appointment_id=$1", [peId])).rowCount).toBe(0);
     await expect(completePhysicalExam(peId, {
       requestId: randomUUID(), physicianId, physicianVersion: 1,
@@ -109,6 +122,14 @@ describe("atomic examination and certificate issuance", () => {
     expect(state.rows[0]).toMatchObject({ status: "COMPLETED", resultStatus: "COMPLETED", count: 1 });
     const stored = await downloadMedicalCertificate(first.certificateId, { kind: "STUDENT", studentNumber: `CERT-${String(sequence).padStart(4, "0")}` });
     expect((await sharp(stored.bytes).metadata()).format).toBe("jpeg");
+    const profile = await getAdminStudentResultProfileRow(`CERT-${String(sequence).padStart(4, "0")}`);
+    expect(profile?.certificate).toMatchObject({ id: first.certificateId, status: "ISSUED", classification: "B" });
+    expect(profile?.history).toEqual([]);
+    const staffDownload = await downloadMedicalCertificate(first.certificateId, { kind: "STAFF", actor: admin });
+    expect(staffDownload.bytes).toEqual(stored.bytes);
+    await expect(setLaboratoryTestVerification(labId, {
+      testCode: "CBC", checked: false, expectedVersion: checklist.version, reason: "Attempted rollback after PE",
+    }, admin)).rejects.toMatchObject({ code: "PHYSICAL_ALREADY_COMPLETED", status: 409 });
     await expect(downloadMedicalCertificate(first.certificateId, { kind: "STUDENT", studentNumber: "CERT-OTHER" }))
       .rejects.toMatchObject({ code: "CERTIFICATE_NOT_FOUND", status: 404 });
     await expect(downloadMedicalCertificate(first.certificateId, { kind: "STAFF", actor: {

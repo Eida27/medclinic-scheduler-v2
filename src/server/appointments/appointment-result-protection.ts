@@ -6,7 +6,7 @@ export type AppointmentResultProtectionState =
   | {
       type: "PENDING_PLACEHOLDER";
       resultId: string;
-      resultTable: AppointmentResultTable;
+      resultTable: "laboratory_results";
     }
   | {
       type: "PROTECTED";
@@ -29,7 +29,7 @@ export type AppointmentResultProtectionFacts = {
   } | null;
   pendingPlaceholder: {
     resultId: string;
-    resultTable: AppointmentResultTable;
+    resultTable: "laboratory_results";
   } | null;
 };
 

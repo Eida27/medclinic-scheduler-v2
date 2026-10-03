@@ -65,13 +65,6 @@ const baseProfile = {
     submission: laboratorySubmission,
     editingInProgress: false,
   },
-  physicalExam: {
-    resultType: "PHYSICAL_EXAM" as const,
-    appointment: null,
-    state: "NOT_SUBMITTED" as const,
-    submission: null,
-    editingInProgress: false,
-  },
   certificate: { id: "", status: null, classification: null, examinationDate: null },
   history: [],
 };
@@ -233,10 +226,10 @@ describe("AdminStudentResultProfilePage", () => {
           }],
         },
         {
-          id: "older-exam-invalidated",
-          appointmentId: "older-exam-appointment",
+          id: "older-rejected-lab-invalidated",
+          appointmentId: "older-rejected-lab-appointment",
           appointmentDate: "2026-06-18",
-          resultType: "PHYSICAL_EXAM",
+          resultType: "LABORATORY",
           status: "INVALIDATED",
           finalizedAt: new Date("2026-06-18T16:00:00.000Z"),
           invalidatedAt: new Date("2026-06-19T16:00:00.000Z"),
@@ -255,7 +248,7 @@ describe("AdminStudentResultProfilePage", () => {
 
     const history = screen.getByRole("region", { name: "Submission history" });
     expect(within(history).getByText("Laboratory · 2026-07-18")).toBeVisible();
-    expect(within(history).getByText("Physical Exam · 2026-06-18")).toBeVisible();
+    expect(within(history).getByText("Laboratory · 2026-06-18")).toBeVisible();
     expect(within(history).getByText("Finalized: Jul 19, 2026, 12:00 AM")).toBeVisible();
     expect(within(history).getByText("Invalidated: Jun 20, 2026, 12:00 AM")).toBeVisible();
     expect(within(history).getByText("Reason: Superseded scan")).toBeVisible();
@@ -273,7 +266,7 @@ describe("AdminStudentResultProfilePage", () => {
       "/api/admin/student-result-submissions/older-lab-finalized/zip",
     );
     expect(within(history).queryByLabelText("Laboratory invalidation reason")).not.toBeInTheDocument();
-    expect(within(history).queryByRole("link", { name: /older-exam|Physical Exam ZIP/i })).not.toBeInTheDocument();
+    expect(within(history).queryByRole("link", { name: /older-rejected-lab|Physical Exam ZIP/i })).not.toBeInTheDocument();
   });
 
   it("labels superseded history with provenance and retains administrator downloads", async () => {

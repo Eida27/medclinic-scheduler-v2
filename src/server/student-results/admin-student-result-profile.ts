@@ -1,6 +1,5 @@
 import type {
   AttendanceStatus,
-  ScheduleType,
 } from "@/server/repositories/current-effective-appointments.repository";
 
 export type CurrentSubmissionState =
@@ -24,7 +23,7 @@ export type AdminResultSubmission = {
   id: string;
   appointmentId: string;
   appointmentDate: string;
-  resultType: ScheduleType;
+  resultType: "LABORATORY";
   status: "FINALIZED" | "INVALIDATED" | "SUPERSEDED";
   finalizedAt: Date;
   invalidatedAt: Date | null;
@@ -38,7 +37,7 @@ export type AdminResultSubmission = {
 };
 
 export type AdminCurrentResultSection = {
-  resultType: ScheduleType;
+  resultType: "LABORATORY";
   appointment: {
     id: string;
     appointmentDate: string;
@@ -57,7 +56,6 @@ export type AdminStudentResultListItem = {
   progress: AdminSubmissionProgress;
   latestActivityAt: Date;
   laboratory: Pick<AdminCurrentResultSection, "state"> & { fileCount: number };
-  physicalExam: Pick<AdminCurrentResultSection, "state"> & { fileCount: number };
   certificate: { status: "ISSUED" | "REVOKED" | null; classification: string | null };
 };
 
@@ -69,7 +67,6 @@ export type AdminStudentResultProfile = {
   progress: AdminSubmissionProgress;
   latestActivityAt: Date | null;
   laboratory: AdminCurrentResultSection;
-  physicalExam: AdminCurrentResultSection;
   certificate: { id: string; status: "ISSUED" | "REVOKED" | null; classification: string | null; examinationDate: string | null };
   history: AdminResultSubmission[];
 };
