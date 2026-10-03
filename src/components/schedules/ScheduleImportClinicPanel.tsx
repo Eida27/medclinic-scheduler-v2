@@ -1,38 +1,10 @@
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 
-type ValidationIssue = {
-  severity: string;
-  message: string;
-};
-
-type CapacityResult = {
-  clinicId: string;
-  date: string;
-  scheduleType: string;
-  count: number;
-  maxCapacity: number;
-  status: string;
-  message: string;
-};
-
 type ValidationSummary = {
   totalItems: number;
   validCount: number;
   conflictCount: number;
-  capacityResults?: CapacityResult[];
-};
-
-type ScheduleRequest = {
-  id: string;
-  studentNumber: string;
-  studentName: string;
-  scheduleType: string;
-  targetDate: string | null;
-  targetWeekStart: string | null;
-  targetWeekEnd: string | null;
-  status: string;
-  validationIssues?: ValidationIssue[];
 };
 
 type GeneratedAppointment = {
@@ -53,15 +25,12 @@ export type ScheduleImportClinicBatchView = {
   clinicName: string;
   status: string;
   validationSummary: ValidationSummary | null;
-  items: ScheduleRequest[];
   appointments: GeneratedAppointment[];
 };
 
 function statusTone(status: string): "neutral" | "success" | "warning" | "danger" | "info" {
-  if (["PUBLISHED", "VALID"].includes(status)) return "success";
-  if (status === "VALIDATED") return "warning";
-  if (["CONFLICT", "CANCELLED"].includes(status)) return "danger";
-  if (status === "GENERATED") return "info";
+  if (status === "PUBLISHED") return "success";
+  if (status === "CANCELLED" || status === "NEEDS_REVIEW") return "danger";
   return "neutral";
 }
 
@@ -72,11 +41,6 @@ function serviceLabel(clinicCode: string) {
 export function ScheduleImportClinicPanel({ batch }: { batch: ScheduleImportClinicBatchView }) {
   const service = serviceLabel(batch.clinicCode);
   const summary = batch.validationSummary;
-  const exceptionItems = batch.items.filter((item) => item.validationIssues?.length);
-  const exceptionCount = exceptionItems.reduce(
-    (count, item) => count + (item.validationIssues?.length ?? 0),
-    0,
-  );
 
   return (
     <Card role="region" aria-label={`${service} schedule review`} className="overflow-hidden p-0">
@@ -117,55 +81,6 @@ export function ScheduleImportClinicPanel({ batch }: { batch: ScheduleImportClin
             </p>
           )}
         </section>
-
-        {summary?.capacityResults?.length ? (
-          <section aria-labelledby={`${batch.id}-capacity-heading`}>
-            <h3 id={`${batch.id}-capacity-heading`} className="font-bold text-ink">Capacity results</h3>
-            <div className="mt-3 grid gap-3">
-              {summary.capacityResults.map((capacity) => (
-                <div key={`${capacity.scheduleType}-${capacity.date}`} className="rounded-xl border border-line bg-canvas p-4">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="font-bold text-ink">{capacity.date}</p>
-                    <Badge tone={statusTone(capacity.status)}>{capacity.status}</Badge>
-                  </div>
-                  <p className="mt-1 text-sm text-muted-strong">
-                    {capacity.count} scheduled / {capacity.maxCapacity} maximum
-                  </p>
-                  <p className="mt-1 text-sm text-muted">{capacity.message}</p>
-                </div>
-              ))}
-            </div>
-          </section>
-        ) : null}
-
-        {exceptionCount ? (
-          <details className="rounded-xl border border-line bg-canvas">
-            <summary className="cursor-pointer px-4 py-3 font-bold text-ink">
-              Review exceptions ({exceptionCount} {exceptionCount === 1 ? "issue" : "issues"})
-            </summary>
-            <div className="divide-y divide-line border-t border-line">
-              {exceptionItems.map((item) => (
-                <div key={item.id} className="p-4">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <p className="font-bold text-ink">{item.studentName}</p>
-                      <p className="font-mono text-xs text-muted">{item.studentNumber}</p>
-                    </div>
-                    <Badge tone={statusTone(item.status)}>{item.status}</Badge>
-                  </div>
-                  {item.validationIssues?.map((issue, index) => (
-                    <p
-                      key={`${issue.message}-${index}`}
-                      className={`mt-2 text-sm ${issue.severity === "CONFLICT" ? "text-red-700" : "text-amber-700"}`}
-                    >
-                      {issue.message}
-                    </p>
-                  ))}
-                </div>
-              ))}
-            </div>
-          </details>
-        ) : null}
 
         <section aria-labelledby={`${batch.id}-appointments-heading`}>
           <h3 id={`${batch.id}-appointments-heading`} className="font-bold text-ink">Generated appointments</h3>

@@ -41,7 +41,7 @@ const importMetadataSchema = z.object({
       context.addIssue({
         code: "custom",
         path: ["studentCategory"],
-        message: "First Year imports use the Regular compatibility category.",
+        message: "First Year imports use the Regular category.",
       });
     }
     if (value.preferredMonth !== null) {

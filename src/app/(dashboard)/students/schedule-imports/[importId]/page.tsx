@@ -7,8 +7,6 @@ import { getScheduleImport } from "@/server/services/schedule-imports.service";
 
 function statusTone(status: string): "neutral" | "success" | "warning" | "danger" | "info" {
   if (status === "PUBLISHED") return "success";
-  if (status === "GENERATED") return "info";
-  if (status === "VALIDATED") return "warning";
   if (status === "CANCELLED" || status === "NEEDS_REVIEW") return "danger";
   return "neutral";
 }
@@ -29,9 +27,7 @@ export default async function ScheduleImportDetailPage({
   const actor = await requireUser(["ADMIN", "COORDINATOR"]);
   const { importId } = await params;
   const detail = await getScheduleImport(importId, actor);
-  const academicYear = detail.academicYearStart
-    ? `${detail.academicYearStart}–${detail.academicYearStart + 1}`
-    : "Legacy import";
+  const academicYear = `${detail.academicYearStart}–${detail.academicYearStart + 1}`;
   const isPublished = detail.status === "PUBLISHED";
 
   return (
@@ -50,7 +46,7 @@ export default async function ScheduleImportDetailPage({
             <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
               <div><dt className="font-semibold text-muted">Source file</dt><dd className="mt-1 break-all font-medium text-ink">{detail.sourceFilename}</dd></div>
               <div><dt className="font-semibold text-muted">Accepted</dt><dd className="mt-1 text-ink"><time dateTime={detail.acceptedAt}>{acceptedAtLabel(detail.acceptedAt)}</time></dd></div>
-              <div><dt className="font-semibold text-muted">Category</dt><dd className="mt-1 text-ink">{detail.importMode === "FIRST_YEAR_OVPSA" ? "First Year" : detail.studentCategory ?? "Legacy"}</dd></div>
+              <div><dt className="font-semibold text-muted">Category</dt><dd className="mt-1 text-ink">{detail.importMode === "FIRST_YEAR_OVPSA" ? "First Year" : detail.studentCategory}</dd></div>
               <div><dt className="font-semibold text-muted">Academic year</dt><dd className="mt-1 text-ink">{academicYear}</dd></div>
               <div><dt className="font-semibold text-muted">Generated range</dt><dd className="mt-1 text-ink">{detail.generatedRange ? `${detail.generatedRange.startDate} – ${detail.generatedRange.endDate}` : "No new pair generated"}</dd></div>
               <div>
@@ -70,7 +66,7 @@ export default async function ScheduleImportDetailPage({
             </div>
             <div className="rounded-xl border border-cpu-navy/8 bg-cpu-navy-soft/55 p-4">
               <dt className="text-xs font-semibold text-muted">
-                {isPublished ? "Published pairs" : "Planned pairs"}
+                {isPublished ? "Published pairs" : "Recorded pairs"}
               </dt>
               <dd className="mt-1 text-2xl font-black text-ink">{Math.min(detail.laboratoryItemCount, detail.physicalExaminationItemCount)}</dd>
             </div>

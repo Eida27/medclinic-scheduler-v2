@@ -33,20 +33,11 @@ function childBatch({
     id,
     clinicCode,
     clinicName,
-    status: "GENERATED",
+    status: "CANCELLED",
     validationSummary: {
       totalItems: 1,
       validCount: 1,
       conflictCount: 0,
-      capacityResults: [{
-        clinicId: `${id}-clinic`,
-        date: targetDate,
-        scheduleType,
-        count: 1,
-        maxCapacity: 150,
-        status: "VALID",
-        message: "This date is within the maximum daily capacity.",
-      }],
     },
     items: [{
       id: `${id}-item`,
@@ -54,10 +45,7 @@ function childBatch({
       studentName: "Review Student",
       scheduleType,
       targetDate,
-      targetWeekStart: null,
-      targetWeekEnd: null,
       status: "SCHEDULED",
-      validationIssues: [],
     }],
     appointments: [{
       id: `${id}-appointment`,
@@ -83,7 +71,7 @@ describe("ScheduleImportDetailPage", () => {
     expect(getScheduleImport).not.toHaveBeenCalled();
   });
 
-  it("allows administrators and coordinators to read historical staged imports without actions", async () => {
+  it("allows administrators and coordinators to read cancelled imports without actions", async () => {
     requireUser.mockResolvedValue(admin);
     getScheduleImport.mockResolvedValue({
       importId: "import-1",
@@ -97,7 +85,7 @@ describe("ScheduleImportDetailPage", () => {
       createdByName: "System Admin",
       laboratoryItemCount: 2,
       physicalExaminationItemCount: 1,
-      status: "GENERATED",
+      status: "CANCELLED",
       studentCategory: "TOUR",
       academicYearStart: 2026,
       preferredMonth: 12,
@@ -141,7 +129,7 @@ describe("ScheduleImportDetailPage", () => {
     expect(screen.getByText("3", { selector: "dd" })).toBeVisible();
     expect(screen.getByText("1 inserted · 2 updated · 0 skipped")).toBeVisible();
     expect(screen.getByText("Historical import data is read-only and cannot be advanced.")).toBeVisible();
-    expect(screen.getByText("Planned pairs")).toBeVisible();
+    expect(screen.getByText("Recorded pairs")).toBeVisible();
     expect(screen.queryByText("Published pairs")).not.toBeInTheDocument();
     expect(screen.queryByText("Historical import actions")).not.toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();

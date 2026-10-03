@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { ScheduleImportClinicPanel } from "./ScheduleImportClinicPanel";
 
@@ -6,11 +6,11 @@ const laboratoryBatch = {
   id: "laboratory-batch",
   clinicCode: "KABALAKA_CLINIC",
   clinicName: "KABALAKA Clinic",
-  status: "GENERATED",
+  status: "PUBLISHED",
   validationSummary: {
     totalItems: 2,
-    validCount: 1,
-    conflictCount: 1,
+    validCount: 2,
+    conflictCount: 0,
     capacityResults: [{
       clinicId: "clinic-1",
       date: "2026-12-10",
@@ -29,7 +29,7 @@ const laboratoryBatch = {
     targetDate: "2026-12-10",
     targetWeekStart: null,
     targetWeekEnd: null,
-    status: "CONFLICT",
+    status: "SCHEDULED",
     validationIssues: [{
       severity: "CONFLICT",
       message: "Student already has an active laboratory appointment.",
@@ -42,23 +42,23 @@ const laboratoryBatch = {
     studentName: "Draft Reviewer",
     scheduleType: "LABORATORY",
     appointmentDate: "2026-12-10",
-    status: "DRAFT",
-    isPublished: false,
+    status: "PENDING",
+    isPublished: true,
     notes: null,
   }],
 };
 
 describe("ScheduleImportClinicPanel", () => {
-  it("shows generated appointments without retired priority labels and keeps issues collapsed", () => {
+  it("shows published appointments and successful validation without retired manual diagnostics", () => {
     render(<ScheduleImportClinicPanel batch={laboratoryBatch} />);
 
     const section = screen.getByRole("region", { name: "Laboratory schedule review" });
     expect(within(section).getByText("KABALAKA Clinic")).toBeVisible();
-    expect(within(section).getByText("GENERATED")).toBeVisible();
-    expect(within(section).getByText("2", { selector: "dd" })).toBeVisible();
-    expect(within(section).getByText("1 conflict")).toBeVisible();
-    expect(within(section).getByText("130 scheduled / 150 maximum")).toBeVisible();
-    expect(within(section).getByText("This date is within the maximum daily capacity.")).toBeVisible();
+    expect(within(section).getByText("PUBLISHED")).toBeVisible();
+    expect(within(section).getAllByText("2", { selector: "dd" })).toHaveLength(2);
+    expect(within(section).getByText("0 conflicts")).toBeVisible();
+    expect(within(section).queryByRole("heading", { name: "Capacity results" })).not.toBeInTheDocument();
+    expect(within(section).queryByText("This date is within the maximum daily capacity.")).not.toBeInTheDocument();
     expect(within(section).queryByText(/warning|safe|recommended/i)).not.toBeInTheDocument();
     expect(within(section).queryByRole("heading", { name: "Schedule requests" })).not.toBeInTheDocument();
 
@@ -69,13 +69,10 @@ describe("ScheduleImportClinicPanel", () => {
     expect(within(appointmentsTable).queryByRole("columnheader", { name: "Priority" })).not.toBeInTheDocument();
     expect(within(section).queryByText(/priority:/i)).not.toBeInTheDocument();
 
-    const exceptionSummary = within(section).getByText("Review exceptions (1 issue)");
-    const conflict = within(section).getByText("Student already has an active laboratory appointment.");
-    expect(conflict).not.toBeVisible();
-    fireEvent.click(exceptionSummary);
-    expect(conflict).toBeVisible();
-    expect(within(section).getByText("Draft — not published")).toBeVisible();
-    expect(within(section).getAllByText("2026-12-10")).toHaveLength(2);
+    expect(within(section).queryByText(/Review exceptions/)).not.toBeInTheDocument();
+    expect(within(section).queryByText("Student already has an active laboratory appointment.")).not.toBeInTheDocument();
+    expect(within(section).getByText("Published")).toBeVisible();
+    expect(within(section).getAllByText("2026-12-10")).toHaveLength(1);
   });
 
   it("explains read-only historical states without lifecycle-action copy", () => {
@@ -83,16 +80,8 @@ describe("ScheduleImportClinicPanel", () => {
       ...laboratoryBatch,
       clinicCode: "CPU_CLINIC",
       clinicName: "CPU Clinic",
-      status: "DRAFT",
+      status: "CANCELLED",
       validationSummary: null,
-      items: [{
-        ...laboratoryBatch.items[0],
-        id: "item-2",
-        scheduleType: "PHYSICAL_EXAM",
-        targetDate: "2026-12-11",
-        validationIssues: [],
-        status: "PENDING",
-      }],
       appointments: [],
     }} />);
 
@@ -100,5 +89,13 @@ describe("ScheduleImportClinicPanel", () => {
     expect(within(section).getByText("Validation totals are not available for this historical import.")).toBeVisible();
     expect(within(section).queryByText(/Review exceptions/)).not.toBeInTheDocument();
     expect(within(section).getByText("No appointments are recorded for this clinic batch.")).toBeVisible();
+  });
+
+  it("retains defensive unpublished appointment presentation", () => {
+    render(<ScheduleImportClinicPanel batch={{
+      ...laboratoryBatch,
+      appointments: [{ ...laboratoryBatch.appointments[0], status: "DRAFT", isPublished: false }],
+    }} />);
+    expect(screen.getByText("Draft — not published")).toBeVisible();
   });
 });

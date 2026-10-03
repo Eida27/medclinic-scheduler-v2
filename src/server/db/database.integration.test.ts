@@ -292,8 +292,8 @@ describe("database constraints", () => {
       { column_name: "created_by", data_type: "uuid", character_maximum_length: null, is_nullable: "NO", column_default: null },
       { column_name: "created_at", data_type: "timestamp with time zone", character_maximum_length: null, is_nullable: "NO", column_default: "now()" },
       { column_name: "updated_at", data_type: "timestamp with time zone", character_maximum_length: null, is_nullable: "NO", column_default: "now()" },
-      { column_name: "student_category", data_type: "character varying", character_maximum_length: 30, is_nullable: "YES", column_default: null },
-      { column_name: "academic_year_start", data_type: "integer", character_maximum_length: null, is_nullable: "YES", column_default: null },
+      { column_name: "student_category", data_type: "character varying", character_maximum_length: 30, is_nullable: "NO", column_default: null },
+      { column_name: "academic_year_start", data_type: "integer", character_maximum_length: null, is_nullable: "NO", column_default: null },
       { column_name: "preferred_month", data_type: "integer", character_maximum_length: null, is_nullable: "YES", column_default: null },
       { column_name: "accepted_at", data_type: "timestamp with time zone", character_maximum_length: null, is_nullable: "NO", column_default: "clock_timestamp()" },
       { column_name: "import_mode", data_type: "character varying", character_maximum_length: 30, is_nullable: "NO", column_default: "'STANDARD'::character varying" },
@@ -309,8 +309,8 @@ describe("database constraints", () => {
       accepted_at: Date;
     }>(
       `INSERT INTO schedule_import_groups (
-         import_name, source_filename, total_rows, created_by, created_at, updated_at
-       ) VALUES ($1,$2,2,$3,NOW() - INTERVAL '1 day',NOW() - INTERVAL '1 day')
+         import_name, source_filename, total_rows, created_by, student_category,academic_year_start,created_at, updated_at
+       ) VALUES ($1,$2,2,$3,'REGULAR',2026,NOW() - INTERVAL '1 day',NOW() - INTERVAL '1 day')
        RETURNING id, created_student_count, matched_student_count, created_at, updated_at, accepted_at`,
       ["TEST database import group", "test-schedule.csv", "00000000-0000-4000-8000-000000000001"],
     );
@@ -335,8 +335,8 @@ describe("database constraints", () => {
   it("enforces import group counts and user ownership", async () => {
     const insert = (totalRows: number, createdCount = 0, matchedCount = 0, createdBy = "00000000-0000-4000-8000-000000000001") => pool.query(
       `INSERT INTO schedule_import_groups (
-         import_name, source_filename, total_rows, created_student_count, matched_student_count, created_by
-       ) VALUES ('TEST invalid group','invalid.csv',$1,$2,$3,$4)`,
+         import_name, source_filename, total_rows, created_student_count, matched_student_count, created_by,student_category,academic_year_start
+       ) VALUES ('TEST invalid group','invalid.csv',$1,$2,$3,$4,'REGULAR',2026)`,
       [totalRows, createdCount, matchedCount, createdBy],
     );
 
@@ -346,10 +346,10 @@ describe("database constraints", () => {
     await expect(insert(1, 0, 0, "99999999-9999-4999-8999-999999999999")).rejects.toMatchObject({ code: "23503" });
   });
 
-  it("supports legacy batches and limits grouped children to one batch per clinic", async () => {
+  it("supports ungrouped published batches and limits grouped children to one batch per clinic", async () => {
     const group = await pool.query<{ id: string }>(
-      `INSERT INTO schedule_import_groups (import_name, source_filename, total_rows, created_by)
-       VALUES ('TEST grouped children','grouped.csv',2,$1) RETURNING id`,
+      `INSERT INTO schedule_import_groups (import_name, source_filename, total_rows, created_by,student_category,academic_year_start)
+       VALUES ('TEST grouped children','grouped.csv',2,$1,'REGULAR',2026) RETURNING id`,
       ["00000000-0000-4000-8000-000000000001"],
     );
     const groupId = group.rows[0].id;
@@ -357,13 +357,13 @@ describe("database constraints", () => {
     const insertBatch = async (name: string, clinicId: string, importGroupId?: string | null) => {
       const result = importGroupId === undefined
         ? await pool.query<{ id: string; import_group_id: string | null }>(
-            `INSERT INTO schedule_batches (clinic_id, batch_name, created_by)
-             VALUES ($1,$2,$3) RETURNING id, import_group_id`,
+            `INSERT INTO schedule_batches (clinic_id, batch_name, created_by,status)
+             VALUES ($1,$2,$3,'PUBLISHED') RETURNING id, import_group_id`,
             [clinicId, name, "00000000-0000-4000-8000-000000000001"],
           )
         : await pool.query<{ id: string; import_group_id: string | null }>(
-            `INSERT INTO schedule_batches (clinic_id, batch_name, created_by, import_group_id)
-             VALUES ($1,$2,$3,$4) RETURNING id, import_group_id`,
+            `INSERT INTO schedule_batches (clinic_id, batch_name, created_by, import_group_id,status)
+             VALUES ($1,$2,$3,$4,'PUBLISHED') RETURNING id, import_group_id`,
             [clinicId, name, "00000000-0000-4000-8000-000000000001", importGroupId],
           );
       createdBatchIds.push(result.rows[0].id);
@@ -371,10 +371,10 @@ describe("database constraints", () => {
     };
 
     try {
-      const legacyOne = await insertBatch("TEST legacy batch one", "60000000-0000-4000-8000-000000000001");
-      const legacyTwo = await insertBatch("TEST legacy batch two", "60000000-0000-4000-8000-000000000001", null);
-      expect(legacyOne.import_group_id).toBeNull();
-      expect(legacyTwo.import_group_id).toBeNull();
+      const standaloneOne = await insertBatch("TEST standalone batch one", "60000000-0000-4000-8000-000000000001");
+      const standaloneTwo = await insertBatch("TEST standalone batch two", "60000000-0000-4000-8000-000000000001", null);
+      expect(standaloneOne.import_group_id).toBeNull();
+      expect(standaloneTwo.import_group_id).toBeNull();
 
       await insertBatch("TEST grouped laboratory", "60000000-0000-4000-8000-000000000001", groupId);
       await insertBatch("TEST grouped physical", "60000000-0000-4000-8000-000000000002", groupId);
@@ -507,14 +507,14 @@ describe("database constraints", () => {
           [studentNumber, "10000000-0000-4000-8000-000000000003", "20000000-0000-4000-8000-000000000003"],
         );
         const batch = await client.query<{ id: string }>(
-          `INSERT INTO schedule_batches (clinic_id, batch_name, created_by)
-           VALUES ($1,'TEST persisted BOTH constraint',$2) RETURNING id`,
+          `INSERT INTO schedule_batches (clinic_id, batch_name, created_by,status)
+           VALUES ($1,'TEST persisted BOTH constraint',$2,'PUBLISHED') RETURNING id`,
           ["60000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000001"],
         );
         await client.query(
           `INSERT INTO coordinator_schedule_items (
-            batch_id, student_number, schedule_type, clinic_id, target_date
-          ) VALUES ($1, $2, 'BOTH', $3, DATE '2026-09-01')`,
+            batch_id, student_number, schedule_type, clinic_id, target_date,status
+          ) VALUES ($1, $2, 'BOTH', $3, DATE '2026-09-01','SCHEDULED')`,
           [
             batch.rows[0].id,
             studentNumber,

@@ -8,8 +8,6 @@ import type {
 
 function statusTone(status: ScheduleImportStatus) {
   if (status === "PUBLISHED") return "success" as const;
-  if (status === "GENERATED") return "info" as const;
-  if (status === "VALIDATED") return "warning" as const;
   if (status === "CANCELLED" || status === "NEEDS_REVIEW") return "danger" as const;
   return "neutral" as const;
 }
@@ -50,10 +48,10 @@ export function ScheduleImportHistoryTable({ imports }: { imports: ScheduleImpor
                 </td>
                 <td className="px-5 py-4">
                   <p className="font-bold text-ink">
-                    {item.importMode === "FIRST_YEAR_OVPSA" ? "First Year" : item.studentCategory ?? "Legacy"}
+                    {item.importMode === "FIRST_YEAR_OVPSA" ? "First Year" : item.studentCategory}
                   </p>
                   <p className="text-xs text-muted">
-                    {item.academicYearStart ? `${item.academicYearStart}–${item.academicYearStart + 1}` : "No academic year"}
+                    {`${item.academicYearStart}–${item.academicYearStart + 1}`}
                   </p>
                 </td>
                 <td className="px-5 py-4">

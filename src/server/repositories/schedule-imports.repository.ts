@@ -26,17 +26,11 @@ import { loadSchedulingBlockedDates } from "./scheduling-blocked-dates.repositor
 import type { HistoricalStaffActor, UserRole } from "@/types/roles";
 
 export type ScheduleImportStatus =
-  | "DRAFT"
-  | "VALIDATED"
-  | "GENERATED"
   | "PUBLISHED"
   | "CANCELLED"
   | "NEEDS_REVIEW";
 
 const synchronizedStatuses = new Set<ScheduleImportStatus>([
-  "DRAFT",
-  "VALIDATED",
-  "GENERATED",
   "PUBLISHED",
   "CANCELLED",
 ]);
@@ -100,10 +94,10 @@ export type ScheduleImportListItem = {
   status: ScheduleImportStatus;
   createdAt: string;
   updatedAt: string;
-  studentCategory: CreateScheduleImportInput["studentCategory"] | null;
+  studentCategory: CreateScheduleImportInput["studentCategory"];
   importMode?: "STANDARD" | "FIRST_YEAR_OVPSA";
   firstYearLaboratoryDate?: string | null;
-  academicYearStart: number | null;
+  academicYearStart: number;
   preferredMonth: number | null;
   acceptedAt: string;
   skippedStudentCount: number;
@@ -131,27 +125,15 @@ export type ScheduleImportRequest = {
   studentNumber: string;
   studentName: string;
   scheduleType: AppointmentScheduleType;
-  targetDate: string | null;
-  targetWeekStart: string | null;
-  targetWeekEnd: string | null;
+  targetDate: string;
   remarks: string | null;
   status: string;
-  validationIssues: Array<{ code?: string; message: string; severity: string }>;
 };
 
 type ScheduleImportValidationSummary = {
   totalItems: number;
   validCount: number;
   conflictCount: number;
-  capacityResults?: Array<{
-    clinicId: string;
-    date: string;
-    scheduleType: string;
-    count: number;
-    maxCapacity: number;
-    status: string;
-    message: string;
-  }>;
 };
 
 type StoredImportChildBatch = {
@@ -168,7 +150,6 @@ type StoredImportChildBatch = {
   description: string | null;
   status: string;
   validationSummary: ScheduleImportValidationSummary | null;
-  overrideReason: string | null;
   importGroupId: string;
   publishedAt: Date | null;
   createdAt: Date;
@@ -209,7 +190,6 @@ async function readImportChildBatch(batchId: string, client?: PoolClient) {
                            batch.description,
                            batch.status,
                            batch.validation_summary AS "validationSummary",
-                           batch.override_reason AS "overrideReason",
                            batch.import_group_id AS "importGroupId",
                            batch.published_at AS "publishedAt",
                            batch.created_at AS "createdAt"
@@ -231,11 +211,8 @@ async function readImportChildBatch(batchId: string, client?: PoolClient) {
                            ${studentDisplayNameSql("student")} AS "studentName",
                            item.schedule_type AS "scheduleType",
                            item.target_date::text AS "targetDate",
-                           item.target_week_start::text AS "targetWeekStart",
-                           item.target_week_end::text AS "targetWeekEnd",
                            item.remarks,
-                           item.status,
-                           item.validation_issues AS "validationIssues"
+                           item.status
                       FROM coordinator_schedule_items item
                       JOIN students student ON student.student_number=item.student_number
                       JOIN clinics clinic ON clinic.id=item.clinic_id
@@ -871,10 +848,10 @@ type ScheduleImportSummaryRow = {
   child_statuses: string[];
   created_at: Date;
   updated_at: Date;
-  student_category: CreateScheduleImportInput["studentCategory"] | null;
+  student_category: CreateScheduleImportInput["studentCategory"];
   import_mode: "STANDARD" | "FIRST_YEAR_OVPSA";
   first_year_laboratory_date: string | null;
-  academic_year_start: number | null;
+  academic_year_start: number;
   preferred_month: number | null;
   accepted_at: Date;
   published_metadata: Record<string, unknown> | null;

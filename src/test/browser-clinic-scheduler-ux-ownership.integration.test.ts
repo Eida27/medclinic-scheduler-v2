@@ -153,8 +153,8 @@ describe("browser clinic scheduler cleanup ownership", () => {
       const startedAt = new Date(Date.now() - 60_000).toISOString();
       await client.query(
         `INSERT INTO schedule_import_groups
-           (id, import_name, source_filename, total_rows, created_by)
-         VALUES ($1,'T20 ownership fixture',$2,2,$3)`,
+           (id, import_name, source_filename, total_rows, created_by,student_category,academic_year_start)
+         VALUES ($1,'T20 ownership fixture',$2,2,$3,'REGULAR',2026)`,
         [ids.import, sourceFilename, TEST_REFERENCE_IDS.adminUser],
       );
       await client.query(
