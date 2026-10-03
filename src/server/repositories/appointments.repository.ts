@@ -8,7 +8,7 @@ import { query } from "@/server/db/pool";
 import type { ClinicCode } from "@/server/clinics";
 import {
   studentDisplayNameSql,
-  studentLegacyDisplayNameSql,
+  studentInitialDisplayNameSql,
 } from "@/server/students/student-display-name";
 import type { HistoricalStaffActor } from "@/types/roles";
 
@@ -120,7 +120,7 @@ export async function listAppointments(filters: {
     add(
       `(a.student_number ILIKE ?
         OR ${studentDisplayNameSql("s")} ILIKE ?
-        OR ${studentLegacyDisplayNameSql("s")} ILIKE ?
+        OR ${studentInitialDisplayNameSql("s")} ILIKE ?
         OR CONCAT_WS(' ', BTRIM(s.first_name), BTRIM(s.last_name)) ILIKE ?
         OR CONCAT_WS(
           ' ', BTRIM(s.first_name), NULLIF(BTRIM(s.middle_name), ''),

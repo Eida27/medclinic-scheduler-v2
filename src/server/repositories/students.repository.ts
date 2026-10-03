@@ -2,7 +2,7 @@ import "server-only";
 import { query } from "@/server/db/pool";
 import {
   studentDisplayNameSql,
-  studentLegacyDisplayNameSql,
+  studentInitialDisplayNameSql,
 } from "@/server/students/student-display-name";
 
 export type StudentInput = {
@@ -103,7 +103,7 @@ export async function listStudents(filters: StudentListFilters) {
     clauses.push(`(
       s.student_number ILIKE $${values.length}
       OR ${studentDisplayNameSql("s")} ILIKE $${values.length}
-      OR ${studentLegacyDisplayNameSql("s")} ILIKE $${values.length}
+      OR ${studentInitialDisplayNameSql("s")} ILIKE $${values.length}
       OR CONCAT_WS(' ', BTRIM(s.first_name), BTRIM(s.last_name)) ILIKE $${values.length}
       OR CONCAT_WS(
         ' ', BTRIM(s.first_name), NULLIF(BTRIM(s.middle_name), ''),

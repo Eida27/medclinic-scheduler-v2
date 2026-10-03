@@ -4,7 +4,7 @@ import { dirname, isAbsolute, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool, type PoolClient } from "pg";
 import { SCHEDULE_NOTICE } from "../src/lib/schedule-notice";
-import { encryptVerificationEmailBody } from "../src/server/email/verification-body-encryption";
+import { encryptEmailOutboxSensitiveBody } from "../src/server/email/verification-body-encryption";
 
 const LOOPBACK_DATABASE_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 const EXCLUSIVE_FLAG = "STUDENT_EMAIL_NOTIFICATIONS_ACCEPTANCE_EXCLUSIVE_DATABASE";
@@ -456,7 +456,7 @@ async function seedDatabase(client: PoolClient, rawToken: string, encryptionKey:
   const students = STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.students;
   const currentFingerprint = fingerprint([["LABORATORY", APPOINTMENT_IDS.deliveryCurrentLaboratory, "PENDING", "2026-10-20", null, "KABALAKA Clinic"]]);
   const staleFingerprint = createHash("sha256").update(`${MARKER}:stale`).digest("hex");
-  const verificationBody = encryptVerificationEmailBody(`Verify your email within 30 minutes: http://localhost:3000${STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.confirmation.route}?token=${encodeURIComponent(rawToken)}`, encryptionKey);
+  const verificationBody = encryptEmailOutboxSensitiveBody(`Verify your email within 30 minutes: http://localhost:3000${STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.confirmation.route}?token=${encodeURIComponent(rawToken)}`, encryptionKey);
   await client.query("BEGIN");
   try {
     await client.query(`INSERT INTO users (id,full_name,email,password_hash,role,email_verified_at,must_change_password,credential_version) VALUES ($1,'Browser Email Administrator',$2,crypt($3,gen_salt('bf',10)),'ADMIN',clock_timestamp(),FALSE,1),($4,'Browser Email Coordinator',$5,crypt($6,gen_salt('bf',10)),'COORDINATOR',clock_timestamp(),FALSE,1)`, [STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.staff.admin.id, STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.staff.admin.email, STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.staff.admin.password, STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.staff.coordinator.id, STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.staff.coordinator.email, STUDENT_EMAIL_NOTIFICATIONS_FIXTURE.staff.coordinator.password]);

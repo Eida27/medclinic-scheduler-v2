@@ -67,7 +67,3 @@ export function decryptEmailOutboxSensitiveBody(envelope: string, encodedKey: st
     throw new Error(DECRYPTION_ERROR_MESSAGE);
   }
 }
-
-// Compatibility aliases: student verification messages retain the same v1 envelope and AAD.
-export const encryptVerificationEmailBody = encryptEmailOutboxSensitiveBody;
-export const decryptVerificationEmailBody = decryptEmailOutboxSensitiveBody;

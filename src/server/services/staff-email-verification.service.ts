@@ -1,7 +1,7 @@
 import type { PoolClient } from "pg";
 import { AppError } from "@/lib/errors";
 import { serverEnv } from "@/lib/env";
-import { encryptVerificationEmailBody } from "@/server/email/verification-body-encryption";
+import { encryptEmailOutboxSensitiveBody } from "@/server/email/verification-body-encryption";
 import {
   addressMetadata,
   createSecurityToken,
@@ -87,7 +87,7 @@ export async function queueStaffEmailVerification(
     subject: "Verify your MedClinic staff email",
     notificationType: "STAFF_EMAIL_VERIFICATION",
     sourceId: row.id,
-    encryptedBody: encryptVerificationEmailBody(
+    encryptedBody: encryptEmailOutboxSensitiveBody(
         `Verify your staff email within ${VERIFICATION_LIFETIME_MINUTES} minutes: ${verifyUrl}`,
         env.EMAIL_OUTBOX_ENCRYPTION_KEY,
       ),

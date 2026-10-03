@@ -20,7 +20,6 @@ vi.mock("@/server/db/pool", async (importOriginal) => {
 
 import {
   AUTOMATIC_NO_SHOW_NOTE,
-  LEGACY_AUTOMATIC_NO_SHOW_NOTE,
   isAutomaticNoShowLog,
 } from "@/server/appointments/automatic-no-show";
 import { pool, transaction } from "@/server/db/pool";
@@ -184,8 +183,8 @@ describe("isAutomaticNoShowLog", () => {
     expect(isAutomaticNoShowLog({ ...canonicalLog, changedById: "user-id" })).toBe(false);
     expect(isAutomaticNoShowLog({
       ...canonicalLog,
-      notes: LEGACY_AUTOMATIC_NO_SHOW_NOTE,
-    })).toBe(true);
+      notes: "Automatically marked no-show after the 24-hour appointment completion window.",
+    })).toBe(false);
   });
 });
 

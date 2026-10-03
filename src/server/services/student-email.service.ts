@@ -4,7 +4,7 @@ import type { PoolClient } from "pg";
 import { z } from "zod";
 import { AppError, isPostgresUniqueViolation } from "@/lib/errors";
 import { serverEnv } from "@/lib/env";
-import { encryptVerificationEmailBody } from "@/server/email/verification-body-encryption";
+import { encryptEmailOutboxSensitiveBody } from "@/server/email/verification-body-encryption";
 import { transaction } from "@/server/db/pool";
 import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import { enqueueStudentEmail } from "@/server/repositories/student-notifications.repository";
@@ -195,7 +195,7 @@ export async function requestStudentEmailVerification(studentNumber: string, ema
       notificationType: "EMAIL_VERIFICATION",
       sourceType: "STUDENT_EMAIL_VERIFICATION",
       sourceId: row.id,
-      verificationBodyEncrypted: encryptVerificationEmailBody(
+      verificationBodyEncrypted: encryptEmailOutboxSensitiveBody(
         `Verify your email within ${VERIFICATION_LIFETIME_MINUTES} minutes: ${verifyUrl}`,
         env.EMAIL_OUTBOX_ENCRYPTION_KEY,
       ),

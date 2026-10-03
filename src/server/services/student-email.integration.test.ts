@@ -20,7 +20,7 @@ import {
   requestStudentEmailVerification,
   verifyStudentEmail,
 } from "./student-email.service";
-import { decryptVerificationEmailBody } from "@/server/email/verification-body-encryption";
+import { decryptEmailOutboxSensitiveBody } from "@/server/email/verification-body-encryption";
 import { queueFirstVerificationCurrentStateCatchUp } from "./student-verification-catch-up.service";
 
 const studentPattern = "99-95%";
@@ -225,7 +225,7 @@ describe("student notifications and optional email", () => {
     });
     expect(JSON.stringify(queued.rows[0])).not.toContain(request.token);
     expect(JSON.stringify(queued.rows[0])).not.toContain("token=");
-    expect(decryptVerificationEmailBody(
+    expect(decryptEmailOutboxSensitiveBody(
       queued.rows[0].verification_body_encrypted,
       encryptionKey,
     )).toContain(encodeURIComponent(request.token));

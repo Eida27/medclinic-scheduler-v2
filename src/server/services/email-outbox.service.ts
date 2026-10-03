@@ -4,7 +4,6 @@ import { transaction } from "@/server/db/pool";
 import { serverEnv } from "@/lib/env";
 import {
   decryptEmailOutboxSensitiveBody,
-  decryptVerificationEmailBody,
 } from "@/server/email/verification-body-encryption";
 import {
   authorizeStaffSecurityEmailOutboxDelivery,
@@ -74,7 +73,7 @@ export async function deliverClaimedEmail(
       const authorization = await authorizeVerificationEmailOutboxDelivery(client, message, now);
       if (authorization !== "AUTHORIZED") return { status: authorization };
       try {
-        const textBody = decryptVerificationEmailBody(
+        const textBody = decryptEmailOutboxSensitiveBody(
           message.verificationBodyEncrypted ?? "",
           encryptionKey,
         );

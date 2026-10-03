@@ -11,7 +11,7 @@ import {
 } from "@/server/repositories/current-effective-appointments.repository";
 import {
   studentDisplayNameSql,
-  studentLegacyDisplayNameSql,
+  studentInitialDisplayNameSql,
 } from "@/server/students/student-display-name";
 
 export type AppointmentSummaryItem = {
@@ -55,12 +55,12 @@ const summaryRowsCte = `
     SELECT
       s.student_number AS "studentNumber",
       ${studentDisplayNameSql("s")} AS "studentName",
-      ${studentLegacyDisplayNameSql("s")} AS "legacyStudentDisplayName",
-      CONCAT_WS(' ', BTRIM(s.first_name), BTRIM(s.last_name)) AS "legacyStudentName",
+      ${studentInitialDisplayNameSql("s")} AS "studentInitialDisplayName",
+      CONCAT_WS(' ', BTRIM(s.first_name), BTRIM(s.last_name)) AS "studentGivenNameFirst",
       CONCAT_WS(
         ' ', BTRIM(s.first_name), NULLIF(BTRIM(s.middle_name), ''),
         BTRIM(s.last_name), NULLIF(BTRIM(s.suffix), '')
-      ) AS "legacyStudentFullName",
+      ) AS "studentFullNameGivenFirst",
       s.first_name AS "firstName",
       s.last_name AS "lastName",
       s.college_id AS "collegeId",
@@ -155,9 +155,9 @@ export async function appointmentSummaryReport(filters: AppointmentSummaryFilter
     add(
       `(summary_rows."studentNumber" ILIKE ?
         OR summary_rows."studentName" ILIKE ?
-        OR summary_rows."legacyStudentDisplayName" ILIKE ?
-        OR summary_rows."legacyStudentName" ILIKE ?
-        OR summary_rows."legacyStudentFullName" ILIKE ?)`,
+        OR summary_rows."studentInitialDisplayName" ILIKE ?
+        OR summary_rows."studentGivenNameFirst" ILIKE ?
+        OR summary_rows."studentFullNameGivenFirst" ILIKE ?)`,
       `%${filters.search}%`,
     );
   }

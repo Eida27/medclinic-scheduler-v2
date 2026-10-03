@@ -9,7 +9,7 @@ import {
   claimEmailOutboxMessages,
   deliverClaimedEmail,
 } from "@/server/services/email-outbox.service";
-import { encryptVerificationEmailBody } from "@/server/email/verification-body-encryption";
+import { encryptEmailOutboxSensitiveBody } from "@/server/email/verification-body-encryption";
 import { cleanupTestFixtures, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import {
   EMAIL_OUTBOX_INTERVAL_MS,
@@ -65,7 +65,7 @@ async function waitForStudentDeliveryLock() {
 }
 
 async function verificationOutbox(studentNumber: string, body: string) {
-  const encryptedBody = encryptVerificationEmailBody(body, encryptionKey, {
+  const encryptedBody = encryptEmailOutboxSensitiveBody(body, encryptionKey, {
     iv: Buffer.from("000102030405060708090a0b", "hex"),
   });
   const verification = await pool.query<{ id: string }>(

@@ -19,7 +19,7 @@ export function studentDisplayNameSql(alias: string) {
   )`;
 }
 
-export function studentLegacyDisplayNameSql(alias: string) {
+export function studentInitialDisplayNameSql(alias: string) {
   const firstName = `BTRIM(${alias}.first_name)`;
   const middleName = `NULLIF(BTRIM(${alias}.middle_name), '')`;
   const lastName = `BTRIM(${alias}.last_name)`;
