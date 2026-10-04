@@ -13,5 +13,7 @@
   "build": { "exitCode": 0, "storageResidueBeforeRemoval": 0 },
   "historicalMigrations001To029Changed": 0,
   "gitDiffCheck": { "exitCode": 0 },
-  "hostedCiExecuted": false
+  "hostedCiExecuted": false,
+  "freshReview": { "reviewedHead": "42c9ef34aa7e1f7e4a904463f55613a0d5bd90eb", "critical": 0, "important": 0, "minor": 0, "readyToMerge": true },
+  "ownedInfrastructureCleanup": { "exitCode": 0, "testDatabaseResidue": 0, "postgresqlStopped": true, "postgresqlDirectoryRemoved": true, "planWorkspaceRemoved": true, "fixtureDirectoryRemoved": true }
 }

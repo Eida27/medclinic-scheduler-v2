@@ -1,5 +1,12 @@
 {
   "loopbackOwnedCluster": true,
   "testDatabaseResidue": 0,
-  "browserFixtureStateResidue": 0
+  "browserFixtureStateResidue": 0,
+  "ownedPostgresqlStopped": true,
+  "ownedPostgresqlDirectoryRemoved": true,
+  "ownedPlanWorkspaceRemoved": true,
+  "emptyBrowserFixtureDirectoryRemoved": true,
+  "archivedLedgerCommitted": true,
+  "removedClusterEntries": 1004,
+  "removedScratchEntries": 113
 }
