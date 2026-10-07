@@ -14,6 +14,8 @@ The fresh seed supplies separate maximums of 100 for KABALAKA Laboratory and CPU
 
 ## Staff and student journey
 
+The owned historical First-Year fixture accepts `setup --reference-date=2026-10-07` for deterministic regression replay. The option is restricted to setup, validates a real ISO calendar date and remains subject to the existing loopback/exclusive-database guards. Ordinary setup uses PostgreSQL's current Manila date; status, cleanup and live Browser imports use their existing workflows. Do not extend a historical academic year's closing date to bypass its year constraint.
+
 1. Sign in as a verified Administrator. Configure the academic year, both service capacities, and one active physician profile with an authorized signature image. Verify the profile has no invented identity or signature.
 2. Publish a synthetic Standard pair and a First-Year/OVPSA pair. Check both clinic lists and the student's schedule. Confirm their academic snapshots determine whether X-ray appears.
 3. Sign in as KABALAKA Clinic staff. Check CBC, Urine, Stool, and applicable X-ray one at a time. Verify partial progress stays “In progress”, survives an explicit replacement, and excludes the visit from automatic no-show. Confirm an unrelated clinic account cannot change it.

@@ -446,7 +446,7 @@ async function deleteFixture(client: PoolClient, state: State | null) {
   }
 }
 
-async function setup(client: PoolClient, databaseIdentity: DatabaseIdentity) {
+async function setup(client: PoolClient, databaseIdentity: DatabaseIdentity, referenceDate?: string) {
   const existingState = await readState();
   if (existingState) {
     assertSame(databaseIdentity, existingState);
@@ -478,8 +478,9 @@ async function setup(client: PoolClient, databaseIdentity: DatabaseIdentity) {
   try {
     const academicYear = await client.query(
       `SELECT 1 FROM academic_years
-        WHERE start_year=$1 AND closing_date >= (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date`,
-      [FIRST_YEAR_IMPORT_ACCEPTANCE.cycleStart],
+        WHERE start_year=$1 AND closing_date >= COALESCE($2::date,
+          (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date)`,
+      [FIRST_YEAR_IMPORT_ACCEPTANCE.cycleStart, referenceDate ?? null],
     );
     if (!academicYear.rowCount) throw new Error("Configure the open 2026 academic year before preparing the fixture.");
     await client.query(
@@ -614,6 +615,7 @@ async function setup(client: PoolClient, databaseIdentity: DatabaseIdentity) {
   await writeFile(CSV_FILE, firstYearAcceptanceCsvContents(), "utf8");
   return {
     mode: "setup",
+    ...(referenceDate ? { referenceDate } : {}),
     databaseIdentity,
     fixture: FIRST_YEAR_IMPORT_ACCEPTANCE,
     residue: await residue(client),
@@ -624,6 +626,19 @@ async function run() {
   const mode = process.argv[2];
   if (!mode || !["setup", "status", "cleanup"].includes(mode)) {
     throw new Error("Use setup, status, or cleanup for the First Year import acceptance fixture.");
+  }
+  const referenceArgument = process.argv[3];
+  if (process.argv.length > 4 || (referenceArgument &&
+    (mode !== "setup" || !/^--reference-date=\d{4}-\d{2}-\d{2}$/.test(referenceArgument)))) {
+    throw new Error("Only setup accepts --reference-date=YYYY-MM-DD for historical fixture replay.");
+  }
+  const referenceDate = referenceArgument?.slice("--reference-date=".length);
+  if (referenceDate) {
+    const parsedDate = new Date(`${referenceDate}T00:00:00.000Z`);
+    if (referenceDate.startsWith("0000") || Number.isNaN(parsedDate.getTime()) ||
+      parsedDate.toISOString().slice(0, 10) !== referenceDate) {
+      throw new Error("The fixture reference must be a valid date-only value.");
+    }
   }
   const databaseIdentity = identity(process.env.DATABASE_URL);
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -636,7 +651,7 @@ async function run() {
         assertSame(databaseIdentity, state);
       }
       if (mode === "setup") {
-        console.log(JSON.stringify(await setup(client, databaseIdentity), null, 2));
+        console.log(JSON.stringify(await setup(client, databaseIdentity, referenceDate), null, 2));
       }
       if (mode === "status") {
         console.log(JSON.stringify({

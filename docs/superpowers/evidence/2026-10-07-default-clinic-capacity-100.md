@@ -1,6 +1,6 @@
 # Default Clinic Capacity 100 — Implementation Evidence
 
-Date: October 7, 2026 (Asia/Manila).
+Dates: Browser acceptance October 7, 2026; final verification October 7–8, 2026 (Asia/Manila).
 
 Authority: [design](../specs/2026-10-07-default-clinic-capacity-100-design.md) and [plan](../plans/2026-10-07-default-clinic-capacity-100.md). Implementation starts from local main `bcaa54d8b55f11cb9545ac1fe199f9ff1d72dba4` in a managed isolated checkout on `codex/default-clinic-capacity-100`.
 
@@ -38,7 +38,15 @@ A later complete integration attempt passed 70 files / 581 tests but failed thre
 
 The complete serial thread attempt passed 212 files / 1,204 tests but exited 1 because a `ResultDraftManager` worker never started. That file alone then passed all 23 tests in 14.9 seconds under the same regular thread pool. The installed Vitest 4.1.8 worker handshake has a fixed 60-second startup timeout, separate from test/hook deadlines. A four-file VM-fork compatibility check passed 35 tests, including that UI file, settings/calendar consumers and the unmocked database-boundary guard. The complete VM-fork attempt then exited 1: 207 files / 1,216 tests passed and six files / 11 tests failed. With one worker, the installed runner groups files into a shared VM context; failures exposed stale navigation/repository mocks and a cross-context `Blob` identity difference. The [VM pool documentation](https://vitest.dev/config/pool#vmforks) also identifies differing native globals and module-cache behavior. That pool was abandoned without changing application code, mocks or assertions to accommodate it. The final complete gate returns to regular isolated threads; no tests or unhandled errors are filtered out.
 
-The final complete isolated-thread run exited 0: all 213 files and 1,227 tests passed in 1,007.86 seconds, with no skips or worker errors. All 11 cases that failed under the VM pool passed in this run. The complete integration gate also exited 0: all 72 files and 584 tests passed in 759.63 seconds, with owned database/storage residue 0.
+The complete isolated-thread run before final review exited 0: all 213 files and 1,227 tests passed in 1,007.86 seconds, with no skips or worker errors. All 11 cases that failed under the VM pool passed in this run. The complete integration gate also exited 0: all 72 files and 584 tests passed in 759.63 seconds, with owned database/storage residue 0.
+
+## Final review and fix
+
+One fresh read-only whole-branch review covered `bcaa54d..cbcfa68`, AC1–AC9, all five review-focus conditions and the recorded rulings. It found no Critical or Minor issues and one Important issue: the new CLI regression's fixed 2027-07-31 closing date would eventually expire against PostgreSQL's clock. Extending that closing date would violate the existing academic-year constraint, so it was ruled out before implementation.
+
+The acceptance fixture now supports a validated setup-only `--reference-date=YYYY-MM-DD` option under its existing loopback/exclusive ownership guards. Ordinary setup still compares against PostgreSQL's current Manila date; no application date rule, environment setting or academic-year constraint changes. The explicit reference is included in setup output. The historical fixture dates remain unchanged.
+
+TDD reproduced the issue through the actual CLI: before the fix it ignored reference 2027-08-01 and succeeded when the regression expected a closed-cycle refusal (one file / one test failed, owned residue 0). Afterward the focused PostgreSQL gate passed one file / one test in 12.96 seconds: closed-cycle reference rejection and cleanup, invalid calendar-date rejection before state creation, ordinary setup behavior matching PostgreSQL's current date, fixed-reference setup at 150 and restoration to 100 with zero clinical/file residue. The existing fixture unit also passed one file / one test. Post-fix typecheck and lint exit 0. The complete post-fix integration suite passed all 72 files / 584 tests in 611.86 seconds with owned database/storage residue 0. The final isolated-thread suite passed all 213 files / 1,227 tests in 1,368.46 seconds, exit 0, with no skips or worker errors. The single review finding is addressed by this one TDD fix pass; no second reviewer is dispatched and no minors are deferred.
 
 ## Final gates
 
@@ -49,8 +57,8 @@ Final commands use bundled Node 24.19.0, locked dependencies, synthetic applicat
 | `node node_modules/next/dist/bin/next typegen` | Exit 0. |
 | `node node_modules/typescript/bin/tsc --noEmit --incremental false` | Exit 0. |
 | `npm run lint` | Exit 0. |
-| `npm test -- --pool=threads --maxWorkers=1 --no-file-parallelism --testTimeout=60000 --hookTimeout=60000 --reporter=verbose` | Exit 0: 213 files / 1,227 tests, no skipped tests or worker errors. |
-| `npm run test:integration -- --testTimeout=60000 --hookTimeout=60000 --reporter=dot` | Exit 0: 72 files / 584 tests, no skipped tests or worker errors; owned database/storage residue 0. |
+| `npm test -- --pool=threads --maxWorkers=1 --no-file-parallelism --testTimeout=60000 --hookTimeout=60000 --reporter=verbose` | Post-fix exit 0: 213 files / 1,227 tests, no skipped tests or worker errors. |
+| `npm run test:integration -- --testTimeout=60000 --hookTimeout=60000 --reporter=dot` | Post-fix exit 0: 72 files / 584 tests, no skipped tests or worker errors; owned database/storage residue 0. |
 | `npm run test:migrations:empty` | Exit 0: exactly 32 first-applied / 0 replay; exact ledger, rollback and reusable connection pass; owned target residue 0. |
 | `npm run build` | Exit 0: production compilation and route generation completed. |
 | `git diff --check` | Exit 0. |
@@ -99,4 +107,4 @@ The final scoped `rg` audit found 498 references to the plan's search patterns. 
 
 This changes first-install defaults and omitted-column inserts. Existing developer capacity rows retain their saved values. The local application database, existing appointments and historical migrations are preserved. Hosted deployment and hosted CI are separate work.
 
-After the final integration run, the owned cluster contained only `postgres`, `template0` and `template1` and was stopped. Initial forced deletion was rejected by automatic approval review (`blocked by policy`). Attribute-respecting native PowerShell deletion then succeeded; the stopped cluster and empty build-storage directories are gone with residue 0. All owned disposable databases and acceptance result storage were removed as verified above.
+After the original integration run, the owned cluster contained only `postgres`, `template0` and `template1` and was stopped. Initial forced deletion was rejected by automatic approval review (`blocked by policy`). Attribute-respecting native PowerShell deletion then succeeded. A fresh owned cluster supplied the review-fix checks; after the complete post-fix integration run its database inventory again contained only those three system databases. It was stopped and removed with the same native deletion, with no forced deletion or rejection. Owned cluster/build-storage residue is 0. All owned disposable databases and acceptance result storage were removed as verified above.
