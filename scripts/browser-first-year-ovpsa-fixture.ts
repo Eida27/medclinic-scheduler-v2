@@ -2,6 +2,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool, type PoolClient } from "pg";
+import { requiredLaboratoryTests } from "../src/server/laboratory/laboratory-requirements";
 
 const DIRECTORY = resolve(".data/browser-first-year-ovpsa");
 const STATE_FILE = resolve(DIRECTORY, "state.json");
@@ -12,6 +13,7 @@ const LAB_CLINIC_ID = "60000000-0000-4000-8000-000000000001";
 const PE_CLINIC_ID = "60000000-0000-4000-8000-000000000002";
 const LOWER_BATCH_ID = "bf200000-0000-4000-8000-000000000031";
 const SOURCE_FILENAME = "B-FIRST-YEAR-IMPORT-280.csv";
+const CONFLICT_SOURCE_FILENAME = "B-FIRST-YEAR-IMPORT-CONFLICTS.csv";
 const FIXTURE_STUDENT_NUMBERS = [
   ...Array.from({ length: 280 }, (_, index) => `86-${String(index + 1).padStart(4, "0")}-91`),
   "86-9001-91",
@@ -159,7 +161,7 @@ export function firstYearAcceptanceCsvContents() {
 async function residue(client: PoolClient): Promise<Residue> {
   const result = await client.query<Omit<Residue, "stateFiles" | "csvFiles">>(
     `WITH tagged_imports AS (
-       SELECT id FROM schedule_import_groups WHERE source_filename=$1
+       SELECT id FROM schedule_import_groups WHERE source_filename=ANY($1::text[])
      ), tagged_ovpsa_batches AS (
        SELECT id FROM ovpsa_first_year_batches
         WHERE source_import_group_id IN (SELECT id FROM tagged_imports)
@@ -191,7 +193,7 @@ async function residue(client: PoolClient): Promise<Residue> {
             OR entity_id IN (SELECT id::text FROM tagged_ovpsa_batches)
             OR entity_id IN (SELECT id::text FROM tagged_appointments)) AS audits,
        (SELECT COUNT(*)::int FROM schedule_batches WHERE id=$3) AS "lowerBatches"`,
-    [SOURCE_FILENAME, FIXTURE_STUDENT_NUMBERS, LOWER_BATCH_ID],
+    [[SOURCE_FILENAME, CONFLICT_SOURCE_FILENAME], FIXTURE_STUDENT_NUMBERS, LOWER_BATCH_ID],
   );
   return {
     ...result.rows[0],
@@ -340,8 +342,8 @@ async function deleteFixture(client: PoolClient, state: State | null) {
   try {
     await client.query(
       `CREATE TEMP TABLE acceptance_imports ON COMMIT DROP AS
-       SELECT id FROM schedule_import_groups WHERE source_filename=$1`,
-      [SOURCE_FILENAME],
+       SELECT id FROM schedule_import_groups WHERE source_filename=ANY($1::text[])`,
+      [[SOURCE_FILENAME, CONFLICT_SOURCE_FILENAME]],
     );
     await client.query(
       `CREATE TEMP TABLE acceptance_ovpsa_batches ON COMMIT DROP AS
@@ -387,6 +389,16 @@ async function deleteFixture(client: PoolClient, state: State | null) {
     await client.query("DELETE FROM laboratory_results WHERE student_number=ANY($1::varchar[]) OR appointment_id IN (SELECT id FROM acceptance_appointments)", [FIXTURE_STUDENT_NUMBERS]);
     await client.query("DELETE FROM exam_results WHERE student_number=ANY($1::varchar[]) OR appointment_id IN (SELECT id FROM acceptance_appointments)", [FIXTURE_STUDENT_NUMBERS]);
     await client.query("DELETE FROM appointment_status_logs WHERE appointment_id IN (SELECT id FROM acceptance_appointments)");
+    await client.query(`CREATE TEMP TABLE acceptance_checklists ON COMMIT DROP AS
+      SELECT DISTINCT checklist_id FROM laboratory_checklist_appointments
+       WHERE appointment_id IN (SELECT id FROM acceptance_appointments)`);
+    await client.query("ALTER TABLE laboratory_checklist_events DISABLE TRIGGER laboratory_checklist_events_immutable");
+    await client.query("ALTER TABLE laboratory_checklist_appointments DISABLE TRIGGER laboratory_checklist_links_immutable");
+    await client.query("ALTER TABLE laboratory_checklists DISABLE TRIGGER laboratory_checklist_identity_immutable");
+    await client.query("DELETE FROM laboratory_checklist_events WHERE checklist_id IN (SELECT checklist_id FROM acceptance_checklists)");
+    await client.query("DELETE FROM laboratory_checklist_items WHERE checklist_id IN (SELECT checklist_id FROM acceptance_checklists)");
+    await client.query("DELETE FROM laboratory_checklist_appointments WHERE appointment_id IN (SELECT id FROM acceptance_appointments)");
+    await client.query("DELETE FROM laboratory_checklists WHERE id IN (SELECT checklist_id FROM acceptance_checklists)");
     await client.query("DELETE FROM appointments WHERE id IN (SELECT id FROM acceptance_appointments)");
     await client.query("DELETE FROM coordinator_schedule_items WHERE student_number=ANY($1::varchar[]) OR batch_id IN (SELECT id FROM acceptance_schedule_batches)", [FIXTURE_STUDENT_NUMBERS]);
     await client.query("DELETE FROM schedule_batches WHERE id IN (SELECT id FROM acceptance_schedule_batches)");
@@ -423,6 +435,10 @@ async function deleteFixture(client: PoolClient, state: State | null) {
         [PE_CLINIC_ID, state.originalCapacity.maximum],
       );
     }
+    await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+    await client.query("ALTER TABLE laboratory_checklist_events ENABLE TRIGGER laboratory_checklist_events_immutable");
+    await client.query("ALTER TABLE laboratory_checklist_appointments ENABLE TRIGGER laboratory_checklist_links_immutable");
+    await client.query("ALTER TABLE laboratory_checklists ENABLE TRIGGER laboratory_checklist_identity_immutable");
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");
@@ -484,6 +500,22 @@ async function setup(client: PoolClient, databaseIdentity: DatabaseIdentity) {
            FROM UNNEST($1::varchar[],$2::varchar[]) AS row(student_number,last_name)`,
       [conflictStudents, ["Regular", "OJT", "Tour", "Protected"]],
     );
+    await client.query(`INSERT INTO schedule_import_groups
+      (id,import_name,source_filename,total_rows,created_student_count,student_category,academic_year_start,created_by,accepted_at)
+      VALUES ($1,'B-FIRST-YEAR-IMPORT lower-priority conflicts',$2,4,4,
+              'REGULAR',$3,$4,'2026-08-01T00:00:00Z')`,
+    [LOWER_BATCH_ID, CONFLICT_SOURCE_FILENAME, FIRST_YEAR_IMPORT_ACCEPTANCE.cycleStart, ADMIN_ID]);
+    await client.query(`INSERT INTO student_academic_snapshots
+      (student_number,academic_year_start,student_name,college_id,college_name,
+       program_id,program_code,program_name,year_level,source_import_group_id)
+      SELECT student.student_number,$2,
+             CONCAT_WS(' ',student.first_name,student.middle_name,student.last_name),
+             student.college_id,college.name,student.program_id,program.code,program.name,
+             student.year_level,$3
+        FROM students student JOIN colleges college ON college.id=student.college_id
+        JOIN programs program ON program.id=student.program_id
+       WHERE student.student_number=ANY($1::varchar[])`,
+    [conflictStudents, FIRST_YEAR_IMPORT_ACCEPTANCE.cycleStart, LOWER_BATCH_ID]);
     await client.query(
       `INSERT INTO schedule_batches (
          id,clinic_id,batch_name,college_id,program_id,status,created_by,published_by,published_at
@@ -496,7 +528,7 @@ async function setup(client: PoolClient, databaseIdentity: DatabaseIdentity) {
     const pairIds = FIRST_YEAR_IMPORT_ACCEPTANCE.conflictStudents.movable.map(
       (_, index) => `bf200000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
     );
-    await client.query(
+    const movableAppointments = await client.query<{ id: string; schedule_type: string }>(
       `INSERT INTO appointments (
          clinic_id,student_number,schedule_type,appointment_date,status,is_published,
          schedule_pair_id,schedule_cycle_start,created_by,updated_by,batch_id,scheduling_category,
@@ -512,7 +544,8 @@ async function setup(client: PoolClient, databaseIdentity: DatabaseIdentity) {
               row.category,('2026-08-01T00:00:00Z'::timestamptz + row.position * interval '1 second'),
               row.position,'2026-08-01'::date,'2027-07-31'::date
          FROM UNNEST($2::varchar[],$3::uuid[],$8::varchar[]) WITH ORDINALITY
-           AS row(student_number,pair_id,category,position)`,
+           AS row(student_number,pair_id,category,position)
+       RETURNING id::text,schedule_type`,
       [
         LAB_CLINIC_ID,
         FIRST_YEAR_IMPORT_ACCEPTANCE.conflictStudents.movable,
@@ -525,7 +558,7 @@ async function setup(client: PoolClient, databaseIdentity: DatabaseIdentity) {
         PE_CLINIC_ID,
       ],
     );
-    await client.query(
+    const protectedAppointments = await client.query<{ id: string; schedule_type: string }>(
       `INSERT INTO appointments (
          clinic_id,student_number,schedule_type,appointment_date,status,is_published,
          schedule_pair_id,schedule_cycle_start,created_by,updated_by,batch_id,scheduling_category,
@@ -536,7 +569,7 @@ async function setup(client: PoolClient, databaseIdentity: DatabaseIdentity) {
         '2026-08-02T00:00:00Z',5,'2026-08-01','2027-07-31',FALSE,NULL,NULL,NULL),
        ($2,$3,'PHYSICAL_EXAM',$8,'PENDING',TRUE,$4,$5,$6,$6,$7,'REGULAR',
         '2026-08-02T00:00:00Z',5,'2026-08-01','2027-07-31',TRUE,$6,clock_timestamp(),
-        'B-FIRST-YEAR-IMPORT protected candidate')`,
+        'B-FIRST-YEAR-IMPORT protected candidate') RETURNING id::text,schedule_type`,
       [
         LAB_CLINIC_ID,
         PE_CLINIC_ID,
@@ -548,6 +581,31 @@ async function setup(client: PoolClient, databaseIdentity: DatabaseIdentity) {
         FIRST_YEAR_IMPORT_ACCEPTANCE.firstPhysicalExamCandidate,
       ],
     );
+    const laboratoryIds = [...movableAppointments.rows, ...protectedAppointments.rows]
+      .filter(row => row.schedule_type === "LABORATORY").map(row => row.id);
+    const checklists = await client.query<{
+      id: string; year_level_snapshot: number; scheduling_category_snapshot: string;
+    }>(`INSERT INTO laboratory_checklists
+      (root_appointment_id,student_number,academic_year_start,academic_snapshot_id,
+       year_level_snapshot,scheduling_category_snapshot)
+      SELECT appointment.id,appointment.student_number,appointment.schedule_cycle_start,snapshot.id,
+             snapshot.year_level,appointment.scheduling_category
+        FROM appointments appointment JOIN student_academic_snapshots snapshot
+          ON snapshot.student_number=appointment.student_number
+         AND snapshot.academic_year_start=appointment.schedule_cycle_start
+       WHERE appointment.id=ANY($1::uuid[])
+      RETURNING id::text,year_level_snapshot,scheduling_category_snapshot`, [laboratoryIds]);
+    await client.query(`INSERT INTO laboratory_checklist_appointments (appointment_id,checklist_id)
+      SELECT root_appointment_id,id FROM laboratory_checklists WHERE root_appointment_id=ANY($1::uuid[])`,
+    [laboratoryIds]);
+    for (const checklist of checklists.rows) {
+      await client.query(`INSERT INTO laboratory_checklist_items (checklist_id,test_code)
+        SELECT $1,code FROM unnest($2::varchar[]) code`,
+      [checklist.id, requiredLaboratoryTests({
+        yearLevel: checklist.year_level_snapshot,
+        schedulingCategory: checklist.scheduling_category_snapshot,
+      })]);
+    }
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");

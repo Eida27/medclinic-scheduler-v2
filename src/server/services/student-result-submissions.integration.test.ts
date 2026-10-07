@@ -1596,6 +1596,8 @@ describe("student result drafts", () => {
         scheduleType: "LABORATORY",
       }]);
 
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-10-01T00:00:00Z"));
       let rescheduleSettled = false;
       rescheduleTask = updateAppointment(appointmentId, {
         appointmentDate: "2026-10-05",
@@ -1620,6 +1622,7 @@ describe("student result drafts", () => {
       resultClient.release();
       observer.release();
       await rescheduleTask?.catch(() => undefined);
+      vi.useRealTimers();
     }
   });
 

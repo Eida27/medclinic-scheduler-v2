@@ -45,7 +45,7 @@ describe("explicit developer reset CLI", () => {
   it("resets a separately owned target twice with the full ledger and canonical reference seed", async () => {
     await withResetDatabase(async (client, databaseUrl) => {
       const expectedLedger = (await sqlFiles(path.join(root, "database/migrations"))).map(file => file.name);
-      expect(expectedLedger).toHaveLength(31);
+      expect(expectedLedger).toHaveLength(32);
       const snapshot = async () => ({
         ledger: (await client.query("SELECT name FROM schema_migrations ORDER BY name")).rows.map(row => row.name),
         colleges: (await client.query("SELECT id,code,name FROM colleges ORDER BY id")).rows,
