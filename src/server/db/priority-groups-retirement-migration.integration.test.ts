@@ -34,6 +34,19 @@ async function applyMigrationsThrough(client: PoolClient, version: number) {
   }
 }
 
+async function seedHistoricalReferenceData(client: PoolClient): Promise<void> {
+  const seed = await readFile(seedPath, "utf8");
+  const capacityBlock = seed.indexOf("INSERT INTO clinic_capacity_settings (");
+  expect(capacityBlock).toBeGreaterThan(0);
+  expect(seed.match(/INSERT INTO clinic_capacity_settings\b/g)).toHaveLength(1);
+  await client.query(seed.slice(0, capacityBlock));
+  // Pre-030 schemas still require the historical safe/maximum comparison.
+  await client.query(`INSERT INTO clinic_capacity_settings
+    (id,clinic_id,schedule_type,safe_daily_capacity,max_daily_capacity) VALUES
+    ('40000000-0000-4000-8000-000000000001','60000000-0000-4000-8000-000000000002','PHYSICAL_EXAM',150,150),
+    ('40000000-0000-4000-8000-000000000002','60000000-0000-4000-8000-000000000001','LABORATORY',150,150)`);
+}
+
 async function withDisposableSchema(callback: (client: PoolClient) => Promise<void>) {
   const client = await pool.connect();
   const schemaName = `retire_priority_${randomUUID().replaceAll("-", "_")}`;
@@ -90,7 +103,7 @@ describe("026 priority groups and legacy scheduling retirement migration", () =>
   it("builds and seeds a fresh 001-026 schema without priority storage", async () => {
     await withDisposableSchema(async (client) => {
       await applyMigrationsThrough(client, 26);
-      await client.query(await readFile(seedPath, "utf8"));
+      await seedHistoricalReferenceData(client);
       await assertPriorityStorageRetired(client);
 
       await insertCurrentFixturePrincipals(client);
@@ -114,7 +127,7 @@ describe("026 priority groups and legacy scheduling retirement migration", () =>
   it("upgrades 025 data without cascading into scheduling provenance or history", async () => {
     await withDisposableSchema(async (client) => {
       await applyMigrationsThrough(client, 25);
-      await client.query(await readFile(seedPath, "utf8"));
+      await seedHistoricalReferenceData(client);
       await insertCurrentFixturePrincipals(client);
 
       const importGroupId = randomUUID();

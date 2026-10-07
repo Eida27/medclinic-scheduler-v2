@@ -16,7 +16,7 @@ const STORAGE_ROOT = resolve(
 );
 const LABORATORY_CLINIC_ID = "60000000-0000-4000-8000-000000000001";
 const PHYSICAL_EXAM_CLINIC_ID = "60000000-0000-4000-8000-000000000002";
-const CAPACITY_STUDENT_COUNT = 150;
+const CAPACITY_STUDENT_COUNT = 100;
 
 // Acceptance-only credentials. They are intentionally excluded from every
 // setup/status/cleanup JSON response; Browser operators read them locally here.

@@ -170,10 +170,10 @@ describe("scheduling integrity Browser acceptance fixture", () => {
     const expected = {
       users: 2,
       coreStudents: 4,
-      capacityStudents: 150,
-      academicSnapshots: 154,
+      capacityStudents: 100,
+      academicSnapshots: 104,
       pairAppointments: 8,
-      capacityAppointments: 150,
+      capacityAppointments: 100,
       laboratoryChecklists: 4,
       laboratoryChecklistItems: 12,
       laboratoryChecklistEvents: 3,

@@ -54,9 +54,10 @@ describe.sequential("scheduling integrity guarded fixture workflow", () => {
         preparedCounts: {
           users: 2,
           coreStudents: 4,
-          capacityStudents: 150,
+          capacityStudents: 100,
+          academicSnapshots: 104,
           pairAppointments: 8,
-          capacityAppointments: 150,
+          capacityAppointments: 100,
           importGroups: 1,
           scheduleBatches: 0,
           scheduleItems: 0,
@@ -98,7 +99,7 @@ describe.sequential("scheduling integrity guarded fixture workflow", () => {
         ],
       );
       expect(clinicalSetup.rows[0]).toEqual({
-        snapshots: 154,
+        snapshots: 104,
         checklists: 4,
         links: 4,
         items: 12,
@@ -110,6 +111,11 @@ describe.sequential("scheduling integrity guarded fixture workflow", () => {
         mode: "status",
         phase: "PREPARED",
         retiredRouteSentinel: { unchanged: true },
+        serviceStates: {
+          ownedCapacityLoad: 100,
+          totalCapacityLoad: 100,
+          maximumCapacity: 100,
+        },
       });
       expect(() => assertSafeSchedulingIntegrityStatus(initialStatus)).not.toThrow();
 
