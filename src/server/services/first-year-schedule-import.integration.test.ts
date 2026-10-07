@@ -188,6 +188,71 @@ afterAll(async () => {
 });
 
 describe("First Year schedule imports", () => {
+  it("reviews and publishes 280 external Laboratory students with PE loads 100/100/80 at the fresh default", async () => {
+    expect(originalCapacity).toBe(100);
+    await pool.query(`UPDATE clinic_capacity_settings SET max_daily_capacity=$2
+      WHERE clinic_id=$1 AND schedule_type='PHYSICAL_EXAM'`, [TEST_REFERENCE_IDS.physicalExamClinic, originalCapacity]);
+    try {
+      const students = Array.from({ length: 280 }, (_, index) =>
+        `95-81${String(Math.floor(index / 100)).padStart(2, "0")}-${String(index % 100).padStart(2, "0")}`);
+      const contents = [header, ...students.map((student, index) =>
+        `${student},Capacity,Student${index},Maria,,College of Computer Studies,BSIT,1,2006-01-01`)].join("\n");
+      const raw = input(contents);
+      const dates: string[] = [];
+      const day = new Date("2095-09-29T00:00:00Z");
+      while (dates.length < 3) {
+        if (day.getUTCDay() !== 0 && day.getUTCDay() !== 6) dates.push(day.toISOString().slice(0, 10));
+        day.setUTCDate(day.getUTCDate() + 1);
+      }
+      const allocations = [
+        { date: dates[0], studentCount: 100, capacity: 100 },
+        { date: dates[1], studentCount: 100, capacity: 100 },
+        { date: dates[2], studentCount: 80, capacity: 100 },
+      ];
+      const review = await reviewFirstYearScheduleImport(raw, admin);
+      expect(review).toMatchObject({
+        memberCount: 280, physicalExamMaximumCapacity: 100, canPublish: true,
+        laboratory: { date: "2095-09-22", locationName: "Iloilo Mission Hospital" }, allocations,
+      });
+      expect((await pool.query(`SELECT
+        (SELECT COUNT(*)::int FROM schedule_import_groups WHERE source_filename=$1) AS imports,
+        (SELECT COUNT(*)::int FROM students WHERE student_number LIKE $2) AS students,
+        (SELECT COUNT(*)::int FROM appointments WHERE student_number LIKE $2) AS appointments,
+        (SELECT COUNT(*)::int FROM student_academic_snapshots WHERE student_number LIKE $2) AS snapshots`,
+      [sourceFilename, studentPattern])).rows).toEqual([{ imports: 0, students: 0, appointments: 0, snapshots: 0 }]);
+      const published = await acceptAndScheduleImport(raw, admin);
+      expect(published).toMatchObject({ outcome: "PUBLISHED", publishedAppointmentCount: 560, firstYearSummary: { allocations } });
+      expect(await getScheduleImport(published.importId, admin)).toMatchObject({
+        status: "PUBLISHED", firstYearLaboratoryDate: "2095-09-22",
+        firstYearSummary: { appointmentCount: 560, allocations },
+      });
+      const appointments = await pool.query(`SELECT appointment.schedule_type,appointment.appointment_date::text,COUNT(*)::int AS used
+        FROM appointments appointment JOIN ovpsa_first_year_batches batch ON batch.id=appointment.ovpsa_batch_id
+        WHERE batch.source_import_group_id=$1 AND appointment.is_published=TRUE AND appointment.status='PENDING'
+        GROUP BY appointment.schedule_type,appointment.appointment_date ORDER BY appointment.schedule_type,appointment.appointment_date`, [published.importId]);
+      expect(appointments.rows).toEqual([
+        { schedule_type: "LABORATORY", appointment_date: "2095-09-22", used: 280 },
+        { schedule_type: "PHYSICAL_EXAM", appointment_date: dates[0], used: 100 },
+        { schedule_type: "PHYSICAL_EXAM", appointment_date: dates[1], used: 100 },
+        { schedule_type: "PHYSICAL_EXAM", appointment_date: dates[2], used: 80 },
+      ]);
+      const members = await pool.query(`SELECT snapshot.student_number,snapshot.allocation_position,pe.appointment_date::text
+        FROM ovpsa_first_year_membership_snapshots snapshot
+        JOIN ovpsa_first_year_batches batch ON batch.id=snapshot.batch_id
+        JOIN appointments pe ON pe.ovpsa_batch_id=batch.id AND pe.student_number=snapshot.student_number
+          AND pe.schedule_type='PHYSICAL_EXAM' AND pe.is_published=TRUE AND pe.status='PENDING'
+        WHERE batch.source_import_group_id=$1 ORDER BY snapshot.allocation_position`, [published.importId]);
+      expect(members.rows.map((member) => member.student_number)).toEqual(students);
+      members.rows.forEach((member, index) => {
+        expect(member.appointment_date).toBe(dates[Math.floor(index / 100)]);
+        expect((Date.parse(member.appointment_date) - Date.parse("2095-09-22")) / 86_400_000).toBeGreaterThanOrEqual(7);
+      });
+    } finally {
+      await pool.query(`UPDATE clinic_capacity_settings SET max_daily_capacity=3
+        WHERE clinic_id=$1 AND schedule_type='PHYSICAL_EXAM'`, [TEST_REFERENCE_IDS.physicalExamClinic]);
+    }
+  }, 60_000);
+
   it("reviews without writes and publishes one atomic multi-date import in CSV order", async () => {
     const review = await reviewFirstYearScheduleImport(input(), admin);
     expect(review).toMatchObject({

@@ -18,8 +18,8 @@ const settings = [
     maxDailyCapacity: 125,
   },
   {
-    clinicCode: "UNIVERSITY_CLINIC",
-    clinicName: "University Clinic",
+    clinicCode: "CPU_CLINIC",
+    clinicName: "CPU Clinic",
     scheduleType: "PHYSICAL_EXAM",
     maxDailyCapacity: 150,
   },
@@ -48,6 +48,18 @@ describe("CapacityForm", () => {
     expect(screen.queryByText("Recommended")).not.toBeInTheDocument();
     expect(screen.queryByText("Warning")).not.toBeInTheDocument();
     expect(screen.queryByText("Safe")).not.toBeInTheDocument();
+  });
+
+  it("displays both canonical fresh defaults without capping custom maximums", () => {
+    render(<CapacityForm settings={settings.map((setting) => ({ ...setting, maxDailyCapacity: 100 }))} />);
+
+    const maximumInputs = screen.getAllByLabelText("Maximum students per day");
+    expect(maximumInputs[0]).toHaveValue(100);
+    expect(maximumInputs[1]).toHaveValue(100);
+    expect(maximumInputs[0]).not.toHaveAttribute("max");
+    expect(maximumInputs[1]).not.toHaveAttribute("max");
+    expect(screen.getByText("CPU Clinic")).toBeVisible();
+    expect(screen.getByText("Kabalaka Clinic")).toBeVisible();
   });
 
   it("submits only the maximum and disables only the pending card", async () => {

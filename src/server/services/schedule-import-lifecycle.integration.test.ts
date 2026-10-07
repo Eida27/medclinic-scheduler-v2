@@ -87,6 +87,66 @@ afterAll(async () => {
 });
 
 describe("atomic academic-year import lifecycle", () => {
+  it("allocates 101 Standard students in CSV order as 100/1 per service at the fresh defaults", async () => {
+    expect(capacityFixture!.originalCapacities.map((capacity) => capacity.max_daily_capacity)).toEqual([100, 100]);
+    await cleanupAndRestoreCapacitySettings(pool, capacityFixture!.originalCapacities, cleanup);
+    const academicYearStart = 2094;
+    const year = await pool.query(
+      `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+       VALUES ($1,'2095-07-31',$2,$2) RETURNING start_year`,
+      [academicYearStart, TEST_REFERENCE_IDS.adminUser],
+    );
+    expect(year.rowCount).toBe(1);
+    createdAcademicYears.push(academicYearStart);
+    const students = Array.from({ length: 101 }, (_, index) =>
+      `99-92${String(Math.floor(index / 100)).padStart(2, "0")}-${String(index % 100).padStart(2, "0")}`);
+    const contents = [header, ...students.map((student, index) =>
+      `${student},Capacity,Student${index},Maria,,College of Computer Studies,BSIT,3,2003-05-06`)].join("\n");
+    const result = await acceptAndScheduleImport({
+      ...input("TEST-FCFS-default-101.csv", students[0], academicYearStart),
+      contents,
+      fileSize: Buffer.byteLength(contents),
+    }, admin);
+    expect(result).toMatchObject({ outcome: "PUBLISHED", totalRows: 101, publishedAppointmentCount: 202 });
+
+    const eligibleDates: string[] = [];
+    const day = new Date(Date.UTC(academicYearStart, 7, 1));
+    while (eligibleDates.length < 3) {
+      if (day.getUTCDay() !== 0 && day.getUTCDay() !== 6) eligibleDates.push(day.toISOString().slice(0, 10));
+      day.setUTCDate(day.getUTCDate() + 1);
+    }
+    const loads = await pool.query(`SELECT appointment.schedule_type,appointment.appointment_date::text,COUNT(*)::int AS used
+      FROM appointments appointment JOIN schedule_batches batch ON batch.id=appointment.batch_id
+      WHERE batch.import_group_id=$1 AND appointment.is_published=TRUE AND appointment.ovpsa_batch_id IS NULL
+        AND appointment.status NOT IN ('CANCELLED','RESCHEDULED')
+      GROUP BY appointment.schedule_type,appointment.appointment_date ORDER BY appointment.schedule_type,appointment.appointment_date`, [result.importId]);
+    expect(loads.rows).toEqual([
+      { schedule_type: "LABORATORY", appointment_date: eligibleDates[0], used: 100 },
+      { schedule_type: "LABORATORY", appointment_date: eligibleDates[1], used: 1 },
+      { schedule_type: "PHYSICAL_EXAM", appointment_date: eligibleDates[1], used: 100 },
+      { schedule_type: "PHYSICAL_EXAM", appointment_date: eligibleDates[2], used: 1 },
+    ]);
+    const pairs = await pool.query(`SELECT lab.student_number,lab.schedule_pair_id::text AS lab_pair,pe.schedule_pair_id::text AS pe_pair,
+      lab.appointment_date::text AS lab_date,pe.appointment_date::text AS pe_date,item.source_row_order,
+      lab.scheduling_accepted_at=import_group.accepted_at AND pe.scheduling_accepted_at=import_group.accepted_at AS fcfs_preserved
+      FROM appointments lab JOIN appointments pe ON pe.student_number=lab.student_number AND pe.schedule_pair_id=lab.schedule_pair_id
+        AND pe.schedule_type='PHYSICAL_EXAM' AND pe.is_published=TRUE AND pe.status NOT IN ('CANCELLED','RESCHEDULED')
+      JOIN coordinator_schedule_items item ON item.id=lab.schedule_item_id
+      JOIN schedule_batches batch ON batch.id=lab.batch_id JOIN schedule_import_groups import_group ON import_group.id=batch.import_group_id
+      WHERE batch.import_group_id=$1 AND lab.schedule_type='LABORATORY' AND lab.is_published=TRUE
+        AND lab.status NOT IN ('CANCELLED','RESCHEDULED') ORDER BY item.source_row_order`, [result.importId]);
+    expect(pairs.rows).toHaveLength(101);
+    expect(pairs.rows.map((pair) => pair.student_number)).toEqual(students);
+    pairs.rows.forEach((pair, index) => {
+      expect(pair.source_row_order).toBe(index + 1);
+      expect(pair.lab_pair).toBe(pair.pe_pair);
+      expect(pair.lab_date < pair.pe_date).toBe(true);
+      expect(pair.fcfs_preserved).toBe(true);
+      expect(pair.lab_date).toBe(eligibleDates[index < 100 ? 0 : 1]);
+      expect(pair.pe_date).toBe(eligibleDates[index < 100 ? 1 : 2]);
+    });
+  }, 60_000);
+
   it("fills imported schedules to maximum capacity before using the next date", async () => {
     await pool.query(
       `UPDATE clinic_capacity_settings
