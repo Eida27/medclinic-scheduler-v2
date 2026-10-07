@@ -42,9 +42,9 @@ async function runMigrationCli(targetDatabaseUrl: string) {
 await withDisposableTestDatabase(async ({ targetUrl: targetDatabaseUrl }) => {
   const migrations = await sqlFiles(projectPath("database", "migrations"));
 
-  assert.equal(migrations.length, 31);
+  assert.equal(migrations.length, 32);
   assert.ok(migrations[0]?.name.startsWith("001_"));
-  assert.equal(migrations.at(-1)?.name, "031_retire_manual_schedule_metadata.sql");
+  assert.equal(migrations.at(-1)?.name, "032_default_clinic_capacity_100.sql");
 
   let client: Client | undefined;
   try {
@@ -52,7 +52,7 @@ await withDisposableTestDatabase(async ({ targetUrl: targetDatabaseUrl }) => {
     process.stdout.write(first.stdout);
     process.stderr.write(first.stderr);
     const firstAppliedCount = first.stdout.match(/^Applied /gm)?.length ?? 0;
-    assert.equal(firstAppliedCount, 31);
+    assert.equal(firstAppliedCount, 32);
     console.log(`First migration CLI applied count: ${firstAppliedCount}`);
 
     client = new Client({ connectionString: targetDatabaseUrl });
@@ -118,7 +118,7 @@ await withDisposableTestDatabase(async ({ targetUrl: targetDatabaseUrl }) => {
       to_regclass('public.clinical_mutation_requests')::text]) AS name`);
     assert.equal(clinicalTables.rows.length, 8);
     assert.ok(clinicalTables.rows.every((row) => row.name !== null));
-    console.log("Final schema and exact 31-entry migration history assertions passed.");
+    console.log("Final schema and exact 32-entry migration history assertions passed.");
 
     const second = await runMigrationCli(targetDatabaseUrl);
     process.stdout.write(second.stdout);

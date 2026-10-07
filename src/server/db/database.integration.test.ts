@@ -432,8 +432,8 @@ describe("database constraints", () => {
         ORDER BY c.code, s.schedule_type`,
     );
     expect(capacity.rows).toEqual([
-      { code: "CPU_CLINIC", schedule_type: "PHYSICAL_EXAM", max_daily_capacity: 150 },
-      { code: "KABALAKA_CLINIC", schedule_type: "LABORATORY", max_daily_capacity: 150 },
+      { code: "CPU_CLINIC", schedule_type: "PHYSICAL_EXAM", max_daily_capacity: 100 },
+      { code: "KABALAKA_CLINIC", schedule_type: "LABORATORY", max_daily_capacity: 100 },
     ]);
 
     const users = await pool.query<{ full_name: string; email: string; role: string; clinic_code: string | null }>(
