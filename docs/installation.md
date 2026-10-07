@@ -56,11 +56,13 @@ npm run db:migrate
 npm run db:seed
 ```
 
-Apply all 31 migrations through `031_retire_manual_schedule_metadata.sql`; a second migration run applies zero. The student portal access policy requires no additional migration, role, cookie, environment variable, or verification backfill. Retain the complete 001–031 chain, including migration 023's email ownership and outbox protections; historical 001–029 are unchanged.
+Apply all 32 migrations through `032_default_clinic_capacity_100.sql` before the reference seed; a second migration run applies zero. The student portal access policy requires no additional migration, role, cookie, environment variable, or verification backfill. Retain the complete 001–032 chain, including migration 023's email ownership and outbox protections; the default-capacity change preserves historical migrations 001–031.
 
 Migration 030 removes the obsolete safe-capacity column and enforces a positive maximum. Migration 031 requires category/year provenance and an authoritative service date, permits only published/cancelled generic batches and scheduled items, and removes manual override/week/failed-validation metadata. It refuses unsupported existing rows atomically with `UNSUPPORTED_PREDEPLOYMENT_SCHEDULING_DATA`; do not reset, rewrite or delete application data to bypass that refusal. Successful validation/publication evidence and OVPSA transaction states remain intact. Developer reset remains an explicitly consented disposable-development command and is not an installation step.
 
-The seed supplies clinics, colleges, programs, and capacity/reference values. It does not create an Administrator, clinic staff, Coordinator, student, academic year, or test account. On a new database, confirm both people tables remain empty before continuing. Do not run Browser fixtures or the integration suite against this database; those workflows own and remove separate disposable databases.
+The seed supplies clinics, colleges, programs, and capacity/reference values. KABALAKA Laboratory and CPU Physical Examination each start at a separate maximum of 100 students per day. Administrators may independently save any positive integer, including values above 100. Migration 032 changes the SQL default only, and seed replay preserves saved rows and custom maximums. Previously seeded developer databases retain their configured values; ordinary first installation does not reset or overwrite them.
+
+The seed does not create an Administrator, clinic staff, Coordinator, student, academic year, or test account. On a new database, confirm both people tables remain empty before continuing. Do not run Browser fixtures or the integration suite against this database; those workflows own and remove separate disposable databases.
 
 ## 4. Bootstrap and complete the first Administrator account
 

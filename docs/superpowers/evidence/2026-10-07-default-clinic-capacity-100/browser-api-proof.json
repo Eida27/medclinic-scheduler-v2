@@ -1,0 +1,551 @@
+{
+  "fresh": {
+    "fresh": {
+      "migrations": 32,
+      "users": 0,
+      "students": 0,
+      "maxima": [
+        100,
+        100
+      ]
+    },
+    "settings": [
+      {
+        "scheduleType": "PHYSICAL_EXAM",
+        "clinicCode": "CPU_CLINIC",
+        "clinicName": "CPU Clinic",
+        "maxDailyCapacity": 100
+      },
+      {
+        "scheduleType": "LABORATORY",
+        "clinicCode": "KABALAKA_CLINIC",
+        "clinicName": "KABALAKA Clinic",
+        "maxDailyCapacity": 100
+      }
+    ],
+    "loads": [],
+    "pairs": [],
+    "occupiedDays": []
+  },
+  "standard": {
+    "fresh": {
+      "migrations": 32,
+      "users": 0,
+      "students": 0,
+      "maxima": [
+        100,
+        100
+      ]
+    },
+    "settings": [
+      {
+        "scheduleType": "PHYSICAL_EXAM",
+        "clinicCode": "CPU_CLINIC",
+        "clinicName": "CPU Clinic",
+        "maxDailyCapacity": 100
+      },
+      {
+        "scheduleType": "LABORATORY",
+        "clinicCode": "KABALAKA_CLINIC",
+        "clinicName": "KABALAKA Clinic",
+        "maxDailyCapacity": 100
+      }
+    ],
+    "loads": [
+      {
+        "source_filename": "CAPACITY-STANDARD-101.csv",
+        "schedule_type": "LABORATORY",
+        "appointment_date": "2026-10-14",
+        "used": 100
+      },
+      {
+        "source_filename": "CAPACITY-STANDARD-101.csv",
+        "schedule_type": "LABORATORY",
+        "appointment_date": "2026-10-15",
+        "used": 1
+      },
+      {
+        "source_filename": "CAPACITY-STANDARD-101.csv",
+        "schedule_type": "PHYSICAL_EXAM",
+        "appointment_date": "2026-10-15",
+        "used": 100
+      },
+      {
+        "source_filename": "CAPACITY-STANDARD-101.csv",
+        "schedule_type": "PHYSICAL_EXAM",
+        "appointment_date": "2026-10-16",
+        "used": 1
+      }
+    ],
+    "pairs": [
+      {
+        "source_filename": "CAPACITY-STANDARD-101.csv",
+        "pairs": 101,
+        "lab_before_pe": true,
+        "first_year_gap": null
+      }
+    ],
+    "occupiedDays": [
+      {
+        "date": "2026-10-14",
+        "tone": "RED",
+        "laboratory": {
+          "used": 100,
+          "maximum": 100,
+          "remaining": 0
+        },
+        "physicalExam": {
+          "used": 0,
+          "maximum": 100,
+          "remaining": 100
+        },
+        "externalLaboratory": 0
+      },
+      {
+        "date": "2026-10-15",
+        "tone": "RED",
+        "laboratory": {
+          "used": 1,
+          "maximum": 100,
+          "remaining": 99
+        },
+        "physicalExam": {
+          "used": 100,
+          "maximum": 100,
+          "remaining": 0
+        },
+        "externalLaboratory": 0
+      },
+      {
+        "date": "2026-10-16",
+        "tone": "GREEN",
+        "laboratory": {
+          "used": 0,
+          "maximum": 100,
+          "remaining": 100
+        },
+        "physicalExam": {
+          "used": 1,
+          "maximum": 100,
+          "remaining": 99
+        },
+        "externalLaboratory": 0
+      }
+    ]
+  },
+  "custom120": {
+    "fresh": {
+      "migrations": 32,
+      "users": 0,
+      "students": 0,
+      "maxima": [
+        100,
+        100
+      ]
+    },
+    "settings": [
+      {
+        "scheduleType": "PHYSICAL_EXAM",
+        "clinicCode": "CPU_CLINIC",
+        "clinicName": "CPU Clinic",
+        "maxDailyCapacity": 120
+      },
+      {
+        "scheduleType": "LABORATORY",
+        "clinicCode": "KABALAKA_CLINIC",
+        "clinicName": "KABALAKA Clinic",
+        "maxDailyCapacity": 100
+      }
+    ],
+    "loads": [
+      {
+        "source_filename": "CAPACITY-STANDARD-101.csv",
+        "schedule_type": "LABORATORY",
+        "appointment_date": "2026-10-14",
+        "used": 99
+      },
+      {
+        "source_filename": "CAPACITY-STANDARD-101.csv",
+        "schedule_type": "LABORATORY",
+        "appointment_date": "2026-10-15",
+        "used": 1
+      },
+      {
+        "source_filename": "CAPACITY-STANDARD-101.csv",
+        "schedule_type": "PHYSICAL_EXAM",
+        "appointment_date": "2026-10-15",
+        "used": 99
+      },
+      {
+        "source_filename": "CAPACITY-STANDARD-101.csv",
+        "schedule_type": "PHYSICAL_EXAM",
+        "appointment_date": "2026-10-16",
+        "used": 1
+      }
+    ],
+    "pairs": [
+      {
+        "source_filename": "CAPACITY-STANDARD-101.csv",
+        "pairs": 100,
+        "lab_before_pe": true,
+        "first_year_gap": null
+      }
+    ],
+    "occupiedDays": [
+      {
+        "date": "2026-10-14",
+        "tone": "GREEN",
+        "laboratory": {
+          "used": 99,
+          "maximum": 100,
+          "remaining": 1
+        },
+        "physicalExam": {
+          "used": 0,
+          "maximum": 120,
+          "remaining": 120
+        },
+        "externalLaboratory": 0
+      },
+      {
+        "date": "2026-10-15",
+        "tone": "GREEN",
+        "laboratory": {
+          "used": 1,
+          "maximum": 100,
+          "remaining": 99
+        },
+        "physicalExam": {
+          "used": 99,
+          "maximum": 120,
+          "remaining": 21
+        },
+        "externalLaboratory": 0
+      },
+      {
+        "date": "2026-10-16",
+        "tone": "GREEN",
+        "laboratory": {
+          "used": 0,
+          "maximum": 100,
+          "remaining": 100
+        },
+        "physicalExam": {
+          "used": 1,
+          "maximum": 120,
+          "remaining": 119
+        },
+        "externalLaboratory": 0
+      }
+    ]
+  },
+  "firstyear150": {
+    "fresh": {
+      "migrations": 32,
+      "users": 0,
+      "students": 0,
+      "maxima": [
+        100,
+        100
+      ]
+    },
+    "settings": [
+      {
+        "scheduleType": "PHYSICAL_EXAM",
+        "clinicCode": "CPU_CLINIC",
+        "clinicName": "CPU Clinic",
+        "maxDailyCapacity": 150
+      },
+      {
+        "scheduleType": "LABORATORY",
+        "clinicCode": "KABALAKA_CLINIC",
+        "clinicName": "KABALAKA Clinic",
+        "maxDailyCapacity": 100
+      }
+    ],
+    "loads": [
+      {
+        "source_filename": "CAPACITY-FIRST-YEAR-280.csv",
+        "schedule_type": "LABORATORY",
+        "appointment_date": "2026-10-21",
+        "used": 280
+      },
+      {
+        "source_filename": "CAPACITY-FIRST-YEAR-280.csv",
+        "schedule_type": "PHYSICAL_EXAM",
+        "appointment_date": "2026-10-28",
+        "used": 150
+      },
+      {
+        "source_filename": "CAPACITY-FIRST-YEAR-280.csv",
+        "schedule_type": "PHYSICAL_EXAM",
+        "appointment_date": "2026-10-29",
+        "used": 130
+      },
+      {
+        "source_filename": "CAPACITY-STANDARD-101.csv",
+        "schedule_type": "LABORATORY",
+        "appointment_date": "2026-10-14",
+        "used": 99
+      },
+      {
+        "source_filename": "CAPACITY-STANDARD-101.csv",
+        "schedule_type": "LABORATORY",
+        "appointment_date": "2026-10-15",
+        "used": 1
+      },
+      {
+        "source_filename": "CAPACITY-STANDARD-101.csv",
+        "schedule_type": "PHYSICAL_EXAM",
+        "appointment_date": "2026-10-15",
+        "used": 99
+      },
+      {
+        "source_filename": "CAPACITY-STANDARD-101.csv",
+        "schedule_type": "PHYSICAL_EXAM",
+        "appointment_date": "2026-10-16",
+        "used": 1
+      }
+    ],
+    "pairs": [
+      {
+        "source_filename": "CAPACITY-FIRST-YEAR-280.csv",
+        "pairs": 280,
+        "lab_before_pe": true,
+        "first_year_gap": true
+      },
+      {
+        "source_filename": "CAPACITY-STANDARD-101.csv",
+        "pairs": 100,
+        "lab_before_pe": true,
+        "first_year_gap": null
+      }
+    ],
+    "occupiedDays": [
+      {
+        "date": "2026-10-14",
+        "tone": "GREEN",
+        "laboratory": {
+          "used": 99,
+          "maximum": 100,
+          "remaining": 1
+        },
+        "physicalExam": {
+          "used": 0,
+          "maximum": 150,
+          "remaining": 150
+        },
+        "externalLaboratory": 0
+      },
+      {
+        "date": "2026-10-15",
+        "tone": "GREEN",
+        "laboratory": {
+          "used": 1,
+          "maximum": 100,
+          "remaining": 99
+        },
+        "physicalExam": {
+          "used": 99,
+          "maximum": 150,
+          "remaining": 51
+        },
+        "externalLaboratory": 0
+      },
+      {
+        "date": "2026-10-16",
+        "tone": "GREEN",
+        "laboratory": {
+          "used": 0,
+          "maximum": 100,
+          "remaining": 100
+        },
+        "physicalExam": {
+          "used": 1,
+          "maximum": 150,
+          "remaining": 149
+        },
+        "externalLaboratory": 0
+      },
+      {
+        "date": "2026-10-21",
+        "tone": "GREEN",
+        "laboratory": {
+          "used": 0,
+          "maximum": 100,
+          "remaining": 100
+        },
+        "physicalExam": {
+          "used": 0,
+          "maximum": 150,
+          "remaining": 150
+        },
+        "externalLaboratory": 280
+      },
+      {
+        "date": "2026-10-28",
+        "tone": "RED",
+        "laboratory": {
+          "used": 0,
+          "maximum": 100,
+          "remaining": 100
+        },
+        "physicalExam": {
+          "used": 150,
+          "maximum": 150,
+          "remaining": 0
+        },
+        "externalLaboratory": 0
+      },
+      {
+        "date": "2026-10-29",
+        "tone": "GREEN",
+        "laboratory": {
+          "used": 0,
+          "maximum": 100,
+          "remaining": 100
+        },
+        "physicalExam": {
+          "used": 130,
+          "maximum": 150,
+          "remaining": 20
+        },
+        "externalLaboratory": 0
+      }
+    ]
+  },
+  "restored": {
+    "fresh": {
+      "migrations": 32,
+      "users": 0,
+      "students": 0,
+      "maxima": [
+        100,
+        100
+      ]
+    },
+    "settings": [
+      {
+        "scheduleType": "PHYSICAL_EXAM",
+        "clinicCode": "CPU_CLINIC",
+        "clinicName": "CPU Clinic",
+        "maxDailyCapacity": 100
+      },
+      {
+        "scheduleType": "LABORATORY",
+        "clinicCode": "KABALAKA_CLINIC",
+        "clinicName": "KABALAKA Clinic",
+        "maxDailyCapacity": 100
+      }
+    ],
+    "loads": [
+      {
+        "source_filename": "CAPACITY-STANDARD-101.csv",
+        "schedule_type": "LABORATORY",
+        "appointment_date": "2026-10-14",
+        "used": 99
+      },
+      {
+        "source_filename": "CAPACITY-STANDARD-101.csv",
+        "schedule_type": "LABORATORY",
+        "appointment_date": "2026-10-15",
+        "used": 1
+      },
+      {
+        "source_filename": "CAPACITY-STANDARD-101.csv",
+        "schedule_type": "PHYSICAL_EXAM",
+        "appointment_date": "2026-10-15",
+        "used": 99
+      },
+      {
+        "source_filename": "CAPACITY-STANDARD-101.csv",
+        "schedule_type": "PHYSICAL_EXAM",
+        "appointment_date": "2026-10-16",
+        "used": 1
+      }
+    ],
+    "pairs": [
+      {
+        "source_filename": "CAPACITY-STANDARD-101.csv",
+        "pairs": 100,
+        "lab_before_pe": true,
+        "first_year_gap": null
+      }
+    ],
+    "occupiedDays": [
+      {
+        "date": "2026-10-14",
+        "tone": "GREEN",
+        "laboratory": {
+          "used": 99,
+          "maximum": 100,
+          "remaining": 1
+        },
+        "physicalExam": {
+          "used": 0,
+          "maximum": 100,
+          "remaining": 100
+        },
+        "externalLaboratory": 0
+      },
+      {
+        "date": "2026-10-15",
+        "tone": "GREEN",
+        "laboratory": {
+          "used": 1,
+          "maximum": 100,
+          "remaining": 99
+        },
+        "physicalExam": {
+          "used": 99,
+          "maximum": 100,
+          "remaining": 1
+        },
+        "externalLaboratory": 0
+      },
+      {
+        "date": "2026-10-16",
+        "tone": "GREEN",
+        "laboratory": {
+          "used": 0,
+          "maximum": 100,
+          "remaining": 100
+        },
+        "physicalExam": {
+          "used": 1,
+          "maximum": 100,
+          "remaining": 99
+        },
+        "externalLaboratory": 0
+      }
+    ]
+  },
+  "calendar99": {
+    "date": "2026-10-14",
+    "uniqueStudents": 99,
+    "appointmentTotal": 99,
+    "laboratory": {
+      "used": 99,
+      "maximum": 100,
+      "remaining": 1
+    },
+    "physicalExam": {
+      "used": 0,
+      "maximum": 100,
+      "remaining": 100
+    },
+    "externalLaboratory": 0,
+    "heldCapacity": 0,
+    "hiddenCapacityHold": 0,
+    "groups": [
+      {
+        "college": "College of Computer Studies",
+        "service": "LABORATORY",
+        "location": "INTERNAL",
+        "appointments": 99
+      }
+    ],
+    "reservations": [],
+    "tone": "GREEN"
+  }
+}
