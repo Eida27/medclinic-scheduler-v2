@@ -12,6 +12,9 @@ import { loadPhysicalExamCompletionContext } from "@/server/medical-certificates
 import { completePhysicalExam, previewPhysicalExam, correctMedicalCertificate, previewCertificateCorrection, revokeMedicalCertificate, downloadMedicalCertificate } from "@/server/medical-certificates/certificate.service";
 import { savePhysicianRevision } from "@/server/medical-certificates/physician.service";
 import * as renderer from "@/server/medical-certificates/certificate-renderer";
+import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
+import { getAppointmentMutationContext, rescheduleAppointmentWithClient } from "@/server/repositories/appointments.repository";
+import { markOverdueAppointmentsNoShow } from "@/server/repositories/appointment-no-show.repository";
 
 const admin: SessionUser = { userId: ids.adminUser, fullName: "Test Admin", email: "admin@medclinic.local", role: "ADMIN" };
 const labStaff: SessionUser = { userId: ids.clinicStaffUser, fullName: "Clinic Staff", email: "staff@medclinic.local", role: "CLINIC_STAFF", clinicId: ids.laboratoryClinic };
@@ -86,6 +89,34 @@ async function effects(f: Fixture) {
   ) AS state`, [f.studentNumber, [f.labId, f.peId], f.labId, [f.labId, f.peId], f.peId])).rows[0].state;
 }
 
+async function replaceLaboratory(f: Fixture) {
+  return transaction(async (client) => {
+    await lockEffectiveAppointmentScopes(client, [
+      { studentNumber: f.studentNumber, scheduleType: "LABORATORY" },
+      { studentNumber: f.studentNumber, scheduleType: "PHYSICAL_EXAM" },
+    ]);
+    const current = await getAppointmentMutationContext(f.labId, client);
+    if (!current) throw new Error("Missing Laboratory fixture");
+    return rescheduleAppointmentWithClient(client, current, "2026-09-22", "Synthetic replacement", admin.userId);
+  });
+}
+
+function pauseAfterRendering(expectedRenders = 1) {
+  const original = renderer.renderMedicalCertificate;
+  let reached!: () => void;
+  let resume!: () => void;
+  const rendered = new Promise<void>((resolve) => { reached = resolve; });
+  const released = new Promise<void>((resolve) => { resume = resolve; });
+  let count = 0;
+  vi.spyOn(renderer, "renderMedicalCertificate").mockImplementation(async (...args) => {
+    const bytes = await original(...args);
+    if (++count === expectedRenders) reached();
+    await released;
+    return bytes;
+  });
+  return { rendered, resume };
+}
+
 beforeAll(async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date("2026-12-20T04:00:00Z"));
@@ -113,6 +144,94 @@ afterAll(async () => {
 });
 
 describe("PE-linked external Laboratory confirmation", () => {
+  it("confirms only the effective replacement and keeps its immutable OJT requirements", async () => {
+    const f = await fixture();
+    const original = await manual(f);
+    const replacementId = await replaceLaboratory(f);
+    await pool.query("UPDATE students SET year_level=2 WHERE student_number=$1", [f.studentNumber]);
+    await expect(getLaboratoryChecklist(f.labId, admin)).rejects.toMatchObject({ code: "APPOINTMENT_NOT_FOUND" });
+    const replacement = await getLaboratoryChecklist(replacementId, admin);
+    expect(replacement).toMatchObject({ checklistId: original.checklistId, version: original.version, verifiedCount: 3,
+      completionPolicy: { mode: "FOURTH_YEAR_OJT" } });
+    const issued = await completePhysicalExam(f.peId, input(), cpu);
+    expect((await pool.query("SELECT status FROM appointments WHERE id=$1", [f.labId])).rows[0].status).toBe("RESCHEDULED");
+    expect((await getLaboratoryChecklist(replacementId, admin)).appointmentStatus).toBe("COMPLETED");
+    expect((await pool.query("SELECT appointment_id::text FROM laboratory_checklist_events WHERE test_code='XRAY' AND checklist_id=$1", [original.checklistId])).rows).toEqual([{ appointment_id: replacementId }]);
+    expect((await pool.query("SELECT examination_snapshot FROM medical_certificate_revisions WHERE id=$1", [issued.revisionId])).rows[0].examination_snapshot.laboratoryAppointmentId).toBe(replacementId);
+  });
+
+  it.each(["uncheck", "replace"] as const)("rejects stale issuance when %s changes Laboratory after rendering", async (change) => {
+    const f = await fixture();
+    const checklist = await manual(f);
+    const barrier = pauseAfterRendering();
+    const issuance = completePhysicalExam(f.peId, input(), cpu);
+    await barrier.rendered;
+    try {
+      if (change === "uncheck") await setLaboratoryTestVerification(f.labId, { testCode: "CBC", checked: false,
+        expectedVersion: checklist.version, reason: "Correcting the recorded manual finding" }, labStaff);
+      else await replaceLaboratory(f);
+      const beforeCommit = await effects(f);
+      barrier.resume();
+      await expect(issuance).rejects.toMatchObject({ code: "EXAMINATION_STALE" });
+      expect(await effects(f)).toEqual(beforeCommit);
+    } finally { barrier.resume(); }
+  });
+
+  it.each([true, false])("serializes concurrent completion requests (same request: %s)", async (sameRequest) => {
+    const f = await fixture("FIRST_YEAR");
+    const notificationsBefore = (await effects(f)).notifications?.length ?? 0;
+    const first = input();
+    const barrier = pauseAfterRendering(2);
+    const requests = Promise.allSettled([completePhysicalExam(f.peId, first, cpu),
+      completePhysicalExam(f.peId, sameRequest ? first : input(), cpu)]);
+    await barrier.rendered;
+    barrier.resume();
+    const outcomes = await requests;
+    const successes = outcomes.filter((outcome) => outcome.status === "fulfilled");
+    expect(successes).toHaveLength(sameRequest ? 2 : 1);
+    if (sameRequest) expect(outcomes[0]).toEqual(outcomes[1]);
+    else expect(outcomes.find((outcome) => outcome.status === "rejected")).toMatchObject({ reason: { code: "EXAMINATION_STALE" } });
+    const saved = await effects(f);
+    expect(saved.events).toHaveLength(4);
+    expect(saved.summaries).toHaveLength(1);
+    expect(saved.certificates).toHaveLength(1);
+    expect(saved.examResults).toHaveLength(1);
+    expect(saved.notifications).toHaveLength(notificationsBefore + 1);
+    expect(saved.checklists[0].version).toBe(2);
+  });
+
+  it("rejects a First-Year PE paired to another revision's reservations before confirmation", async () => {
+    const f = await fixture("FIRST_YEAR");
+    const other = await fixture("FIRST_YEAR");
+    await pool.query(`UPDATE appointments SET ovpsa_batch_id=o.ovpsa_batch_id,ovpsa_revision_id=o.ovpsa_revision_id,
+      ovpsa_service_reservation_id=o.ovpsa_service_reservation_id FROM appointments o WHERE appointments.id=$1 AND o.id=$2`, [f.peId, other.peId]);
+    const before = await effects(f);
+    await expect(completePhysicalExam(f.peId, input(), cpu)).rejects.toMatchObject({ code: "LABORATORY_PROVENANCE_MISSING" });
+    expect(await effects(f)).toEqual(before);
+  });
+
+  it("protects recorded OJT progress from a concurrent automatic no-show sweep", async () => {
+    const f = await fixture();
+    await Promise.all([markOverdueAppointmentsNoShow(new Date("2026-12-20T04:00:00Z"), "Asia/Manila"),
+      setLaboratoryTestVerification(f.labId, { testCode: "CBC", checked: true, expectedVersion: 1,
+        reason: "The student attended; correct an automatic no-show if it raced this verification" }, labStaff)]);
+    expect(await getLaboratoryChecklist(f.labId, admin)).toMatchObject({ appointmentStatus: "PENDING", verifiedCount: 1 });
+    await markOverdueAppointmentsNoShow(new Date("2026-12-20T04:00:00Z"), "Asia/Manila");
+    expect((await getLaboratoryChecklist(f.labId, admin)).appointmentStatus).toBe("PENDING");
+  });
+
+  it("retains status-only completion constraints and the unique external summary", async () => {
+    const ojt = await fixture();
+    await manual(ojt);
+    await expect(pool.query("UPDATE appointments SET status='COMPLETED' WHERE id=$1", [ojt.labId])).rejects.toMatchObject({ code: "23514" });
+    const external = await fixture("FIRST_YEAR");
+    await expect(pool.query("UPDATE appointments SET status='COMPLETED' WHERE id=$1", [external.labId])).rejects.toMatchObject({ code: "23514" });
+    await expect(pool.query("UPDATE appointments SET status='COMPLETED' WHERE id=$1", [external.peId])).rejects.toMatchObject({ code: "23514" });
+    await completePhysicalExam(external.peId, input(), cpu);
+    await expect(pool.query(`INSERT INTO ovpsa_external_laboratory_verifications(appointment_id,batch_id,revision_id,external_provider,verified_by)
+      SELECT appointment_id,batch_id,revision_id,external_provider,verified_by FROM ovpsa_external_laboratory_verifications WHERE appointment_id=$1`, [external.labId])).rejects.toMatchObject({ code: "23505" });
+  });
+
   it.each(["CBC", "URINE", "STOOL"] as const)("blocks PE while manual %s is missing, without side effects", async (missing) => {
     const f = await fixture();
     await manual(f, (["CBC", "URINE", "STOOL"] as const).filter((c) => c !== missing));

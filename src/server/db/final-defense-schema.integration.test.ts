@@ -140,6 +140,25 @@ describe("final-defense clinical database invariants", () => {
     await expect(client.query("COMMIT")).rejects.toMatchObject({ code: "23514" });
   }));
 
+  it.each([{ year: 4, category: "OJT" }, { year: 1, category: "REGULAR" }])(
+    "keeps all four tests required at commit for $year/$category", async ({ year, category }) => isolated(async (client) => {
+      await client.query("UPDATE student_academic_snapshots SET year_level=$1 WHERE id=$2", [year, snapshot]);
+      await client.query("BEGIN");
+      const appointmentId = await appointment(client);
+      await client.query("UPDATE appointments SET scheduling_category=$1 WHERE id=$2", [category, appointmentId]);
+      const result = await client.query<{ id: string }>(`INSERT INTO laboratory_checklists
+        (root_appointment_id,student_number,academic_year_start,academic_snapshot_id,year_level_snapshot,scheduling_category_snapshot)
+        VALUES ($1,'S1',2026,$2,$3,$4) RETURNING id`, [appointmentId, snapshot, year, category]);
+      const checklistId = result.rows[0].id;
+      await client.query("INSERT INTO laboratory_checklist_appointments VALUES ($1,$2)", [appointmentId, checklistId]);
+      await client.query("INSERT INTO laboratory_checklist_items(checklist_id,test_code) VALUES ($1,'CBC'),($1,'URINE'),($1,'STOOL'),($1,'XRAY')", [checklistId]);
+      await client.query("COMMIT");
+      await client.query("BEGIN");
+      await client.query("UPDATE laboratory_checklist_items SET verified_at=now(),verified_by=$2,verification_source='INTERNAL' WHERE checklist_id=$1 AND test_code<>'XRAY'", [checklistId, actor]);
+      await client.query("UPDATE appointments SET status='COMPLETED' WHERE id=$1", [appointmentId]);
+      await expect(client.query("COMMIT")).rejects.toMatchObject({ code: "23514" });
+    }));
+
   it("completes the replacement while retaining its predecessor's historical status", async () => isolated(async (client) => {
     await client.query("BEGIN");
     const original = await appointment(client);
