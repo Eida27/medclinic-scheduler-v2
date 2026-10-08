@@ -7,6 +7,7 @@ import { assertOpenAppointmentCycle } from "@/server/appointments/academic-year-
 import { isAutomaticNoShowLog } from "@/server/appointments/automatic-no-show";
 import { transaction } from "@/server/db/pool";
 import { loadLaboratoryChecklist } from "@/server/laboratory/laboratory-checklist.repository";
+import { completeExternalLaboratoryWithClient } from "./pe-linked-laboratory.service";
 import { changeAppointmentStatusWithClient, getAppointmentMutationContext } from "@/server/repositories/appointments.repository";
 import { resolveEffectiveAppointmentPair } from "@/server/repositories/effective-appointment-pair.repository";
 import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
@@ -58,7 +59,8 @@ async function currentClinicalActor(client: PoolClient, actor: SessionUser, scop
     ? "CPU_CLINIC"
     : "KABALAKA_CLINIC";
   const expectedClinic = await client.query<{ id: string }>("SELECT id::text FROM clinics WHERE code=$1", [allowedClinic]);
-  if (!expectedClinic.rows[0] || scope.clinicId !== expectedClinic.rows[0].id) {
+  const bookingClinic = await client.query<{ id: string }>("SELECT id::text FROM clinics WHERE code='KABALAKA_CLINIC'");
+  if (!expectedClinic.rows[0] || scope.clinicId !== bookingClinic.rows[0]?.id) {
     throw new AppError("LABORATORY_CLINIC_INVALID", "The Laboratory appointment has an invalid clinic assignment.", 409);
   }
   if (current.role !== "ADMIN" && (current.role !== "CLINIC_STAFF"
@@ -119,6 +121,10 @@ export async function setLaboratoryTestVerification(appointmentId: string, raw: 
     }
     const item = checklist.items.find((current) => current.testCode === input.testCode);
     if (!item) throw new AppError("LABORATORY_TEST_NOT_REQUIRED", "This test is not required for this appointment.", 422);
+    if (checklist.completionPolicy.peConfirmedTestCodes.includes(input.testCode)) {
+      throw new AppError("LABORATORY_TEST_PE_MANAGED",
+        "This test is confirmed when CPU Clinic completes the Physical Examination.", 422);
+    }
     const wasVerified = item.verifiedAt !== null;
     if (wasVerified === input.checked) return checklist;
     const reason = input.reason?.trim() || null;
@@ -172,7 +178,7 @@ export async function setLaboratoryTestVerification(appointmentId: string, raw: 
     }
     if (targetStatus === "COMPLETED") {
       if (scope.ovpsaBatchId) {
-        await completeExternalLaboratory(client, appointmentId, actor.userId);
+        await completeExternalLaboratoryWithClient(client, appointmentId, actor.userId);
       } else {
         await ensurePendingUploadResult(client, appointment);
       }
@@ -183,24 +189,3 @@ export async function setLaboratoryTestVerification(appointmentId: string, raw: 
   });
 }
 
-async function completeExternalLaboratory(client: PoolClient, appointmentId: string, actorUserId: string) {
-  const appointment = await client.query<{
-    studentNumber: string; batchId: string; revisionId: string;
-  }>(`SELECT student_number AS "studentNumber",ovpsa_batch_id::text AS "batchId",
-    ovpsa_revision_id::text AS "revisionId" FROM appointments WHERE id=$1`, [appointmentId]);
-  const row = appointment.rows[0];
-  if (!row?.batchId || !row.revisionId) {
-    throw new AppError("OVPSA_PROVENANCE_MISSING", "The external Laboratory appointment has no batch provenance.", 409);
-  }
-  await client.query(`INSERT INTO ovpsa_external_laboratory_verifications
-    (appointment_id,batch_id,revision_id,external_provider,verified_by)
-    VALUES ($1,$2,$3,'Iloilo Mission Hospital',$4)`,
-  [appointmentId, row.batchId, row.revisionId, actorUserId]);
-  await client.query(`INSERT INTO laboratory_results
-    (student_number,appointment_id,result_status,completed_at,encoded_by)
-    VALUES ($1,$2,'COMPLETED',(clock_timestamp() AT TIME ZONE 'Asia/Manila')::date,$3)
-    ON CONFLICT (appointment_id) DO UPDATE SET result_status='COMPLETED',
-      completed_at=EXCLUDED.completed_at,encoded_by=EXCLUDED.encoded_by,
-      updated_at=clock_timestamp() WHERE laboratory_results.result_status='PENDING_UPLOAD'`,
-  [row.studentNumber, appointmentId, actorUserId]);
-}

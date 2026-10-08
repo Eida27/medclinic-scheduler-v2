@@ -8,6 +8,7 @@ const { requireUser, getLaboratoryChecklist, setLaboratoryTestVerification } = v
 vi.mock("@/server/auth/current-user", () => ({ requireUser }));
 vi.mock("@/server/laboratory/laboratory-checklist.service", () => ({ getLaboratoryChecklist, setLaboratoryTestVerification }));
 import { GET, PATCH } from "./route";
+import { AppError } from "@/lib/errors";
 
 const id = "11111111-1111-4111-8111-111111111111";
 const actor = { userId: "staff", role: "CLINIC_STAFF" };
@@ -34,5 +35,16 @@ describe("Laboratory checklist API", () => {
     }), { params: Promise.resolve({ appointmentId: "bad" }) });
     expect(response.status).toBe(404);
     expect(setLaboratoryTestVerification).not.toHaveBeenCalled();
+  });
+
+  it("returns the PE-managed domain error without a success response", async () => {
+    setLaboratoryTestVerification.mockRejectedValueOnce(new AppError("LABORATORY_TEST_PE_MANAGED",
+      "This test is confirmed when CPU Clinic completes the Physical Examination.", 422));
+    const response = await PATCH(new Request(`http://localhost/api/appointments/${id}/laboratory-checklist`, {
+      method: "PATCH", body: JSON.stringify({ testCode: "XRAY", checked: false, expectedVersion: 1 }),
+    }), context);
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ error: { code: "LABORATORY_TEST_PE_MANAGED",
+      message: "This test is confirmed when CPU Clinic completes the Physical Examination." } });
   });
 });

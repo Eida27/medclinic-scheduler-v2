@@ -200,6 +200,18 @@ export async function cleanupTestFixtures(
        SELECT id FROM fixture_appointments`,
     );
     await client.query("ALTER TABLE test_fixture_appointments ADD PRIMARY KEY (id)");
+    await client.query(`CREATE TEMP TABLE test_fixture_ovpsa_batches ON COMMIT DROP AS
+      SELECT DISTINCT ovpsa_batch_id AS id FROM appointments
+      WHERE id IN (SELECT id FROM test_fixture_appointments) AND ovpsa_batch_id IS NOT NULL`);
+    const sharedOvpsaMembers = await client.query(`SELECT 1 FROM ovpsa_first_year_membership_snapshots
+      WHERE batch_id IN (SELECT id FROM test_fixture_ovpsa_batches)
+        AND student_number NOT IN (SELECT student_number FROM test_fixture_students) LIMIT 1`);
+    if (sharedOvpsaMembers.rowCount) throw new Error("Refusing cleanup of a partially owned OVPSA batch");
+    await client.query(`INSERT INTO test_fixture_import_groups SELECT source_import_group_id
+      FROM ovpsa_first_year_batches WHERE id IN (SELECT id FROM test_fixture_ovpsa_batches)
+      ON CONFLICT DO NOTHING`);
+    await client.query(`INSERT INTO test_fixture_batches SELECT id FROM schedule_batches
+      WHERE import_group_id IN (SELECT id FROM test_fixture_import_groups) ON CONFLICT DO NOTHING`);
 
     await client.query(
       `DELETE FROM audit_logs audit
@@ -297,6 +309,9 @@ export async function cleanupTestFixtures(
     await client.query(
       "DELETE FROM appointment_status_logs WHERE appointment_id IN (SELECT id FROM test_fixture_appointments)",
     );
+    await client.query("ALTER TABLE ovpsa_external_laboratory_verifications DISABLE TRIGGER ovpsa_external_laboratory_verifications_immutable");
+    await client.query("DELETE FROM ovpsa_external_laboratory_verifications WHERE batch_id IN (SELECT id FROM test_fixture_ovpsa_batches)");
+    await client.query("ALTER TABLE ovpsa_external_laboratory_verifications ENABLE TRIGGER ovpsa_external_laboratory_verifications_immutable");
     await client.query(
       "DELETE FROM appointments WHERE id IN (SELECT id FROM test_fixture_appointments)",
     );
@@ -306,6 +321,14 @@ export async function cleanupTestFixtures(
            OR student_number IN (SELECT student_number FROM test_fixture_students)`,
     );
     await client.query("DELETE FROM schedule_batches WHERE id IN (SELECT id FROM test_fixture_batches)");
+    await client.query("DELETE FROM ovpsa_first_year_active_memberships WHERE batch_id IN (SELECT id FROM test_fixture_ovpsa_batches)");
+    await client.query("ALTER TABLE ovpsa_first_year_membership_snapshots DISABLE TRIGGER ovpsa_first_year_membership_snapshots_immutable");
+    await client.query("DELETE FROM ovpsa_first_year_membership_snapshots WHERE batch_id IN (SELECT id FROM test_fixture_ovpsa_batches)");
+    await client.query("ALTER TABLE ovpsa_first_year_membership_snapshots ENABLE TRIGGER ovpsa_first_year_membership_snapshots_immutable");
+    await client.query("DELETE FROM ovpsa_first_year_service_reservations WHERE batch_id IN (SELECT id FROM test_fixture_ovpsa_batches)");
+    await client.query("UPDATE ovpsa_first_year_batches SET current_revision_id=NULL WHERE id IN (SELECT id FROM test_fixture_ovpsa_batches)");
+    await client.query("DELETE FROM ovpsa_first_year_batch_revisions WHERE batch_id IN (SELECT id FROM test_fixture_ovpsa_batches)");
+    await client.query("DELETE FROM ovpsa_first_year_batches WHERE id IN (SELECT id FROM test_fixture_ovpsa_batches)");
     await client.query(
       "ALTER TABLE student_academic_snapshots DISABLE TRIGGER student_academic_snapshots_immutable",
     );
