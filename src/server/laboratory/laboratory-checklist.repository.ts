@@ -3,6 +3,8 @@ import type { PoolClient } from "pg";
 import { AppError } from "@/lib/errors";
 import { requiredLaboratoryTests } from "@/server/laboratory/laboratory-requirements";
 import type { LaboratoryTestCode } from "@/server/laboratory/laboratory-requirements";
+import { resolveLaboratoryCompletionPolicy } from "./laboratory-completion-policy";
+import type { LaboratoryCompletionPolicy } from "@/shared/laboratory-completion";
 
 export type LaboratoryChecklistItem = {
   testCode: LaboratoryTestCode;
@@ -19,6 +21,7 @@ export type LaboratoryChecklistRecord = {
   items: LaboratoryChecklistItem[];
   verifiedCount: number;
   totalCount: number;
+  completionPolicy: LaboratoryCompletionPolicy;
 };
 
 export async function loadLaboratoryChecklist(
@@ -26,9 +29,16 @@ export async function loadLaboratoryChecklist(
   appointmentId: string,
   lock = false,
 ): Promise<LaboratoryChecklistRecord | null> {
-  const checklist = await client.query<{ checklistId: string; version: number; appointmentStatus: string }>(
+  const checklist = await client.query<{ checklistId: string; version: number; appointmentStatus: string;
+    yearLevel: number; schedulingCategory: string; ovpsaBatchId: string | null;
+    ovpsaRevisionId: string | null; ovpsaServiceReservationId: string | null }>(
     `SELECT checklist.id::text AS "checklistId",checklist.version,
-            appointment.status AS "appointmentStatus"
+            appointment.status AS "appointmentStatus",
+            checklist.year_level_snapshot AS "yearLevel",
+            checklist.scheduling_category_snapshot AS "schedulingCategory",
+            appointment.ovpsa_batch_id::text AS "ovpsaBatchId",
+            appointment.ovpsa_revision_id::text AS "ovpsaRevisionId",
+            appointment.ovpsa_service_reservation_id::text AS "ovpsaServiceReservationId"
        FROM laboratory_checklist_appointments link
        JOIN laboratory_checklists checklist ON checklist.id=link.checklist_id
        JOIN appointments appointment ON appointment.id=link.appointment_id
@@ -37,6 +47,10 @@ export async function loadLaboratoryChecklist(
   );
   const row = checklist.rows[0];
   if (!row) return null;
+  const completionPolicy = resolveLaboratoryCompletionPolicy({
+    yearLevel: row.yearLevel, schedulingCategory: row.schedulingCategory,
+    isOvpsaFirstYear: Boolean(row.ovpsaBatchId && row.ovpsaRevisionId && row.ovpsaServiceReservationId),
+  });
   const items = await client.query<LaboratoryChecklistItem>(
     `SELECT test_code AS "testCode",verified_at AS "verifiedAt",
             verified_by::text AS "verifiedBy",verification_source AS "verificationSource"
@@ -46,7 +60,10 @@ export async function loadLaboratoryChecklist(
     [row.checklistId],
   );
   return {
-    ...row,
+    checklistId: row.checklistId,
+    version: row.version,
+    appointmentStatus: row.appointmentStatus,
+    completionPolicy,
     appointmentId,
     items: items.rows,
     verifiedCount: items.rows.filter((item) => item.verifiedAt !== null).length,

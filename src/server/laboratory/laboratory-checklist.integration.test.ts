@@ -84,6 +84,30 @@ afterAll(async () => {
 });
 
 describe("Laboratory checklist lifecycle", () => {
+  it("keeps immutable OJT ownership across live-year changes and replacements", async () => {
+    const originalId = await fixture(4, "OJT");
+    const original = await getLaboratoryChecklist(originalId, admin);
+    await pool.query("UPDATE students SET year_level=2 WHERE student_number=(SELECT student_number FROM appointments WHERE id=$1)", [originalId]);
+    const replacementId = await transaction(async (client) => {
+      await client.query("UPDATE appointments SET status='RESCHEDULED',is_published=FALSE WHERE id=$1", [originalId]);
+      const inserted = await client.query<{ id: string }>(`INSERT INTO appointments
+        (clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+         schedule_pair_id,schedule_cycle_start,scheduling_category,rescheduled_from,created_by,updated_by)
+        SELECT clinic_id,student_number,schedule_type,'2026-09-23','PENDING',TRUE,
+               schedule_pair_id,schedule_cycle_start,scheduling_category,id,created_by,updated_by
+          FROM appointments WHERE id=$1 RETURNING id::text`, [originalId]);
+      await linkPublishedLaboratoryAppointments(client, [inserted.rows[0].id]);
+      return inserted.rows[0].id;
+    });
+    const replacement = await getLaboratoryChecklist(replacementId, admin);
+    expect(replacement.checklistId).toBe(original.checklistId);
+    expect(replacement.items.map((item) => item.testCode)).toEqual(["CBC", "URINE", "STOOL", "XRAY"]);
+    expect(replacement.completionPolicy).toEqual({ mode: "FOURTH_YEAR_OJT",
+      manualTestCodes: ["CBC", "URINE", "STOOL"], peConfirmedTestCodes: ["XRAY"], externalProvider: "Iloilo Mission Hospital" });
+    expect((await transaction((client) => import("./laboratory-checklist.repository").then(({ loadLaboratoryChecklist }) =>
+      loadLaboratoryChecklist(client, originalId))))?.completionPolicy).toEqual(replacement.completionPolicy);
+  });
+
   it("persists partial checks, rejects stale versions, and completes on the final check", async () => {
     const id = await fixture();
     const initial = await getLaboratoryChecklist(id, admin);
