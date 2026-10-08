@@ -3,24 +3,32 @@ import { manilaCalendarDate } from "@/lib/academic-year";
 import { AppError } from "@/lib/errors";
 import { isAutomaticNoShowLog } from "@/server/appointments/automatic-no-show";
 import { transaction } from "@/server/db/pool";
-import { loadLaboratoryChecklist } from "@/server/laboratory/laboratory-checklist.repository";
+import { loadPeLaboratoryCompletionPlan } from "@/server/laboratory/pe-linked-laboratory.service";
 import { currentCpuActor } from "@/server/medical-certificates/certificate.service";
 import { listPhysicians } from "@/server/medical-certificates/physician.service";
-import { getAppointmentMutationContext, getPublishedAppointment } from "@/server/repositories/appointments.repository";
-import { resolveEffectiveAppointmentPair } from "@/server/repositories/effective-appointment-pair.repository";
+import { getAppointmentMutationContext, getAppointmentMutationScope, getPublishedAppointment } from "@/server/repositories/appointments.repository";
+import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
+import type { PeLaboratoryReadiness } from "@/shared/laboratory-completion";
 import type { SessionUser } from "@/types/roles";
 
 export async function loadPhysicalExamCompletionContext(appointmentId: string, actor: SessionUser) {
   const clinical = await transaction(async (client) => {
     const current = await currentCpuActor(client, actor);
+    const scope = await getAppointmentMutationScope(appointmentId, client);
+    if (!scope || scope.scheduleType !== "PHYSICAL_EXAM" || scope.clinicId !== current.cpuClinicId) {
+      throw new AppError("APPOINTMENT_NOT_FOUND", "Physical Examination appointment not found.", 404);
+    }
+    await lockEffectiveAppointmentScopes(client, [
+      { studentNumber: scope.studentNumber, scheduleType: "LABORATORY" },
+      { studentNumber: scope.studentNumber, scheduleType: "PHYSICAL_EXAM" },
+    ]);
     const appointment = await getAppointmentMutationContext(appointmentId, client);
     if (!appointment || !appointment.isPublished || appointment.scheduleType !== "PHYSICAL_EXAM"
         || appointment.clinicId !== current.cpuClinicId) {
       throw new AppError("APPOINTMENT_NOT_FOUND", "Physical Examination appointment not found.", 404);
     }
-    const pair = await resolveEffectiveAppointmentPair(client, appointment);
+    const plan = await loadPeLaboratoryCompletionPlan(client, appointment);
     const blockers: string[] = [];
-    if (pair.physicalExam?.id !== appointmentId) blockers.push("This is not the effective Physical Examination record. Open the current replacement.");
     if (appointment.status !== "PENDING" && (appointment.status !== "NO_SHOW" || !isAutomaticNoShowLog(appointment.latestLog))) {
       blockers.push("This examination cannot be completed from its current status.");
     }
@@ -30,24 +38,19 @@ export async function loadPhysicalExamCompletionContext(appointmentId: string, a
     )).rows[0];
     const today = manilaCalendarDate(new Date());
     if (!year || year.closingDate < today) blockers.push("This academic year has ended.");
-    let laboratoryReady = false;
-    if (pair.laboratory?.status === "COMPLETED") {
-      const checklist = await loadLaboratoryChecklist(client, pair.laboratory.id);
-      laboratoryReady = Boolean(checklist && checklist.totalCount > 0 && checklist.verifiedCount === checklist.totalCount);
-      if (laboratoryReady) {
-        const external = (await client.query<{ ovpsaBatchId: string | null }>(
-          'SELECT ovpsa_batch_id::text AS "ovpsaBatchId" FROM appointments WHERE id=$1', [pair.laboratory.id],
-        )).rows[0];
-        if (external?.ovpsaBatchId) {
-          laboratoryReady = Boolean((await client.query(
-            "SELECT 1 FROM ovpsa_external_laboratory_verifications WHERE appointment_id=$1", [pair.laboratory.id],
-          )).rowCount);
-        }
-      }
+    const laboratoryCompletion: PeLaboratoryReadiness = {
+      laboratoryAppointmentId: plan.laboratoryAppointmentId, laboratoryCompleted: plan.laboratoryCompleted,
+      readyForPe: plan.readyForPe, missingManualTestCodes: plan.missingManualTestCodes, completionPolicy: plan.completionPolicy,
+    };
+    const laboratoryReady = laboratoryCompletion.readyForPe;
+    if (!laboratoryReady) {
+      if (plan.completionPolicy.mode === "FOURTH_YEAR_OJT" && plan.missingManualTestCodes.length) {
+        const names = { CBC: "CBC", URINE: "Urine", STOOL: "Stool", XRAY: "X-ray" };
+        blockers.push(`Verify the missing Laboratory tests at KABALAKA before this examination: ${plan.missingManualTestCodes.map((code) => names[code]).join(", ")}.`);
+      } else blockers.push("Complete and verify the effective Laboratory checklist before this examination.");
     }
-    if (!laboratoryReady) blockers.push("Complete and verify the effective Laboratory checklist before this examination.");
     return { today, status: appointment.status, automaticNoShowEligible: appointment.status === "NO_SHOW"
-      && isAutomaticNoShowLog(appointment.latestLog), laboratoryReady, blockers };
+      && isAutomaticNoShowLog(appointment.latestLog), laboratoryReady, laboratoryCompletion, blockers };
   });
   const [appointment, physicians] = await Promise.all([
     getPublishedAppointment(appointmentId), listPhysicians(actor),

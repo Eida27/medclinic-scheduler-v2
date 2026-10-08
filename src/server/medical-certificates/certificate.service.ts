@@ -8,12 +8,11 @@ import { assertOpenAppointmentCycle } from "@/server/appointments/academic-year-
 import { isAutomaticNoShowLog } from "@/server/appointments/automatic-no-show";
 import { transaction } from "@/server/db/pool";
 import { pool } from "@/server/db/pool";
-import { loadLaboratoryChecklist } from "@/server/laboratory/laboratory-checklist.repository";
+import { loadPeLaboratoryCompletionPlan, applyPeLinkedLaboratoryCompletion, type PeLaboratoryCompletionPlan } from "@/server/laboratory/pe-linked-laboratory.service";
 import { certificateCompletionSchema, certificateCorrectionSchema, certificateRevocationSchema,
   type CertificateCompletionInput, type CertificateCorrectionInput } from "@/server/medical-certificates/certificate-schema";
 import { CERTIFICATE_TEMPLATE_VERSION, renderMedicalCertificate, type CertificateRenderSnapshot } from "@/server/medical-certificates/certificate-renderer";
 import { changeAppointmentStatusWithClient, getAppointmentMutationContext, getAppointmentMutationScope } from "@/server/repositories/appointments.repository";
-import { resolveEffectiveAppointmentPair } from "@/server/repositories/effective-appointment-pair.repository";
 import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import { writeAudit } from "@/server/repositories/audit.repository";
 import { createStudentNotification } from "@/server/services/student-notifications.service";
@@ -32,6 +31,8 @@ type Context = {
   examinationSnapshot: Record<string, unknown>;
   physicianSnapshot: Record<string, unknown>;
   actorName: string;
+  actorRole: SessionUser["role"];
+  laboratoryPlan: PeLaboratoryCompletionPlan;
 };
 
 function payloadHash(appointmentId: string, input: CertificateCompletionInput) {
@@ -79,7 +80,10 @@ async function clinicalContext(client: PoolClient, appointmentId: string, input:
   if (!anchor || anchor.scheduleType !== "PHYSICAL_EXAM") {
     throw new AppError("APPOINTMENT_NOT_FOUND", "Physical Examination appointment not found.", 404);
   }
-  const pair = await resolveEffectiveAppointmentPair(client, anchor);
+  await lockEffectiveAppointmentScopes(client, [
+    { studentNumber: anchor.studentNumber, scheduleType: "LABORATORY" },
+    { studentNumber: anchor.studentNumber, scheduleType: "PHYSICAL_EXAM" },
+  ]);
   const appointment = await getAppointmentMutationContext(appointmentId, client);
   if (!appointment || appointment.scheduleType !== "PHYSICAL_EXAM" || appointment.clinicId !== current.cpuClinicId) {
     throw new AppError("APPOINTMENT_NOT_FOUND", "Physical Examination appointment not found.", 404);
@@ -98,21 +102,14 @@ async function clinicalContext(client: PoolClient, appointmentId: string, input:
   if (mode === "issue" && (input.examinationDate < today || appointment.status === "NO_SHOW") && !input.lateReason?.trim()) {
     throw new AppError("LATE_EXAMINATION_REASON_REQUIRED", "Enter a reason for late examination encoding.", 422);
   }
-  if (pair.physicalExam?.id !== appointmentId || !pair.laboratory || pair.laboratory.status !== "COMPLETED") {
+  const laboratoryPlan = await loadPeLaboratoryCompletionPlan(client, anchor);
+  if (!laboratoryPlan.readyForPe || (mode === "correct" && !laboratoryPlan.laboratoryCompleted)) {
     throw new AppError("LABORATORY_NOT_COMPLETED", "The effective Laboratory checklist must be complete first.", 409);
   }
-  if (input.examinationDate < pair.laboratory.appointmentDate) {
+  const laboratoryDate = (await client.query<{ date: string }>('SELECT appointment_date::text AS date FROM appointments WHERE id=$1',
+    [laboratoryPlan.laboratoryAppointmentId])).rows[0].date;
+  if (input.examinationDate < laboratoryDate) {
     throw new AppError("EXAMINATION_DATE_INVALID", "The examination cannot predate Laboratory.", 422);
-  }
-  const checklist = await loadLaboratoryChecklist(client, pair.laboratory.id, true);
-  if (!checklist || checklist.verifiedCount !== checklist.totalCount || !checklist.totalCount) {
-    throw new AppError("LABORATORY_NOT_COMPLETED", "The effective Laboratory checklist must be complete first.", 409);
-  }
-  const external = await client.query<{ ovpsaBatchId: string | null }>(
-    "SELECT ovpsa_batch_id::text AS \"ovpsaBatchId\" FROM appointments WHERE id=$1", [pair.laboratory.id]);
-  if (external.rows[0]?.ovpsaBatchId) {
-    const verified = await client.query("SELECT 1 FROM ovpsa_external_laboratory_verifications WHERE appointment_id=$1", [pair.laboratory.id]);
-    if (!verified.rowCount) throw new AppError("LABORATORY_NOT_COMPLETED", "External Laboratory verification is incomplete.", 409);
   }
   const student = (await client.query<{ studentName: string; collegeName: string; programName: string; yearLevel: number; dateOfBirth: string | null }>(
     `SELECT snapshot.student_name AS "studentName",snapshot.college_name AS "collegeName",
@@ -140,10 +137,19 @@ async function clinicalContext(client: PoolClient, appointmentId: string, input:
     [input.physicianId, input.physicianVersion],
   )).rows[0];
   if (!physician) throw new AppError("PHYSICIAN_STALE", "The selected physician profile changed. Refresh the form.", 409);
+  const laboratoryCompletion = mode === "issue" ? {
+    mode: laboratoryPlan.completionPolicy.mode, checklistId: laboratoryPlan.checklistId,
+    checklistVersionBefore: laboratoryPlan.checklistVersionBefore, checklistVersionAfter: laboratoryPlan.checklistVersionAfter,
+    automaticallyVerifiedTestCodes: laboratoryPlan.automaticallyVerifiedTestCodes, externalProvider: laboratoryPlan.completionPolicy.externalProvider,
+  } : (await client.query<{ snapshot: Record<string, unknown> }>(
+    `SELECT examination_snapshot AS snapshot FROM medical_certificate_revisions WHERE appointment_id=$1 AND status='ISSUED'
+      ORDER BY revision_number DESC LIMIT 1`, [appointmentId],
+  )).rows[0]?.snapshot.laboratoryCompletion;
   return {
     appointmentId, appointmentUpdatedAt: appointment.updatedAt.toISOString(),
     studentNumber: appointment.studentNumber, cycleStart: appointment.scheduleCycleStart,
-    checklistVersion: checklist.version, physicianRevisionId: physician.revisionId,
+    checklistVersion: laboratoryPlan.checklistVersionBefore, physicianRevisionId: physician.revisionId,
+    laboratoryPlan,
     render: { certificateNumber, studentName: student.studentName, studentNumber: appointment.studentNumber,
       collegeName: student.collegeName, programName: student.programName, yearLevel: student.yearLevel,
       age, sex: input.sex, examinationDate: input.examinationDate, classification: input.classification,
@@ -154,17 +160,20 @@ async function clinicalContext(client: PoolClient, appointmentId: string, input:
       collegeName: student.collegeName, programName: student.programName,
       yearLevel: student.yearLevel, dateOfBirth: student.dateOfBirth, age, sex: input.sex },
     examinationSnapshot: { examinationDate: input.examinationDate, classification: input.classification,
-      remarks: input.remarks ?? null, laboratoryAppointmentId: pair.laboratory.id,
-      checklistVersion: checklist.version, certificateNumber },
+      remarks: input.remarks ?? null, laboratoryAppointmentId: laboratoryPlan.laboratoryAppointmentId,
+      checklistVersion: laboratoryPlan.checklistVersionAfter, certificateNumber,
+      ...(laboratoryCompletion === undefined ? {} : { laboratoryCompletion }) },
     physicianSnapshot: { name: physician.displayName, licenseNumber: physician.licenseNumber,
       specialty: physician.specialty, revisionId: physician.revisionId },
     actorName: current.fullName,
+    actorRole: current.role as SessionUser["role"],
   };
 }
 
 function sameContext(first: Context, second: Context) {
   return first.appointmentUpdatedAt === second.appointmentUpdatedAt
     && first.checklistVersion === second.checklistVersion
+    && first.laboratoryPlan.fingerprint === second.laboratoryPlan.fingerprint
     && first.physicianRevisionId === second.physicianRevisionId
     && JSON.stringify(first.studentSnapshot) === JSON.stringify(second.studentSnapshot)
     && JSON.stringify(first.examinationSnapshot) === JSON.stringify(second.examinationSnapshot);
@@ -205,7 +214,7 @@ export async function completePhysicalExam(appointmentId: string, raw: unknown, 
     const existing = await replayRequest<Outcome>(client, actor, input.requestId, "ISSUE_CERTIFICATE", hash);
     if (existing) return existing;
     const scope = await getAppointmentMutationScope(appointmentId, client);
-    if (!scope) throw new AppError("APPOINTMENT_NOT_FOUND", "Physical Examination appointment not found.", 404);
+    if (!scope) throw new AppError("EXAMINATION_STALE", "The record changed. Refresh and review the details.", 409);
     await lockEffectiveAppointmentScopes(client, [
       { studentNumber: scope.studentNumber, scheduleType: "LABORATORY" },
       { studentNumber: scope.studentNumber, scheduleType: "PHYSICAL_EXAM" },
@@ -213,10 +222,27 @@ export async function completePhysicalExam(appointmentId: string, raw: unknown, 
     // An identical request may have committed while this transaction waited for the scope lock.
     const committed = await replayRequest<Outcome>(client, actor, input.requestId, "ISSUE_CERTIFICATE", hash);
     if (committed) return committed;
-    const current = await clinicalContext(client, appointmentId, input, actor, certificateNumber);
+    let current: Context;
+    try {
+      current = await clinicalContext(client, appointmentId, input, actor, certificateNumber);
+    } catch (error) {
+      if (error instanceof AppError && ["APPOINTMENT_NOT_FOUND", "EXAMINATION_NOT_PENDING", "LABORATORY_NOT_COMPLETED",
+        "LABORATORY_APPOINTMENT_INACTIVE", "LABORATORY_CHECKLIST_MISSING", "LABORATORY_PROVENANCE_MISSING"].includes(error.code)) {
+        throw new AppError("EXAMINATION_STALE", "The record changed. Refresh and review the details.", 409);
+      }
+      throw error;
+    }
     if (!sameContext(prepared, current)) {
       throw new AppError("EXAMINATION_STALE", "The record changed. Refresh and review the details.", 409);
     }
+    const completion = await applyPeLinkedLaboratoryCompletion(client, current.laboratoryPlan, {
+      actor: { ...actor, role: current.actorRole }, actorFullName: current.actorName,
+      physicalExamAppointmentId: appointmentId, certificateId, examinationDate: input.examinationDate,
+    });
+    if (completion.checklistVersion !== current.laboratoryPlan.checklistVersionAfter) {
+      throw new AppError("EXAMINATION_STALE", "The Laboratory completion changed. Refresh and review the details.", 409);
+    }
+    current.examinationSnapshot.checklistVersion = completion.checklistVersion;
     const revisionId = randomUUID();
     await client.query(`INSERT INTO medical_certificate_revisions
       (id,certificate_id,appointment_id,student_number,academic_year_start,

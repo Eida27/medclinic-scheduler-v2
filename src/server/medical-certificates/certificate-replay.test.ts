@@ -48,3 +48,14 @@ it("keeps the preparation error when no identical request committed", async () =
     .rejects.toBe(error);
   expect(transaction).toHaveBeenCalledTimes(3);
 });
+
+it("does not swallow a changed-payload replay conflict after concurrent completion", async () => {
+  const error = new AppError("EXAMINATION_NOT_PENDING", "This examination cannot be completed.", 409);
+  const conflict = new AppError("CLINICAL_REQUEST_CONFLICT", "This request ID was already used with different details.", 409);
+  transaction.mockResolvedValueOnce(null).mockRejectedValueOnce(error).mockRejectedValueOnce(conflict);
+  await expect(completePhysicalExam("33333333-3333-4333-8333-333333333333", {
+    requestId: "44444444-4444-4444-8444-444444444444", physicianId: "55555555-5555-4555-8555-555555555555",
+    physicianVersion: 1, examinationDate: "2026-09-28", sex: "Female", classification: "A", attested: true,
+  }, { userId: "66666666-6666-4666-8666-666666666666", fullName: "CPU", email: "cpu@test.local", role: "ADMIN" }))
+    .rejects.toBe(conflict);
+});
