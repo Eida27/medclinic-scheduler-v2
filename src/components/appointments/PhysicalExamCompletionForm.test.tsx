@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PhysicalExamCompletionForm } from "./PhysicalExamCompletionForm";
+import type { PeLaboratoryReadiness } from "@/shared/laboratory-completion";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 afterEach(() => vi.unstubAllGlobals());
@@ -19,9 +20,49 @@ const base = {
     yearLevel: 4,
   },
   physicians: [{ id: "physician-1", version: 2, displayName: "Dr Test", licenseNumber: "123", specialty: null }],
+  laboratoryCompletion: { laboratoryAppointmentId: "lab-1", laboratoryCompleted: true, readyForPe: true, missingManualTestCodes: [],
+    completionPolicy: { mode: "STANDARD", manualTestCodes: ["CBC", "URINE", "STOOL"], peConfirmedTestCodes: [], externalProvider: null } } as PeLaboratoryReadiness,
 };
 
 describe("PhysicalExamCompletionForm certificate context", () => {
+  it.each([
+    ["FOURTH_YEAR_OJT", "I attest that these details match the physician's recorded finding and that the student's X-ray at Iloilo Mission Hospital has been completed.", "X-ray at Iloilo Mission Hospital — confirmed when Physical Examination is completed."],
+    ["FIRST_YEAR_EXTERNAL", "I attest that these details match the physician's recorded finding and that the student's CBC, Urine, Stool and X-ray at Iloilo Mission Hospital have been completed.", "Laboratory tests at Iloilo Mission Hospital will be confirmed when CPU Clinic completes the Physical Examination."],
+  ] as const)("shows one mandatory contextual attestation for %s", (mode, attestation, summary) => {
+    render(<PhysicalExamCompletionForm {...base} laboratoryCompletion={{ ...base.laboratoryCompletion, laboratoryCompleted: false,
+      completionPolicy: { mode, manualTestCodes: mode === "FOURTH_YEAR_OJT" ? ["CBC", "URINE", "STOOL"] : [],
+        peConfirmedTestCodes: mode === "FOURTH_YEAR_OJT" ? ["XRAY"] : ["CBC", "URINE", "STOOL", "XRAY"], externalProvider: "Iloilo Mission Hospital" } }} />);
+    expect(screen.getByRole("checkbox", { name: attestation })).toBeRequired();
+    expect(screen.getAllByRole("checkbox")).toHaveLength(1);
+    expect(screen.getByText(summary)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Submit" })).toBeEnabled();
+  });
+
+  it("keeps both actions blocked when a manual test is missing", () => {
+    render(<PhysicalExamCompletionForm {...base} blockers={["Verify CBC at KABALAKA first."]}
+      laboratoryCompletion={{ ...base.laboratoryCompletion, readyForPe: false, missingManualTestCodes: ["CBC"] }} />);
+    expect(screen.getByText("Verify CBC at KABALAKA first.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Submit" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Preview certificate" })).toBeDisabled();
+  });
+
+  it("previews a ready external examination without a completion or checklist request", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, blob: async () => new Blob(["jpeg"], { type: "image/jpeg" }) });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("URL", { createObjectURL: () => "blob:preview", revokeObjectURL: vi.fn() });
+    render(<PhysicalExamCompletionForm {...base} laboratoryCompletion={{ ...base.laboratoryCompletion, laboratoryCompleted: false,
+      completionPolicy: { mode: "FOURTH_YEAR_OJT", manualTestCodes: ["CBC", "URINE", "STOOL"], peConfirmedTestCodes: ["XRAY"], externalProvider: "Iloilo Mission Hospital" } }} />);
+    fireEvent.change(screen.getByLabelText("Sex recorded for this examination"), { target: { value: "Female" } });
+    fireEvent.change(screen.getByLabelText("Physician"), { target: { value: "physician-1" } });
+    fireEvent.click(screen.getByRole("radio", { name: /Class A:/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /I attest/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview certificate" }));
+    expect(await screen.findByText("Preview — not issued")).toBeVisible();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0][0]).toContain("physical-exam-certificate-preview");
+    expect(screen.getByRole("checkbox", { name: /I attest/ })).toBeChecked();
+  });
+
   it("shows the immutable academic record and age for the actual examination date", () => {
     render(<PhysicalExamCompletionForm {...base} />);
 

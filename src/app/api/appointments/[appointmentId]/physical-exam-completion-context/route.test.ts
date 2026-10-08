@@ -34,4 +34,16 @@ describe("Physical Examination completion context API", () => {
     expect(response.status).toBe(404);
     expect(loadPhysicalExamCompletionContext).not.toHaveBeenCalled();
   });
+
+  it("returns typed external readiness and physician metadata without signature bytes", async () => {
+    const laboratoryCompletion = { laboratoryAppointmentId: id, laboratoryCompleted: false, readyForPe: true, missingManualTestCodes: [],
+      completionPolicy: { mode: "FIRST_YEAR_EXTERNAL", manualTestCodes: [], peConfirmedTestCodes: ["CBC", "URINE", "STOOL", "XRAY"], externalProvider: "Iloilo Mission Hospital" } };
+    loadPhysicalExamCompletionContext.mockResolvedValue({ appointmentId: id, laboratoryReady: true, laboratoryCompletion,
+      physicians: [{ id, version: 1, displayName: "Dr. Test", licenseNumber: "123", specialty: null }] });
+    const response = await GET(new Request("http://localhost/api/context"), { params: Promise.resolve({ appointmentId: id }) });
+    const body = await response.json();
+    expect(body.data.laboratoryCompletion).toEqual(laboratoryCompletion);
+    expect(body.data.physicians[0]).not.toHaveProperty("signatureBytes");
+    expect(loadPhysicalExamCompletionContext).toHaveBeenCalledOnce();
+  });
 });

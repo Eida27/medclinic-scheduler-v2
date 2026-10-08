@@ -8,6 +8,7 @@ import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { CertificateDownload } from "@/components/medical-certificates/CertificateDownload";
 import { ageOn } from "@/lib/medical-certificate-age";
+import type { PeLaboratoryReadiness } from "@/shared/laboratory-completion";
 
 type Physician = { id: string; version: number; displayName: string; licenseNumber: string; specialty: string | null };
 export type PhysicalExamIssue = { certificateId: string; certificateNumber: string };
@@ -23,11 +24,12 @@ export type PhysicalExamCompletionContext = {
   scheduleCycleStart: number; dateOfBirth: string | null; studentAcademicSnapshot: StudentAcademicSnapshot | null;
   physicians: Physician[]; today?: string; status?: string; automaticNoShowEligible?: boolean;
   laboratoryReady?: boolean; blockers?: string[]; canConfigurePhysicians?: boolean;
+  laboratoryCompletion: PeLaboratoryReadiness;
 };
 
 export function PhysicalExamCompletionForm({ appointmentId, studentName, studentNumber,
   appointmentDate, scheduleCycleStart, dateOfBirth, studentAcademicSnapshot, physicians,
-  today, status, blockers = [], canConfigurePhysicians = false, onBusyChange, onCompleted }: PhysicalExamCompletionContext & {
+  today, status, laboratoryCompletion, blockers = [], canConfigurePhysicians = false, onBusyChange, onCompleted }: PhysicalExamCompletionContext & {
     onBusyChange?: (busy: boolean) => void;
     onCompleted?: (issue: Issue, classification: string) => void;
   }) {
@@ -51,6 +53,13 @@ export function PhysicalExamCompletionForm({ appointmentId, studentName, student
   const age = dateOfBirth && examinationDate ? ageOn(dateOfBirth, examinationDate) : null;
   const validAge = age !== null && Number.isFinite(age) && age >= 0 && age <= 125;
   const identityReady = Boolean(studentAcademicSnapshot && dateOfBirth && validAge);
+  const laboratoryReady = laboratoryCompletion?.readyForPe === true;
+  const mode = laboratoryCompletion?.completionPolicy.mode;
+  const attestation = mode === "FOURTH_YEAR_OJT"
+    ? "I attest that these details match the physician's recorded finding and that the student's X-ray at Iloilo Mission Hospital has been completed."
+    : mode === "FIRST_YEAR_EXTERNAL"
+      ? "I attest that these details match the physician's recorded finding and that the student's CBC, Urine, Stool and X-ray at Iloilo Mission Hospital have been completed."
+      : "I attest that these details match the physician's recorded finding.";
   const selected = physicians.find((physician) => physician.id === physicianId);
   const lateReasonRequired = Boolean((today && examinationDate < today) || status === "NO_SHOW");
   const payload = { requestId, physicianId, physicianVersion: selected?.version,
@@ -59,7 +68,7 @@ export function PhysicalExamCompletionForm({ appointmentId, studentName, student
   useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl); }, [previewUrl]);
 
   async function submit(action: "preview" | "issue", retryPayload?: string) {
-    if (busyRef.current) return;
+    if (busyRef.current || !laboratoryReady || !identityReady || blockers.length) return;
     busyRef.current = true;
     setBusy(true);
     onBusyChange?.(true);
@@ -126,6 +135,9 @@ export function PhysicalExamCompletionForm({ appointmentId, studentName, student
       href={`/students/${encodeURIComponent(studentNumber)}`}>Open student record</Link> : null}
     {dateOfBirth && !validAge ? <Alert tone="danger">The date of birth is invalid for this examination date.</Alert> : null}
     {blockers.length ? <Alert tone="danger"><ul>{blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul></Alert> : null}
+    {!laboratoryCompletion ? <Alert tone="danger">Unable to load Laboratory readiness. Reload this record.</Alert> : null}
+    {mode === "FOURTH_YEAR_OJT" ? <p className="text-sm text-muted">X-ray at Iloilo Mission Hospital — confirmed when Physical Examination is completed.</p> : null}
+    {mode === "FIRST_YEAR_EXTERNAL" ? <p className="text-sm text-muted">Laboratory tests at Iloilo Mission Hospital will be confirmed when CPU Clinic completes the Physical Examination.</p> : null}
     {error ? <Alert tone="danger">{error}</Alert> : null}
     {!physicians.length ? <Alert tone="warning">An Administrator must configure an active physician and signature first.
       {canConfigurePhysicians ? <Link className="ml-2 font-semibold underline" href="/settings/medical-certificate-physicians">Physician settings</Link> : null}
@@ -172,11 +184,11 @@ export function PhysicalExamCompletionForm({ appointmentId, studentName, student
       </label>
       <label className="flex gap-2 font-semibold">
         <input type="checkbox" required checked={attested} onChange={(event) => setAttested(event.target.checked)} />
-        I attest that these details match the physician&apos;s recorded finding.
+        {attestation}
       </label>
       <div className="flex flex-wrap gap-2">
-        <Button type="submit" disabled={busy || !physicians.length || !identityReady || blockers.length > 0}>Submit</Button>
-        <Button type="button" disabled={busy || !physicians.length || !identityReady || blockers.length > 0}
+        <Button type="submit" disabled={busy || !physicians.length || !identityReady || !laboratoryReady || blockers.length > 0}>Submit</Button>
+        <Button type="button" disabled={busy || !physicians.length || !identityReady || !laboratoryReady || blockers.length > 0}
           onClick={() => { if (formRef.current?.reportValidity()) void submit("preview"); }}>Preview certificate</Button>
       </div>
       {previewUrl && previewKey === key ? <>

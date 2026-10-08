@@ -98,12 +98,10 @@ export async function AppointmentDetail({
       {appointment.scheduleType === "PHYSICAL_EXAM" && pairedLaboratoryChecklist ? (
           <Card>
             <CardTitle>{appointment.isOvpsaFirstYear ? "External Laboratory verification" : "Laboratory progress"}</CardTitle>
-            <p className="mt-1 text-sm text-muted">{appointment.isOvpsaFirstYear
-              ? "Iloilo Mission Hospital results are verified by CPU Clinic one test at a time."
-              : "Laboratory test progress is read-only on this Physical Examination record."}</p>
+            <p className="mt-1 text-sm text-muted">Laboratory test progress is read-only on this Physical Examination record.</p>
             <div className="mt-4"><LaboratoryChecklist appointmentId={pairedLaboratoryChecklist.appointmentId}
               initial={pairedLaboratoryChecklist}
-              readOnly={!appointment.isOvpsaFirstYear || appointment.academicYearEnded} /></div>
+              readOnly /></div>
           </Card>
         ) : null}
       <AppointmentProtectionPanel
@@ -146,7 +144,7 @@ export async function AppointmentDetail({
             <LaboratoryChecklist appointmentId={String(appointment.id)} />
           ) : appointment.isOvpsaFirstYear && appointment.scheduleType === "LABORATORY" ? (
             <Alert tone={appointment.status === "COMPLETED" ? "success" : "info"}>
-              {String(appointment.displayStatus)}. CPU Clinic verifies individual tests from the linked Physical Examination detail.
+              {String(appointment.displayStatus)}. Laboratory tests at Iloilo Mission Hospital will be confirmed when CPU Clinic completes the Physical Examination.
             </Alert>
           ) : null}
           {!(appointment.isOvpsaFirstYear && appointment.scheduleType === "LABORATORY") ? <AppointmentActions

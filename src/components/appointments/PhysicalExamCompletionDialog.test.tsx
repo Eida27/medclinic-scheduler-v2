@@ -14,6 +14,21 @@ function context(studentName: string) {
 describe("PhysicalExamCompletionDialog", () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it("closes a ready First-Year form after its context GET without confirming tests", async () => {
+    const data = context("First-Year student").data;
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: { ...data,
+      laboratoryCompletion: { laboratoryAppointmentId: "lab-1", laboratoryCompleted: false, readyForPe: true, missingManualTestCodes: [],
+        completionPolicy: { mode: "FIRST_YEAR_EXTERNAL", manualTestCodes: [], peConfirmedTestCodes: ["CBC", "URINE", "STOOL", "XRAY"], externalProvider: "Iloilo Mission Hospital" } } } }) });
+    vi.stubGlobal("fetch", fetchMock);
+    const onClose = vi.fn();
+    render(<PhysicalExamCompletionDialog appointmentId="first" onClose={onClose} onCompleted={vi.fn()} />);
+    expect(await screen.findByText("Laboratory tests at Iloilo Mission Hospital will be confirmed when CPU Clinic completes the Physical Examination.")).toBeVisible();
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0][1]).not.toHaveProperty("method");
+  });
+
   it("ignores stale context when a different appointment is opened", async () => {
     let resolveOld!: (value: Response) => void;
     const old = new Promise<Response>((resolve) => { resolveOld = resolve; });
