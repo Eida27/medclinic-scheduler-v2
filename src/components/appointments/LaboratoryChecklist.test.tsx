@@ -59,6 +59,28 @@ describe("LaboratoryChecklist", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it.each(["FOURTH_YEAR_OJT", "FIRST_YEAR_EXTERNAL"] as const)(
+    "shows the committed %s checklist when the PE detail refreshes", (mode) => {
+      const fetchMock = vi.fn(); vi.stubGlobal("fetch", fetchMock);
+      const checklist = external(mode);
+      const pending: ChecklistView = mode === "FIRST_YEAR_EXTERNAL" ? checklist : { ...checklist,
+        verifiedCount: 3, items: checklist.items.map((item) => item.testCode === "XRAY" ? item : {
+          ...item, verifiedAt: "2026-10-08T04:00:00Z", verifiedBy: "lab-staff", verificationSource: "INTERNAL",
+        }) };
+      const view = render(<LaboratoryChecklist appointmentId="appointment-1" initial={pending} readOnly />);
+      expect(screen.getByRole("checkbox", { name: "X-ray" })).not.toBeChecked();
+      const committed: ChecklistView = { ...pending, version: pending.version + 1, appointmentStatus: "COMPLETED",
+        verifiedCount: 4, items: pending.items.map((item) => item.verifiedAt ? item : {
+          ...item, verifiedAt: "2026-10-08T05:00:00Z", verifiedBy: "cpu-staff", verificationSource: "EXTERNAL",
+        }) };
+      view.rerender(<LaboratoryChecklist appointmentId="appointment-1" initial={committed} readOnly />);
+      expect(screen.getByText(/4\/4 verified/)).toBeVisible();
+      for (const box of screen.getAllByRole("checkbox")) {
+        expect(box).toBeChecked(); expect(box).toBeDisabled();
+      }
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
   it.each([undefined, { mode: "FOURTH_YEAR_OJT", manualTestCodes: ["XRAY"], peConfirmedTestCodes: [], externalProvider: null }])(
     "fails closed when the completion policy is absent or invalid", (completionPolicy) => {
       render(<LaboratoryChecklist appointmentId="appointment-1" initial={{ ...initial, completionPolicy } as unknown as ChecklistView} />);

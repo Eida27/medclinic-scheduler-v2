@@ -61,8 +61,6 @@ function laboratoryStatusBadge(status: ClinicAppointment["laboratoryStatus"]) {
 }
 
 const operationalStatuses = ["PENDING", "COMPLETED", "NO_SHOW"];
-const physicalCompletionBlockReason =
-  "Laboratory must be completed before Physical Examination can be marked completed.";
 const sortOptions: Array<[AppointmentListSort, string]> = [
   ["surname_asc", "Surname A-Z"],
   ["surname_desc", "Surname Z-A"],
@@ -269,13 +267,9 @@ export function ClinicPublishedSchedule({
                             <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-800">
                               {operationalStatusLabel(appointment.status)}
                             </span>
-                            {appointment.status !== "COMPLETED" && !appointment.academicYearEnded ? (
-                              appointment.laboratoryStatus !== "COMPLETED" ?
-                                <span className="text-xs text-muted">{physicalCompletionBlockReason}</span>
-                              : canCompletePhysicalExam ? (
+                            {["PENDING", "NO_SHOW"].includes(appointment.status) && !appointment.academicYearEnded && canCompletePhysicalExam ? (
                                 <button type="button" className="text-xs font-semibold text-cpu-navy underline"
                                   onClick={() => setCompletionId(appointment.id)}>Complete Physical Examination</button>
-                              ) : null
                             ) : null}
                           </>
                         )}

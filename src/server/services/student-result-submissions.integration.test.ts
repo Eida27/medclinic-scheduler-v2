@@ -351,6 +351,16 @@ afterAll(async () => {
 });
 
 describe("student result edit creation", () => {
+  it("does not present a completed fourth-year clinical checklist as an uploaded official document", async () => {
+    const studentNumber = "99-9439-39";
+    await insertTestStudent({ studentNumber, firstName: "Clinical", lastName: "Only", yearLevel: 4 });
+    await appointment(studentNumber);
+    const before = (await pool.query("SELECT count(*)::int AS count FROM student_result_submissions WHERE student_number=$1", [studentNumber])).rows[0].count;
+    await getAdminStudentResultProfile(studentNumber, admin);
+    expect((await pool.query("SELECT count(*)::int AS count FROM student_result_submissions WHERE student_number=$1", [studentNumber])).rows[0].count).toBe(before);
+    expect(before).toBe(0);
+  });
+
   it("copies every verified official file into one idempotent edit draft", async () => {
     const studentNumber = "99-9440-40";
     const fixture = await finalizedResultFixture(

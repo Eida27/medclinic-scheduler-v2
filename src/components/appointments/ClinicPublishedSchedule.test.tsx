@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 import { ClinicPublishedSchedule } from "./ClinicPublishedSchedule";
@@ -16,6 +16,46 @@ const appointment = {
 };
 
 describe("ClinicPublishedSchedule", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each([
+    { mode: "FOURTH_YEAR_OJT", verified: 3, required: 4, ready: true, missing: [] },
+    { mode: "FIRST_YEAR_EXTERNAL", verified: 0, required: 4, ready: true, missing: [] },
+    { mode: "FOURTH_YEAR_OJT", verified: 2, required: 4, ready: false, missing: ["STOOL"] },
+    { mode: "STANDARD", verified: 0, required: 3, ready: false, missing: ["CBC", "URINE", "STOOL"] },
+  ])("opens authoritative completion context for pending $mode ($verified/$required)", async ({ mode, verified, required, ready, missing }) => {
+    const blockers = ready ? [] : ["Verify Laboratory tests before Physical Examination: " + missing.join(", ") + "."];
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: {
+      appointmentId: appointment.id, studentName: appointment.studentName, studentNumber: appointment.studentNumber,
+      appointmentDate: appointment.appointmentDate, scheduleCycleStart: 2026, dateOfBirth: "2005-01-01",
+      studentAcademicSnapshot: { studentName: appointment.studentName, collegeName: "College", programName: "Program", yearLevel: mode === "FIRST_YEAR_EXTERNAL" ? 1 : 4 },
+      physicians: [{ id: "physician-1", version: 1, displayName: "Synthetic Physician", licenseNumber: "TEST", specialty: null }], blockers,
+      laboratoryCompletion: { laboratoryAppointmentId: "lab-1", laboratoryCompleted: false,
+        readyForPe: ready, missingManualTestCodes: missing,
+        completionPolicy: { mode, manualTestCodes: mode === "FIRST_YEAR_EXTERNAL" ? [] : ["CBC", "URINE", "STOOL"],
+          peConfirmedTestCodes: mode === "FIRST_YEAR_EXTERNAL" ? ["CBC", "URINE", "STOOL", "XRAY"] : mode === "FOURTH_YEAR_OJT" ? ["XRAY"] : [],
+          externalProvider: mode === "STANDARD" ? null : "Iloilo Mission Hospital" } },
+    } }) });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ClinicPublishedSchedule basePath="/physical-exam" title="Physical Examination"
+      description="Current appointments" emptyMessage="No appointments" page={1} total={1}
+      filters={{}} showLaboratoryStatus canCompletePhysicalExam appointments={[{ ...appointment,
+        scheduleType: "PHYSICAL_EXAM", laboratoryStatus: "PENDING", laboratoryVerifiedTests: verified,
+        laboratoryRequiredTests: required, isOvpsaFirstYear: mode === "FIRST_YEAR_EXTERNAL" }]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Complete Physical Examination" }));
+    const submit = await screen.findByRole("button", { name: "Submit" });
+    if (ready) expect(submit).toBeEnabled();
+    else {
+      expect(submit).toBeDisabled();
+      expect(screen.getByText(blockers[0])).toBeVisible();
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Close", exact: true }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0][0]).toBe(`/api/appointments/${appointment.id}/physical-exam-completion-context`);
+    expect(fetchMock.mock.calls[0][1]).not.toHaveProperty("method");
+  });
+
   it("renders published schedule filters and appointments without draft or visibility controls", () => {
     render(
       <ClinicPublishedSchedule
@@ -133,15 +173,8 @@ describe("ClinicPublishedSchedule", () => {
     expect(laboratoryBadge).toHaveClass(backgroundClass, textClass);
     expect(within(laboratoryCell).queryByRole("button", { name: label })).not.toBeInTheDocument();
     expect(within(laboratoryCell).queryByRole("link", { name: label })).not.toBeInTheDocument();
-    if (laboratoryStatus === "COMPLETED") {
-      expect(within(row).queryByRole("button", { name: "Complete Physical Examination" })).not.toBeInTheDocument();
-      expect(within(row).queryByText(/Laboratory must be completed/)).not.toBeInTheDocument();
-    } else {
-      within(row).getByText(
-        "Laboratory must be completed before Physical Examination can be marked completed.",
-      );
-      expect(within(row).queryByRole("button", { name: "Complete Physical Examination" })).not.toBeInTheDocument();
-    }
+    expect(within(row).queryByRole("button", { name: "Complete Physical Examination" })).not.toBeInTheDocument();
+    expect(within(row).queryByText(/Laboratory must be completed/)).not.toBeInTheDocument();
   });
 
   it("shows an authorized completion button without navigating and opens the dialog", () => {

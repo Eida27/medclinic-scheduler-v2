@@ -13,8 +13,15 @@ import { completePhysicalExam, previewPhysicalExam, correctMedicalCertificate, p
 import { savePhysicianRevision } from "@/server/medical-certificates/physician.service";
 import * as renderer from "@/server/medical-certificates/certificate-renderer";
 import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
-import { getAppointmentMutationContext, rescheduleAppointmentWithClient } from "@/server/repositories/appointments.repository";
+import { getAppointmentMutationContext, rescheduleAppointmentWithClient, getPublishedAppointment, listAppointments } from "@/server/repositories/appointments.repository";
 import { markOverdueAppointmentsNoShow } from "@/server/repositories/appointment-no-show.repository";
+import { getStudentPortalSchedule } from "@/server/repositories/student-portal.repository";
+import { getStudentResultSubmission } from "@/server/services/student-result-submissions.service";
+import { requireStudent, requireVerifiedStudent } from "@/server/auth/current-student";
+import { createStudentSessionToken } from "@/server/auth/student-session";
+
+const authState = vi.hoisted(() => ({ token: "" }));
+vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => ({ value: authState.token }) }) }));
 
 const admin: SessionUser = { userId: ids.adminUser, fullName: "Test Admin", email: "admin@medclinic.local", role: "ADMIN" };
 const labStaff: SessionUser = { userId: ids.clinicStaffUser, fullName: "Clinic Staff", email: "staff@medclinic.local", role: "CLINIC_STAFF", clinicId: ids.laboratoryClinic };
@@ -127,7 +134,7 @@ beforeAll(async () => {
   const signatureBytes = await sharp({ create: { width: 200, height: 80, channels: 4, background: "white" } }).png().toBuffer();
   physicianId = (await savePhysicianRevision({ profile: { displayName: "Dr. PE Linked", licenseNumber: "PRC PE Linked", specialty: "General Medicine", active: true }, signatureBytes, signatureMediaType: "image/png" }, admin)).id;
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { authState.token = ""; vi.restoreAllMocks(); });
 afterAll(async () => {
   vi.useRealTimers();
   await cleanupTestFixtures("PELC-%", "PELC-%", "PELC fixture%");
@@ -144,6 +151,38 @@ afterAll(async () => {
 });
 
 describe("PE-linked external Laboratory confirmation", () => {
+  it("shows saved First-Year confirmation in staff/student readers without creating upload work", async () => {
+    const f = await fixture("FIRST_YEAR");
+    expect((await getPublishedAppointment(f.labId))?.displayStatus).toBe("Awaiting confirmation at Physical Examination");
+    const staff = await listAppointments({ scheduleType: "LABORATORY", studentNumber: f.studentNumber,
+      isPublished: true, page: 1, limit: 150, offset: 0 });
+    expect(staff.items.find((row) => row.id === f.labId)?.displayStatus).toBe("Awaiting confirmation at Physical Examination");
+    const student = await getStudentPortalSchedule(f.studentNumber);
+    expect(student?.emailVerifiedAt).toBeNull();
+    expect(student?.appointments.find((row) => row.id === f.labId)?.displayStatus).toBe("Awaiting confirmation at Physical Examination");
+    const issued = await completePhysicalExam(f.peId, input(), cpu);
+    expect((await getPublishedAppointment(f.labId))?.displayStatus).toBe("COMPLETED");
+    expect((await getStudentPortalSchedule(f.studentNumber))?.appointments.map((row) => row.status)).toEqual(["COMPLETED", "COMPLETED"]);
+    const saved = await effects(f);
+    expect(saved.submissions).toBeNull(); expect(saved.files).toBeNull();
+    const jpeg = await downloadMedicalCertificate(issued.certificateId, { kind: "STUDENT", studentNumber: f.studentNumber });
+    expect(jpeg.bytes).toEqual((await pool.query("SELECT jpeg_bytes FROM medical_certificate_revisions WHERE id=$1", [issued.revisionId])).rows[0].jpeg_bytes);
+    await expect(downloadMedicalCertificate(issued.certificateId, { kind: "STUDENT", studentNumber: "wrong-student" })).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("keeps OJT clinical completion separate from verified student document access", async () => {
+    const f = await fixture();
+    await manual(f); await completePhysicalExam(f.peId, input(), cpu);
+    const saved = await effects(f);
+    expect(saved.laboratoryResults[0].result_status).toBe("PENDING_UPLOAD");
+    expect(saved.submissions).toBeNull(); expect(saved.files).toBeNull();
+    authState.token = await createStudentSessionToken({ studentNumber: f.studentNumber, sessionType: "STUDENT" });
+    expect(await requireStudent()).toMatchObject({ studentNumber: f.studentNumber, emailVerifiedAt: null });
+    await expect(requireVerifiedStudent()).rejects.toMatchObject({ code: "STUDENT_EMAIL_VERIFICATION_REQUIRED" });
+    expect(await effects(f)).toEqual(saved);
+    await expect(getStudentResultSubmission("wrong-student", f.labId)).rejects.toMatchObject({ status: 404 });
+  });
+
   it("confirms only the effective replacement and keeps its immutable OJT requirements", async () => {
     const f = await fixture();
     const original = await manual(f);

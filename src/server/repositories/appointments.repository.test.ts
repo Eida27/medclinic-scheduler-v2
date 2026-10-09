@@ -13,6 +13,7 @@ vi.mock("@/server/laboratory/laboratory-checklist.repository", () => ({
 
 import {
   listAppointments,
+  getPublishedAppointment,
   rescheduleAppointmentWithClient,
   type AppointmentMutationContext,
 } from "./appointments.repository";
@@ -23,6 +24,14 @@ describe("listAppointments", () => {
     query
       .mockResolvedValueOnce({ rows: [{ count: "2" }] })
       .mockResolvedValueOnce({ rows: [] });
+  });
+
+  it("uses the First-Year PE-confirmation label in both staff projections", async () => {
+    await listAppointments({ page: 1, limit: 150, offset: 0, isPublished: true });
+    expect(query.mock.calls[1][0]).toContain("Awaiting confirmation at Physical Examination");
+    query.mockReset().mockResolvedValueOnce({ rows: [] });
+    await getPublishedAppointment("11111111-1111-4111-8111-111111111111");
+    expect(query.mock.calls[0][0]).toContain("Awaiting confirmation at Physical Examination");
   });
 
   it.each([

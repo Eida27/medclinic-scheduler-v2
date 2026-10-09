@@ -134,7 +134,24 @@ exponential delay at one hour.
 
 ## Private Result Documents
 
-Completing Laboratory creates its matching `PENDING_UPLOAD` result if none exists. Existing manually recorded result statuses are preserved. Only an eligible completed current Laboratory appointment becomes uploadable, and email verification is required. Physical Examination student uploads are retired; clinical completion issues its private JPG certificate.
+Completing ordinary Laboratory creates its matching `PENDING_UPLOAD` result if none exists. Existing manually recorded result statuses are preserved. First-Year/OVPSA external confirmation creates its completed external result without an upload draft or file. Only an eligible completed current Laboratory appointment becomes uploadable, and email verification is required. Physical Examination student uploads are retired; clinical completion issues its private JPG certificate.
+
+### Laboratory confirmation during Physical Examination
+
+Completion ownership follows the checklist's immutable imported year and category, including explicit replacements. For fourth-year OJT, KABALAKA staff verify CBC, Urine and Stool; X-ray at Iloilo Mission Hospital is confirmed when CPU Clinic completes PE. The checklist remains four tests: 3/4 Pending is ready for PE, and issuance confirms X-ray and completes Laboratory and PE together. For a valid First-Year/OVPSA pair, all four hospital tests are confirmed during PE; 0/4 Pending is ready and displays **Awaiting confirmation at Physical Examination**. Other categories retain their full manual Laboratory prerequisite.
+
+CPU Clinic staff or an Administrator submits the existing completion form with one hospital-specific attestation, the physician and the recorded Class A–D finding. Classes B, C and D require remarks. Context, preview and cancellation create no clinical confirmation. Final issuance confirms pending external tests, records the existing Laboratory evidence and issues the private certificate atomically. Correction or revocation preserves the original Laboratory confirmation. OJT document status remains separate from clinical completion; uploads still require verified email.
+
+The [October 8 design](docs/superpowers/specs/2026-10-08-pe-linked-external-laboratory-completion-design.md) and [implementation plan](docs/superpowers/plans/2026-10-08-pe-linked-external-laboratory-completion.md) supersede September 22/27 guidance only where it requires manual First-Year checks or completed external tests before PE. Scheduling order, the seven-day First-Year gap, current staff authority, certificate rules and capacity remain unchanged. See the [local acceptance evidence](docs/superpowers/evidence/2026-10-08-pe-linked-external-laboratory-completion.md).
+
+The guarded synthetic Browser fixture requires a dedicated named loopback `medclinic_test_*` database and `BROWSER_PE_LINKED_ACCEPTANCE_LOCAL_TEST_DB=1`, using the existing disposable-database guard. Setup creates four cases with complete import provenance. Status and cleanup validate the saved database address, port, OID and role; cleanup removes only that fixture and checks residue and capacity.
+
+```powershell
+$env:BROWSER_PE_LINKED_ACCEPTANCE_LOCAL_TEST_DB = "1"
+npm run acceptance:pe-linked-laboratory:setup
+npm run acceptance:pe-linked-laboratory:status
+npm run acceptance:pe-linked-laboratory:cleanup
+```
 
 - Allowed: PDF, JPG/JPEG, and PNG with matching extension, declared MIME, and file signature
 - Maximum 20 MB per file, 10 files per submission, and 50 MB combined
@@ -269,7 +286,7 @@ The ignored state is `.data/browser-clinic-scheduler-ux/state.json`. `stage`, `s
 3. Confirm the import is `PUBLISHED`, dates are date-only, Laboratory precedes PE, and overflow/displacement totals are visible.
 4. Import an OJT or Tour category against constrained capacity and review the Regular student's linked replacement history and notification.
 5. As administrator, add CPU and KABALAKA unavailable dates and confirm their PE-only/pair rules.
-6. As KABALAKA clinic staff, verify CBC, Urine, Stool, and applicable X-ray individually; confirm partial work survives an explicit replacement and full verification completes Laboratory.
+6. As KABALAKA clinic staff, verify the ordinary manual checklist; confirm partial work survives an explicit replacement. For fourth-year OJT, verify only CBC, Urine and Stool and observe disabled X-ray with 3/4 Pending. First-Year hospital tests are all read-only and await PE confirmation.
 7. As CPU Clinic staff, use **Complete Physical Examination** in the published PE list. Select the physician and recorded Class A–D finding, enter the required certificate details and attestation, then **Submit**. Preview is optional. Class B, C, and D require remarks. Confirm the row becomes Completed and the JPG download appears. [Completed popup](docs/superpowers/evidence/pe-completed-browser.png) · [Synthetic issued certificate](docs/superpowers/evidence/pe-issued-certificate.jpg).
 8. Use **Student sign in** with that Student Number/DOB/complete Middle Name. Read Schedule, Notifications, and Results and download own official files/certificates before verification. Enter Laboratory management deliberately, verify through the real email token, and confirm continuation to the selected workspace. Upload, finalize, and revise only Laboratory documents; confirm a forged Physical Examination upload is rejected.
 9. For an ordinary manual resolution group, filter by academic year and import batch or closure group. Select eligible cases individually, on the page, or across the full server group. Use **Assign schedules** to choose shared replacement dates, review preserved services and aggregate capacity, preview every case, then confirm once. The group is applied atomically. [Two-case preview](docs/superpowers/evidence/manual-batch-preview-browser.png).

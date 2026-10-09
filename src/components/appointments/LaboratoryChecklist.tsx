@@ -52,7 +52,8 @@ function hasCompletionPolicy(checklist: ChecklistView) {
 
 export function LaboratoryChecklist({ appointmentId, initial, readOnly = false, compact = false }: Props) {
   const router = useRouter();
-  const [checklist, setChecklist] = useState<ChecklistView | null>(initial ?? null);
+  const [loadedChecklist, setChecklist] = useState<ChecklistView | null>(initial ?? null);
+  const checklist = readOnly && initial ? initial : loadedChecklist;
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [announcement, setAnnouncement] = useState("");

@@ -56,7 +56,7 @@ export async function getStudentPortalSchedule(studentNumber: string) {
             CASE WHEN appointment.ovpsa_batch_id IS NOT NULL
                        AND appointment.schedule_type='LABORATORY'
                        AND appointment.status='PENDING' AND verification.id IS NULL
-                 THEN 'Awaiting External Laboratory Result' ELSE appointment.status END AS "displayStatus"
+                 THEN 'Awaiting confirmation at Physical Examination' ELSE appointment.status END AS "displayStatus"
        FROM appointments appointment
        JOIN academic_years academic_year ON academic_year.start_year=appointment.schedule_cycle_start
        JOIN clinics clinic ON clinic.id=appointment.clinic_id

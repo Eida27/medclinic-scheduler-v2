@@ -43,7 +43,10 @@
     "acceptance:scheduling-integrity:setup": "tsx --env-file=.env.local scripts/browser-scheduling-integrity-fixture.ts setup",
     "acceptance:scheduling-integrity:status": "tsx --env-file=.env.local scripts/browser-scheduling-integrity-fixture.ts status",
     "acceptance:scheduling-integrity:cleanup": "tsx --env-file=.env.local scripts/browser-scheduling-integrity-fixture.ts cleanup",
-    "test:integration": "tsx scripts/test-integration.ts"
+    "test:integration": "tsx scripts/test-integration.ts",
+    "acceptance:pe-linked-laboratory:setup": "tsx --env-file=.env.local scripts/browser-pe-linked-laboratory-fixture.ts setup",
+    "acceptance:pe-linked-laboratory:status": "tsx --env-file=.env.local scripts/browser-pe-linked-laboratory-fixture.ts status",
+    "acceptance:pe-linked-laboratory:cleanup": "tsx --env-file=.env.local scripts/browser-pe-linked-laboratory-fixture.ts cleanup"
   },
   "dependencies": {
     "archiver": "^8.0.0",

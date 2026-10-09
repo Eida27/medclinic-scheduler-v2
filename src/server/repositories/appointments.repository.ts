@@ -188,7 +188,7 @@ export async function listAppointments(filters: {
             (a.ovpsa_batch_id IS NOT NULL) AS "isOvpsaFirstYear",
             CASE WHEN a.ovpsa_batch_id IS NOT NULL AND a.schedule_type='LABORATORY'
                        AND a.status='PENDING' AND ovpsa_verification.id IS NULL
-                 THEN 'Awaiting External Laboratory Result' ELSE a.status END AS "displayStatus",
+                 THEN 'Awaiting confirmation at Physical Examination' ELSE a.status END AS "displayStatus",
             CASE
               WHEN a.status='COMPLETED' AND completion.old_status IN ('PENDING','NO_SHOW')
                 THEN completion.old_status
@@ -235,7 +235,7 @@ export async function getPublishedAppointment(id: string) {
             (a.ovpsa_batch_id IS NOT NULL) AS "isOvpsaFirstYear",
             CASE WHEN a.ovpsa_batch_id IS NOT NULL AND a.schedule_type='LABORATORY'
                        AND a.status='PENDING' AND ovpsa_verification.id IS NULL
-                 THEN 'Awaiting External Laboratory Result' ELSE a.status END AS "displayStatus",
+                 THEN 'Awaiting confirmation at Physical Examination' ELSE a.status END AS "displayStatus",
             linked_laboratory.id::text AS "pairedLaboratoryAppointmentId",
             a.is_manually_locked AS "isManuallyLocked", a.lock_reason AS "lockReason",
             a.locked_by::text AS "lockedById", locked_user.full_name AS "lockedByName",

@@ -1,0 +1,313 @@
+{
+  "prepared": true,
+  "today": "2026-10-08",
+  "cases": [
+    {
+      "name": "OJT_READY",
+      "studentNumber": "99-9331-91",
+      "labId": "90eed26b-a407-4fc2-b914-3484cce89083",
+      "peId": "0170b0b0-a2dd-4244-a35b-c5f9567068fd"
+    },
+    {
+      "name": "OJT_MISSING",
+      "studentNumber": "99-9332-91",
+      "labId": "ec9deb61-bf4b-438e-b7be-4cd89091f6fe",
+      "peId": "e63f9cbe-6954-404d-8537-bb673bc10f3a"
+    },
+    {
+      "name": "FIRST_YEAR",
+      "studentNumber": "99-9333-91",
+      "labId": "5217abcd-8256-49ba-9f08-3afc9cec4e79",
+      "peId": "61ff8e94-113c-4d9b-9a8c-266ac879ca13"
+    },
+    {
+      "name": "STANDARD",
+      "studentNumber": "99-9334-91",
+      "labId": "a6ae996c-5e85-4fee-9974-5f54a28964e0",
+      "peId": "788a0c3e-f685-495c-bd6f-af4d68925c38"
+    }
+  ],
+  "appointments": [
+    {
+      "id": "90eed26b-a407-4fc2-b914-3484cce89083",
+      "student_number": "99-9331-91",
+      "schedule_type": "LABORATORY",
+      "appointment_date": "2026-10-07",
+      "status": "COMPLETED",
+      "ovpsa_batch_id": null,
+      "ovpsa_revision_id": null,
+      "ovpsa_service_reservation_id": null
+    },
+    {
+      "id": "0170b0b0-a2dd-4244-a35b-c5f9567068fd",
+      "student_number": "99-9331-91",
+      "schedule_type": "PHYSICAL_EXAM",
+      "appointment_date": "2026-10-08",
+      "status": "COMPLETED",
+      "ovpsa_batch_id": null,
+      "ovpsa_revision_id": null,
+      "ovpsa_service_reservation_id": null
+    },
+    {
+      "id": "ec9deb61-bf4b-438e-b7be-4cd89091f6fe",
+      "student_number": "99-9332-91",
+      "schedule_type": "LABORATORY",
+      "appointment_date": "2026-10-07",
+      "status": "NO_SHOW",
+      "ovpsa_batch_id": null,
+      "ovpsa_revision_id": null,
+      "ovpsa_service_reservation_id": null
+    },
+    {
+      "id": "e63f9cbe-6954-404d-8537-bb673bc10f3a",
+      "student_number": "99-9332-91",
+      "schedule_type": "PHYSICAL_EXAM",
+      "appointment_date": "2026-10-08",
+      "status": "NO_SHOW",
+      "ovpsa_batch_id": null,
+      "ovpsa_revision_id": null,
+      "ovpsa_service_reservation_id": null
+    },
+    {
+      "id": "5217abcd-8256-49ba-9f08-3afc9cec4e79",
+      "student_number": "99-9333-91",
+      "schedule_type": "LABORATORY",
+      "appointment_date": "2026-10-08",
+      "status": "COMPLETED",
+      "ovpsa_batch_id": "89f40fdb-d430-437b-accb-060dca46aa83",
+      "ovpsa_revision_id": "1e1568b9-2bed-4d35-9c96-c2545acfa97a",
+      "ovpsa_service_reservation_id": "ff86b5e1-de9d-4b0e-9684-34b0f456efdc"
+    },
+    {
+      "id": "61ff8e94-113c-4d9b-9a8c-266ac879ca13",
+      "student_number": "99-9333-91",
+      "schedule_type": "PHYSICAL_EXAM",
+      "appointment_date": "2026-10-15",
+      "status": "COMPLETED",
+      "ovpsa_batch_id": "89f40fdb-d430-437b-accb-060dca46aa83",
+      "ovpsa_revision_id": "1e1568b9-2bed-4d35-9c96-c2545acfa97a",
+      "ovpsa_service_reservation_id": "9c43845c-5fb9-4e6b-ad92-a3d733104c33"
+    },
+    {
+      "id": "a6ae996c-5e85-4fee-9974-5f54a28964e0",
+      "student_number": "99-9334-91",
+      "schedule_type": "LABORATORY",
+      "appointment_date": "2026-10-07",
+      "status": "NO_SHOW",
+      "ovpsa_batch_id": null,
+      "ovpsa_revision_id": null,
+      "ovpsa_service_reservation_id": null
+    },
+    {
+      "id": "788a0c3e-f685-495c-bd6f-af4d68925c38",
+      "student_number": "99-9334-91",
+      "schedule_type": "PHYSICAL_EXAM",
+      "appointment_date": "2026-10-08",
+      "status": "NO_SHOW",
+      "ovpsa_batch_id": null,
+      "ovpsa_revision_id": null,
+      "ovpsa_service_reservation_id": null
+    }
+  ],
+  "checklists": [
+    {
+      "student_number": "99-9331-91",
+      "version": 5,
+      "test_code": "CBC",
+      "verified_at": "2026-10-08T12:17:21.620Z",
+      "verified_by": "937b8664-8b8c-41bb-82a6-3c8c29e67af6",
+      "verification_source": "INTERNAL"
+    },
+    {
+      "student_number": "99-9331-91",
+      "version": 5,
+      "test_code": "STOOL",
+      "verified_at": "2026-10-08T12:19:23.596Z",
+      "verified_by": "937b8664-8b8c-41bb-82a6-3c8c29e67af6",
+      "verification_source": "INTERNAL"
+    },
+    {
+      "student_number": "99-9331-91",
+      "version": 5,
+      "test_code": "URINE",
+      "verified_at": "2026-10-08T12:18:16.347Z",
+      "verified_by": "937b8664-8b8c-41bb-82a6-3c8c29e67af6",
+      "verification_source": "INTERNAL"
+    },
+    {
+      "student_number": "99-9331-91",
+      "version": 5,
+      "test_code": "XRAY",
+      "verified_at": "2026-10-08T12:43:33.172Z",
+      "verified_by": "0e7b1c3b-70a8-4536-aa05-5084ae0e195b",
+      "verification_source": "EXTERNAL"
+    },
+    {
+      "student_number": "99-9332-91",
+      "version": 1,
+      "test_code": "CBC",
+      "verified_at": null,
+      "verified_by": null,
+      "verification_source": null
+    },
+    {
+      "student_number": "99-9332-91",
+      "version": 1,
+      "test_code": "STOOL",
+      "verified_at": null,
+      "verified_by": null,
+      "verification_source": null
+    },
+    {
+      "student_number": "99-9332-91",
+      "version": 1,
+      "test_code": "URINE",
+      "verified_at": null,
+      "verified_by": null,
+      "verification_source": null
+    },
+    {
+      "student_number": "99-9332-91",
+      "version": 1,
+      "test_code": "XRAY",
+      "verified_at": null,
+      "verified_by": null,
+      "verification_source": null
+    },
+    {
+      "student_number": "99-9333-91",
+      "version": 2,
+      "test_code": "CBC",
+      "verified_at": "2026-10-08T12:55:53.669Z",
+      "verified_by": "0e7b1c3b-70a8-4536-aa05-5084ae0e195b",
+      "verification_source": "EXTERNAL"
+    },
+    {
+      "student_number": "99-9333-91",
+      "version": 2,
+      "test_code": "STOOL",
+      "verified_at": "2026-10-08T12:55:53.669Z",
+      "verified_by": "0e7b1c3b-70a8-4536-aa05-5084ae0e195b",
+      "verification_source": "EXTERNAL"
+    },
+    {
+      "student_number": "99-9333-91",
+      "version": 2,
+      "test_code": "URINE",
+      "verified_at": "2026-10-08T12:55:53.669Z",
+      "verified_by": "0e7b1c3b-70a8-4536-aa05-5084ae0e195b",
+      "verification_source": "EXTERNAL"
+    },
+    {
+      "student_number": "99-9333-91",
+      "version": 2,
+      "test_code": "XRAY",
+      "verified_at": "2026-10-08T12:55:53.669Z",
+      "verified_by": "0e7b1c3b-70a8-4536-aa05-5084ae0e195b",
+      "verification_source": "EXTERNAL"
+    },
+    {
+      "student_number": "99-9334-91",
+      "version": 1,
+      "test_code": "CBC",
+      "verified_at": null,
+      "verified_by": null,
+      "verification_source": null
+    },
+    {
+      "student_number": "99-9334-91",
+      "version": 1,
+      "test_code": "STOOL",
+      "verified_at": null,
+      "verified_by": null,
+      "verification_source": null
+    },
+    {
+      "student_number": "99-9334-91",
+      "version": 1,
+      "test_code": "URINE",
+      "verified_at": null,
+      "verified_by": null,
+      "verification_source": null
+    }
+  ],
+  "certificates": [
+    {
+      "certificate_id": "11e17615-0b1b-4365-be01-50a8c600d48d",
+      "appointment_id": "0170b0b0-a2dd-4244-a35b-c5f9567068fd",
+      "student_number": "99-9331-91",
+      "classification": "A",
+      "status": "ISSUED",
+      "sha256": "90bf90bc0081085ed4970f2ad32d954ecdd9d2a10e64217c251eec0c359d608f",
+      "examination_snapshot": {
+        "remarks": "",
+        "classification": "A",
+        "examinationDate": "2026-10-08",
+        "checklistVersion": 5,
+        "certificateNumber": "MC-2026-11E17615",
+        "laboratoryCompletion": {
+          "mode": "FOURTH_YEAR_OJT",
+          "checklistId": "796d4c18-663c-4af9-be1f-15732aee8eb7",
+          "externalProvider": "Iloilo Mission Hospital",
+          "checklistVersionAfter": 5,
+          "checklistVersionBefore": 4,
+          "automaticallyVerifiedTestCodes": [
+            "XRAY"
+          ]
+        },
+        "laboratoryAppointmentId": "90eed26b-a407-4fc2-b914-3484cce89083"
+      }
+    },
+    {
+      "certificate_id": "d22d64eb-9136-4a56-b7f5-91d99837131c",
+      "appointment_id": "61ff8e94-113c-4d9b-9a8c-266ac879ca13",
+      "student_number": "99-9333-91",
+      "classification": "B",
+      "status": "ISSUED",
+      "sha256": "2fafd52f07060711e2f83db633f8fc47276867164b976d4e8aa270b0ae5e2149",
+      "examination_snapshot": {
+        "remarks": "Synthetic Class B finding: corrective follow-up recorded by the fixture physician.",
+        "classification": "B",
+        "examinationDate": "2026-10-08",
+        "checklistVersion": 2,
+        "certificateNumber": "MC-2026-D22D64EB",
+        "laboratoryCompletion": {
+          "mode": "FIRST_YEAR_EXTERNAL",
+          "checklistId": "451b7a4d-42c3-4341-9c7a-da71d94e4ccb",
+          "externalProvider": "Iloilo Mission Hospital",
+          "checklistVersionAfter": 2,
+          "checklistVersionBefore": 1,
+          "automaticallyVerifiedTestCodes": [
+            "CBC",
+            "URINE",
+            "STOOL",
+            "XRAY"
+          ]
+        },
+        "laboratoryAppointmentId": "5217abcd-8256-49ba-9f08-3afc9cec4e79"
+      }
+    }
+  ],
+  "results": [
+    {
+      "student_number": "99-9331-91",
+      "result_status": "PENDING_UPLOAD",
+      "completed_at": null
+    },
+    {
+      "student_number": "99-9333-91",
+      "result_status": "COMPLETED",
+      "completed_at": "2026-10-08"
+    }
+  ],
+  "counts": {
+    "external_events": 5,
+    "external_summaries": 1,
+    "upload_drafts": 0,
+    "upload_files": 0,
+    "certificate_notices": 2,
+    "outbox": 0
+  },
+  "capacityUnchanged": true
+}
+
