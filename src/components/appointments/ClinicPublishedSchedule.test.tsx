@@ -49,7 +49,7 @@ describe("ClinicPublishedSchedule", () => {
       expect(submit).toBeDisabled();
       expect(screen.getByText(blockers[0])).toBeVisible();
     }
-    fireEvent.click(screen.getByRole("button", { name: "Close", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: /^Close$/ }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchMock.mock.calls[0][0]).toBe(`/api/appointments/${appointment.id}/physical-exam-completion-context`);
