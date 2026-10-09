@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { afterAll, describe, expect, it } from "vitest";
 import { deleteAcademicYear } from "@/server/services/academic-years.service";
@@ -143,6 +144,14 @@ async function cleanupShareLockYear() {
 describe("academic-years repository", () => {
   it("returns the configured-year domain conflict when deletion locks and commits first", async () => {
     await cleanupReverseConcurrentYear();
+    const unrelatedAuditIds = [randomUUID(), randomUUID()];
+    await pool.query(
+      `INSERT INTO audit_logs (id,actor_user_id,action,entity_type,entity_id,metadata)
+       SELECT id,$2,'TEST_UNRELATED_IMPORT','schedule_import_group',id::text,
+              jsonb_build_object('academicYearStart',$3::integer)
+         FROM UNNEST($1::uuid[]) fixture(id)`,
+      [unrelatedAuditIds, TEST_REFERENCE_IDS.adminUser, reverseConcurrentYear],
+    );
     await pool.query(
       `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
        VALUES ($1,'2096-07-31',$2,$2)`,
@@ -161,6 +170,9 @@ describe("academic-years repository", () => {
     } finally {
       importGroupClient.release();
     }
+    const auditStateBefore = await pool.query(
+      "SELECT to_jsonb(audit) AS audit FROM audit_logs audit ORDER BY id",
+    );
     const deleter = await pool.connect();
     const importer = await pool.connect();
     let deleterCommitted = false;
@@ -226,10 +238,7 @@ describe("academic-years repository", () => {
            (SELECT COUNT(*)::integer FROM student_academic_snapshots
              WHERE student_number='95-RACE-0001' AND academic_year_start=$1) AS snapshots,
            (SELECT COUNT(*)::integer FROM students WHERE student_number='95-RACE-0001') AS students,
-           (SELECT COUNT(*)::integer FROM appointments WHERE student_number='95-RACE-0001') AS appointments,
-           (SELECT COUNT(*)::integer FROM audit_logs
-             WHERE entity_id='95-RACE-0001:2095'
-                OR metadata->>'academicYearStart'=$1::text) AS audits`,
+           (SELECT COUNT(*)::integer FROM appointments WHERE student_number='95-RACE-0001') AS appointments`,
         [reverseConcurrentYear],
       );
       expect(writes.rows[0]).toEqual({
@@ -237,13 +246,16 @@ describe("academic-years repository", () => {
         snapshots: 0,
         students: 0,
         appointments: 0,
-        audits: 0,
       });
+      expect((await pool.query(
+        "SELECT to_jsonb(audit) AS audit FROM audit_logs audit ORDER BY id",
+      )).rows).toEqual(auditStateBefore.rows);
     } finally {
       if (!deleterCommitted) await deleter.query("ROLLBACK");
       if (!importerSettled) await importer.query("ROLLBACK");
       deleter.release();
       importer.release();
+      await pool.query("DELETE FROM audit_logs WHERE id=ANY($1::uuid[])", [unrelatedAuditIds]);
       await cleanupReverseConcurrentYear();
     }
   });
