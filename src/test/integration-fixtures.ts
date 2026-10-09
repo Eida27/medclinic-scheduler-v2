@@ -209,6 +209,7 @@ export async function cleanupTestFixtures(
     if (sharedOvpsaMembers.rowCount) throw new Error("Refusing cleanup of a partially owned OVPSA batch");
     await client.query(`INSERT INTO test_fixture_import_groups SELECT source_import_group_id
       FROM ovpsa_first_year_batches WHERE id IN (SELECT id FROM test_fixture_ovpsa_batches)
+        AND source_import_group_id IS NOT NULL
       ON CONFLICT DO NOTHING`);
     await client.query(`INSERT INTO test_fixture_batches SELECT id FROM schedule_batches
       WHERE import_group_id IN (SELECT id FROM test_fixture_import_groups) ON CONFLICT DO NOTHING`);
