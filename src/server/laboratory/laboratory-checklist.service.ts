@@ -188,4 +188,3 @@ export async function setLaboratoryTestVerification(appointmentId: string, raw: 
     return { ...updated, appointmentStatus: targetStatus };
   });
 }
-
