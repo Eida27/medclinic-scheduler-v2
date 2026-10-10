@@ -1,0 +1,31 @@
+{
+  "sourceHead": "9ed5731f02d0040bca58d7f3c5a4d66aeae371da",
+  "scratch": "C:\\Users\\anula\\.codex\\worktrees\\pe-linked-laboratory\\medclinic-scheduler-v2\\.superpowers\\sdd\\2026-10-08-pe-linked-external-laboratory-completion",
+  "scratchRemaining": true,
+  "cleanup": "BLOCKED",
+  "reason": "Automatic approval review: blocked by policy",
+  "rejectedActions": [
+    "recursive scratch deletion",
+    "nonrecursive cache junction removal"
+  ],
+  "mutationsExecuted": 0,
+  "preservedLinks": [
+    {
+      "path": "C:\\Users\\anula\\.codex\\worktrees\\pe-linked-laboratory\\medclinic-scheduler-v2\\.superpowers\\sdd\\2026-10-08-pe-linked-external-laboratory-completion\\next-dev-cache\\node_modules\\pdfkit-d5967b64ee09fcf0",
+      "type": "Junction",
+      "target": "C:\\Users\\anula\\.codex\\worktrees\\pe-linked-laboratory\\medclinic-scheduler-v2\\node_modules\\pdfkit"
+    },
+    {
+      "path": "C:\\Users\\anula\\.codex\\worktrees\\pe-linked-laboratory\\medclinic-scheduler-v2\\.superpowers\\sdd\\2026-10-08-pe-linked-external-laboratory-completion\\next-dev-cache\\node_modules\\pg-587764f78a6c7a9c",
+      "type": "Junction",
+      "target": "C:\\Users\\anula\\.codex\\worktrees\\pe-linked-laboratory\\medclinic-scheduler-v2\\node_modules\\pg"
+    },
+    {
+      "path": "C:\\Users\\anula\\.codex\\worktrees\\pe-linked-laboratory\\medclinic-scheduler-v2\\.superpowers\\sdd\\2026-10-08-pe-linked-external-laboratory-completion\\next-dev-cache\\node_modules\\sharp-20c6a5da84e2135f",
+      "type": "Junction",
+      "target": "C:\\Users\\anula\\.codex\\worktrees\\pe-linked-laboratory\\medclinic-scheduler-v2\\node_modules\\sharp"
+    }
+  ],
+  "postgresListeners": 0,
+  "appListeners": 0
+}
