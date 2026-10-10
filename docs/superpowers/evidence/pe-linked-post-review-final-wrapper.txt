@@ -1,0 +1,65 @@
+Starting integration: npm.cmd run test:integration -- --testTimeout=180000 --hookTimeout=180000 --reporter=dot
+stdout | src/server/db/default-clinic-capacity.integration.test.ts > fresh clinic capacity defaults > seeds both services at 100, defaults omitted maximums, and preserves saved settings on replay
+Dropped disposable database medclinic_test_default_capacity_55446de7646e; residue=0.
+
+·····························································································································································································································································································································
+
+ Test Files  74 passed (74)
+      Tests  630 passed (630)
+   Start at  10:40:28
+   Duration  663.70s (transform 6.83s, setup 72.62s, import 55.04s, tests 483.49s, environment 30ms)
+
+Disposable test storage residue before removal: 0 entries.
+Dropped disposable database medclinic_test_pe_post_review_final_oct10; residue=0.
+PASSED integration: exit 0
+Starting unit: npm.cmd test -- --pool=threads --maxWorkers=1 --no-file-parallelism --testTimeout=60000 --hookTimeout=60000 --reporter=default
+ ✓ src/server/services/calendar-occupancy.test.ts (5 tests) 15ms
+ ✓ src/server/student-results/admin-student-result-profile.test.ts (7 tests) 16ms
+ ✓ src/server/repositories/effective-appointment-scope-lock.repository.test.ts (1 test) 15ms
+ ✓ src/test/staff-fixtures.test.ts (1 test) 14ms
+ ✓ src/server/appointments/automatic-no-show.test.ts (3 tests) 13ms
+ ✓ src/components/reports/report-query.test.ts (1 test) 11ms
+
+ Test Files  218 passed (218)
+      Tests  1276 passed (1276)
+   Start at  10:51:37
+   Duration  1459.66s (transform 17.75s, setup 285.98s, import 105.60s, tests 248.73s, environment 659.89s)
+
+PASSED unit: exit 0
+Starting migrations: npm.cmd run test:migrations:empty
+Applied 026_remove_priority_groups_and_legacy_scheduling.sql
+Applied 027_staff_login_brute_force_protection.sql
+Applied 028_final_defense_clinical_workflows.sql
+Applied 029_manual_resolution_batch_requests.sql
+Applied 030_remove_safe_daily_capacity.sql
+Applied 031_retire_manual_schedule_metadata.sql
+Applied 032_default_clinic_capacity_100.sql
+First migration CLI applied count: 32
+Final schema and exact 32-entry migration history assertions passed.
+Second migration CLI applied count: 0
+Atomic DDL/history rollback and post-rollback connection assertions passed.
+Dropped disposable database medclinic_test_pe_post_review_migrations_oct10; residue=0.
+PASSED migrations: exit 0
+Starting lint: npm.cmd run lint
+
+> medclinic-scheduler-v2@0.1.0 lint
+> eslint
+
+PASSED lint: exit 0
+Starting build: npm.cmd run build
+├ ƒ /students
+├ ƒ /students/[studentNumber]
+├ ƒ /students/new
+├ ƒ /students/schedule-imports/[importId]
+└ ƒ /students/schedule-imports/new
+
+
+ƒ Proxy (Middleware)
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+
+PASSED build: exit 0
+Starting typecheck: npx.cmd tsc --noEmit
+PASSED typecheck: exit 0
+All six post-review final gates passed.

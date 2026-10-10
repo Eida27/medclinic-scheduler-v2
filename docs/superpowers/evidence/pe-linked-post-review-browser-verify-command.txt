@@ -1,0 +1,24 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { readFile, writeFile } from 'node:fs/promises';
+const dir = '.superpowers/sdd/2026-10-08-pe-linked-external-laboratory-completion/';
+const beforeText = await readFile(dir+'review-browser-correction-before.json','utf8');
+const previewText = await readFile(dir+'review-browser-correction-after-preview.json','utf8');
+assert.equal(previewText,beforeText);
+const before = JSON.parse(beforeText), after = JSON.parse(await readFile(dir+'review-browser-correction-after-save.json','utf8'));
+const preserved = ['appointments','checklists','items','events','logs','summaries','laboratoryResults','submissions','files'];
+for (const key of preserved) assert.deepEqual(after[key],before[key],key+' changed during correction');
+assert.equal(before.certificates.length,1); assert.equal(after.certificates.length,2);
+const original = after.certificates.find((c:{id:string})=>c.id===before.certificates[0].id);
+const corrected = after.certificates.find((c:{id:string})=>c.id!==before.certificates[0].id);
+assert.equal(original.status,'SUPERSEDED'); assert.equal(corrected.status,'ISSUED');
+assert.equal(corrected.snapshot.classification,'C');
+assert.deepEqual(corrected.snapshot.laboratoryCompletion,original.snapshot.laboratoryCompletion);
+assert.equal(corrected.snapshot.laboratoryAppointmentId,original.snapshot.laboratoryAppointmentId);
+assert.equal(corrected.snapshot.checklistVersion,original.snapshot.checklistVersion);
+const proof = { sourceHead:'9ed5731f02d0040bca58d7f3c5a4d66aeae371da', previewCategories:15,
+  previewUnchanged:true, previewSha256:createHash('sha256').update(beforeText).digest('hex'),
+  preservedCategories:preserved, laboratoryEvidenceUnchanged:true, certificateRevisions:2,
+  originalStatus:original.status, correctedStatus:corrected.status, correctedClassification:'C', confirmationMetadataUnchanged:true };
+await writeFile(dir+'review-browser-proof.json',JSON.stringify(proof,null,2));
+console.log(JSON.stringify(proof));

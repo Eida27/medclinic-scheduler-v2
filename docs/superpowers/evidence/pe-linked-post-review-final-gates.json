@@ -1,0 +1,62 @@
+[
+  {
+    "name": "integration",
+    "command": "npm.cmd run test:integration -- --testTimeout=180000 --hookTimeout=180000 --reporter=dot",
+    "exitCode": 0,
+    "startedAt": "2026-10-10T10:40:13.8296065+08:00",
+    "durationSeconds": 679.34,
+    "sourceHead": "9ed5731f02d0040bca58d7f3c5a4d66aeae371da",
+    "logSha256": "2B1990DFB0255D195E91E97ECB3679113152E92708AC02168D5556A3A98B8064",
+    "retainedPriorRun": false
+  },
+  {
+    "name": "unit",
+    "command": "npm.cmd test -- --pool=threads --maxWorkers=1 --no-file-parallelism --testTimeout=60000 --hookTimeout=60000 --reporter=default",
+    "exitCode": 0,
+    "startedAt": "2026-10-10T10:51:33.4279585+08:00",
+    "durationSeconds": 1463.73,
+    "sourceHead": "9ed5731f02d0040bca58d7f3c5a4d66aeae371da",
+    "logSha256": "61E93B421A0EAD7D75C800BEA63BA7DD23E3F34FF9A3F60E1D8BB5B3C33DA54F",
+    "retainedPriorRun": false
+  },
+  {
+    "name": "migrations",
+    "command": "npm.cmd run test:migrations:empty",
+    "exitCode": 0,
+    "startedAt": "2026-10-10T11:15:57.1959512+08:00",
+    "durationSeconds": 11.04,
+    "sourceHead": "9ed5731f02d0040bca58d7f3c5a4d66aeae371da",
+    "logSha256": "0EF3110F63B239D5BA15507F4F05CD6279601AE19D8D76BFD6FFFDD560A8DDEB",
+    "retainedPriorRun": false
+  },
+  {
+    "name": "lint",
+    "command": "npm.cmd run lint",
+    "exitCode": 0,
+    "startedAt": "2026-10-10T11:16:08.2827928+08:00",
+    "durationSeconds": 169.4,
+    "sourceHead": "9ed5731f02d0040bca58d7f3c5a4d66aeae371da",
+    "logSha256": "FA2FAFEE5356CE196F99EFC861AB068612F12EAE8B61CA02A8791411FA6FE382",
+    "retainedPriorRun": false
+  },
+  {
+    "name": "build",
+    "command": "npm.cmd run build",
+    "exitCode": 0,
+    "startedAt": "2026-10-10T11:18:57.6989106+08:00",
+    "durationSeconds": 228.71,
+    "sourceHead": "9ed5731f02d0040bca58d7f3c5a4d66aeae371da",
+    "logSha256": "FE3F70B685F1BAA00B21B6F171DAB93D2445DFF626066C902C43E608884C285A",
+    "retainedPriorRun": false
+  },
+  {
+    "name": "typecheck",
+    "command": "npx.cmd tsc --noEmit",
+    "exitCode": 0,
+    "startedAt": "2026-10-10T11:22:46.4472309+08:00",
+    "durationSeconds": 84.27,
+    "sourceHead": "9ed5731f02d0040bca58d7f3c5a4d66aeae371da",
+    "logSha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+    "retainedPriorRun": false
+  }
+]

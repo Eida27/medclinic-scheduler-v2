@@ -1,0 +1,98 @@
+- complementary:
+  - img "Central Philippine University seal"
+  - generic: MedClinic Scheduler
+  - generic: CPU Health Services
+  - navigation "Dashboard navigation":
+    - link "Dashboard":
+      - /url: /dashboard
+    - link "Laboratory":
+      - /url: /laboratory
+    - link "Physical exam":
+      - /url: /physical-exam
+    - link "Students & Schedules":
+      - /url: /students
+    - link "Account":
+      - /url: /account
+    - link "Clinic calendar":
+      - /url: /settings/clinic-unavailable-dates
+- banner:
+  - link "Back to Physical Examination":
+    - /url: /physical-exam
+    - generic: Back to Physical Examination
+  - paragraph: Browser CPU Staff
+  - paragraph: Clinic staff
+  - button "Sign out"
+- main:
+  - paragraph: CPU Health Services
+  - heading "FirstYear, Browser Maria" [level=1]
+  - paragraph: 99-9333-91 · PHYSICAL EXAM
+  - generic: Completed
+  - paragraph: Appointment date
+  - paragraph: 2026-10-19
+  - paragraph: Visibility
+  - paragraph: Published
+  - paragraph: Location
+  - paragraph: CPU Clinic
+  - heading "External Laboratory verification" [level=2]
+  - paragraph: Laboratory test progress is read-only on this Physical Examination record.
+  - group "Laboratory tests":
+    - generic: Laboratory tests
+    - paragraph: 4/4 verified
+    - paragraph: Laboratory tests at Iloilo Mission Hospital will be confirmed when CPU Clinic completes the Physical Examination.
+    - checkbox "CBC" [checked] [disabled]
+    - text: CBC
+    - checkbox "Urine" [checked] [disabled]
+    - text: Urine
+    - checkbox "Stool" [checked] [disabled]
+    - text: Stool
+    - checkbox "X-ray" [checked] [disabled]
+    - text: X-ray
+  - heading "Appointment protection" [level=2]
+  - paragraph: This appointment is currently available for automatic scheduling changes.
+  - generic: Not protected
+  - paragraph: Only administrators can change appointment protection.
+  - heading "Medical certificate" [level=2]
+  - paragraph: "Issued finding: Class A"
+  - link "Download medical certificate JPG":
+    - /url: /api/medical-certificates/b7eb4d3b-d860-47b9-a928-dd004f2909bb/download
+  - generic "Correct certificate details"
+  - text: Examination date
+  - textbox "Examination date": 2026-10-10
+  - text: Sex
+  - textbox "Sex": Female
+  - text: Physician
+  - combobox "Physician":
+    - option "Select physician"
+    - option "Dr. Browser PE Fixture" [selected]
+  - group "Corrected finding":
+    - generic: Corrected finding
+    - radio "Class A"
+    - text: Class A
+    - radio "Class B"
+    - text: Class B
+    - radio "Class C" [checked]
+    - text: Class C
+    - radio "Class D"
+    - text: Class D
+  - text: Remarks
+  - textbox "Remarks": Synthetic physician follow-up after batch cancellation
+  - text: Correction reason
+  - textbox "Correction reason": Synthetic physician corrected the finding after batch cancellation
+  - button "Preview corrected certificate"
+  - img "Corrected certificate preview marked not issued"
+  - button "Save corrected revision"
+  - heading "Certificate history" [level=3]
+  - list:
+    - text: Revision 1 · issued · Class A
+    - link "Download historical JPG":
+      - /url: /api/medical-certificates/b7eb4d3b-d860-47b9-a928-dd004f2909bb/revisions/07162aba-3cd6-4db8-b3d8-fb3dc6c8bc33/download
+  - heading "Update appointment" [level=2]
+  - heading "Status history" [level=2]
+  - paragraph: Pending → Completed
+  - paragraph: Browser CPU Staff · Oct 10, 2026, 10:33 AM
+  - paragraph: Medical certificate issued.
+  - paragraph: Created → Pending
+  - paragraph: Browser PE Admin · Oct 10, 2026, 10:30 AM
+  - paragraph: Published by First Year schedule import.
+- button "Open Next.js Dev Tools":
+- alert

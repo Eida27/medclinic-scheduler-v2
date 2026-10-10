@@ -1,0 +1,31 @@
+$ErrorActionPreference = 'Stop'
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
+Set-Location -LiteralPath $repoRoot
+. (Join-Path $PSScriptRoot 'review-browser-env.ps1')
+$env:TEST_DATABASE_DISPOSABLE = '1'
+$sourceHead = (& git rev-parse HEAD).Trim()
+if ($sourceHead -ne '9ed5731f02d0040bca58d7f3c5a4d66aeae371da') { throw 'Source changed after focused review-fix verification' }
+$gateResults = [System.Collections.Generic.List[object]]::new()
+function Invoke-FinalGate([string]$Name, [string]$Executable, [string[]]$Arguments) {
+  $gateLog = Join-Path $PSScriptRoot ('post-review-final-' + $Name + '.log')
+  $started = Get-Date
+  Write-Output ('Starting ' + $Name + ': ' + $Executable + ' ' + ($Arguments -join ' '))
+  & $Executable @Arguments *> $gateLog
+  $gateExit = $LASTEXITCODE
+  $gateResults.Add([pscustomobject]@{ name=$Name; command=($Executable+' '+($Arguments -join ' ')); exitCode=$gateExit;
+    startedAt=$started.ToString('o'); durationSeconds=[Math]::Round(((Get-Date)-$started).TotalSeconds,2);
+    sourceHead=$sourceHead; logSha256=(Get-FileHash -Algorithm SHA256 -LiteralPath $gateLog).Hash; retainedPriorRun=$false })
+  $gateResults | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $PSScriptRoot 'post-review-final-gates.json')
+  Get-Content -LiteralPath $gateLog -Tail 12
+  if ($gateExit -ne 0) { Write-Output ('FAILED ' + $Name + ': ' + $gateExit); exit $gateExit }
+  Write-Output ('PASSED ' + $Name + ': exit 0')
+}
+$env:TEST_DATABASE_URL = 'postgresql://medclinic_test_admin@127.0.0.1:55440/medclinic_test_pe_post_review_final_oct10'
+Invoke-FinalGate 'integration' 'npm.cmd' @('run','test:integration','--','--testTimeout=180000','--hookTimeout=180000','--reporter=dot')
+Invoke-FinalGate 'unit' 'npm.cmd' @('test','--','--pool=threads','--maxWorkers=1','--no-file-parallelism','--testTimeout=60000','--hookTimeout=60000','--reporter=default')
+$env:TEST_DATABASE_URL = 'postgresql://medclinic_test_admin@127.0.0.1:55440/medclinic_test_pe_post_review_migrations_oct10'
+Invoke-FinalGate 'migrations' 'npm.cmd' @('run','test:migrations:empty')
+Invoke-FinalGate 'lint' 'npm.cmd' @('run','lint')
+Invoke-FinalGate 'build' 'npm.cmd' @('run','build')
+Invoke-FinalGate 'typecheck' 'npx.cmd' @('tsc','--noEmit')
+Write-Output 'All six post-review final gates passed.'

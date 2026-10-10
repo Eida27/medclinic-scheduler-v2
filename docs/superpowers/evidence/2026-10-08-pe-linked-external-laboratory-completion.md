@@ -57,7 +57,7 @@ Exact synthetic preview snapshots: [OJT before](pe-linked-ojt-preview-before.jso
 | A14 classes/history | B/C/D remarks rules, non-Class-A findings and closed-cycle mutation cases; Browser remarked Class B |
 | A15 reload/student access | Staff list/detail and student completed schedule/Results; actual matching private JPG downloads |
 
-## Final gates
+## Gates before the final review
 
 The final gates run after the last Browser-driven source fix, with the owned acceptance server stopped. Only its generated development cache was archived before the fresh TypeScript/build checks. Earlier interrupted jobs and the stale generated `.next/dev/types/validator.ts` typecheck failure do not establish a pass.
 
@@ -90,9 +90,39 @@ A further integration run exceeded the 60-second limit in the unchanged Reports 
 
 The October 9 overnight unit repeat ended with exit 1: the fork worker for `ClinicUnavailableCalendar.test.tsx` did not respond to the fixed startup handshake. Its 217 files/1,267 passing tests are not a passing gate. The [failed reporter output](pe-linked-unit-worker-start-failure-oct10.txt) is preserved. The [focused thread-pool recovery](pe-linked-unit-thread-recovery.txt) passed all nine omitted tests; the fresh full thread-pool run passed all 218 files/1,276 tests with exit 0. It retained one worker, default isolation and the unchanged database-free setup; no assertions, dependencies or product source changed. The integration pass remains valid for unchanged source commit `71969bac9d562c132fa0a73bb989687e604f537d` and its retained log SHA-256 is verified before the remaining gates run.
 
-The fresh whole-branch review follows the final gates. Decisions already made:
+The fresh whole-branch review compared `22020b3..0c4a195`. It returned two Important findings and no Critical or Minor findings. Both Important findings were addressed together in one TDD pass; no second whole-branch review was requested. The [review report](pe-linked-final-review.md) and [review package](pe-linked-final-review-diff.txt) are preserved.
+
+Actual PostgreSQL service concurrency reproduced `40P01` for cancellation versus PE readiness, final issuance and final correction. An issuance/cancellation/correction-preview case reproduced `LABORATORY_PROVENANCE_MISSING`. All four failed before implementation and passed after aligning the shared scheduling queue before student scopes and allowing completed historical provenance during correction. New issuance still requires the active current published batch. The [RED](pe-linked-review-fixes-red.txt), [GREEN](pe-linked-review-fixes-green.txt), [62-test clinical regression](pe-linked-review-fixes-regression.txt) and [six-test unit recovery](pe-linked-review-fixes-unit.txt) outputs are retained. The full six-gate repeat on source `9ed5731f02d0040bca58d7f3c5a4d66aeae371da` passed.
+
+On October 10, authenticated CPU Browser acceptance issued a synthetic First-Year Class A certificate. The cancellation condition was prepared through the real cancellation service with a guarded helper that verifies the owned database, fixture, completed visits and batch owner; cancellation has an API but no staff UI. Both completed appointments were retained while all membership/reservations were released. The CPU form then previewed and saved a Class C correction. Preview changed none of the 15 state categories (SHA-256 `e561529b21bcc1d47cf372247bb5c49265346e8bfa7f418cf645f30d455b8f48`). Correction preserved nine Laboratory/appointment/document categories and the original confirmation metadata. Reload showed 4/4, revision 2 Issued/Class C and revision 1 Superseded/Class A; console errors were empty. [Browser proof](pe-linked-post-review-browser-proof.json), [preview](pe-linked-cancelled-batch-correction-preview.jpg), [saved/reloaded result](pe-linked-cancelled-batch-correction-saved.jpg) and [cleanup](pe-linked-post-review-browser-cleanup.txt) are preserved. Cleanup returned zero owned rows and unchanged capacity.
+
+Decisions made during execution and review:
 
 1. Keep imported First-Year Laboratory booking under KABALAKA while authorizing CPU external confirmation separately. Tests retain immutable booking and current staff scope. Cost if wrong: valid external checklists could be inaccessible or clinic authority could broaden.
 2. Extend the omitted PE list file so authorized Pending/No-show rows open the existing server-context dialog. The dialog supplies policy and blockers without duplicating eligibility. Cost if wrong: a blocked case could open an explanatory form, or an eligible case could lose the list action.
+3. Keep execution local-only; hosted/Linux readiness and SMTP delivery remain unproven. Cost if wrong: hosting or delivery failures could first appear outside the tested local environment.
+4. Preserve authorized staff attestation as evidence of external hospital tests. Cost if wrong: an incorrect attestation can record tests that were not performed.
+5. Preserve the approved fresh first-deployment assumption without historical backfill or inferred clinical facts. Cost if wrong: pre-existing data would require separate validation and repair.
+6. Preserve the existing actual examination date contract: open academic year, no future date and not before Laboratory, including a date before the booked PE date. Cost if wrong: early encoding remains possible where another business rule was intended.
+7. Reproduce both review findings against real PostgreSQL and actual services before the single fix pass. Cost if wrong: a nonrepresentative reproduction could leave the reported failure reachable. The new tests actually reproduced three database deadlocks and the blocked historical correction before passing after the fixes.
+
+No Minor findings were deferred.
+
+## Final gates after the review fixes, October 10, 2026
+
+All six gates ran freshly against source commit `9ed5731f02d0040bca58d7f3c5a4d66aeae371da`, after the single review-fix pass and authenticated Browser correction acceptance. No previous integration or unit pass was substituted for these runs.
+
+| Gate | Final result and retained proof |
+| --- | --- |
+| Integration | **PASS:** 74 files / 630 tests, no skipped tests, exit 0; DB/storage residue 0. [Output](pe-linked-post-review-final-integration.txt) |
+| Unit | **PASS:** 218 files / 1,276 tests, no skipped tests or unhandled errors, exit 0. [Output](pe-linked-post-review-final-unit.txt) |
+| Empty migration | **PASS:** exact 32 migrations, replay 0, exact schema/history, atomic DDL/history rollback and connection reuse, exit 0; DB residue 0. [Output](pe-linked-post-review-final-migrations.txt) |
+| Lint | **PASS:** exit 0. [Output](pe-linked-post-review-final-lint.txt) |
+| Production build | **PASS:** Next.js 16.3.5 production compilation, TypeScript and prerendering, exit 0. [Output](pe-linked-post-review-final-build.txt) |
+| Typecheck | **PASS:** standalone compiler against fresh production-generated types, exit 0. [Output](pe-linked-post-review-final-typecheck.txt) |
+
+The [gate manifest](pe-linked-post-review-final-gates.json) records the source commit, each command/exit code/timestamp/duration and raw log SHA-256. The [runner](pe-linked-post-review-gates-command.txt), [complete execution ledger](pe-linked-execution-ledger.txt) and [wrapper output](pe-linked-post-review-final-wrapper.txt) preserve the sequence. Both Important findings are fixed; Critical findings and deferred Minor findings are zero.
+
+The [task TDD archive](pe-linked-task-tdd-proof.zip) preserves the task briefs and raw RED/GREEN/test-run logs; its [index](pe-linked-task-tdd-proof-index.json) records byte counts and SHA-256, checked against every ZIP entry. The [owned-service shutdown proof](pe-linked-post-review-owned-services-stop.txt) records matching data-directory/database/role/loopback identity, PostgreSQL stop/status and zero acceptance-port listeners. The plan's scratch directory is removed after proof preservation. The named Git worktree and branch remain for the user's integration choice.
 
 This is local implementation/acceptance evidence. Hosted/Linux execution and SMTP delivery are outside this run. No deployment, merge or publication is implied.

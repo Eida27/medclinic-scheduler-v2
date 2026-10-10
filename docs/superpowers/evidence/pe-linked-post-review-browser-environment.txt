@@ -1,0 +1,13 @@
+$env:PATH = 'C:\Users\anula\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin;' + $env:PATH
+$env:DATABASE_URL = 'postgresql://medclinic_test_admin@127.0.0.1:55440/medclinic_test_pe_browser'
+$env:JWT_SECRET = 'synthetic-browser-pe-linked-secret-at-least-32-characters'
+$env:EMAIL_OUTBOX_ENCRYPTION_KEY = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+$env:APP_URL = 'http://localhost:3100'
+$env:APP_TIMEZONE = 'Asia/Manila'
+$env:SMTP_HOST = ''
+$env:SMTP_PORT = '587'
+$env:SMTP_USER = ''
+$env:SMTP_PASS = ''
+$env:SMTP_FROM = ''
+$env:RESULT_UPLOAD_ROOT = '.data/browser-pe-linked-results'
+$env:BROWSER_PE_LINKED_ACCEPTANCE_LOCAL_TEST_DB = '1'

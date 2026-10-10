@@ -1,0 +1,425 @@
+
+> medclinic-scheduler-v2@0.1.0 test
+> node ./node_modules/vitest/vitest.mjs run --pool=threads --maxWorkers=1 --no-file-parallelism --testTimeout=60000 --hookTimeout=60000 --reporter=default
+
+
+ RUN  v4.1.8 C:/Users/anula/.codex/worktrees/pe-linked-laboratory/medclinic-scheduler-v2
+
+ ✓ src/components/settings/ClinicUnavailableCalendar.test.tsx (9 tests) 65129ms
+     ✓ renders all twelve true-date month grids without adjacent-month dates  4831ms
+     ✓ keeps date-only drafts while navigating between years  11653ms
+     ✓ keeps an unsaved draft when server calendar props refresh  6267ms
+     ✓ previews before saving and sends the exact public request payload  10777ms
+     ✓ permits today only for an acknowledged emergency closure  14231ms
+     ✓ invalidates an impact preview whenever the draft configuration changes  6706ms
+     ✓ shows clinic staff the same annual calendar without editing controls  3589ms
+     ✓ keeps day details open when the info button receives focus and is clicked  2577ms
+     ✓ distinguishes unconfigured capacity from an available date  4486ms
+ ✓ src/server/medical-certificates/certificate-renderer.test.ts (8 tests) 17110ms
+     ✓ produces immutable-size landscape A4 JPEG with 300 DPI metadata  4833ms
+     ✓ renders preview separately without an issued number  7554ms
+     ✓ renders Unicode clinical text that fits the measured space  4116ms
+ ✓ src/components/settings/UsersManager.test.tsx (15 tests) 14012ms
+     ✓ labels existing coordinator accounts as global  648ms
+     ✓ submits KABALAKA_CLINIC for a clinic staff account  1331ms
+     ✓ submits CPU_CLINIC for a clinic staff account  1447ms
+     ✓ forces COORDINATOR account creation to global clinic access  1297ms
+     ✓ forces ADMIN account creation to global clinic access  1167ms
+     ✓ uses the clinic error before other field errors  1170ms
+     ✓ uses the full name error before email, password, and role errors  1049ms
+     ✓ uses the email error before password and role errors  1045ms
+     ✓ uses the password error before the role error  1035ms
+     ✓ uses the role error when it is the only field error  949ms
+     ✓ preserves a top-level duplicate email error  1133ms
+     ✓ falls back to a generic user creation error without an API message  1066ms
+ ✓ src/app/(dashboard)/appointments/[appointmentId]/page.test.tsx (9 tests) 5035ms
+     ✓ returns not found for a non-UUID path segment without querying appointments  3467ms
+     ✓ renders a published appointment after enforcing the allowed roles  1168ms
+ ✓ src/components/settings/ManualResolutionQueue.test.tsx (14 tests) 11847ms
+     ✓ requires replacement for an awaiting-reschedule service in both individual and page batch controls  1411ms
+     ✓ retains ordinary selection across pages and clears it when filters change  1263ms
+     ✓ selects the full server group and reports blocked cases  974ms
+     ✓ opens a selected academic year as read-only history  558ms
+     ✓ keeps a selected active academic year actionable and refreshes it on focus  576ms
+     ✓ keeps a selected upcoming academic year actionable for planned recovery  388ms
+     ✓ loads searchable closure cases with dates, service state, and history  632ms
+     ✓ renders and resolves an automatic-displacement case without closure context  1338ms
+     ✓ submits a capacity-aware assignment with the optimistic token  1219ms
+     ✓ requires a reason before keeping the current safe replacement  901ms
+     ✓ requires an explicit preservation decision for a related unaffected appointment  1285ms
+     ✓ groups OVPSA Laboratory cases into one coordinated preview and confirmation  983ms
+ ✓ src/app/(dashboard)/reports/page.test.tsx (12 tests) 3349ms
+     ✓ requires a configured academic year before loading report data  891ms
+     ✓ preserves a valid bookmarked program filter when no college is selected  434ms
+     ✓ preserves a bookmarked college-program pair when a reassigned program has another tuple first  358ms
+     ✓ renders normalized metrics, dependent filters, breakdowns, rows, and pagination  1437ms
+ ✓ scripts/admin-bootstrap.test.ts (1 test) 2530ms
+     ✓ refuses missing SMTP before attempting the bootstrap database transaction  2526ms
+ ✓ src/components/appointments/AppointmentActions.test.tsx (15 tests) 4516ms
+     ✓ does not offer manual no-show for a pending appointment  576ms
+     ✓ warns about lock inheritance and navigates to the replacement detail  976ms
+     ✓ keeps physical-exam replacement navigation in the physical-exam workflow  799ms
+     ✓ sends the appointment version with a manual reschedule when one is available  767ms
+     ✓ shows a JSON API error for HTTP 400 and restores the action  385ms
+     ✓ shows a JSON API error for HTTP 500 and restores the action  408ms
+ ✓ src/components/schedules/ScheduleImportForm.test.tsx (10 tests) 4865ms
+     ✓ offers only configured years and defaults to the most recent selectable cycle already started  638ms
+     ✓ keeps a reviewed year on an unchanged refresh and invalidates it when the closing date changes  469ms
+     ✓ shows the exact workbook headers, academic year controls, and seven-day notice  470ms
+     ✓ requires and clears preferred month for priority categories  456ms
+     ✓ reviews First Year imports before confirmation and shows the authoritative allocation warning  689ms
+     ✓ posts file, category, academic year, and conditional preferred month once confirmed  770ms
+     ✓ stays locked after a successful import until navigation unmounts the form  523ms
+     ✓ restores editing after an import request fails  415ms
+     ✓ shows a preflight mismatch without confirmation and clears it when category changes  330ms
+ ✓ src/components/student/StudentLoginForm.test.tsx (9 tests) 4568ms
+     ✓ renders the required plain-text Middle Name after Date of Birth  581ms
+     ✓ allows 100 supplementary Unicode characters and submits them untouched  3220ms
+ ✓ src/components/students/StudentForm.test.tsx (8 tests) 4937ms
+     ✓ requires a middle name without blocking 100 supplementary Unicode characters  3656ms
+     ✓ shows and associates the real middle-name Zod field error while preserving input  361ms
+ ✓ src/server/reports/historical-compliance-pdf-renderer.test.ts (5 tests) 7318ms
+     ✓ finalizes a landscape PDF readable with provenance and every matching row  1336ms
+     ✓ draws every student identifier and all seven ordered detail headers on each detail page  4732ms
+     ✓ draws authoritative Unicode body text without transliteration  477ms
+     ✓ wraps complete long filter and breakdown values within page boundaries  438ms
+     ✓ left-aligns top-level section headings after multi-column content  327ms
+ ✓ src/components/student-results/ResultDraftManager.test.tsx (23 tests) 5652ms
+     ✓ stops upload on a verification 403, clears files and offers the safe appointment continuation  984ms
+     ✓ stops remove on a verification 403, clears files and offers the safe appointment continuation  369ms
+     ✓ stops cancel-edit on a verification 403, clears files and offers the safe appointment continuation  513ms
+     ✓ stops finalize on a verification 403, clears files and offers the safe appointment continuation  405ms
+     ✓ stops submit-changes on a verification 403, clears files and offers the safe appointment continuation  410ms
+     ✓ preserves the selected files after a recoverable upload failure so retry sends them again  309ms
+     ✓ refreshes and locks a stale edit until replacement props arrive  366ms
+ ✓ src/app/(dashboard)/settings/clinic-unavailable-dates/page.test.tsx (2 tests) 5397ms
+     ✓ renders the unified editable year and open-case count for administrators  3736ms
+     ✓ renders the same route read-only for clinic staff  1655ms
+ ✓ src/components/appointments/ClinicPublishedSchedule.test.tsx (17 tests) 5153ms
+     ✓ opens authoritative completion context for pending 'FOURTH_YEAR_OJT' (3/4)  1186ms
+     ✓ opens authoritative completion context for pending 'FIRST_YEAR_EXTERNAL' (+0/4)  555ms
+     ✓ opens authoritative completion context for pending 'FOURTH_YEAR_OJT' (2/4)  612ms
+     ✓ opens authoritative completion context for pending 'STANDARD' (+0/3)  580ms
+     ✓ renders published schedule filters and appointments without draft or visibility controls  465ms
+     ✓ clears bulk selection when the student filter changes, including when returning  363ms
+ ✓ src/components/account/StaffSecurityScreens.test.tsx (8 tests) 4430ms
+     ✓ consumes an email verification token only once in React Strict Mode  447ms
+     ✓ shows the generic Forgot Password response regardless of account eligibility  579ms
+     ✓ submits reset confirmation and sends the user back to Login  650ms
+     ✓ shows read-only account identity and changes the current browser password  1188ms
+     ✓ recovers the account password form after a network error  1139ms
+ ✓ src/components/settings/UsersManager.security.test.tsx (4 tests) 3947ms
+     ✓ renders lifecycle badges and approved actions without Activate or Deactivate  913ms
+     ✓ uses the destructive confirmation pattern with explicit Delete account wording  423ms
+     ✓ submits matching temporary-password fields for a new pending account  1330ms
+     ✓ recovers the create form after a network error  1275ms
+ ✓ src/components/settings/ReferenceDataManager.test.tsx (9 tests) 4299ms
+     ✓ renders two responsive cards with independently constrained record lists  1030ms
+     ✓ resets the submitted program form and refreshes after an asynchronous create succeeds  935ms
+     ✓ preserves entered creation values and shows the API message when creation fails  690ms
+     ✓ does not delete a program when confirmation is cancelled  315ms
+     ✓ sends a confirmed delete for CCS · College of Computer Studies to the matching endpoint  395ms
+     ✓ sends a confirmed delete for BSIT · BS Information Technology to the matching endpoint  339ms
+     ✓ keeps an in-use reference visible and shows the conflict message  388ms
+ ✓ src/components/admin-results/AdminSubmissionActions.test.tsx (5 tests) 3110ms
+     ✓ uses Laboratory-specific labels and the submission-addressed API URLs  1150ms
+     ✓ shows an API conflict, closes stale confirmation state, and refreshes the profile  499ms
+     ✓ clears a stale API error before retrying invalidation  775ms
+     ✓ recovers from a rejected request and allows the confirmation to be retried  581ms
+ ✓ src/components/appointments/PhysicalExamCompletionForm.test.tsx (11 tests) 2911ms
+     ✓ shows one mandatory contextual attestation for FOURTH_YEAR_OJT  648ms
+     ✓ previews a ready external examination without a completion or checklist request  432ms
+     ✓ submits Class B directly with mandatory details and preserves the same request on retry  357ms
+ ✓ scripts/installation-preflight.test.ts (7 tests) 2820ms
+     ✓ rejects absolute storage inside the repository root even when run elsewhere  973ms
+     ✓ rejects absolute storage inside the src descendant even when run elsewhere  924ms
+     ✓ rejects absolute storage inside the .next descendant even when run elsewhere  880ms
+ ✓ src/components/layout/DashboardShell.test.tsx (12 tests) 2707ms
+     ✓ shows an accessible link back to Laboratory on its appointment details  1063ms
+ ✓ src/components/appointments/AppointmentProtectionPanel.test.tsx (5 tests) 2347ms
+     ✓ confirms a validated lock and submits the optimistic timestamp  1368ms
+     ✓ preserves the typed reason and shows stale errors in the open dialog  820ms
+ ✓ src/components/reports/ReportBreakdowns.test.tsx (2 tests) 668ms
+     ✓ preserves a program-only filter for its college and drops it for another college  557ms
+ ✓ src/components/settings/EmailDeliveryMonitor.test.tsx (10 tests) 2285ms
+     ✓ shows masked actionable failures without override or schedule-edit affordances  581ms
+     ✓ shows loading state and ignores an older filter response  323ms
+ ✓ src/components/settings/AcademicYearsManager.test.tsx (6 tests) 2046ms
+     ✓ shows derived labels, state badges, closing dates, linked counts, and a July 31 create default  697ms
+     ✓ updates the closing date and reports success  462ms
+ ✓ src/app/(dashboard)/settings/student-result-submissions/students/[studentNumber]/page.test.tsx (11 tests) 2121ms
+     ✓ loads one decoded, administrator-authorized profile and renders surname-first identity  744ms
+ ✓ src/server/services/student-import-csv.test.ts (15 tests) 1417ms
+     ✓ keeps the 3,000-row limit and accepts UTF-8 byte input  1339ms
+ ✓ src/components/schedules/ScheduleImportHistoryTable.test.tsx (4 tests) 1521ms
+     ✓ renders grouped import totals and a grouped detail action  775ms
+     ✓ uses First Year as the authoritative imported category  355ms
+     ✓ marks a tombstoned importer as deleted while preserving the historical name  363ms
+ ✓ src/components/appointments/LaboratoryChecklist.test.tsx (9 tests) 1576ms
+     ✓ keeps OJT X-ray disabled while manual tests use the server version without optimistic checks  806ms
+ ✓ src/app/(dashboard)/students/schedule-imports/new/page.test.tsx (3 tests) 1015ms
+     ✓ allows administrators and coordinators and renders the academic-year importer  722ms
+ ✓ src/app/(dashboard)/students/page.test.tsx (5 tests) 1479ms
+     ✓ shows the administrator's grouped schedule-import workspace and actions  841ms
+ ✓ src/components/settings/ManualResolutionBatchDialog.test.tsx (2 tests) 1741ms
+   ✓ requires a reviewed preview and invalidates it when the reason changes  1670ms
+ ✓ src/components/reports/ReportFilters.test.tsx (4 tests) 1525ms
+     ✓ does not render a data-quality control  760ms
+     ✓ preserves a compatible program-only filter and clears it when college becomes incompatible  446ms
+ ✓ src/components/settings/CapacityForm.test.tsx (5 tests) 1431ms
+     ✓ displays both canonical fresh defaults without capping custom maximums  373ms
+     ✓ submits only the maximum and disables only the pending card  523ms
+ ✓ src/app/(student)/student/notifications/page.test.tsx (2 tests) 566ms
+     ✓ shows an unverified student's notifications and normal mark-read action  554ms
+ ✓ src/app/(dashboard)/physical-exam/[appointmentId]/page.test.tsx (3 tests) 1206ms
+     ✓ renders eligible FOURTH_YEAR_OJT detail with a wholly read-only paired checklist  919ms
+ ✓ src/app/(dashboard)/students/schedule-imports/[importId]/page.test.tsx (4 tests) 1124ms
+     ✓ allows administrators and coordinators to read cancelled imports without actions  807ms
+ ✓ src/components/layout/Sidebar.test.tsx (5 tests) 1100ms
+     ✓ pins the sidebar to the viewport only on desktop  446ms
+ ✓ src/app/(dashboard)/physical-exam/page.test.tsx (6 tests) 1533ms
+     ✓ requires CPU Clinic access and renders only its published physical examination schedule  869ms
+     ✓ loads and renders the second physical examination page  476ms
+ ✓ src/components/student/EmailVerificationForm.test.tsx (10 tests) 1095ms
+     ✓ explains that verification gates Laboratory changes while reading remains available  468ms
+ ✓ src/app/(student)/student/results/page.test.tsx (7 tests) 2450ms
+     ✓ lets students with email null download official current and historical documents and certificates  1840ms
+ ✓ src/components/students/DeactivateStudentButton.test.tsx (6 tests) 1062ms
+     ✓ closes and navigates after a successful deactivation  560ms
+ ✓ src/app/(dashboard)/laboratory/page.test.tsx (7 tests) 1042ms
+     ✓ requires KABALAKA access and renders only its published laboratory schedule  526ms
+ ✓ src/components/auth/LoginForm.test.tsx (7 tests) 1032ms
+     ✓ shows the safe API message when credentials are rejected  569ms
+ ✓ src/app/(dashboard)/settings/student-result-submissions/page.test.tsx (9 tests) 855ms
+     ✓ renders Laboratory submission and separate certificate state with pagination  667ms
+ ✓ src/components/students/StudentsSchedulesTabs.test.tsx (3 tests) 578ms
+     ✓ offers both workspace views to administrators  494ms
+ ✓ src/components/ui/ConfirmDialog.test.tsx (3 tests) 842ms
+     ✓ contains long content within a short viewport scroll region  503ms
+ ✓ src/app/(dashboard)/dashboard/page.test.tsx (5 tests) 1242ms
+     ✓ shows actionable email delivery failures only to administrators  791ms
+ ✓ src/components/reports/ReportExportButton.test.tsx (4 tests) 834ms
+     ✓ downloads a PDF using the normalized report filters  527ms
+ ✓ src/components/schedules/ScheduleImportClinicPanel.test.tsx (3 tests) 821ms
+     ✓ shows published appointments and successful validation without retired manual diagnostics  705ms
+ ✓ src/components/appointments/PhysicalExamCompletionDialog.test.tsx (3 tests) 812ms
+     ✓ closes a ready First-Year form after its context GET without confirming tests  604ms
+ ✓ src/app/(student)/student/page.test.tsx (6 tests) 844ms
+     ✓ reads the same schedule without forcing email verification  504ms
+ ✓ src/components/layout/LogoutButton.test.tsx (6 tests) 777ms
+     ✓ navigates to sign in after a successful logout  479ms
+ ✓ src/components/appointments/BulkReplacementDialog.test.tsx (1 test) 830ms
+     ✓ shows each student's preview conflict and requires another preview after removal  826ms
+ ✓ src/components/settings/PhysicianProfiles.test.tsx (1 test) 707ms
+   ✓ reports a saved physician without accessing the submit event after the request  703ms
+ ✓ src/components/student/StudentLogoutButton.test.tsx (6 tests) 751ms
+     ✓ navigates to student sign in after a successful logout  478ms
+ ✓ src/components/student/EmailVerificationConfirmation.test.tsx (3 tests) 757ms
+     ✓ does not consume the token until the explicit Verify button is pressed  614ms
+ ✓ src/app/page.test.tsx (1 test) 728ms
+     ✓ renders the light landing page content and navigation actions  722ms
+ ✓ src/app/(student)/student/email-verification/page.test.tsx (17 tests) 692ms
+     ✓ keeps replacement form for missing or rejected return undefined  404ms
+ ✓ src/app/(student)/student/layout.test.tsx (1 test) 632ms
+     ✓ exposes reading navigation and logout before email verification  627ms
+ ✓ scripts/loopback-smtp-sink.test.ts (2 tests) 545ms
+     ✓ captures a synthetic .test message through SMTP for deliberate local inspection  386ms
+ ✓ src/components/settings/ManualResolutionDatePicker.test.tsx (1 test) 674ms
+   ✓ shows capacity and labels, and permits only available dates  670ms
+ ✓ src/app/(dashboard)/settings/reference-data/page.test.tsx (2 tests) 584ms
+     ✓ enters request time and authorizes an Administrator before reference-data reads  574ms
+ ✓ src/app/(dashboard)/settings/academic-years/page.test.tsx (5 tests) 559ms
+     ✓ authorizes an administrator and renders the academic-year controls  541ms
+ ✓ src/server/workers/appointment-no-show.worker.test.ts (4 tests) 526ms
+ ✓ src/app/(public)/login/page.test.tsx (1 test) 1174ms
+     ✓ does not render a circular background decoration  1161ms
+ ✓ src/app/(dashboard)/students/[studentNumber]/page.test.tsx (3 tests) 534ms
+     ✓ keeps the student editor available to administrators  452ms
+ ✓ src/components/branding/BrandMark.test.tsx (2 tests) 522ms
+     ✓ renders the CPU seal and full clinic identity  476ms
+ ✓ src/app/(dashboard)/settings/email-delivery/page.test.tsx (5 tests) 520ms
+     ✓ authorizes an administrator and defaults to actionable delivery failures  502ms
+ ✓ src/app/(student)/student/login/page.test.tsx (1 test) 492ms
+     ✓ explains that the portal supports Laboratory uploads and issued certificates  487ms
+ ✓ src/app/forbidden.test.tsx (1 test) 449ms
+     ✓ renders a safe access-denied response without email-delivery controls  445ms
+ ✓ src/app/(dashboard)/settings/clinic-unavailable-dates/manual-resolution/page.test.tsx (1 test) 533ms
+     ✓ is administrator-only and renders the queue  528ms
+ ✓ src/components/ui/Button.test.tsx (2 tests) 440ms
+     ✓ renders the CPU gold accent treatment  404ms
+ ✓ src/app/(security)/account/onboarding/page.test.tsx (4 tests) 426ms
+     ✓ renders onboarding for a current authenticated session  406ms
+ ✓ src/app/(dashboard)/students/new/page.test.tsx (1 test) 560ms
+     ✓ requires a student-mutating role before loading the editor  554ms
+ ✓ src/test/test-child.test.ts (2 tests) 431ms
+ ✓ src/server/db/migration-transaction-ownership.test.ts (1 test) 32ms
+ ✓ src/test/capacity-fixture-lifecycle.test.ts (10 tests) 55ms
+ ✓ src/app/api/student/result-submissions/[appointmentId]/files/route.test.ts (15 tests) 272ms
+stderr | src/app/api/reports/export/pdf/route.test.ts > GET /api/reports/export/pdf > does not audit success when PDF render setup fails
+Error: font setup failed
+    at C:/Users/anula/.codex/worktrees/pe-linked-laboratory/medclinic-scheduler-v2/src/app/api/reports/export/pdf/route.test.ts:246:13
+    at Mock (file:///C:/Users/anula/.codex/worktrees/pe-linked-laboratory/medclinic-scheduler-v2/node_modules/@vitest/spy/dist/index.js:332:34)
+    at Module.GET (C:/Users/anula/.codex/worktrees/pe-linked-laboratory/medclinic-scheduler-v2/src/app/api/reports/export/pdf/route.ts:164:13)
+    at processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at C:/Users/anula/.codex/worktrees/pe-linked-laboratory/medclinic-scheduler-v2/src/app/api/reports/export/pdf/route.test.ts:249:22
+    at file:///C:/Users/anula/.codex/worktrees/pe-linked-laboratory/medclinic-scheduler-v2/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20
+
+ ✓ src/app/api/reports/export/pdf/route.test.ts (11 tests) 223ms
+ ✓ src/app/api/admin/student-result-submissions/[submissionId]/files/[fileId]/route.test.ts (4 tests) 71ms
+stdout | src/test/test-storage.test.ts > owned test storage teardown > returns successful callback output and removes owned residue
+Disposable test storage residue before removal: 1 entries.
+
+stdout | src/test/test-storage.test.ts > owned test storage teardown > preserves the child failure when storage cleanup succeeds
+Disposable test storage residue before removal: 1 entries.
+
+stdout | src/test/test-storage.test.ts > owned test storage teardown > retains every failure and attempts removal independently: {"childFails":false,"inspectionFails":false,"removalFails":true}
+Disposable test storage residue before removal: 1 entries.
+
+stdout | src/test/test-storage.test.ts > owned test storage teardown > retains every failure and attempts removal independently: {"childFails":true,"inspectionFails":false,"removalFails":true}
+Disposable test storage residue before removal: 1 entries.
+
+ ✓ src/test/test-storage.test.ts (8 tests) 319ms
+ ✓ src/server/services/manual-resolution-batch-planning.test.ts (8 tests) 227ms
+ ✓ src/app/(dashboard)/layout.test.tsx (4 tests) 119ms
+ ✓ src/test/browser-clinic-scheduler-ux-fixture.test.ts (23 tests) 109ms
+ ✓ src/app/api/student/result-submissions/[appointmentId]/edit/route.test.ts (12 tests) 128ms
+ ✓ src/server/services/appointments.service.test.ts (30 tests) 160ms
+ ✓ src/server/services/clinic-calendar-planner.test.ts (16 tests) 217ms
+ ✓ src/server/medical-certificates/physician.service.test.ts (2 tests) 101ms
+ ✓ src/server/storage/local-result-storage.test.ts (3 tests) 84ms
+ ✓ src/app/api/compliance/route.test.ts (17 tests) 162ms
+ ✓ src/app/api/student-auth/login/route.test.ts (8 tests) 134ms
+ ✓ src/server/files/result-file-validation.test.ts (15 tests) 77ms
+ ✓ src/app/api/schedule-imports/preflight/route.test.ts (4 tests) 74ms
+ ✓ src/app/api/schedule-imports/review/route.test.ts (1 test) 68ms
+ ✓ src/app/api/staff-security-routes.test.ts (8 tests) 183ms
+ ✓ src/components/layout/ManilaBoundaryRefresh.test.tsx (2 tests) 251ms
+ ✓ src/test/reference-catalog.contract.test.ts (3 tests) 29ms
+ ✓ src/server/auth/session.test.ts (4 tests) 73ms
+ ✓ src/app/api/student/medical-certificates/[certificateId]/download/route.test.ts (5 tests) 57ms
+ ✓ src/app/api/appointments/[appointmentId]/route.test.ts (11 tests) 85ms
+ ✓ src/app/api/student/result-submissions/[appointmentId]/files/[fileId]/route.test.ts (6 tests) 87ms
+ ✓ src/app/api/clinic-unavailable-dates/manual-cases/bulk/routes.test.ts (8 tests) 89ms
+ ✓ src/app/api/schedule-imports/route.test.ts (5 tests) 101ms
+ ✓ src/app/api/student/result-submissions/[appointmentId]/submit-changes/route.test.ts (9 tests) 123ms
+ ✓ src/server/services/academic-years.service.test.ts (17 tests) 85ms
+ ✓ src/app/api/admin/student-result-submissions/[submissionId]/invalidate/route.test.ts (2 tests) 67ms
+ ✓ src/app/api/student/result-submissions/[appointmentId]/finalize/route.test.ts (6 tests) 88ms
+ ✓ src/app/(dashboard)/laboratory/[appointmentId]/page.test.tsx (1 test) 59ms
+ ✓ src/app/api/admin/email-deliveries/routes.test.ts (6 tests) 59ms
+ ✓ src/app/api/student/result-files/[fileId]/route.test.ts (4 tests) 115ms
+ ✓ src/app/api/student/notifications/route.test.ts (6 tests) 135ms
+ ✓ src/server/services/schedule-imports.schemas.test.ts (3 tests) 41ms
+ ✓ src/app/api/reference-data.routes.test.ts (5 tests) 76ms
+ ✓ src/app/api/appointments/[appointmentId]/complete-physical-exam/route.test.ts (3 tests) 65ms
+ ✓ src/app/api/ovpsa-first-year-batches/route.test.ts (3 tests) 56ms
+ ✓ src/app/api/settings/academic-years/route.test.ts (9 tests) 77ms
+ ✓ src/app/api/student/result-submissions/[appointmentId]/route.test.ts (3 tests) 56ms
+ ✓ src/components/student-results/result-selection-validation.test.ts (12 tests) 52ms
+ ✓ src/server/acceptance/browser-scheduling-integrity-fixture.test.ts (10 tests) 40ms
+ ✓ src/server/auth/student-session.test.ts (2 tests) 67ms
+ ✓ src/app/api/clinic-unavailable-dates/route.test.ts (3 tests) 39ms
+ ✓ src/app/api/appointments/route.test.ts (2 tests) 57ms
+ ✓ scripts/browser-pe-linked-laboratory-fixture.test.ts (6 tests) 31ms
+ ✓ src/server/services/reference-data.service.test.ts (8 tests) 61ms
+ ✓ src/app/api/schedule-imports/[importId]/route.test.ts (2 tests) 53ms
+ ✓ src/app/api/clinic-unavailable-dates/preview/route.test.ts (1 test) 57ms
+ ✓ src/server/services/scheduling-window.test.ts (4 tests) 21ms
+ ✓ src/app/api/appointments/[appointmentId]/laboratory-checklist/route.test.ts (3 tests) 41ms
+ ✓ src/server/auth/current-student.test.ts (9 tests) 47ms
+ ✓ src/app/api/settings/capacity/route.test.ts (1 test) 53ms
+ ✓ src/server/medical-certificates/certificate-schema.test.ts (5 tests) 40ms
+ ✓ src/app/api/clinic-unavailable-dates/manual-cases/ovpsa-batches/[batchId]/preview/route.test.ts (1 test) 122ms
+ ✓ src/test/browser-student-middle-name-auth-fixture.test.ts (4 tests) 42ms
+ ✓ src/app/api/clinic-unavailable-dates/manual-cases/[caseId]/resolve/route.test.ts (1 test) 38ms
+ ✓ src/server/rule-engine/generate-paired-schedule.test.ts (7 tests) 26ms
+ ✓ src/app/api/appointments/[appointmentId]/physical-exam-completion-context/route.test.ts (3 tests) 45ms
+ ✓ src/app/api/admin/student-result-submissions/route.test.ts (2 tests) 39ms
+ ✓ src/app/api/clinic-unavailable-dates/manual-cases/route.test.ts (2 tests) 56ms
+ ✓ src/lib/student-verification-return.test.ts (37 tests) 51ms
+ ✓ src/app/api/appointments/[appointmentId]/physical-exam-certificate-preview/route.test.ts (2 tests) 37ms
+ ✓ src/app/api/schedule-imports/academic-years/route.test.ts (2 tests) 50ms
+ ✓ src/proxy.test.ts (4 tests) 70ms
+ ✓ src/server/repositories/appointments.repository.test.ts (8 tests) 31ms
+ ✓ src/server/repositories/scheduling-blocked-dates.repository.test.ts (2 tests) 23ms
+ ✓ src/server/acceptance/browser-reports-acceptance-fixture.test.ts (11 tests) 42ms
+ ✓ src/server/email/verification-body-encryption.test.ts (3 tests) 35ms
+ ✓ src/server/services/manual-resolution-batch.test.ts (3 tests) 35ms
+ ✓ src/app/api/student/email/verify/route.test.ts (1 test) 52ms
+ ✓ src/app/api/student/email/status/route.test.ts (1 test) 39ms
+ ✓ src/components/settings/clinic-calendar.test.ts (3 tests) 29ms
+ ✓ src/server/services/students.schemas.test.ts (8 tests) 34ms
+ ✓ src/server/schedule/schedule-notifications.test.ts (12 tests) 35ms
+ ✓ src/app/api/dashboard/route.test.ts (3 tests) 68ms
+ ✓ src/lib/historical-compliance-pdf.test.ts (6 tests) 35ms
+ ✓ src/app/api/students/route.test.ts (2 tests) 34ms
+ ✓ src/app/api/clinic-unavailable-dates/manual-cases/ovpsa-batches/[batchId]/route.test.ts (1 test) 93ms
+ ✓ src/app/api/students/[studentNumber]/route.test.ts (2 tests) 46ms
+ ✓ src/server/services/schedule-import-year-category-policy.test.ts (21 tests) 31ms
+ ✓ src/lib/env.test.ts (3 tests) 27ms
+ ✓ src/test/test-database.test.ts (12 tests) 21ms
+ ✓ src/server/services/student-verification-catch-up.service.test.ts (3 tests) 31ms
+ ✓ src/app/(student)/student/results/[appointmentId]/page.test.tsx (3 tests) 30ms
+ ✓ src/lib/api-response.test.ts (1 test) 26ms
+ ✓ src/app/api/student/email/request-verification/route.test.ts (1 test) 32ms
+ ✓ src/server/acceptance/staff-account-security-fixture.test.ts (6 tests) 30ms
+ ✓ src/server/appointments/bulk-replacement.test.ts (2 tests) 31ms
+ ✓ src/app/api/clinic-unavailable-dates/manual-cases/ovpsa-batches/[batchId]/resolve/route.test.ts (1 test) 46ms
+ ✓ src/server/medical-certificates/certificate-replay.test.ts (3 tests) 51ms
+ ✓ src/server/db/migration-runner.test.ts (3 tests) 23ms
+ ✓ src/server/repositories/admin-email-deliveries.repository.test.ts (15 tests) 31ms
+ ✓ src/server/auth/verified-student-page.test.ts (6 tests) 37ms
+ ✓ src/server/services/clinic-closure-recovery-policy.test.ts (10 tests) 27ms
+ ✓ src/server/laboratory/laboratory-requirements.test.ts (12 tests) 25ms
+ ✓ src/server/acceptance/browser-appointment-protection-fixture.test.ts (6 tests) 26ms
+ ✓ src/server/medical-certificates/physical-exam-completion-context.service.test.ts (3 tests) 57ms
+ ✓ src/server/appointments/academic-year-visibility.test.ts (4 tests) 25ms
+ ✓ src/server/auth/student-page.test.ts (2 tests) 18ms
+ ✓ src/server/ovpsa/ovpsa-first-year-import-planner.test.ts (4 tests) 25ms
+ ✓ src/test/browser-student-email-notifications-fixture.test.ts (3 tests) 28ms
+ ✓ src/server/services/student-notifications.service.test.ts (4 tests) 27ms
+ ✓ src/server/acceptance/staff-account-security-dev.test.ts (2 tests) 37ms
+ ✓ src/server/repositories/appointment-summary.repository.test.ts (8 tests) 32ms
+ ✓ src/server/auth/admin-authorization.test.ts (3 tests) 26ms
+ ✓ src/server/services/clinic-manual-resolution-locks.test.ts (1 test) 28ms
+ ✓ src/server/appointments/manual-appointment-destination.test.ts (12 tests) 24ms
+ ✓ src/lib/academic-year.test.ts (6 tests) 18ms
+ ✓ src/server/ovpsa/ovpsa-first-year-planner.test.ts (5 tests) 24ms
+ ✓ src/server/services/staff-password-recovery.service.test.ts (1 test) 25ms
+ ✓ src/server/services/ovpsa-manual-batch-context.service.test.ts (2 tests) 22ms
+ ✓ src/app/(dashboard)/settings/student-result-submissions/[submissionId]/page.test.tsx (2 tests) 29ms
+ ✓ src/server/laboratory/laboratory-completion-policy.test.ts (13 tests) 23ms
+ ✓ src/lib/historical-compliance-report.test.ts (8 tests) 20ms
+ ✓ src/server/repositories/student-result-submissions.repository.test.ts (2 tests) 20ms
+ ✓ src/server/security/request-ip.test.ts (5 tests) 44ms
+ ✓ src/components/appointments/status-labels.test.ts (21 tests) 25ms
+ ✓ src/server/services/appointment-no-show.service.test.ts (1 test) 22ms
+ ✓ src/instrumentation.test.ts (2 tests) 20ms
+ ✓ src/components/appointments/appointment-summary.test.ts (11 tests) 35ms
+ ✓ src/server/repositories/schedule-imports.repository.test.ts (8 tests) 21ms
+ ✓ src/components/admin-results/submission-status.test.ts (5 tests) 20ms
+stderr | src/test/test-database-failure.test.ts > disposable database partial setup failure > reports possible residue when creation succeeded but ownership verification is unavailable
+DISPOSABLE DATABASE CLEANUP FAILED: medclinic_test_partial_setup; inspect residue before retrying.
+
+ ✓ src/test/test-database-failure.test.ts (1 test) 16ms
+ ✓ src/test/browser-first-year-schedule-import-fixture.test.ts (1 test) 19ms
+ ✓ src/test/unit-database-boundary.test.ts (2 tests) 19ms
+ ✓ src/server/appointments/appointment-result-protection.test.ts (6 tests) 18ms
+ ✓ src/server/services/schedule-imports-retired-exports.test.ts (3 tests) 20ms
+ ✓ src/server/appointments/appointment-pair-integrity.test.ts (4 tests) 23ms
+ ✓ src/test/browser-schedule-import-year-category-fixture.test.ts (2 tests) 16ms
+ ✓ src/components/appointments/appointment-list-sort.test.ts (9 tests) 16ms
+ ✓ src/components/settings/clinic-calendar-draft.test.ts (1 test) 16ms
+ ✓ src/server/scheduling/automatic-replacement-bounds.test.ts (3 tests) 16ms
+ ✓ src/server/services/calendar-occupancy.test.ts (5 tests) 15ms
+ ✓ src/server/student-results/admin-student-result-profile.test.ts (7 tests) 16ms
+ ✓ src/server/repositories/effective-appointment-scope-lock.repository.test.ts (1 test) 15ms
+ ✓ src/test/staff-fixtures.test.ts (1 test) 14ms
+ ✓ src/server/appointments/automatic-no-show.test.ts (3 tests) 13ms
+ ✓ src/components/reports/report-query.test.ts (1 test) 11ms
+
+ Test Files  218 passed (218)
+      Tests  1276 passed (1276)
+   Start at  10:51:37
+   Duration  1459.66s (transform 17.75s, setup 285.98s, import 105.60s, tests 248.73s, environment 659.89s)
+

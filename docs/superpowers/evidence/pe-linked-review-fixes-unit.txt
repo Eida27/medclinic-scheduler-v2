@@ -1,0 +1,15 @@
+
+> medclinic-scheduler-v2@0.1.0 test
+> node ./node_modules/vitest/vitest.mjs run src/server/medical-certificates/physical-exam-completion-context.service.test.ts src/server/medical-certificates/certificate-replay.test.ts --pool=threads --maxWorkers=1 --no-file-parallelism --testTimeout=60000 --hookTimeout=60000 --reporter=default
+
+
+ RUN  v4.1.8 C:/Users/anula/.codex/worktrees/pe-linked-laboratory/medclinic-scheduler-v2
+
+ ✓ src/server/medical-certificates/certificate-replay.test.ts (3 tests) 27ms
+ ✓ src/server/medical-certificates/physical-exam-completion-context.service.test.ts (3 tests) 37ms
+
+ Test Files  2 passed (2)
+      Tests  6 passed (6)
+   Start at  10:29:17
+   Duration  6.44s (transform 1.22s, setup 2.49s, import 2.45s, tests 64ms, environment 1ms)
+

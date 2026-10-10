@@ -1,0 +1,23 @@
+{
+  "sourceHead": "9ed5731f02d0040bca58d7f3c5a4d66aeae371da",
+  "previewCategories": 15,
+  "previewUnchanged": true,
+  "previewSha256": "e561529b21bcc1d47cf372247bb5c49265346e8bfa7f418cf645f30d455b8f48",
+  "preservedCategories": [
+    "appointments",
+    "checklists",
+    "items",
+    "events",
+    "logs",
+    "summaries",
+    "laboratoryResults",
+    "submissions",
+    "files"
+  ],
+  "laboratoryEvidenceUnchanged": true,
+  "certificateRevisions": 2,
+  "originalStatus": "SUPERSEDED",
+  "correctedStatus": "ISSUED",
+  "correctedClassification": "C",
+  "confirmationMetadataUnchanged": true
+}

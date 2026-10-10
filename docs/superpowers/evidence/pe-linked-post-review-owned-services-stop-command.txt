@@ -1,0 +1,17 @@
+$ErrorActionPreference = 'Stop'
+$pgBin = 'C:\Program Files\PostgreSQL\18\bin'
+$expectedData = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'postgres')).Path.Replace('\','/')
+$identityText = & (Join-Path $pgBin 'psql.exe') -h 127.0.0.1 -p 55440 -U medclinic_test_admin -d medclinic_test_pe_browser -X -A -t -c "SELECT json_build_object('database',current_database(),'oid',(SELECT oid FROM pg_database WHERE datname=current_database()),'role',current_user,'address',host(inet_server_addr()),'port',inet_server_port(),'dataDirectory',current_setting('data_directory'));"
+if ($LASTEXITCODE -ne 0) { throw 'Cannot verify owned PostgreSQL identity' }
+$identity = $identityText | ConvertFrom-Json
+if ($identity.database -ne 'medclinic_test_pe_browser' -or $identity.oid -ne 46365 -or $identity.role -ne 'medclinic_test_admin' -or $identity.address -ne '127.0.0.1' -or $identity.port -ne 55440 -or $identity.dataDirectory.Replace('\','/') -ne $expectedData) { throw 'Refusing to stop an unowned PostgreSQL cluster' }
+$identity | ConvertTo-Json -Compress
+& (Join-Path $pgBin 'pg_ctl.exe') stop -D $expectedData -m fast
+if ($LASTEXITCODE -ne 0) { throw 'Owned PostgreSQL shutdown failed' }
+& (Join-Path $pgBin 'pg_ctl.exe') status -D $expectedData
+$statusExit = $LASTEXITCODE
+if ($statusExit -ne 3) { throw 'Owned PostgreSQL is still running' }
+$pgListener = @(Get-NetTCPConnection -LocalPort 55440 -State Listen -ErrorAction SilentlyContinue)
+$appListener = @(Get-NetTCPConnection -LocalPort 3100 -State Listen -ErrorAction SilentlyContinue)
+if ($pgListener.Count -ne 0 -or $appListener.Count -ne 0) { throw 'Owned acceptance ports are still listening' }
+Write-Output ('Owned PostgreSQL status exit='+$statusExit+'; port 55440 listeners=0; port 3100 listeners=0.')

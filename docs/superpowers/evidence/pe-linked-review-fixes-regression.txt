@@ -1,0 +1,90 @@
+
+> medclinic-scheduler-v2@0.1.0 test:integration
+> tsx scripts/test-integration.ts src/server/laboratory/pe-linked-laboratory.integration.test.ts src/server/medical-certificates/certificate.integration.test.ts src/server/laboratory/laboratory-checklist.integration.test.ts src/server/services/appointments-locking.integration.test.ts src/server/services/first-year-schedule-import.integration.test.ts --testTimeout=180000 --hookTimeout=180000 --reporter=default
+
+Verified disposable database medclinic_test_pe_review_regression_oct10.
+Applied 001_extensions_and_helpers.sql
+Applied 002_users_and_reference_data.sql
+Applied 003_students_and_schedules.sql
+Applied 004_appointments_results_and_audit.sql
+Applied 005_clinic_scheduler_scoping.sql
+Applied 006_unified_student_schedule_imports.sql
+Applied 007_coordinator_import_automation.sql
+Applied 008_automated_scheduling_and_student_portal.sql
+Applied 009_remove_appointment_times.sql
+Applied 010_maximum_only_capacity.sql
+Applied 011_current_appointment_and_submission_read_indexes.sql
+Applied 012_cpu_reference_catalog.sql
+Applied 013_clinic_calendar_batch_editor.sql
+Applied 014_unified_clinic_calendar.sql
+Applied 015_appointment_result_protection.sql
+Applied 016_reports_historical_compliance.sql
+Applied 017_student_result_multi_upload_editing.sql
+Applied 018_student_result_storage_cleanup_intents.sql
+Applied 019_first_year_ovpsa_priority_scheduling.sql
+Applied 020_first_year_schedule_import_consolidation.sql
+Applied 021_clinic_closure_recovery_policy.sql
+Applied 022_schedule_import_year_category_validation.sql
+Applied 023_mandatory_student_email_verification_notifications.sql
+Applied 024_staff_account_security_onboarding_deletion.sql
+Applied 025_scheduling_integrity_hardening.sql
+Applied 026_remove_priority_groups_and_legacy_scheduling.sql
+Applied 027_staff_login_brute_force_protection.sql
+Applied 028_final_defense_clinical_workflows.sql
+Applied 029_manual_resolution_batch_requests.sql
+Applied 030_remove_safe_daily_capacity.sql
+Applied 031_retire_manual_schedule_metadata.sql
+Applied 032_default_clinic_capacity_100.sql
+Applied 001_reference_and_users.sql
+
+ RUN  v4.1.8 C:/Users/anula/.codex/worktrees/pe-linked-laboratory/medclinic-scheduler-v2
+
+ ✓ src/server/laboratory/pe-linked-laboratory.integration.test.ts (38 tests) 135117ms
+     ✓ serializes actual batch cancellation against PE readiness without a database deadlock  575ms
+     ✓ serializes actual batch cancellation against PE issuance without a database deadlock  5068ms
+     ✓ serializes actual batch cancellation against PE correction without a database deadlock  7243ms
+     ✓ corrects a completed First-Year certificate after cancellation using unchanged historical Laboratory evidence  8405ms
+     ✓ shows saved First-Year confirmation in staff/student readers without creating upload work  7544ms
+     ✓ keeps OJT clinical completion separate from verified student document access  3395ms
+     ✓ confirms only the effective replacement and keeps its immutable OJT requirements  3232ms
+     ✓ rejects stale issuance when uncheck changes Laboratory after rendering  4122ms
+     ✓ rejects stale issuance when replace changes Laboratory after rendering  3447ms
+     ✓ serializes concurrent completion requests (same request: true)  5454ms
+     ✓ serializes concurrent completion requests (same request: false)  4158ms
+     ✓ rejects a First-Year PE paired to another revision's reservations before confirmation  352ms
+     ✓ retains status-only completion constraints and the unique external summary  5260ms
+     ✓ blocks PE while manual CBC is missing, without side effects  569ms
+     ✓ readies OJT at 3/4, previews without writes, and preserves the manual verifier on issuance  7153ms
+     ✓ readies First-Year at 0/4 without a summary and atomically saves four EXTERNAL tests and a result  7548ms
+     ✓ preserves the ordinary completed-Laboratory gate for fourth-year REGULAR  5154ms
+     ✓ preserves the ordinary completed-Laboratory gate for fourth-year TOUR  6535ms
+     ✓ keeps external eligibility from the snapshot after the student's live year changes  5669ms
+     ✓ confirms the hospital test for Class B while requiring remarks  4312ms
+     ✓ confirms the hospital test for Class C while requiring remarks  5122ms
+     ✓ confirms the hospital test for Class D while requiring remarks  7567ms
+     ✓ rolls confirmation back when the subsequent certificate insert fails  6168ms
+     ✓ rejects a closed cycle and inactive physician without partial confirmation  309ms
+     ✓ preserves Laboratory evidence and its initial linkage through correction preview, correction and revocation  16461ms
+ ✓ src/server/medical-certificates/certificate.integration.test.ts (3 tests) 20607ms
+     ✓ rejects PE uploads without state changes and requires the full Laboratory checklist  755ms
+     ✓ issues Class B once and returns the same bytes after a lost-response retry  13640ms
+     ✓ returns one certificate for two concurrent identical completion requests  5239ms
+ ✓ src/server/services/first-year-schedule-import.integration.test.ts (6 tests) 12507ms
+     ✓ reviews and publishes 280 external Laboratory students with PE loads 100/100/80 at the fresh default  9641ms
+     ✓ allows only one concurrent owner and rolls the losing publication back completely  540ms
+     ✓ reschedules and cancels a published atomic First Year import with complete history  1162ms
+ ✓ src/server/laboratory/laboratory-checklist.integration.test.ts (9 tests) 2774ms
+     ✓ rejects checking and no-op unchecking OJT X-ray without changing evidence  432ms
+     ✓ reserves every First-Year test, including no-ops, for CPU PE completion  484ms
+     ✓ finalizes the unique external summary and result without replacing confirmation identity  350ms
+ ✓ src/server/services/appointments-locking.integration.test.ts (6 tests) 2405ms
+     ✓ locks, rejects stale requests and clinic staff, then unlocks after a status change  388ms
+     ✓ does not deadlock a lifecycle mutation with a schedule import row lock  336ms
+
+ Test Files  5 passed (5)
+      Tests  62 passed (62)
+   Start at  10:29:23
+   Duration  196.53s (transform 1.99s, setup 6.30s, import 10.41s, tests 173.41s, environment 2ms)
+
+Disposable test storage residue before removal: 0 entries.
+Dropped disposable database medclinic_test_pe_review_regression_oct10; residue=0.

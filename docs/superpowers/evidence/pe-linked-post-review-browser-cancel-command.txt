@@ -1,0 +1,28 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { assertSafePeLinkedBrowserDatabase, assertMatchingPeLinkedBrowserDatabase } from '../../../scripts/browser-pe-linked-laboratory-fixture';
+import { pool } from '../../../src/server/db/pool';
+import { cancelOvpsaFirstYearBatch } from '../../../src/server/ovpsa/ovpsa-first-year.service';
+assertSafePeLinkedBrowserDatabase(process.env.DATABASE_URL, process.env.BROWSER_PE_LINKED_ACCEPTANCE_LOCAL_TEST_DB);
+try {
+  const manifest = JSON.parse(await readFile('.data/browser-pe-linked-laboratory/state.json', 'utf8'));
+  const live = (await pool.query(`SELECT current_database() AS database,host(inet_server_addr()) AS address,
+    inet_server_port() AS port,(SELECT oid FROM pg_database WHERE datname=current_database()) AS oid,current_user AS role`)).rows[0];
+  assertMatchingPeLinkedBrowserDatabase(manifest.identity, live);
+  const owned = manifest.cases.find((c: {name:string}) => c.name === 'FIRST_YEAR');
+  assert(owned);
+  const row = (await pool.query(`SELECT b.id::text,b.optimistic_token::text AS token,b.created_by::text AS owner,
+    a.status,(SELECT count(*)::int FROM appointments WHERE id=ANY($2::uuid[]) AND status='COMPLETED') AS completed,
+    (SELECT count(*)::int FROM medical_certificate_revisions WHERE appointment_id=a.id AND status='ISSUED') AS certificates
+    FROM appointments a JOIN ovpsa_first_year_batches b ON b.id=a.ovpsa_batch_id
+    WHERE a.id=$1 AND a.student_number=$3`, [owned.peId,[owned.labId,owned.peId],owned.studentNumber])).rows[0];
+  assert.equal(row.owner, manifest.adminId); assert.equal(row.completed,2); assert.equal(row.certificates,1);
+  const outcome = await cancelOvpsaFirstYearBatch(row.id, { optimisticToken: row.token,
+    reason:'Synthetic post-review Browser cancellation preserves completed visits' }, manifest.adminId);
+  const saved = (await pool.query(`SELECT b.status,
+    (SELECT count(*)::int FROM ovpsa_first_year_active_memberships WHERE batch_id=b.id AND released_at IS NULL) AS active_memberships,
+    (SELECT count(*)::int FROM ovpsa_first_year_service_reservations WHERE batch_id=b.id AND status<>'RELEASED') AS unreleased_reservations
+    FROM ovpsa_first_year_batches b WHERE b.id=$1`, [row.id])).rows[0];
+  assert.equal(saved.status,'CANCELLED'); assert.equal(saved.active_memberships,0); assert.equal(saved.unreleased_reservations,0);
+  console.log(JSON.stringify({database:live,batchId:row.id,outcome,saved,completedVisits:2}));
+} finally { await pool.end(); }

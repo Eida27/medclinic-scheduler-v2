@@ -1,0 +1,253 @@
+
+> medclinic-scheduler-v2@0.1.0 test:integration
+> tsx scripts/test-integration.ts src/server/laboratory/pe-linked-laboratory.integration.test.ts --testNamePattern=serializes actual batch|corrects a completed First-Year certificate after cancellation --testTimeout=180000 --hookTimeout=180000 --reporter=default
+
+Verified disposable database medclinic_test_pe_review_red_oct10.
+Applied 001_extensions_and_helpers.sql
+Applied 002_users_and_reference_data.sql
+Applied 003_students_and_schedules.sql
+Applied 004_appointments_results_and_audit.sql
+Applied 005_clinic_scheduler_scoping.sql
+Applied 006_unified_student_schedule_imports.sql
+Applied 007_coordinator_import_automation.sql
+Applied 008_automated_scheduling_and_student_portal.sql
+Applied 009_remove_appointment_times.sql
+Applied 010_maximum_only_capacity.sql
+Applied 011_current_appointment_and_submission_read_indexes.sql
+Applied 012_cpu_reference_catalog.sql
+Applied 013_clinic_calendar_batch_editor.sql
+Applied 014_unified_clinic_calendar.sql
+Applied 015_appointment_result_protection.sql
+Applied 016_reports_historical_compliance.sql
+Applied 017_student_result_multi_upload_editing.sql
+Applied 018_student_result_storage_cleanup_intents.sql
+Applied 019_first_year_ovpsa_priority_scheduling.sql
+Applied 020_first_year_schedule_import_consolidation.sql
+Applied 021_clinic_closure_recovery_policy.sql
+Applied 022_schedule_import_year_category_validation.sql
+Applied 023_mandatory_student_email_verification_notifications.sql
+Applied 024_staff_account_security_onboarding_deletion.sql
+Applied 025_scheduling_integrity_hardening.sql
+Applied 026_remove_priority_groups_and_legacy_scheduling.sql
+Applied 027_staff_login_brute_force_protection.sql
+Applied 028_final_defense_clinical_workflows.sql
+Applied 029_manual_resolution_batch_requests.sql
+Applied 030_remove_safe_daily_capacity.sql
+Applied 031_retire_manual_schedule_metadata.sql
+Applied 032_default_clinic_capacity_100.sql
+Applied 001_reference_and_users.sql
+
+ RUN  v4.1.8 C:/Users/anula/.codex/worktrees/pe-linked-laboratory/medclinic-scheduler-v2
+
+ ❯ src/server/laboratory/pe-linked-laboratory.integration.test.ts (38 tests | 4 failed | 34 skipped) 16267ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/laboratory/pe-linked-laboratory.integration.test.ts > PE-linked external Laboratory confirmation > serializes actual batch cancellation against PE readiness without a database deadlock
+AssertionError: expected [ { status: 'rejected', …(1) } ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   {
++     "reason": error {
++       "message": "deadlock detected",
++       "length": 375,
++       "name": "error",
++       "severity": "ERROR",
++       "code": "40P01",
++       "detail": "Process 7380 waits for ShareLock on transaction 43308; blocked by process 12220.
++ Process 12220 waits for ExclusiveLock on advisory lock [313382,1203528606,721869538,1]; blocked by process 7380.",
++       "hint": "See server log for query details.",
++       "position": undefined,
++       "internalPosition": undefined,
++       "internalQuery": undefined,
++       "where": "while locking tuple (0,2) in relation \"ovpsa_first_year_batches\"",
++       "schema": undefined,
++       "table": undefined,
++       "column": undefined,
++       "dataType": undefined,
++       "constraint": undefined,
++       "file": "deadlock.c",
++       "line": "1138",
++       "routine": "DeadLockReport",
++     },
++     "status": "rejected",
++   },
++ ]
+
+ ❯ src/server/laboratory/pe-linked-laboratory.integration.test.ts:219:105
+    217|       await Promise.allSettled([cancellation, ...(clinical ? [clinical…
+    218|     }
+    219|     expect(settled!.filter((result) => result.status === "rejected" &&…
+       |                                                                                                         ^
+    220|     expect(settled![0].status).toBe("fulfilled");
+    221|     if (operation === "correction") expect(settled![1].status).toBe("f…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+ FAIL  src/server/laboratory/pe-linked-laboratory.integration.test.ts > PE-linked external Laboratory confirmation > serializes actual batch cancellation against PE issuance without a database deadlock
+AssertionError: expected [ { status: 'rejected', …(1) } ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   {
++     "reason": error {
++       "message": "deadlock detected",
++       "length": 310,
++       "name": "error",
++       "severity": "ERROR",
++       "code": "40P01",
++       "detail": "Process 12220 waits for ExclusiveLock on advisory lock [313382,1002028983,3582655016,1]; blocked by process 3096.
++ Process 3096 waits for ShareLock on transaction 43316; blocked by process 12220.",
++       "hint": "See server log for query details.",
++       "position": undefined,
++       "internalPosition": undefined,
++       "internalQuery": undefined,
++       "where": undefined,
++       "schema": undefined,
++       "table": undefined,
++       "column": undefined,
++       "dataType": undefined,
++       "constraint": undefined,
++       "file": "deadlock.c",
++       "line": "1138",
++       "routine": "DeadLockReport",
++     },
++     "status": "rejected",
++   },
++ ]
+
+ ❯ src/server/laboratory/pe-linked-laboratory.integration.test.ts:219:105
+    217|       await Promise.allSettled([cancellation, ...(clinical ? [clinical…
+    218|     }
+    219|     expect(settled!.filter((result) => result.status === "rejected" &&…
+       |                                                                                                         ^
+    220|     expect(settled![0].status).toBe("fulfilled");
+    221|     if (operation === "correction") expect(settled![1].status).toBe("f…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯
+
+ FAIL  src/server/laboratory/pe-linked-laboratory.integration.test.ts > PE-linked external Laboratory confirmation > serializes actual batch cancellation against PE correction without a database deadlock
+AssertionError: expected [ { status: 'rejected', …(1) } ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   {
++     "reason": error {
++       "message": "deadlock detected",
++       "length": 374,
++       "name": "error",
++       "severity": "ERROR",
++       "code": "40P01",
++       "detail": "Process 7380 waits for ShareLock on transaction 43334; blocked by process 3096.
++ Process 3096 waits for ExclusiveLock on advisory lock [313382,3844246415,2997542287,1]; blocked by process 7380.",
++       "hint": "See server log for query details.",
++       "position": undefined,
++       "internalPosition": undefined,
++       "internalQuery": undefined,
++       "where": "while locking tuple (0,7) in relation \"ovpsa_first_year_batches\"",
++       "schema": undefined,
++       "table": undefined,
++       "column": undefined,
++       "dataType": undefined,
++       "constraint": undefined,
++       "file": "deadlock.c",
++       "line": "1138",
++       "routine": "DeadLockReport",
++     },
++     "status": "rejected",
++   },
++ ]
+
+ ❯ src/server/laboratory/pe-linked-laboratory.integration.test.ts:219:105
+    217|       await Promise.allSettled([cancellation, ...(clinical ? [clinical…
+    218|     }
+    219|     expect(settled!.filter((result) => result.status === "rejected" &&…
+       |                                                                                                         ^
+    220|     expect(settled![0].status).toBe("fulfilled");
+    221|     if (operation === "correction") expect(settled![1].status).toBe("f…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯
+
+ FAIL  src/server/laboratory/pe-linked-laboratory.integration.test.ts > PE-linked external Laboratory confirmation > corrects a completed First-Year certificate after cancellation using unchanged historical Laboratory evidence
+AppError: The effective Laboratory pair has invalid immutable provenance.
+ ❯ provenanceMissing src/server/laboratory/pe-linked-laboratory.service.ts:31:9
+     29|
+     30| function provenanceMissing(): never {
+     31|   throw new AppError("LABORATORY_PROVENANCE_MISSING", "The effective L…
+       |         ^
+     32| }
+     33|
+ ❯ loadPeLaboratoryCompletionPlan src/server/laboratory/pe-linked-laboratory.service.ts:96:25
+ ❯ clinicalContext src/server/medical-certificates/certificate.service.ts:105:26
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ Module.previewCertificateCorrection src/server/medical-certificates/certificate.service.ts:485:19
+ ❯ src/server/laboratory/pe-linked-laboratory.integration.test.ts:239:21
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/4]⎯
+
+     × serializes actual batch cancellation against PE readiness without a database deadlock 1708ms
+     × serializes actual batch cancellation against PE issuance without a database deadlock 4169ms
+     × serializes actual batch cancellation against PE correction without a database deadlock 7093ms
+     × corrects a completed First-Year certificate after cancellation using unchanged historical Laboratory evidence 2755ms
+     ↓ shows saved First-Year confirmation in staff/student readers without creating upload work
+     ↓ keeps OJT clinical completion separate from verified student document access
+     ↓ confirms only the effective replacement and keeps its immutable OJT requirements
+     ↓ rejects stale issuance when uncheck changes Laboratory after rendering
+     ↓ rejects stale issuance when replace changes Laboratory after rendering
+     ↓ serializes concurrent completion requests (same request: true)
+     ↓ serializes concurrent completion requests (same request: false)
+     ↓ rejects a First-Year PE paired to another revision's reservations before confirmation
+     ↓ protects recorded OJT progress from a concurrent automatic no-show sweep
+     ↓ retains status-only completion constraints and the unique external summary
+     ↓ blocks PE while manual CBC is missing, without side effects
+     ↓ blocks PE while manual URINE is missing, without side effects
+     ↓ blocks PE while manual STOOL is missing, without side effects
+     ↓ readies OJT at 3/4, previews without writes, and preserves the manual verifier on issuance
+     ↓ readies First-Year at 0/4 without a summary and atomically saves four EXTERNAL tests and a result
+     ↓ preserves the ordinary completed-Laboratory gate for fourth-year REGULAR
+     ↓ preserves the ordinary completed-Laboratory gate for fourth-year TOUR
+     ↓ keeps external eligibility from the snapshot after the student's live year changes
+     ↓ confirms the hospital test for Class B while requiring remarks
+     ↓ confirms the hospital test for Class C while requiring remarks
+     ↓ confirms the hospital test for Class D while requiring remarks
+     ↓ leaves every side effect untouched when rendering fails
+     ↓ rolls confirmation back when the subsequent certificate insert fails
+     ↓ rejects current database authority or expired identities: 'FORBIDDEN'
+     ↓ rejects current database authority or expired identities: 'FORBIDDEN'
+     ↓ rejects current database authority or expired identities: 'SESSION_EXPIRED'
+     ↓ rejects current database authority or expired identities: 'SESSION_EXPIRED'
+     ↓ rejects unonboarded CPU staff before any external writes
+     ↓ rejects first-year appointments without OVPSA provenance without writes
+     ↓ rejects a closed cycle and inactive physician without partial confirmation
+     ↓ rejects invalid dates or physicians without partial confirmation: 'EXAMINATION_DATE_INVALID'
+     ↓ rejects invalid dates or physicians without partial confirmation: 'EXAMINATION_DATE_INVALID'
+     ↓ rejects invalid dates or physicians without partial confirmation: 'PHYSICIAN_STALE'
+     ↓ preserves Laboratory evidence and its initial linkage through correction preview, correction and revocation
+
+ Test Files  1 failed (1)
+      Tests  4 failed | 34 skipped (38)
+   Start at  10:26:55
+   Duration  22.82s (transform 1.38s, setup 715ms, import 4.19s, tests 16.27s, environment 0ms)
+
+Disposable test storage residue before removal: 0 entries.
+Dropped disposable database medclinic_test_pe_review_red_oct10; residue=0.
+C:\Users\anula\.codex\worktrees\pe-linked-laboratory\medclinic-scheduler-v2\scripts\test-child.ts:17
+      else reject(new Error(`Test child failed: exit=${code}, signal=${signal ?? "none"}`));
+                  ^
+
+Error: Test child failed: exit=1, signal=none
+    at ChildProcess.<anonymous> (C:\Users\anula\.codex\worktrees\pe-linked-laboratory\medclinic-scheduler-v2\scripts\test-child.ts:17:19)
+    at ChildProcess.emit (node:events:509:28)
+    at ChildProcess._handle.onexit (node:internal/child_process:295:12)
+
+Node.js v24.19.0

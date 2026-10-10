@@ -1,0 +1,28 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { readFile, readdir } from 'node:fs/promises';
+const dir = 'docs/superpowers/evidence/';
+const gates = JSON.parse(await readFile(dir+'pe-linked-post-review-final-gates.json','utf8'));
+assert.equal(gates.length,6);
+assert.deepEqual(new Set(gates.map((g:{name:string})=>g.name)),new Set(['integration','unit','migrations','lint','build','typecheck']));
+for (const gate of gates) {
+  assert.equal(gate.exitCode,0,gate.name);
+  assert.equal(gate.sourceHead,'9ed5731f02d0040bca58d7f3c5a4d66aeae371da');
+  assert.equal(gate.retainedPriorRun,false);
+  const bytes = await readFile(dir+'pe-linked-post-review-final-'+gate.name+'.txt');
+  assert.equal(createHash('sha256').update(bytes).digest('hex').toUpperCase(),gate.logSha256,gate.name+' hash');
+}
+const before = await readFile(dir+'pe-linked-post-review-correction-before.json');
+const preview = await readFile(dir+'pe-linked-post-review-correction-after-preview.json');
+assert.deepEqual(before,preview);
+assert.equal(createHash('sha256').update(before).digest('hex'),'e561529b21bcc1d47cf372247bb5c49265346e8bfa7f418cf645f30d455b8f48');
+const paths = (await readdir(dir)).filter((p)=>/^pe-linked-.*\.(json|txt)$/.test(p));
+for (const name of paths) {
+  const path = dir+name;
+  const diskHash = execFileSync('git',['hash-object','--no-filters',path],{encoding:'utf8'}).trim();
+  const blobHash = execFileSync('git',['rev-parse','HEAD:'+path],{encoding:'utf8'}).trim();
+  assert.equal(diskHash,blobHash,name+' checkout bytes');
+}
+console.log(JSON.stringify({sourceHead:gates[0].sourceHead,gates:6,exitZero:true,freshRuns:6,logHashesMatch:true,
+  previewBytesUnchanged:true,bytePreservedJsonTxtFiles:paths.length}));

@@ -1,0 +1,5 @@
+{"database":"medclinic_test_pe_browser","oid":"46365","role":"medclinic_test_admin","address":"127.0.0.1","port":55440,"dataDirectory":"C:/Users/anula/.codex/worktrees/pe-linked-laboratory/medclinic-scheduler-v2/.superpowers/sdd/2026-10-08-pe-linked-external-laboratory-completion/postgres"}
+waiting for server to shut down.... done
+server stopped
+pg_ctl: no server running
+Owned PostgreSQL status exit=3; port 55440 listeners=0; port 3100 listeners=0.

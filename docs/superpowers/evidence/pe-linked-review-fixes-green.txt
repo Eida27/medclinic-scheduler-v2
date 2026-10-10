@@ -1,0 +1,54 @@
+
+> medclinic-scheduler-v2@0.1.0 test:integration
+> tsx scripts/test-integration.ts src/server/laboratory/pe-linked-laboratory.integration.test.ts --testNamePattern=serializes actual batch|corrects a completed First-Year certificate after cancellation --testTimeout=180000 --hookTimeout=180000 --reporter=default
+
+Verified disposable database medclinic_test_pe_review_green_oct10.
+Applied 001_extensions_and_helpers.sql
+Applied 002_users_and_reference_data.sql
+Applied 003_students_and_schedules.sql
+Applied 004_appointments_results_and_audit.sql
+Applied 005_clinic_scheduler_scoping.sql
+Applied 006_unified_student_schedule_imports.sql
+Applied 007_coordinator_import_automation.sql
+Applied 008_automated_scheduling_and_student_portal.sql
+Applied 009_remove_appointment_times.sql
+Applied 010_maximum_only_capacity.sql
+Applied 011_current_appointment_and_submission_read_indexes.sql
+Applied 012_cpu_reference_catalog.sql
+Applied 013_clinic_calendar_batch_editor.sql
+Applied 014_unified_clinic_calendar.sql
+Applied 015_appointment_result_protection.sql
+Applied 016_reports_historical_compliance.sql
+Applied 017_student_result_multi_upload_editing.sql
+Applied 018_student_result_storage_cleanup_intents.sql
+Applied 019_first_year_ovpsa_priority_scheduling.sql
+Applied 020_first_year_schedule_import_consolidation.sql
+Applied 021_clinic_closure_recovery_policy.sql
+Applied 022_schedule_import_year_category_validation.sql
+Applied 023_mandatory_student_email_verification_notifications.sql
+Applied 024_staff_account_security_onboarding_deletion.sql
+Applied 025_scheduling_integrity_hardening.sql
+Applied 026_remove_priority_groups_and_legacy_scheduling.sql
+Applied 027_staff_login_brute_force_protection.sql
+Applied 028_final_defense_clinical_workflows.sql
+Applied 029_manual_resolution_batch_requests.sql
+Applied 030_remove_safe_daily_capacity.sql
+Applied 031_retire_manual_schedule_metadata.sql
+Applied 032_default_clinic_capacity_100.sql
+Applied 001_reference_and_users.sql
+
+ RUN  v4.1.8 C:/Users/anula/.codex/worktrees/pe-linked-laboratory/medclinic-scheduler-v2
+
+ ✓ src/server/laboratory/pe-linked-laboratory.integration.test.ts (38 tests | 34 skipped) 20211ms
+     ✓ serializes actual batch cancellation against PE readiness without a database deadlock  686ms
+     ✓ serializes actual batch cancellation against PE issuance without a database deadlock  3097ms
+     ✓ serializes actual batch cancellation against PE correction without a database deadlock  5727ms
+     ✓ corrects a completed First-Year certificate after cancellation using unchanged historical Laboratory evidence  10085ms
+
+ Test Files  1 passed (1)
+      Tests  4 passed | 34 skipped (38)
+   Start at  10:28:14
+   Duration  26.01s (transform 1.28s, setup 679ms, import 3.65s, tests 20.21s, environment 0ms)
+
+Disposable test storage residue before removal: 0 entries.
+Dropped disposable database medclinic_test_pe_review_green_oct10; residue=0.
