@@ -1,0 +1,57 @@
+[
+  {
+    "name": "integration",
+    "command": "npm.cmd run test:integration -- --testTimeout=180000 --hookTimeout=180000 --reporter=dot",
+    "exitCode": 0,
+    "startedAt": "2026-10-09T22:49:56.4688909+08:00",
+    "durationSeconds": 789.05,
+    "sourceHead": "71969bac9d562c132fa0a73bb989687e604f537d",
+    "logSha256": "AF3739F38D0B4F17316B1EB637EA9A5B1B0AE6EE76B7FEDDC8B4A9B11C1C470B",
+    "retainedPriorRun": true
+  },
+  {
+    "name": "unit",
+    "command": "npm.cmd test -- --pool=threads --maxWorkers=1 --no-file-parallelism --testTimeout=60000 --hookTimeout=60000 --reporter=default",
+    "exitCode": 0,
+    "startedAt": "2026-10-10T09:43:02.3699229+08:00",
+    "durationSeconds": 1364.22,
+    "sourceHead": "71969bac9d562c132fa0a73bb989687e604f537d",
+    "logSha256": "AF92BC98AE031757CE89417B6025A34FAB78E273F229E86920936CF2143EAED6"
+  },
+  {
+    "name": "migrations",
+    "command": "npm.cmd run test:migrations:empty",
+    "exitCode": 0,
+    "startedAt": "2026-10-10T10:05:46.7134987+08:00",
+    "durationSeconds": 14.53,
+    "sourceHead": "71969bac9d562c132fa0a73bb989687e604f537d",
+    "logSha256": "D91D3C665535F10678D3FCBD959382A0E1DBB7DD12D12D1DA8F962C9AD4BDFAA"
+  },
+  {
+    "name": "lint",
+    "command": "npm.cmd run lint",
+    "exitCode": 0,
+    "startedAt": "2026-10-10T10:06:01.2934471+08:00",
+    "durationSeconds": 195.33,
+    "sourceHead": "71969bac9d562c132fa0a73bb989687e604f537d",
+    "logSha256": "FA2FAFEE5356CE196F99EFC861AB068612F12EAE8B61CA02A8791411FA6FE382"
+  },
+  {
+    "name": "build",
+    "command": "npm.cmd run build",
+    "exitCode": 0,
+    "startedAt": "2026-10-10T10:09:16.6549296+08:00",
+    "durationSeconds": 200.01,
+    "sourceHead": "71969bac9d562c132fa0a73bb989687e604f537d",
+    "logSha256": "41361D51C41E459C8B5B7D23B6338A6D2015FCB3401DC5684D2896330C88793D"
+  },
+  {
+    "name": "typecheck",
+    "command": "npx.cmd tsc --noEmit",
+    "exitCode": 0,
+    "startedAt": "2026-10-10T10:12:36.6951121+08:00",
+    "durationSeconds": 38.73,
+    "sourceHead": "71969bac9d562c132fa0a73bb989687e604f537d",
+    "logSha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+  }
+]

@@ -1,0 +1,5 @@
+
+> medclinic-scheduler-v2@0.1.0 acceptance:pe-linked-laboratory:cleanup
+> tsx --env-file=.env.local scripts/browser-pe-linked-laboratory-fixture.ts cleanup
+
+{"cleaned":true,"residue":{"students":0,"appointments":0,"submissions":0,"notifications":0,"staff":0,"physicians":0},"capacityUnchanged":true}

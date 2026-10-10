@@ -1,0 +1,14 @@
+
+> medclinic-scheduler-v2@0.1.0 test
+> node ./node_modules/vitest/vitest.mjs run src/components/appointments/ClinicPublishedSchedule.test.tsx --maxWorkers=1 --no-file-parallelism --testTimeout=60000 --hookTimeout=60000 --reporter=dot
+
+
+ RUN  v4.1.8 C:/Users/anula/.codex/worktrees/pe-linked-laboratory/medclinic-scheduler-v2
+
+·················
+
+ Test Files  1 passed (1)
+      Tests  17 passed (17)
+   Start at  21:40:35
+   Duration  15.82s (transform 1.15s, setup 1.99s, import 2.20s, tests 5.19s, environment 5.37s)
+

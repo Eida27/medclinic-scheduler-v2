@@ -1,0 +1,80 @@
+
+> medclinic-scheduler-v2@0.1.0 test:integration
+> tsx scripts/test-integration.ts src/test/integration-fixtures.integration.test.ts --testTimeout=60000 --hookTimeout=60000
+
+Verified disposable database medclinic_test_pe_cleanup_red4.
+Applied 001_extensions_and_helpers.sql
+Applied 002_users_and_reference_data.sql
+Applied 003_students_and_schedules.sql
+Applied 004_appointments_results_and_audit.sql
+Applied 005_clinic_scheduler_scoping.sql
+Applied 006_unified_student_schedule_imports.sql
+Applied 007_coordinator_import_automation.sql
+Applied 008_automated_scheduling_and_student_portal.sql
+Applied 009_remove_appointment_times.sql
+Applied 010_maximum_only_capacity.sql
+Applied 011_current_appointment_and_submission_read_indexes.sql
+Applied 012_cpu_reference_catalog.sql
+Applied 013_clinic_calendar_batch_editor.sql
+Applied 014_unified_clinic_calendar.sql
+Applied 015_appointment_result_protection.sql
+Applied 016_reports_historical_compliance.sql
+Applied 017_student_result_multi_upload_editing.sql
+Applied 018_student_result_storage_cleanup_intents.sql
+Applied 019_first_year_ovpsa_priority_scheduling.sql
+Applied 020_first_year_schedule_import_consolidation.sql
+Applied 021_clinic_closure_recovery_policy.sql
+Applied 022_schedule_import_year_category_validation.sql
+Applied 023_mandatory_student_email_verification_notifications.sql
+Applied 024_staff_account_security_onboarding_deletion.sql
+Applied 025_scheduling_integrity_hardening.sql
+Applied 026_remove_priority_groups_and_legacy_scheduling.sql
+Applied 027_staff_login_brute_force_protection.sql
+Applied 028_final_defense_clinical_workflows.sql
+Applied 029_manual_resolution_batch_requests.sql
+Applied 030_remove_safe_daily_capacity.sql
+Applied 031_retire_manual_schedule_metadata.sql
+Applied 032_default_clinic_capacity_100.sql
+Applied 001_reference_and_users.sql
+
+ RUN  v4.1.8 C:/Users/anula/.codex/worktrees/pe-linked-laboratory/medclinic-scheduler-v2
+
+ ❯ src/test/integration-fixtures.integration.test.ts (1 test | 1 failed) 743ms
+     × removes an owned draft batch without an import source and preserves unrelated batches 729ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/test/integration-fixtures.integration.test.ts > OVPSA fixture cleanup > removes an owned draft batch without an import source and preserves unrelated batches
+error: null value in column "id" of relation "test_fixture_import_groups" violates not-null constraint
+ ❯ node_modules/pg/lib/client.js:646:17
+ ❯ src/test/integration-fixtures.ts:210:5
+    208|         AND student_number NOT IN (SELECT student_number FROM test_fix…
+    209|     if (sharedOvpsaMembers.rowCount) throw new Error("Refusing cleanup…
+    210|     await client.query(`INSERT INTO test_fixture_import_groups SELECT …
+       |     ^
+    211|       FROM ovpsa_first_year_batches WHERE id IN (SELECT id FROM test_f…
+    212|       ON CONFLICT DO NOTHING`);
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ cleanupTestFixtures src/test/integration-fixtures.ts:157:3
+ ❯ src/test/integration-fixtures.integration.test.ts:64:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed (1)
+   Start at  20:21:13
+   Duration  6.52s (transform 257ms, setup 1.55s, import 842ms, tests 743ms, environment 1ms)
+
+Disposable test storage residue before removal: 0 entries.
+Dropped disposable database medclinic_test_pe_cleanup_red4; residue=0.
+C:\Users\anula\.codex\worktrees\pe-linked-laboratory\medclinic-scheduler-v2\scripts\test-child.ts:17
+      else reject(new Error(`Test child failed: exit=${code}, signal=${signal ?? "none"}`));
+                  ^
+
+Error: Test child failed: exit=1, signal=none
+    at ChildProcess.<anonymous> (C:\Users\anula\.codex\worktrees\pe-linked-laboratory\medclinic-scheduler-v2\scripts\test-child.ts:17:19)
+    at ChildProcess.emit (node:events:509:28)
+    at ChildProcess._handle.onexit (node:internal/child_process:295:12)
+
+Node.js v24.19.0

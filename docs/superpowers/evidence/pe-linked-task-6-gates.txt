@@ -1,0 +1,52 @@
+Retained verified integration: 74 files / 626 tests, exit 0, same source commit and matching log SHA-256.
+Starting unit: npm.cmd test -- --pool=threads --maxWorkers=1 --no-file-parallelism --testTimeout=60000 --hookTimeout=60000 --reporter=default
+ ✓ src/server/repositories/schedule-imports.repository.test.ts (8 tests) 16ms
+ ✓ src/server/services/calendar-occupancy.test.ts (5 tests) 13ms
+ ✓ src/server/student-results/admin-student-result-profile.test.ts (7 tests) 13ms
+ ✓ src/components/settings/clinic-calendar-draft.test.ts (1 test) 14ms
+ ✓ src/server/appointments/automatic-no-show.test.ts (3 tests) 11ms
+ ✓ src/components/reports/report-query.test.ts (1 test) 10ms
+
+ Test Files  218 passed (218)
+      Tests  1276 passed (1276)
+   Start at  09:43:19
+   Duration  1346.76s (transform 28.61s, setup 271.66s, import 134.45s, tests 228.26s, environment 572.73s)
+
+PASSED unit: exit 0
+Starting migrations: npm.cmd run test:migrations:empty
+Applied 026_remove_priority_groups_and_legacy_scheduling.sql
+Applied 027_staff_login_brute_force_protection.sql
+Applied 028_final_defense_clinical_workflows.sql
+Applied 029_manual_resolution_batch_requests.sql
+Applied 030_remove_safe_daily_capacity.sql
+Applied 031_retire_manual_schedule_metadata.sql
+Applied 032_default_clinic_capacity_100.sql
+First migration CLI applied count: 32
+Final schema and exact 32-entry migration history assertions passed.
+Second migration CLI applied count: 0
+Atomic DDL/history rollback and post-rollback connection assertions passed.
+Dropped disposable database medclinic_test_pe_migrations_oct10; residue=0.
+PASSED migrations: exit 0
+Starting lint: npm.cmd run lint
+
+> medclinic-scheduler-v2@0.1.0 lint
+> eslint
+
+PASSED lint: exit 0
+Starting build: npm.cmd run build
+├ ƒ /students
+├ ƒ /students/[studentNumber]
+├ ƒ /students/new
+├ ƒ /students/schedule-imports/[importId]
+└ ƒ /students/schedule-imports/new
+
+
+ƒ Proxy (Middleware)
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+
+PASSED build: exit 0
+Starting typecheck: npx.cmd tsc --noEmit
+PASSED typecheck: exit 0
+All six final gates passed.

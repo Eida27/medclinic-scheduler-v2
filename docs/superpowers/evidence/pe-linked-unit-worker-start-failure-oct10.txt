@@ -1,0 +1,56 @@
+
+> medclinic-scheduler-v2@0.1.0 test
+> node ./node_modules/vitest/vitest.mjs run --maxWorkers=1 --no-file-parallelism --testTimeout=60000 --hookTimeout=60000 --reporter=dot
+
+
+ RUN  v4.1.8 C:/Users/anula/.codex/worktrees/pe-linked-laboratory/medclinic-scheduler-v2
+
+stderr | src/app/api/reports/export/pdf/route.test.ts > GET /api/reports/export/pdf > does not audit success when PDF render setup fails
+Error: font setup failed
+    at C:/Users/anula/.codex/worktrees/pe-linked-laboratory/medclinic-scheduler-v2/src/app/api/reports/export/pdf/route.test.ts:246:13
+    at Mock (file:///C:/Users/anula/.codex/worktrees/pe-linked-laboratory/medclinic-scheduler-v2/node_modules/@vitest/spy/dist/index.js:332:34)
+    at Module.GET (C:/Users/anula/.codex/worktrees/pe-linked-laboratory/medclinic-scheduler-v2/src/app/api/reports/export/pdf/route.ts:164:13)
+    at processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at C:/Users/anula/.codex/worktrees/pe-linked-laboratory/medclinic-scheduler-v2/src/app/api/reports/export/pdf/route.test.ts:249:22
+    at file:///C:/Users/anula/.codex/worktrees/pe-linked-laboratory/medclinic-scheduler-v2/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20
+
+······································································································································································································································································································································································································································································································································································································stdout | src/test/test-storage.test.ts > owned test storage teardown > returns successful callback output and removes owned residue
+Disposable test storage residue before removal: 1 entries.
+
+stdout | src/test/test-storage.test.ts > owned test storage teardown > preserves the child failure when storage cleanup succeeds
+Disposable test storage residue before removal: 1 entries.
+
+··stdout | src/test/test-storage.test.ts > owned test storage teardown > retains every failure and attempts removal independently: {"childFails":false,"inspectionFails":false,"removalFails":true}
+Disposable test storage residue before removal: 1 entries.
+
+··stdout | src/test/test-storage.test.ts > owned test storage teardown > retains every failure and attempts removal independently: {"childFails":true,"inspectionFails":false,"removalFails":true}
+Disposable test storage residue before removal: 1 entries.
+
+stderr | src/test/test-database-failure.test.ts > disposable database partial setup failure > reports possible residue when creation succeeded but ownership verification is unavailable
+DISPOSABLE DATABASE CLEANUP FAILED: medclinic_test_partial_setup; inspect residue before retrying.
+
+·········································································································································································································································································································································································································································································································································································································································································································
+⎯⎯⎯⎯⎯⎯ Unhandled Errors ⎯⎯⎯⎯⎯⎯
+
+Vitest caught 1 unhandled error during the test run.
+This might cause false positive tests. Resolve unhandled errors to make sure your tests are not affected.
+
+⎯⎯⎯⎯⎯⎯ Unhandled Error ⎯⎯⎯⎯⎯⎯⎯
+Error: [vitest-pool]: Failed to start forks worker for test files C:/Users/anula/.codex/worktrees/pe-linked-laboratory/medclinic-scheduler-v2/src/components/settings/ClinicUnavailableCalendar.test.tsx.
+ ❯ node_modules/vitest/dist/chunks/cli-api.BfdDOPPI.js:3449:94
+ ❯ Pool.schedule node_modules/vitest/dist/chunks/cli-api.BfdDOPPI.js:3449:5
+
+Caused by: Error: [vitest-pool-runner]: Timeout waiting for worker to respond
+ ❯ Timeout.<anonymous> node_modules/vitest/dist/chunks/cli-api.BfdDOPPI.js:3029:58
+ ❯ listOnTimeout node:internal/timers:635:17
+ ❯ processTimers node:internal/timers:571:7
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+
+
+ Test Files  217 passed (217)
+      Tests  1267 passed (1267)
+     Errors  1 error
+   Start at  23:03:09
+   Duration  1837.41s (transform 23.80s, setup 355.41s, import 149.64s, tests 245.16s, environment 827.17s)
+

@@ -1,0 +1,130 @@
+
+> medclinic-scheduler-v2@0.1.0 test:integration
+> tsx scripts/test-integration.ts --testTimeout=60000 --hookTimeout=60000 --reporter=dot
+
+Verified disposable database medclinic_test_pe_final_recovery2_oct9.
+Applied 001_extensions_and_helpers.sql
+Applied 002_users_and_reference_data.sql
+Applied 003_students_and_schedules.sql
+Applied 004_appointments_results_and_audit.sql
+Applied 005_clinic_scheduler_scoping.sql
+Applied 006_unified_student_schedule_imports.sql
+Applied 007_coordinator_import_automation.sql
+Applied 008_automated_scheduling_and_student_portal.sql
+Applied 009_remove_appointment_times.sql
+Applied 010_maximum_only_capacity.sql
+Applied 011_current_appointment_and_submission_read_indexes.sql
+Applied 012_cpu_reference_catalog.sql
+Applied 013_clinic_calendar_batch_editor.sql
+Applied 014_unified_clinic_calendar.sql
+Applied 015_appointment_result_protection.sql
+Applied 016_reports_historical_compliance.sql
+Applied 017_student_result_multi_upload_editing.sql
+Applied 018_student_result_storage_cleanup_intents.sql
+Applied 019_first_year_ovpsa_priority_scheduling.sql
+Applied 020_first_year_schedule_import_consolidation.sql
+Applied 021_clinic_closure_recovery_policy.sql
+Applied 022_schedule_import_year_category_validation.sql
+Applied 023_mandatory_student_email_verification_notifications.sql
+Applied 024_staff_account_security_onboarding_deletion.sql
+Applied 025_scheduling_integrity_hardening.sql
+Applied 026_remove_priority_groups_and_legacy_scheduling.sql
+Applied 027_staff_login_brute_force_protection.sql
+Applied 028_final_defense_clinical_workflows.sql
+Applied 029_manual_resolution_batch_requests.sql
+Applied 030_remove_safe_daily_capacity.sql
+Applied 031_retire_manual_schedule_metadata.sql
+Applied 032_default_clinic_capacity_100.sql
+Applied 001_reference_and_users.sql
+
+ RUN  v4.1.8 C:/Users/anula/.codex/worktrees/pe-linked-laboratory/medclinic-scheduler-v2
+
+·····················································································································································stdout | scripts/db-reset.integration.test.ts > explicit developer reset CLI > resets a separately owned target twice with the full ledger and canonical reference seed
+Verified disposable database medclinic_test_reset_e751b1100c0446cd.
+
+stdout | scripts/db-reset.integration.test.ts > explicit developer reset CLI > resets a separately owned target twice with the full ledger and canonical reference seed
+Dropped disposable database medclinic_test_reset_e751b1100c0446cd; residue=0.
+
+·stdout | scripts/db-reset.integration.test.ts > explicit developer reset CLI > rolls back a failing migration and its ledger entry through the canonical executor
+Verified disposable database medclinic_test_reset_7e736e0fafa142f0.
+
+stdout | scripts/db-reset.integration.test.ts > explicit developer reset CLI > rolls back a failing migration and its ledger entry through the canonical executor
+Dropped disposable database medclinic_test_reset_7e736e0fafa142f0; residue=0.
+
+·······································································stdout | src/test/test-database.integration.test.ts > disposable database ownership > refuses an existing target before fixtures and preserves its sentinel
+Verified disposable database medclinic_test_guard_77ed9c1b46914389b6be2cd1f5be0583.
+
+stdout | src/test/test-database.integration.test.ts > disposable database ownership > refuses an existing target before fixtures and preserves its sentinel
+Dropped disposable database medclinic_test_guard_77ed9c1b46914389b6be2cd1f5be0583; residue=0.
+
+·stdout | src/test/test-database.integration.test.ts > disposable database ownership > propagates callback failure and still proves target removal
+Verified disposable database medclinic_test_guard_5b99724b989b488882cdeff74f7f56ec.
+
+stdout | src/test/test-database.integration.test.ts > disposable database ownership > propagates callback failure and still proves target removal
+Dropped disposable database medclinic_test_guard_5b99724b989b488882cdeff74f7f56ec; residue=0.
+
+·stdout | src/test/test-database.integration.test.ts > disposable database ownership > reports both the fixture failure and a refused teardown, preserving ownership on identity drift
+Verified disposable database medclinic_test_guard_319d54138d2a4e4790db265d5fe18282.
+
+stderr | src/test/test-database.integration.test.ts > disposable database ownership > reports both the fixture failure and a refused teardown, preserving ownership on identity drift
+DISPOSABLE DATABASE CLEANUP FAILED: medclinic_test_guard_319d54138d2a4e4790db265d5fe18282; inspect residue before retrying.
+
+········································stdout | src/server/db/predeployment-cleanup-schema.integration.test.ts > predeployment scheduling schema > refuses each unsupported 030 row atomically, then preserves supported publication evidence
+Verified disposable database medclinic_test_cleanup_guard_19f3876c45fb.
+
+stdout | src/server/db/predeployment-cleanup-schema.integration.test.ts > predeployment scheduling schema > refuses each unsupported 030 row atomically, then preserves supported publication evidence
+Dropped disposable database medclinic_test_cleanup_guard_19f3876c45fb; residue=0.
+
+·································································stdout | src/server/db/default-clinic-capacity.integration.test.ts > fresh clinic capacity defaults > seeds both services at 100, defaults omitted maximums, and preserves saved settings on replay
+Verified disposable database medclinic_test_default_capacity_5c2029ab250b.
+
+stdout | src/server/db/default-clinic-capacity.integration.test.ts > fresh clinic capacity defaults > seeds both services at 100, defaults omitted maximums, and preserves saved settings on replay
+Dropped disposable database medclinic_test_default_capacity_5c2029ab250b; residue=0.
+
+···································································································································································································x······································································································
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/repositories/academic-years.repository.integration.test.ts > academic-years repository > returns the configured-year domain conflict when deletion locks and commits first
+AssertionError: expected { years: +0, snapshots: +0, …(3) } to deeply equal { years: +0, snapshots: +0, …(3) }
+
+- Expected
++ Received
+
+  {
+    "appointments": 0,
+-   "audits": 0,
++   "audits": 2,
+    "snapshots": 0,
+    "students": 0,
+    "years": 0,
+  }
+
+ ❯ src/server/repositories/academic-years.repository.integration.test.ts:235:30
+    233|         [reverseConcurrentYear],
+    234|       );
+    235|       expect(writes.rows[0]).toEqual({
+       |                              ^
+    236|         years: 0,
+    237|         snapshots: 0,
+
+ Test Files  1 failed | 73 passed (74)
+      Tests  1 failed | 625 passed (626)
+   Start at  21:50:36
+   Duration  1023.55s (transform 9.88s, setup 131.14s, import 85.05s, tests 709.71s, environment 54ms)
+
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+Disposable test storage residue before removal: 0 entries.
+Dropped disposable database medclinic_test_pe_final_recovery2_oct9; residue=0.
+C:\Users\anula\.codex\worktrees\pe-linked-laboratory\medclinic-scheduler-v2\scripts\test-child.ts:17
+      else reject(new Error(`Test child failed: exit=${code}, signal=${signal ?? "none"}`));
+                  ^
+
+Error: Test child failed: exit=1, signal=none
+    at ChildProcess.<anonymous> (C:\Users\anula\.codex\worktrees\pe-linked-laboratory\medclinic-scheduler-v2\scripts\test-child.ts:17:19)
+    at ChildProcess.emit (node:events:509:28)
+    at ChildProcess._handle.onexit (node:internal/child_process:295:12)
+
+Node.js v24.19.0

@@ -1,0 +1,2164 @@
+
+> medclinic-scheduler-v2@0.1.0 test:integration
+> tsx scripts/test-integration.ts --testTimeout=60000 --hookTimeout=60000 --reporter=dot
+
+Verified disposable database medclinic_test_pe_final_oct9.
+Applied 001_extensions_and_helpers.sql
+Applied 002_users_and_reference_data.sql
+Applied 003_students_and_schedules.sql
+Applied 004_appointments_results_and_audit.sql
+Applied 005_clinic_scheduler_scoping.sql
+Applied 006_unified_student_schedule_imports.sql
+Applied 007_coordinator_import_automation.sql
+Applied 008_automated_scheduling_and_student_portal.sql
+Applied 009_remove_appointment_times.sql
+Applied 010_maximum_only_capacity.sql
+Applied 011_current_appointment_and_submission_read_indexes.sql
+Applied 012_cpu_reference_catalog.sql
+Applied 013_clinic_calendar_batch_editor.sql
+Applied 014_unified_clinic_calendar.sql
+Applied 015_appointment_result_protection.sql
+Applied 016_reports_historical_compliance.sql
+Applied 017_student_result_multi_upload_editing.sql
+Applied 018_student_result_storage_cleanup_intents.sql
+Applied 019_first_year_ovpsa_priority_scheduling.sql
+Applied 020_first_year_schedule_import_consolidation.sql
+Applied 021_clinic_closure_recovery_policy.sql
+Applied 022_schedule_import_year_category_validation.sql
+Applied 023_mandatory_student_email_verification_notifications.sql
+Applied 024_staff_account_security_onboarding_deletion.sql
+Applied 025_scheduling_integrity_hardening.sql
+Applied 026_remove_priority_groups_and_legacy_scheduling.sql
+Applied 027_staff_login_brute_force_protection.sql
+Applied 028_final_defense_clinical_workflows.sql
+Applied 029_manual_resolution_batch_requests.sql
+Applied 030_remove_safe_daily_capacity.sql
+Applied 031_retire_manual_schedule_metadata.sql
+Applied 032_default_clinic_capacity_100.sql
+Applied 001_reference_and_users.sql
+
+ RUN  v4.1.8 C:/Users/anula/.codex/worktrees/pe-linked-laboratory/medclinic-scheduler-v2
+
+···················································································xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx··xxxxxxxxxxxxxxxxxxxxxxxxxxxx····························································x··········································x······························································xx········································xxxxxxxx·····················x···x·····································x···································x···x··································x·x············xx··x·········x···stdout | src/server/db/predeployment-cleanup-schema.integration.test.ts > predeployment scheduling schema > refuses each unsupported 030 row atomically, then preserves supported publication evidence
+Verified disposable database medclinic_test_cleanup_guard_350d2b23ddc1.
+
+stdout | src/server/db/predeployment-cleanup-schema.integration.test.ts > predeployment scheduling schema > refuses each unsupported 030 row atomically, then preserves supported publication evidence
+Dropped disposable database medclinic_test_cleanup_guard_350d2b23ddc1; residue=0.
+
+··················································stdout | scripts/db-reset.integration.test.ts > explicit developer reset CLI > resets a separately owned target twice with the full ledger and canonical reference seed
+Verified disposable database medclinic_test_reset_662145fa65b94cfb.
+
+stdout | scripts/db-reset.integration.test.ts > explicit developer reset CLI > resets a separately owned target twice with the full ledger and canonical reference seed
+Dropped disposable database medclinic_test_reset_662145fa65b94cfb; residue=0.
+
+·stdout | scripts/db-reset.integration.test.ts > explicit developer reset CLI > rolls back a failing migration and its ledger entry through the canonical executor
+Verified disposable database medclinic_test_reset_6e63d857b20f40f5.
+
+stdout | scripts/db-reset.integration.test.ts > explicit developer reset CLI > rolls back a failing migration and its ledger entry through the canonical executor
+Dropped disposable database medclinic_test_reset_6e63d857b20f40f5; residue=0.
+
+·····stdout | src/server/db/default-clinic-capacity.integration.test.ts > fresh clinic capacity defaults > seeds both services at 100, defaults omitted maximums, and preserves saved settings on replay
+Verified disposable database medclinic_test_default_capacity_c6a1c9df0b4d.
+
+stdout | src/server/db/default-clinic-capacity.integration.test.ts > fresh clinic capacity defaults > seeds both services at 100, defaults omitted maximums, and preserves saved settings on replay
+Dropped disposable database medclinic_test_default_capacity_c6a1c9df0b4d; residue=0.
+
+···x··stdout | src/test/test-database.integration.test.ts > disposable database ownership > refuses an existing target before fixtures and preserves its sentinel
+Verified disposable database medclinic_test_guard_8ab99b79980a4a88a6620e9f8fdcb7cd.
+
+stdout | src/test/test-database.integration.test.ts > disposable database ownership > refuses an existing target before fixtures and preserves its sentinel
+Dropped disposable database medclinic_test_guard_8ab99b79980a4a88a6620e9f8fdcb7cd; residue=0.
+
+·stdout | src/test/test-database.integration.test.ts > disposable database ownership > propagates callback failure and still proves target removal
+Verified disposable database medclinic_test_guard_706570c2b17c47e79630c5837930fc57.
+
+stdout | src/test/test-database.integration.test.ts > disposable database ownership > propagates callback failure and still proves target removal
+Dropped disposable database medclinic_test_guard_706570c2b17c47e79630c5837930fc57; residue=0.
+
+·stdout | src/test/test-database.integration.test.ts > disposable database ownership > reports both the fixture failure and a refused teardown, preserving ownership on identity drift
+Verified disposable database medclinic_test_guard_917f85b99824446f9c239122fdf92ee1.
+
+stderr | src/test/test-database.integration.test.ts > disposable database ownership > reports both the fixture failure and a refused teardown, preserving ownership on identity drift
+DISPOSABLE DATABASE CLEANUP FAILED: medclinic_test_guard_917f85b99824446f9c239122fdf92ee1; inspect residue before retrying.
+
+··························
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/services/appointments-manual-rescheduling.integration.test.ts [ src/server/services/appointments-manual-rescheduling.integration.test.ts ]
+error: null value in column "id" of relation "test_fixture_import_groups" violates not-null constraint
+ ❯ node_modules/pg/lib/client.js:646:17
+ ❯ src/test/integration-fixtures.ts:210:5
+    208|         AND student_number NOT IN (SELECT student_number FROM test_fix…
+    209|     if (sharedOvpsaMembers.rowCount) throw new Error("Refusing cleanup…
+    210|     await client.query(`INSERT INTO test_fixture_import_groups SELECT …
+       |     ^
+    211|       FROM ovpsa_first_year_batches WHERE id IN (SELECT id FROM test_f…
+    212|       ON CONFLICT DO NOTHING`);
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ cleanupTestFixtures src/test/integration-fixtures.ts:157:3
+ ❯ cleanup src/server/services/appointments-manual-rescheduling.integration.test.ts:201:3
+ ❯ src/server/services/appointments-manual-rescheduling.integration.test.ts:260:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts [ src/server/services/clinic-calendar.integration.test.ts ]
+error: null value in column "id" of relation "test_fixture_import_groups" violates not-null constraint
+ ❯ node_modules/pg/lib/client.js:646:17
+ ❯ src/test/integration-fixtures.ts:210:5
+    208|         AND student_number NOT IN (SELECT student_number FROM test_fix…
+    209|     if (sharedOvpsaMembers.rowCount) throw new Error("Refusing cleanup…
+    210|     await client.query(`INSERT INTO test_fixture_import_groups SELECT …
+       |     ^
+    211|       FROM ovpsa_first_year_batches WHERE id IN (SELECT id FROM test_f…
+    212|       ON CONFLICT DO NOTHING`);
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ cleanupTestFixtures src/test/integration-fixtures.ts:157:3
+ ❯ cleanup src/server/services/clinic-calendar.integration.test.ts:86:3
+ ❯ src/server/services/clinic-calendar.integration.test.ts:427:5
+ ❯ cleanupAndRestoreCapacitySettings src/test/capacity-fixture-lifecycle.ts:76:5
+ ❯ teardownCapacityFixtureLock src/test/capacity-fixture-lifecycle.ts:123:5
+ ❯ src/server/services/clinic-calendar.integration.test.ts:426:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/142]⎯
+
+ FAIL  src/server/services/priority-displacement.integration.test.ts [ src/server/services/priority-displacement.integration.test.ts ]
+error: null value in column "id" of relation "test_fixture_import_groups" violates not-null constraint
+ ❯ node_modules/pg/lib/client.js:646:17
+ ❯ src/test/integration-fixtures.ts:210:5
+    208|         AND student_number NOT IN (SELECT student_number FROM test_fix…
+    209|     if (sharedOvpsaMembers.rowCount) throw new Error("Refusing cleanup…
+    210|     await client.query(`INSERT INTO test_fixture_import_groups SELECT …
+       |     ^
+    211|       FROM ovpsa_first_year_batches WHERE id IN (SELECT id FROM test_f…
+    212|       ON CONFLICT DO NOTHING`);
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ cleanupTestFixtures src/test/integration-fixtures.ts:157:3
+ ❯ cleanup src/server/services/priority-displacement.integration.test.ts:48:3
+ ❯ src/server/services/priority-displacement.integration.test.ts:328:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/142]⎯
+
+
+⎯⎯⎯⎯⎯⎯ Failed Tests 87 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/appointments/bulk-replacement.integration.test.ts > atomic bulk replacement > returns every selected student when one source version changed and refuses to save
+AssertionError: expected [ { …(9) }, { …(9) } ] to deeply equal [ ObjectContaining{…}, …(1) ]
+
+- Expected
++ Received
+
+  [
+    {
++     "checklistVersion": 1,
++     "expectedUpdatedAt": "2000-01-01T00:00:00.000Z",
+      "id": "5928adba-5866-439a-a585-cc05e87f9b5c",
++     "isManuallyLocked": false,
+      "issues": [
+        {
+          "code": "BULK_SOURCE_CHANGED",
+          "message": "An appointment changed. Preview the selection again.",
+        },
++       {
++         "code": "OUTSIDE_SCHEDULING_CYCLE",
++         "message": "The replacement date must remain inside the appointment's scheduling cycle.",
++       },
+      ],
++     "originalDate": "2027-09-06",
++     "pairedDate": "2027-09-13",
++     "retainedTests": [],
+      "studentNumber": "BULK-0001",
+    },
+    {
++     "checklistVersion": 1,
++     "expectedUpdatedAt": "2026-10-09T12:09:40.820Z",
+      "id": "2c9e2700-4a19-4a1f-944e-3c0f03c05d8c",
+-     "issues": [],
++     "isManuallyLocked": false,
++     "issues": [
++       {
++         "code": "OUTSIDE_SCHEDULING_CYCLE",
++         "message": "The replacement date must remain inside the appointment's scheduling cycle.",
++       },
++     ],
++     "originalDate": "2027-09-06",
++     "pairedDate": "2027-09-13",
++     "retainedTests": [],
+      "studentNumber": "BULK-0002",
+    },
+  ]
+
+ ❯ src/server/appointments/bulk-replacement.integration.test.ts:95:26
+     93|     const payload = { appointments, replacementDate, reason: "Review c…
+     94|     const preview = await previewBulkReplacement(payload, admin);
+     95|     expect(preview.rows).toEqual([
+       |                          ^
+     96|       expect.objectContaining({ id: selected[0].id, studentNumber: "BU…
+     97|         issues: [expect.objectContaining({ code: "BULK_SOURCE_CHANGED"…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/142]⎯
+
+ FAIL  src/server/appointments/bulk-replacement.integration.test.ts > atomic bulk replacement > reviews aggregate exact capacity and saves both with checklist lineage
+AssertionError: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ src/server/appointments/bulk-replacement.integration.test.ts:127:66
+    125|     expect(preview.capacity).toMatchObject({ used: 0, incoming: 2, res…
+    126|     expect(preview.rows).toHaveLength(2);
+    127|     expect(preview.rows.every((row) => row.issues.length === 0)).toBe(…
+       |                                                                  ^
+    128|     const request = { ...payload, previewToken: preview.previewToken, …
+    129|     const outcome = await commitBulkReplacement(request, admin);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/142]⎯
+
+ FAIL  src/server/db/clinic-closure-recovery-policy-migration.integration.test.ts > clinic closure recovery policy migration > adds policy context, warning metadata, and recovery reservation kinds
+AssertionError: expected Result{ command: 'SELECT', …(9) } to match object { rowCount: +0 }
+(13 matching properties omitted from actual)
+
+- Expected
++ Received
+
+- {
+-   "rowCount": 0,
++ Result {
++   "rowCount": 1,
+  }
+
+ ❯ src/server/db/clinic-closure-recovery-policy-migration.integration.test.ts:54:7
+     52|           LIMIT 1`,
+     53|         ),
+     54|       ).resolves.toMatchObject({ rowCount: 0 });
+       |       ^
+     55|     } finally {
+     56|       await client.query("ROLLBACK");
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/142]⎯
+
+ FAIL  src/server/db/database.integration.test.ts > database constraints > creates the unified closure, request, manual-case, and event-lineage schema
+AssertionError: expected [ { '?column?': 1 }, …(43) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++   {
++     "?column?": 1,
++   },
++ ]
+
+ ❯ src/server/db/database.integration.test.ts:112:26
+    110|       "SELECT 1 FROM clinic_unavailable_dates WHERE reopened_at IS NUL…
+    111|     );
+    112|     expect(initial.rows).toEqual([]);
+       |                          ^
+    113|
+    114|     const group = await pool.query<{ id: string }>(
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/142]⎯
+
+ FAIL  src/server/db/predeployment-cleanup-schema.integration.test.ts > predeployment capacity schema > allows maximum one through the capacity service and restores the fixture snapshot
+AppError: The maximum is below already committed appointments. Review the affected dates.
+ ❯ updateCapacitySetting src/server/repositories/appointments.repository.ts:624:11
+    622|   );
+    623|   if (workload.rows.length) {
+    624|     throw new AppError("CAPACITY_COMMITTED_WORKLOAD_CONFLICT",
+       |           ^
+    625|       "The maximum is below already committed appointments. Review the…
+    626|       409, undefined, { clinicCode, scheduleType, maxDailyCapacity: ma…
+ ❯ src/server/services/appointments.service.ts:567:20
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ src/server/db/predeployment-cleanup-schema.integration.test.ts:28:14
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/142]⎯
+
+ FAIL  src/server/repositories/academic-years.repository.integration.test.ts > academic-years repository > keeps a closing-date update waiting while the scheduling boundary is share locked
+error: update or delete on table "academic_years" violates foreign key constraint "student_academic_snapshots_academic_year_start_fkey" on table "student_academic_snapshots"
+ ❯ node_modules/pg/lib/client.js:646:17
+ ❯ cleanupShareLockYear src/server/repositories/academic-years.repository.integration.test.ts:133:5
+    131|       [String(shareLockYear)],
+    132|     );
+    133|     await client.query("DELETE FROM academic_years WHERE start_year=$1…
+       |     ^
+    134|     await client.query("COMMIT");
+    135|   } catch (error) {
+ ❯ src/server/repositories/academic-years.repository.integration.test.ts:324:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/142]⎯
+
+ FAIL  src/server/services/appointments-manual-rescheduling.integration.test.ts > manual appointment rescheduling integrity > does not count an external OVPSA Laboratory appointment against KABALAKA capacity
+ FAIL  src/server/services/appointments-manual-rescheduling.integration.test.ts > manual appointment rescheduling integrity > rejects Laboratory on Physical Examination
+ FAIL  src/server/services/appointments-manual-rescheduling.integration.test.ts > manual appointment rescheduling integrity > rejects Physical Examination on Laboratory
+ FAIL  src/server/services/appointments-manual-rescheduling.integration.test.ts > manual appointment rescheduling integrity > rejects a destination after the current cycle closing date
+ FAIL  src/server/services/appointments-manual-rescheduling.integration.test.ts > manual appointment rescheduling integrity > rejects a stale optional appointment version without mutation
+ FAIL  src/server/services/appointments-manual-rescheduling.integration.test.ts > manual appointment rescheduling integrity > reports a stale UI version before eligibility when the appointment status changed
+ FAIL  src/server/services/appointments-manual-rescheduling.integration.test.ts > manual appointment rescheduling integrity > moves only the selected appointment and preserves history, audit, pair, cycle, and lineage
+ FAIL  src/server/services/appointments-manual-rescheduling.integration.test.ts > manual appointment rescheduling integrity > allows only one simultaneous request to consume the last destination slot
+error: null value in column "id" of relation "test_fixture_import_groups" violates not-null constraint
+ ❯ node_modules/pg/lib/client.js:646:17
+ ❯ src/test/integration-fixtures.ts:210:5
+    208|         AND student_number NOT IN (SELECT student_number FROM test_fix…
+    209|     if (sharedOvpsaMembers.rowCount) throw new Error("Refusing cleanup…
+    210|     await client.query(`INSERT INTO test_fixture_import_groups SELECT …
+       |     ^
+    211|       FROM ovpsa_first_year_batches WHERE id IN (SELECT id FROM test_f…
+    212|       ON CONFLICT DO NOTHING`);
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ cleanupTestFixtures src/test/integration-fixtures.ts:157:3
+ ❯ cleanup src/server/services/appointments-manual-rescheduling.integration.test.ts:201:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/142]⎯
+
+ FAIL  src/server/services/appointments-manual-rescheduling.integration.test.ts > manual appointment rescheduling integrity > moves only the selected appointment and preserves history, audit, pair, cycle, and lineage
+AppError: The selected service has reached its daily appointment capacity.
+ ❯ assertManualAppointmentDestination src/server/appointments/manual-appointment-destination.ts:77:11
+     75|   }
+     76|   if (input.usedCapacity >= input.maxDailyCapacity) {
+     77|     throw new AppError(
+       |           ^
+     78|       "DAILY_CAPACITY_EXCEEDED",
+     79|       "The selected service has reached its daily appointment capacity…
+ ❯ src/server/services/appointments.service.ts:405:9
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ updateAppointment src/server/services/appointments.service.ts:343:29
+ ❯ src/server/services/appointments-manual-rescheduling.integration.test.ts:433:25
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/142]⎯
+
+ FAIL  src/server/services/appointments-manual-rescheduling.integration.test.ts > manual appointment rescheduling integrity > allows only one simultaneous request to consume the last destination slot
+AssertionError: expected [] to have a length of 1 but got +0
+
+- Expected
++ Received
+
+- 1
++ 0
+
+ ❯ src/server/services/appointments-manual-rescheduling.integration.test.ts:520:71
+    518|     ]);
+    519|
+    520|     expect(results.filter((result) => result.status === "fulfilled")).…
+       |                                                                       ^
+    521|     expect(results.filter((result) => result.status === "rejected")).t…
+    522|       expect.objectContaining({
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[12/142]⎯
+
+ FAIL  src/server/services/capacity-integrity.integration.test.ts > transactional capacity integrity > allows safe reductions and increases with atomic audits
+AppError: The maximum is below already committed appointments. Review the affected dates.
+ ❯ updateCapacitySetting src/server/repositories/appointments.repository.ts:624:11
+    622|   );
+    623|   if (workload.rows.length) {
+    624|     throw new AppError("CAPACITY_COMMITTED_WORKLOAD_CONFLICT",
+       |           ^
+    625|       "The maximum is below already committed appointments. Review the…
+    626|       409, undefined, { clinicCode, scheduleType, maxDailyCapacity: ma…
+ ❯ src/server/services/appointments.service.ts:567:20
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ src/server/services/capacity-integrity.integration.test.ts:114:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[13/142]⎯
+
+ FAIL  src/server/services/capacity-integrity.integration.test.ts > transactional capacity integrity > ignores past workload
+AppError: The maximum is below already committed appointments. Review the affected dates.
+ ❯ updateCapacitySetting src/server/repositories/appointments.repository.ts:624:11
+    622|   );
+    623|   if (workload.rows.length) {
+    624|     throw new AppError("CAPACITY_COMMITTED_WORKLOAD_CONFLICT",
+       |           ^
+    625|       "The maximum is below already committed appointments. Review the…
+    626|       409, undefined, { clinicCode, scheduleType, maxDailyCapacity: ma…
+ ❯ src/server/services/appointments.service.ts:567:20
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ src/server/services/capacity-integrity.integration.test.ts:122:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[14/142]⎯
+
+ FAIL  src/server/services/capacity-integrity.integration.test.ts > transactional capacity integrity > serializes a last-slot import and reduction with import first=false
+AssertionError: expected AppError: The maximum is below already co… { …(4) } to be null
+
+- Expected:
+null
+
++ Received:
+AppError {
+  "message": "The maximum is below already committed appointments. Review the affected dates.",
+  "code": "CAPACITY_COMMITTED_WORKLOAD_CONFLICT",
+  "status": 409,
+  "fields": undefined,
+  "details": {
+    "affectedDates": [
+      {
+        "count": 2,
+        "date": "2027-08-02",
+      },
+      {
+        "count": 2,
+        "date": "2027-08-27",
+      },
+      {
+        "count": 8,
+        "date": "2027-08-30",
+      },
+      {
+        "count": 2,
+        "date": "2027-09-01",
+      },
+      {
+        "count": 3,
+        "date": "2027-09-03",
+      },
+      {
+        "count": 3,
+        "date": "2049-08-08",
+      },
+      {
+        "count": 10,
+        "date": "2049-08-09",
+      },
+      {
+        "count": 7,
+        "date": "2049-08-12",
+      },
+      {
+        "count": 8,
+        "date": "2094-09-13",
+      },
+    ],
+    "clinicCode": "KABALAKA_CLINIC",
+    "maxDailyCapacity": 1,
+    "scheduleType": "LABORATORY",
+  },
+  "name": "AppError",
+}
+
+ ❯ src/server/services/capacity-integrity.integration.test.ts:147:32
+    145|       await blocker.query("COMMIT");
+    146|       const results = await Promise.all([first, second]);
+    147|       expect(results[0].error).toBeNull();
+       |                                ^
+    148|       if (importFirst) {
+    149|         expect(results[1].error).toMatchObject({ code: "CAPACITY_COMMI…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[15/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > unified clinic calendar lifecycle > excludes an external OVPSA Laboratory from automatic Manual Resolution capacity
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > unified clinic calendar lifecycle > keeps emergency cases manual in a mixed-category automatic batch
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > unified clinic calendar lifecycle > moves a complete pair after the group end and returns an idempotent stored result
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > unified clinic calendar lifecycle > keeps verified Laboratory in Manual Resolution when Physical Examination closes
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > unified clinic calendar lifecycle > keeps a real closure while routing a locked pair to manual resolution
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > unified clinic calendar lifecycle > moves safe students in a mixed closure while live draft files block manual assignment
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > unified clinic calendar lifecycle > reopening changes calendar availability without restoring appointments
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > unified clinic calendar lifecycle > commits scheduling and audits a warning when email enqueue fails
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > unified clinic calendar lifecycle > reopening leaves replacements and manual-case state untouched
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > unified clinic calendar lifecycle > allows clinic staff to read but not mutate the unified calendar
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > unified clinic calendar lifecycle > does not retain compatibility for clinicId or UNBLOCK
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > unified clinic calendar lifecycle > serializes calendar saves with imports under the shared advisory lock
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > unified clinic calendar lifecycle > rolls back the whole operation for an unexpected database failure
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > unified clinic calendar lifecycle > keeps an existing safe replacement with a required audited reason
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > closure same-cycle integrity > keeps no complete pair within closing 2049-07-30 in Manual Resolution
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > closure same-cycle integrity > keeps no complete pair within closing 2049-08-11 in Manual Resolution
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > closure same-cycle integrity > revalidates a shortened academic cycle at confirmation
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > closure same-cycle integrity > reuses the retired PE slot for the next student while preserving its unblocked Laboratory
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > closure same-cycle integrity > rejects ordinary manual recovery beyond its configured cycle
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > OVPSA closure cycle boundaries > rejects a seven-day gap crossing cycle close and preserves the open batch case
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > OVPSA closure cycle boundaries > previews and confirms a complete batch pair on the custom last weekday
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > OVPSA closure cycle boundaries > revalidates shortened batch bounds at confirmation
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > OVPSA closure cycle boundaries > rejects an individual OVPSA PE replacement earlier than seven days after Laboratory
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > closure recovery protected occupancy > keeps a preserved PE occupied for the next student
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > closure recovery protected occupancy > discards a failed student's simulated release and reservation
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > closure recovery protected occupancy > does not count external OVPSA Laboratory in a capacity reduction
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > closure recovery protected occupancy > keeps ordinary today manual cases unresolved
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > closure recovery protected occupancy > keeps ordinary expired manual cases unresolved
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > closure recovery protected occupancy > does not move a manually locked OVPSA LABORATORY in coordinated recovery
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > closure recovery protected occupancy > does not move a manually locked OVPSA PHYSICAL_EXAM in coordinated recovery
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > keeps the completed OVPSA Laboratory reservation while releasing the affected PE reservation
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > mixed block and reopening preview agreement > matches confirmation with null reserved on '2049-08-11'
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > mixed block and reopening preview agreement > matches confirmation with 'LABORATORY' reserved on '2049-08-11'
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > mixed block and reopening preview agreement > matches confirmation with 'PHYSICAL_EXAM' reserved on '2049-08-12'
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > mixed block and reopening preview agreement > matches confirmation with 'PHYSICAL_EXAM' reserved on '2049-08-11'
+error: null value in column "id" of relation "test_fixture_import_groups" violates not-null constraint
+ ❯ node_modules/pg/lib/client.js:646:17
+ ❯ src/test/integration-fixtures.ts:210:5
+    208|         AND student_number NOT IN (SELECT student_number FROM test_fix…
+    209|     if (sharedOvpsaMembers.rowCount) throw new Error("Refusing cleanup…
+    210|     await client.query(`INSERT INTO test_fixture_import_groups SELECT …
+       |     ^
+    211|       FROM ovpsa_first_year_batches WHERE id IN (SELECT id FROM test_f…
+    212|       ON CONFLICT DO NOTHING`);
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ cleanupTestFixtures src/test/integration-fixtures.ts:157:3
+ ❯ cleanup src/server/services/clinic-calendar.integration.test.ts:86:3
+ ❯ src/server/services/clinic-calendar.integration.test.ts:409:5
+ ❯ cleanupAndRestoreCapacitySettings src/test/capacity-fixture-lifecycle.ts:76:5
+ ❯ src/server/services/clinic-calendar.integration.test.ts:408:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[16/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > unified clinic calendar lifecycle > moves a complete pair after the group end and returns an idempotent stored result
+AssertionError: expected [ …(4) ] to deeply equal [ ObjectContaining{…}, …(3) ]
+
+- Expected
++ Received
+
+@@ -16,11 +16,11 @@
+      "is_published": true,
+      "rescheduled_from": "142823ee-84d3-4d85-880f-63f11777b50a",
+      "status": "PENDING",
+    },
+    {
+-     "appointment_date": "2049-08-12",
++     "appointment_date": "2049-08-16",
+      "is_published": true,
+      "rescheduled_from": "bd2ae686-cac3-428c-aea7-58896b0ea05c",
+      "status": "PENDING",
+    },
+  ]
+
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1004:31
+    1002|         ORDER BY appointment_date,id`,
+    1003|     );
+    1004|     expect(appointments.rows).toEqual([
+       |                               ^
+    1005|       expect.objectContaining({ status: "RESCHEDULED", is_published: f…
+    1006|       expect.objectContaining({ status: "RESCHEDULED", is_published: f…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[17/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > unified clinic calendar lifecycle > keeps verified Laboratory in Manual Resolution when Physical Examination closes
+AppError: 2049-08-10 is already blocked.
+ ❯ validateCalendarState src/server/services/clinic-calendar.service.ts:281:13
+    279|   for (const change of changes) {
+    280|     if (change.action === "BLOCK" && activeByDate.has(change.date)) {
+    281|       throw new AppError("CLINIC_CALENDAR_CONFLICT", `${change.date} i…
+       |             ^
+    282|     }
+    283|     if (change.action === "REOPEN") {
+ ❯ src/server/services/clinic-calendar.service.ts:1234:13
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ saveClinicCalendarChanges src/server/services/clinic-calendar.service.ts:1216:12
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1048:20
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[18/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > unified clinic calendar lifecycle > keeps a real closure while routing a locked pair to manual resolution
+AppError: 2049-08-12 is already blocked.
+ ❯ validateCalendarState src/server/services/clinic-calendar.service.ts:281:13
+    279|   for (const change of changes) {
+    280|     if (change.action === "BLOCK" && activeByDate.has(change.date)) {
+    281|       throw new AppError("CLINIC_CALENDAR_CONFLICT", `${change.date} i…
+       |             ^
+    282|     }
+    283|     if (change.action === "REOPEN") {
+ ❯ src/server/services/clinic-calendar.service.ts:1234:13
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ saveClinicCalendarChanges src/server/services/clinic-calendar.service.ts:1216:12
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1072:20
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[19/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > unified clinic calendar lifecycle > moves safe students in a mixed closure while live draft files block manual assignment
+AppError: 2049-08-12 is already blocked.
+ ❯ validateCalendarState src/server/services/clinic-calendar.service.ts:281:13
+    279|   for (const change of changes) {
+    280|     if (change.action === "BLOCK" && activeByDate.has(change.date)) {
+    281|       throw new AppError("CLINIC_CALENDAR_CONFLICT", `${change.date} i…
+       |             ^
+    282|     }
+    283|     if (change.action === "REOPEN") {
+ ❯ src/server/services/clinic-calendar.service.ts:1234:13
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ saveClinicCalendarChanges src/server/services/clinic-calendar.service.ts:1216:12
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1160:19
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[20/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > unified clinic calendar lifecycle > reopening changes calendar availability without restoring appointments
+AppError: 2049-08-09 is already blocked.
+ ❯ validateCalendarState src/server/services/clinic-calendar.service.ts:281:13
+    279|   for (const change of changes) {
+    280|     if (change.action === "BLOCK" && activeByDate.has(change.date)) {
+    281|       throw new AppError("CLINIC_CALENDAR_CONFLICT", `${change.date} i…
+       |             ^
+    282|     }
+    283|     if (change.action === "REOPEN") {
+ ❯ src/server/services/clinic-calendar.service.ts:1234:13
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ saveClinicCalendarChanges src/server/services/clinic-calendar.service.ts:1216:12
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1252:21
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[21/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > unified clinic calendar lifecycle > commits scheduling and audits a warning when email enqueue fails
+AppError: 2049-08-09 is already blocked.
+ ❯ validateCalendarState src/server/services/clinic-calendar.service.ts:281:13
+    279|   for (const change of changes) {
+    280|     if (change.action === "BLOCK" && activeByDate.has(change.date)) {
+    281|       throw new AppError("CLINIC_CALENDAR_CONFLICT", `${change.date} i…
+       |             ^
+    282|     }
+    283|     if (change.action === "REOPEN") {
+ ❯ src/server/services/clinic-calendar.service.ts:1234:13
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ saveClinicCalendarChanges src/server/services/clinic-calendar.service.ts:1216:12
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1326:22
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[22/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > unified clinic calendar lifecycle > reopening leaves replacements and manual-case state untouched
+AppError: 2049-08-09 is already blocked.
+ ❯ validateCalendarState src/server/services/clinic-calendar.service.ts:281:13
+    279|   for (const change of changes) {
+    280|     if (change.action === "BLOCK" && activeByDate.has(change.date)) {
+    281|       throw new AppError("CLINIC_CALENDAR_CONFLICT", `${change.date} i…
+       |             ^
+    282|     }
+    283|     if (change.action === "REOPEN") {
+ ❯ src/server/services/clinic-calendar.service.ts:1234:13
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ saveClinicCalendarChanges src/server/services/clinic-calendar.service.ts:1216:12
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1367:21
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[23/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > unified clinic calendar lifecycle > allows clinic staff to read but not mutate the unified calendar
+AssertionError: expected [ { …(12) }, { …(12) }, …(2) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   {
++     "blockedDate": "2049-08-09",
++     "category": "CLOSURE",
++     "closureGroupId": "13aa1ac4-55f9-41bd-b833-debcb0cf8567",
++     "createdAt": "2026-10-09T12:00:57.081Z",
++     "createdByName": "System Admin",
++     "groupEndDate": "2049-08-10",
++     "groupStartDate": "2049-08-09",
++     "id": "86c25caa-daeb-4a6d-af9b-8ea7f6a409bb",
++     "policyEffectiveDate": "2026-10-09",
++     "reason": "TEST-UNIFIED pair",
++     "recoveryMode": "AUTO_ELIGIBLE",
++     "updatedAt": "2026-10-09T12:00:57.081488Z",
++   },
++   {
++     "blockedDate": "2049-08-10",
++     "category": "CLOSURE",
++     "closureGroupId": "13aa1ac4-55f9-41bd-b833-debcb0cf8567",
++     "createdAt": "2026-10-09T12:00:57.081Z",
++     "createdByName": "System Admin",
++     "groupEndDate": "2049-08-10",
++     "groupStartDate": "2049-08-09",
++     "id": "295027eb-d99a-49ab-88d0-14ddb74c6494",
++     "policyEffectiveDate": "2026-10-09",
++     "reason": "TEST-UNIFIED pair",
++     "recoveryMode": "AUTO_ELIGIBLE",
++     "updatedAt": "2026-10-09T12:00:57.081488Z",
++   },
++   {
++     "blockedDate": "2049-08-12",
++     "category": "EMERGENCY_CLOSURE",
++     "closureGroupId": "a9fb7f64-480d-46c9-960e-c6ce7be3c66f",
++     "createdAt": "2026-10-09T12:00:56.759Z",
++     "createdByName": "System Admin",
++     "groupEndDate": "2049-08-12",
++     "groupStartDate": "2049-08-12",
++     "id": "51459372-856d-4262-9045-be0895b27e0a",
++     "policyEffectiveDate": "2026-10-09",
++     "reason": "TEST-UNIFIED mixed emergency",
++     "recoveryMode": "AUTO_ELIGIBLE",
++     "updatedAt": "2026-10-09T12:00:56.759109Z",
++   },
++   {
++     "blockedDate": "2049-08-13",
++     "category": "MAINTENANCE",
++     "closureGroupId": "8ede268e-9aaf-472b-9d08-529bcf40e332",
++     "createdAt": "2026-10-09T12:00:56.759Z",
++     "createdByName": "System Admin",
++     "groupEndDate": "2049-08-13",
++     "groupStartDate": "2049-08-13",
++     "id": "8eba2d8b-839a-4c22-9324-bb3ec2dce88c",
++     "policyEffectiveDate": "2026-10-09",
++     "reason": "TEST-UNIFIED mixed planned",
++     "recoveryMode": "AUTO_ELIGIBLE",
++     "updatedAt": "2026-10-09T12:00:56.759109Z",
++   },
++ ]
+
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1421:51
+    1419|       clinicId: TEST_REFERENCE_IDS.laboratoryClinic,
+    1420|     };
+    1421|     await expect(listClinicUnavailableDates(staff)).resolves.toEqual([…
+       |                                                   ^
+    1422|     await expect(saveClinicCalendarChanges({
+    1423|       requestId: randomUUID(),
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[24/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > unified clinic calendar lifecycle > serializes calendar saves with imports under the shared advisory lock
+AppError: 2049-08-12 is already blocked.
+ ❯ validateCalendarState src/server/services/clinic-calendar.service.ts:281:13
+    279|   for (const change of changes) {
+    280|     if (change.action === "BLOCK" && activeByDate.has(change.date)) {
+    281|       throw new AppError("CLINIC_CALENDAR_CONFLICT", `${change.date} i…
+       |             ^
+    282|     }
+    283|     if (change.action === "REOPEN") {
+ ❯ src/server/services/clinic-calendar.service.ts:1234:13
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ saveClinicCalendarChanges src/server/services/clinic-calendar.service.ts:1216:12
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1479:7
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[25/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > unified clinic calendar lifecycle > rolls back the whole operation for an unexpected database failure
+AssertionError: expected [Function] to throw error matching /TEST unexpected unified failure/ but got '2049-08-12 is already blocked.'
+
+- Expected:
+/TEST unexpected unified failure/
+
++ Received:
+"2049-08-12 is already blocked."
+
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1516:16
+    1514|         recoveryMode: "AUTO_ELIGIBLE",
+    1515|         changes: [{ action: "BLOCK", date: "2049-08-12", category: "CL…
+    1516|       }, admin)).rejects.toThrow(/TEST unexpected unified failure/);
+       |                ^
+    1517|       await expect(pool.query(
+    1518|         "SELECT 1 FROM clinic_closure_groups WHERE reason='TEST-UNIFIE…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[26/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > unified clinic calendar lifecycle > keeps an existing safe replacement with a required audited reason
+AppError: 2049-08-12 is already blocked.
+ ❯ validateCalendarState src/server/services/clinic-calendar.service.ts:281:13
+    279|   for (const change of changes) {
+    280|     if (change.action === "BLOCK" && activeByDate.has(change.date)) {
+    281|       throw new AppError("CLINIC_CALENDAR_CONFLICT", `${change.date} i…
+       |             ^
+    282|     }
+    283|     if (change.action === "REOPEN") {
+ ❯ src/server/services/clinic-calendar.service.ts:1234:13
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ saveClinicCalendarChanges src/server/services/clinic-calendar.service.ts:1216:12
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1537:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[27/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > closure same-cycle integrity > keeps no complete pair within closing 2049-07-30 in Manual Resolution
+AppError: 2049-08-09 is already blocked.
+ ❯ validateCalendarState src/server/services/clinic-calendar.service.ts:281:13
+    279|   for (const change of changes) {
+    280|     if (change.action === "BLOCK" && activeByDate.has(change.date)) {
+    281|       throw new AppError("CLINIC_CALENDAR_CONFLICT", `${change.date} i…
+       |             ^
+    282|     }
+    283|     if (change.action === "REOPEN") {
+ ❯ src/server/services/clinic-calendar.service.ts:1100:11
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1606:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[28/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > closure same-cycle integrity > keeps no complete pair within closing 2049-08-11 in Manual Resolution
+error: duplicate key value violates unique constraint "students_pkey"
+ ❯ node_modules/pg-pool/index.js:45:11
+ ❯ insertTestStudent src/test/integration-fixtures.ts:115:3
+    113|   dateOfBirth = null,
+    114| }: TestStudent) {
+    115|   await pool.query(
+       |   ^
+    116|     `INSERT INTO students (
+    117|        student_number, first_name, middle_name, last_name, suffix,
+ ❯ createPair src/server/services/clinic-calendar.integration.test.ts:160:3
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1600:7
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[29/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > closure same-cycle integrity > revalidates a shortened academic cycle at confirmation
+error: duplicate key value violates unique constraint "students_pkey"
+ ❯ node_modules/pg-pool/index.js:45:11
+ ❯ insertTestStudent src/test/integration-fixtures.ts:115:3
+    113|   dateOfBirth = null,
+    114| }: TestStudent) {
+    115|   await pool.query(
+       |   ^
+    116|     `INSERT INTO students (
+    117|        student_number, first_name, middle_name, last_name, suffix,
+ ❯ createPair src/server/services/clinic-calendar.integration.test.ts:160:3
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1616:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[30/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > closure same-cycle integrity > reuses the retired PE slot for the next student while preserving its unblocked Laboratory
+AppError: 2049-08-09 is already blocked.
+ ❯ validateCalendarState src/server/services/clinic-calendar.service.ts:281:13
+    279|   for (const change of changes) {
+    280|     if (change.action === "BLOCK" && activeByDate.has(change.date)) {
+    281|       throw new AppError("CLINIC_CALENDAR_CONFLICT", `${change.date} i…
+       |             ^
+    282|     }
+    283|     if (change.action === "REOPEN") {
+ ❯ src/server/services/clinic-calendar.service.ts:1234:13
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ saveClinicCalendarChanges src/server/services/clinic-calendar.service.ts:1216:12
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1637:12
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[31/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > closure same-cycle integrity > rejects ordinary manual recovery beyond its configured cycle
+error: duplicate key value violates unique constraint "students_pkey"
+ ❯ node_modules/pg-pool/index.js:45:11
+ ❯ insertTestStudent src/test/integration-fixtures.ts:115:3
+    113|   dateOfBirth = null,
+    114| }: TestStudent) {
+    115|   await pool.query(
+       |   ^
+    116|     `INSERT INTO students (
+    117|        student_number, first_name, middle_name, last_name, suffix,
+ ❯ createPair src/server/services/clinic-calendar.integration.test.ts:160:3
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1644:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[32/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > OVPSA closure cycle boundaries > previews and confirms a complete batch pair on the custom last weekday
+error: duplicate key value violates unique constraint "students_pkey"
+ ❯ node_modules/pg-pool/index.js:45:11
+ ❯ insertTestStudent src/test/integration-fixtures.ts:115:3
+    113|   dateOfBirth = null,
+    114| }: TestStudent) {
+    115|   await pool.query(
+       |   ^
+    116|     `INSERT INTO students (
+    117|        student_number, first_name, middle_name, last_name, suffix,
+ ❯ createPair src/server/services/clinic-calendar.integration.test.ts:160:3
+ ❯ ovpsaClosureFixture src/server/services/clinic-calendar.integration.test.ts:1665:3
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1717:21
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[33/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > OVPSA closure cycle boundaries > revalidates shortened batch bounds at confirmation
+error: duplicate key value violates unique constraint "students_pkey"
+ ❯ node_modules/pg-pool/index.js:45:11
+ ❯ insertTestStudent src/test/integration-fixtures.ts:115:3
+    113|   dateOfBirth = null,
+    114| }: TestStudent) {
+    115|   await pool.query(
+       |   ^
+    116|     `INSERT INTO students (
+    117|        student_number, first_name, middle_name, last_name, suffix,
+ ❯ createPair src/server/services/clinic-calendar.integration.test.ts:160:3
+ ❯ ovpsaClosureFixture src/server/services/clinic-calendar.integration.test.ts:1665:3
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1729:21
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[34/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > OVPSA closure cycle boundaries > rejects an individual OVPSA PE replacement earlier than seven days after Laboratory
+error: duplicate key value violates unique constraint "students_pkey"
+ ❯ node_modules/pg-pool/index.js:45:11
+ ❯ insertTestStudent src/test/integration-fixtures.ts:115:3
+    113|   dateOfBirth = null,
+    114| }: TestStudent) {
+    115|   await pool.query(
+       |   ^
+    116|     `INSERT INTO students (
+    117|        student_number, first_name, middle_name, last_name, suffix,
+ ❯ createPair src/server/services/clinic-calendar.integration.test.ts:160:3
+ ❯ ovpsaClosureFixture src/server/services/clinic-calendar.integration.test.ts:1665:3
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1738:21
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[35/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > closure recovery protected occupancy > keeps a preserved PE occupied for the next student
+AppError: 2049-08-09 is already blocked.
+ ❯ validateCalendarState src/server/services/clinic-calendar.service.ts:281:13
+    279|   for (const change of changes) {
+    280|     if (change.action === "BLOCK" && activeByDate.has(change.date)) {
+    281|       throw new AppError("CLINIC_CALENDAR_CONFLICT", `${change.date} i…
+       |             ^
+    282|     }
+    283|     if (change.action === "REOPEN") {
+ ❯ src/server/services/clinic-calendar.service.ts:1234:13
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ saveClinicCalendarChanges src/server/services/clinic-calendar.service.ts:1216:12
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1754:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[36/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > closure recovery protected occupancy > discards a failed student's simulated release and reservation
+AppError: 2049-08-09 is already blocked.
+ ❯ validateCalendarState src/server/services/clinic-calendar.service.ts:281:13
+    279|   for (const change of changes) {
+    280|     if (change.action === "BLOCK" && activeByDate.has(change.date)) {
+    281|       throw new AppError("CLINIC_CALENDAR_CONFLICT", `${change.date} i…
+       |             ^
+    282|     }
+    283|     if (change.action === "REOPEN") {
+ ❯ src/server/services/clinic-calendar.service.ts:1234:13
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ saveClinicCalendarChanges src/server/services/clinic-calendar.service.ts:1216:12
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1771:14
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[37/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > closure recovery protected occupancy > does not count external OVPSA Laboratory in a capacity reduction
+AppError: The maximum is below already committed appointments. Review the affected dates.
+ ❯ updateCapacitySetting src/server/repositories/appointments.repository.ts:624:11
+    622|   );
+    623|   if (workload.rows.length) {
+    624|     throw new AppError("CAPACITY_COMMITTED_WORKLOAD_CONFLICT",
+       |           ^
+    625|       "The maximum is below already committed appointments. Review the…
+    626|       409, undefined, { clinicCode, scheduleType, maxDailyCapacity: ma…
+ ❯ src/server/services/appointments.service.ts:567:20
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1788:12
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[38/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > closure recovery protected occupancy > keeps ordinary today manual cases unresolved
+AppError: 2049-08-09 is already blocked.
+ ❯ validateCalendarState src/server/services/clinic-calendar.service.ts:281:13
+    279|   for (const change of changes) {
+    280|     if (change.action === "BLOCK" && activeByDate.has(change.date)) {
+    281|       throw new AppError("CLINIC_CALENDAR_CONFLICT", `${change.date} i…
+       |             ^
+    282|     }
+    283|     if (change.action === "REOPEN") {
+ ❯ src/server/services/clinic-calendar.service.ts:1234:13
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ saveClinicCalendarChanges src/server/services/clinic-calendar.service.ts:1216:12
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1794:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[39/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > closure recovery protected occupancy > keeps ordinary expired manual cases unresolved
+error: duplicate key value violates unique constraint "students_pkey"
+ ❯ node_modules/pg-pool/index.js:45:11
+ ❯ insertTestStudent src/test/integration-fixtures.ts:115:3
+    113|   dateOfBirth = null,
+    114| }: TestStudent) {
+    115|   await pool.query(
+       |   ^
+    116|     `INSERT INTO students (
+    117|        student_number, first_name, middle_name, last_name, suffix,
+ ❯ createPair src/server/services/clinic-calendar.integration.test.ts:160:3
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1793:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[40/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > closure recovery protected occupancy > does not move a manually locked OVPSA LABORATORY in coordinated recovery
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > closure recovery protected occupancy > does not move a manually locked OVPSA PHYSICAL_EXAM in coordinated recovery
+error: duplicate key value violates unique constraint "students_pkey"
+ ❯ node_modules/pg-pool/index.js:45:11
+ ❯ insertTestStudent src/test/integration-fixtures.ts:115:3
+    113|   dateOfBirth = null,
+    114| }: TestStudent) {
+    115|   await pool.query(
+       |   ^
+    116|     `INSERT INTO students (
+    117|        student_number, first_name, middle_name, last_name, suffix,
+ ❯ createPair src/server/services/clinic-calendar.integration.test.ts:160:3
+ ❯ ovpsaClosureFixture src/server/services/clinic-calendar.integration.test.ts:1665:3
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1810:21
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[41/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > keeps the completed OVPSA Laboratory reservation while releasing the affected PE reservation
+error: duplicate key value violates unique constraint "students_pkey"
+ ❯ node_modules/pg-pool/index.js:45:11
+ ❯ insertTestStudent src/test/integration-fixtures.ts:115:3
+    113|   dateOfBirth = null,
+    114| }: TestStudent) {
+    115|   await pool.query(
+       |   ^
+    116|     `INSERT INTO students (
+    117|        student_number, first_name, middle_name, last_name, suffix,
+ ❯ createPair src/server/services/clinic-calendar.integration.test.ts:160:3
+ ❯ ovpsaClosureFixture src/server/services/clinic-calendar.integration.test.ts:1665:3
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1821:19
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[42/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > mixed block and reopening preview agreement > matches confirmation with null reserved on '2049-08-11'
+AppError: 2049-08-09 is already blocked.
+ ❯ validateCalendarState src/server/services/clinic-calendar.service.ts:281:13
+    279|   for (const change of changes) {
+    280|     if (change.action === "BLOCK" && activeByDate.has(change.date)) {
+    281|       throw new AppError("CLINIC_CALENDAR_CONFLICT", `${change.date} i…
+       |             ^
+    282|     }
+    283|     if (change.action === "REOPEN") {
+ ❯ src/server/services/clinic-calendar.service.ts:1100:11
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1859:21
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[43/142]⎯
+
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > mixed block and reopening preview agreement > matches confirmation with 'LABORATORY' reserved on '2049-08-11'
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > mixed block and reopening preview agreement > matches confirmation with 'PHYSICAL_EXAM' reserved on '2049-08-12'
+ FAIL  src/server/services/clinic-calendar.integration.test.ts > mixed block and reopening preview agreement > matches confirmation with 'PHYSICAL_EXAM' reserved on '2049-08-11'
+AppError: 2049-08-11 is already blocked.
+ ❯ validateCalendarState src/server/services/clinic-calendar.service.ts:281:13
+    279|   for (const change of changes) {
+    280|     if (change.action === "BLOCK" && activeByDate.has(change.date)) {
+    281|       throw new AppError("CLINIC_CALENDAR_CONFLICT", `${change.date} i…
+       |             ^
+    282|     }
+    283|     if (change.action === "REOPEN") {
+ ❯ src/server/services/clinic-calendar.service.ts:1234:13
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ saveClinicCalendarChanges src/server/services/clinic-calendar.service.ts:1216:12
+ ❯ src/server/services/clinic-calendar.integration.test.ts:1836:21
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[44/142]⎯
+
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > excludes 'LABORATORY' ownership from 'PAIR' victim selection
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > excludes 'LABORATORY' ownership from 'PHYSICAL_EXAM_ONLY' victim selection
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > excludes 'PHYSICAL_EXAM' ownership from 'PAIR' victim selection
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > excludes 'PHYSICAL_EXAM' ownership from 'PHYSICAL_EXAM_ONLY' victim selection
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > recovers mixed victims by global FCFS with reversed=false and pairOlder=false
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > recovers mixed victims by global FCFS with reversed=false and pairOlder=true
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > recovers mixed victims by global FCFS with reversed=true and pairOlder=false
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > recovers mixed victims by global FCFS with reversed=true and pairOlder=true
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > considers displacement for 1 incoming students in a full or partially full cycle
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > considers displacement for 2 incoming students in a full or partially full cycle
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > preserves an ineffective blocked victim without displacement history or notices
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > reports PE-only overflow when an exclusive reservation prevents preferred-window placement
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > combines complementary releases and preserves a redundant Laboratory
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > prunes an older redundant victim and retains the later accepted pair
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > searches the remaining cycle for unassigned demand even after the preferred month
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > relieves unassigned PE-only pressure while preserving a completed Laboratory
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > rolls back actual incoming student updates, snapshots and publication when protected capacity cannot fit the entire import
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > uses persisted scheduling lineage before deterministic legacy fallbacks
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > keeps a successful Regular replacement eligible for later priority displacement
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > excludes a pair when either appointment has an active draft result file
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > keeps a Physical-only candidate eligible when only Laboratory has a draft file
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > skips the same active blocked dates for both replacement services
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > allows a reopened date to be allocated again
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > keeps a Physical Examination-only replacement after the persisted Laboratory date
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > rolls back incoming publication and fallback state as one transaction
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > plans an April replacement and a same-cycle fallback before applying either
+error: null value in column "id" of relation "test_fixture_import_groups" violates not-null constraint
+ ❯ node_modules/pg/lib/client.js:646:17
+ ❯ src/test/integration-fixtures.ts:210:5
+    208|         AND student_number NOT IN (SELECT student_number FROM test_fix…
+    209|     if (sharedOvpsaMembers.rowCount) throw new Error("Refusing cleanup…
+    210|     await client.query(`INSERT INTO test_fixture_import_groups SELECT …
+       |     ^
+    211|       FROM ovpsa_first_year_batches WHERE id IN (SELECT id FROM test_f…
+    212|       ON CONFLICT DO NOTHING`);
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ cleanupTestFixtures src/test/integration-fixtures.ts:157:3
+ ❯ cleanup src/server/services/priority-displacement.integration.test.ts:48:3
+ ❯ cleanupAndRestoreCapacitySettings src/test/capacity-fixture-lifecycle.ts:76:5
+ ❯ src/server/services/priority-displacement.integration.test.ts:314:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[45/142]⎯
+
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > excludes 'LABORATORY' ownership from 'PHYSICAL_EXAM_ONLY' victim selection
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > excludes 'PHYSICAL_EXAM' ownership from 'PAIR' victim selection
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > excludes 'PHYSICAL_EXAM' ownership from 'PHYSICAL_EXAM_ONLY' victim selection
+error: duplicate key value violates unique constraint "students_pkey"
+ ❯ node_modules/pg-pool/index.js:45:11
+ ❯ insertTestStudent src/test/integration-fixtures.ts:115:3
+    113|   dateOfBirth = null,
+    114| }: TestStudent) {
+    115|   await pool.query(
+       |   ^
+    116|     `INSERT INTO students (
+    117|        student_number, first_name, middle_name, last_name, suffix,
+ ❯ fixture src/server/services/priority-displacement.integration.test.ts:61:3
+ ❯ eligibleFixture src/server/services/priority-displacement.integration.test.ts:138:19
+ ❯ src/server/services/priority-displacement.integration.test.ts:372:21
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[46/142]⎯
+
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > recovers mixed victims by global FCFS with reversed=false and pairOlder=true
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > recovers mixed victims by global FCFS with reversed=true and pairOlder=false
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > recovers mixed victims by global FCFS with reversed=true and pairOlder=true
+error: duplicate key value violates unique constraint "students_pkey"
+ ❯ node_modules/pg-pool/index.js:45:11
+ ❯ insertTestStudent src/test/integration-fixtures.ts:115:3
+    113|   dateOfBirth = null,
+    114| }: TestStudent) {
+    115|   await pool.query(
+       |   ^
+    116|     `INSERT INTO students (
+    117|        student_number, first_name, middle_name, last_name, suffix,
+ ❯ fixture src/server/services/priority-displacement.integration.test.ts:61:3
+ ❯ eligibleFixture src/server/services/priority-displacement.integration.test.ts:138:19
+ ❯ candidateFixture src/server/services/priority-displacement.integration.test.ts:196:19
+ ❯ src/server/services/priority-displacement.integration.test.ts:391:21
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[47/142]⎯
+
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > considers displacement for 2 incoming students in a full or partially full cycle
+error: duplicate key value violates unique constraint "students_pkey"
+ ❯ node_modules/pg-pool/index.js:45:11
+ ❯ insertTestStudent src/test/integration-fixtures.ts:115:3
+    113|   dateOfBirth = null,
+    114| }: TestStudent) {
+    115|   await pool.query(
+       |   ^
+    116|     `INSERT INTO students (
+    117|        student_number, first_name, middle_name, last_name, suffix,
+ ❯ fixture src/server/services/priority-displacement.integration.test.ts:61:3
+ ❯ eligibleFixture src/server/services/priority-displacement.integration.test.ts:138:19
+ ❯ candidateFixture src/server/services/priority-displacement.integration.test.ts:196:19
+ ❯ src/server/services/priority-displacement.integration.test.ts:423:21
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[48/142]⎯
+
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > preserves an ineffective blocked victim without displacement history or notices
+AssertionError: expected { …(14) } to match object { status: 'PUBLISHED', …(2) }
+(12 matching properties omitted from actual)
+
+- Expected
++ Received
+
+  {
+    "displacementTotal": 0,
+    "overflow": {
+-     "pairCountBeyondPreferredWindow": 1,
++     "pairCountBeyondPreferredWindow": 0,
+    },
+    "status": "PUBLISHED",
+  }
+
+ ❯ src/server/services/priority-displacement.integration.test.ts:446:36
+    444|     for (let day = 1;day <= 31;day++) await insertUnifiedDate(`2027-08…
+    445|     const before = (await pool.query("SELECT * FROM appointments WHERE…
+    446|     expect(await importPriority()).toMatchObject({ status: "PUBLISHED"…
+       |                                    ^
+    447|     expect((await pool.query("SELECT * FROM appointments WHERE student…
+    448|     expect((await pool.query(`SELECT (SELECT COUNT(*)::int FROM appoin…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[49/142]⎯
+
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > reports PE-only overflow when an exclusive reservation prevents preferred-window placement
+error: duplicate key value violates unique constraint "clinic_unavailable_dates_one_active_day_idx"
+ ❯ node_modules/pg-pool/index.js:45:11
+ ❯ insertUnifiedDate src/server/services/priority-displacement.integration.test.ts:255:3
+    253|
+    254| async function insertUnifiedDate(date: string, reopened: boolean) {
+    255|   await pool.query(
+       |   ^
+    256|     `WITH closure AS (
+    257|        INSERT INTO clinic_closure_groups (
+ ❯ src/server/services/priority-displacement.integration.test.ts:461:39
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[50/142]⎯
+
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > combines complementary releases and preserves a redundant Laboratory
+error: duplicate key value violates unique constraint "clinic_unavailable_dates_one_active_day_idx"
+ ❯ node_modules/pg-pool/index.js:45:11
+ ❯ insertUnifiedDate src/server/services/priority-displacement.integration.test.ts:255:3
+    253|
+    254| async function insertUnifiedDate(date: string, reopened: boolean) {
+    255|   await pool.query(
+       |   ^
+    256|     `WITH closure AS (
+    257|        INSERT INTO clinic_closure_groups (
+ ❯ src/server/services/priority-displacement.integration.test.ts:486:39
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[51/142]⎯
+
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > prunes an older redundant victim and retains the later accepted pair
+error: duplicate key value violates unique constraint "clinic_unavailable_dates_one_active_day_idx"
+ ❯ node_modules/pg-pool/index.js:45:11
+ ❯ insertUnifiedDate src/server/services/priority-displacement.integration.test.ts:255:3
+    253|
+    254| async function insertUnifiedDate(date: string, reopened: boolean) {
+    255|   await pool.query(
+       |   ^
+    256|     `WITH closure AS (
+    257|        INSERT INTO clinic_closure_groups (
+ ❯ src/server/services/priority-displacement.integration.test.ts:516:39
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[52/142]⎯
+
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > searches the remaining cycle for unassigned demand even after the preferred month
+error: duplicate key value violates unique constraint "clinic_unavailable_dates_one_active_day_idx"
+ ❯ node_modules/pg-pool/index.js:45:11
+ ❯ insertUnifiedDate src/server/services/priority-displacement.integration.test.ts:255:3
+    253|
+    254| async function insertUnifiedDate(date: string, reopened: boolean) {
+    255|   await pool.query(
+       |   ^
+    256|     `WITH closure AS (
+    257|        INSERT INTO clinic_closure_groups (
+ ❯ src/server/services/priority-displacement.integration.test.ts:527:39
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[53/142]⎯
+
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > relieves unassigned PE-only pressure while preserving a completed Laboratory
+AssertionError: expected { …(14) } to match object { displacementTotal: 1 }
+(15 matching properties omitted from actual)
+
+- Expected
++ Received
+
+  {
+-   "displacementTotal": 1,
++   "displacementTotal": 0,
+  }
+
+ ❯ src/server/services/priority-displacement.integration.test.ts:542:36
+
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[54/142]⎯
+
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > rolls back actual incoming student updates, snapshots and publication when protected capacity cannot fit the entire import
+error: duplicate key value violates unique constraint "students_pkey"
+ ❯ node_modules/pg-pool/index.js:45:11
+ ❯ insertTestStudent src/test/integration-fixtures.ts:115:3
+    113|   dateOfBirth = null,
+    114| }: TestStudent) {
+    115|   await pool.query(
+       |   ^
+    116|     `INSERT INTO students (
+    117|        student_number, first_name, middle_name, last_name, suffix,
+ ❯ src/server/services/priority-displacement.integration.test.ts:556:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[55/142]⎯
+
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > uses persisted scheduling lineage before deterministic legacy fallbacks
+AssertionError: expected [ { displacementType: 'PAIR', …(13) } ] to deeply equal [ ObjectContaining{…} ]
+
+- Expected
++ Received
+
+  [
+    {
+-     "acceptedAt": 2027-08-08T01:02:03.000Z,
+-     "scheduleCycleClosingDate": "2028-07-31",
+-     "schedulePairId": "92eed5fb-56ed-4459-bc7e-21913c92d3ab",
++     "acceptedAt": 2028-03-20T00:00:00.000Z,
++     "displacementType": "PAIR",
++     "laboratoryAppointmentId": "bd3e2f72-6441-4fe8-8165-65906a18a8b0",
++     "laboratoryDate": "2027-09-01",
++     "physicalExamAppointmentId": "8696bcd1-4cc6-46ee-8de7-d24dd4293b42",
++     "physicalExamDate": "2027-09-02",
++     "scheduleCycleClosingDate": "2027-08-03",
++     "scheduleCycleStart": 2027,
++     "schedulePairId": "51ba1211-6d39-46db-976b-b53cf6f2fd39",
+      "schedulingCategory": "REGULAR",
+      "schedulingWindowEnd": "2028-03-31",
+-     "schedulingWindowStart": "2027-08-15",
+-     "sourceRowOrder": 17,
++     "schedulingWindowStart": "2027-09-01",
++     "sourceRowOrder": 7,
++     "studentNumber": "99-9434-00",
+    },
+  ]
+
+ ❯ src/server/services/priority-displacement.integration.test.ts:587:24
+    585|     }));
+    586|
+    587|     expect(candidates).toEqual([expect.objectContaining({
+       |                        ^
+    588|       schedulePairId: fixture.created.pairId,
+    589|       schedulingCategory: "REGULAR",
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[56/142]⎯
+
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > keeps a successful Regular replacement eligible for later priority displacement
+AssertionError: expected [ { displacementType: 'PAIR', …(13) } ] to deeply equal [ ObjectContaining{…} ]
+
+- Expected
++ Received
+
+  [
+    {
+-     "acceptedAt": 2027-08-20T00:00:00.000Z,
+-     "schedulePairId": "20411cfe-7efc-4fd8-824f-9beb6edd6b17",
++     "acceptedAt": 2028-03-20T00:00:00.000Z,
++     "displacementType": "PAIR",
++     "laboratoryAppointmentId": "bd3e2f72-6441-4fe8-8165-65906a18a8b0",
++     "laboratoryDate": "2027-09-01",
++     "physicalExamAppointmentId": "8696bcd1-4cc6-46ee-8de7-d24dd4293b42",
++     "physicalExamDate": "2027-09-02",
++     "scheduleCycleClosingDate": "2027-08-03",
++     "scheduleCycleStart": 2027,
++     "schedulePairId": "51ba1211-6d39-46db-976b-b53cf6f2fd39",
+      "schedulingCategory": "REGULAR",
+-     "sourceRowOrder": 11,
+-     "studentNumber": "99-9411-11",
++     "schedulingWindowEnd": "2028-03-31",
++     "schedulingWindowStart": "2027-09-01",
++     "sourceRowOrder": 7,
++     "studentNumber": "99-9434-00",
+    },
+  ]
+
+ ❯ src/server/services/priority-displacement.integration.test.ts:625:29
+    623|     }));
+    624|
+    625|     expect(laterCandidates).toEqual([expect.objectContaining({
+       |                             ^
+    626|       studentNumber: "99-9411-11",
+    627|       schedulePairId: original.created.pairId,
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[57/142]⎯
+
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > excludes a pair when either appointment has an active draft result file
+AssertionError: expected [ { …(14) }, { …(14) }, …(7) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   {
++     "acceptedAt": 2028-03-20T00:00:00.000Z,
++     "displacementType": "PAIR",
++     "laboratoryAppointmentId": "bd3e2f72-6441-4fe8-8165-65906a18a8b0",
++     "laboratoryDate": "2027-09-01",
++     "physicalExamAppointmentId": "8696bcd1-4cc6-46ee-8de7-d24dd4293b42",
++     "physicalExamDate": "2027-09-02",
++     "scheduleCycleClosingDate": "2027-08-03",
++     "scheduleCycleStart": 2027,
++     "schedulePairId": "51ba1211-6d39-46db-976b-b53cf6f2fd39",
++     "schedulingCategory": "REGULAR",
++     "schedulingWindowEnd": "2028-03-31",
++     "schedulingWindowStart": "2027-09-01",
++     "sourceRowOrder": 7,
++     "studentNumber": "99-9434-00",
++   },
++   {
++     "acceptedAt": 2028-03-20T00:00:00.000Z,
++     "displacementType": "PAIR",
++     "laboratoryAppointmentId": "2125d9e9-eeb0-4e09-8c5d-4dd73d3f8a3a",
++     "laboratoryDate": "2027-08-30",
++     "physicalExamAppointmentId": "6c72104a-ba4c-49a6-9dfc-f20c31dcfb05",
++     "physicalExamDate": "2027-08-31",
++     "scheduleCycleClosingDate": "2027-08-03",
++     "scheduleCycleStart": 2027,
++     "schedulePairId": "537e6207-b0d7-4a43-b767-65e25c889006",
++     "schedulingCategory": "REGULAR",
++     "schedulingWindowEnd": "2028-03-31",
++     "schedulingWindowStart": "2027-08-01",
++     "sourceRowOrder": 7,
++     "studentNumber": "99-9425-00",
++   },
++   {
++     "acceptedAt": 2027-08-20T00:00:00.000Z,
++     "displacementType": "PAIR",
++     "laboratoryAppointmentId": "cc2d74d8-9bca-4fd2-a022-ad7fb7fecd6e",
++     "laboratoryDate": "2027-09-01",
++     "physicalExamAppointmentId": "36d082f7-90fc-4c66-9ac6-cddeecc85134",
++     "physicalExamDate": "2027-09-02",
++     "scheduleCycleClosingDate": "2027-08-03",
++     "scheduleCycleStart": 2027,
++     "schedulePairId": "20411cfe-7efc-4fd8-824f-9beb6edd6b17",
++     "schedulingCategory": "REGULAR",
++     "schedulingWindowEnd": "2027-09-30",
++     "schedulingWindowStart": "2027-09-01",
++     "sourceRowOrder": 11,
++     "studentNumber": "99-9411-11",
++   },
++   {
++     "acceptedAt": 2027-08-08T01:02:03.000Z,
++     "displacementType": "PAIR",
++     "laboratoryAppointmentId": "848e2609-e67d-4889-b185-09d8c478667c",
++     "laboratoryDate": "2027-08-30",
++     "physicalExamAppointmentId": "635ec2a8-bbd5-49e0-837f-abfe5148cb27",
++     "physicalExamDate": "2027-08-31",
++     "scheduleCycleClosingDate": "2027-08-03",
++     "scheduleCycleStart": 2027,
++     "schedulePairId": "92eed5fb-56ed-4459-bc7e-21913c92d3ab",
++     "schedulingCategory": "REGULAR",
++     "schedulingWindowEnd": "2028-03-31",
++     "schedulingWindowStart": "2027-08-15",
++     "sourceRowOrder": 17,
++     "studentNumber": "99-9405-05",
++   },
++   {
++     "acceptedAt": 2027-07-02T00:00:00.000Z,
++     "displacementType": "PAIR",
++     "laboratoryAppointmentId": "de5c1e4c-b34e-4b0d-a49f-2b2db803e93a",
++     "laboratoryDate": "2027-08-30",
++     "physicalExamAppointmentId": "6a5beb4d-cf19-4b75-a3a3-ac27638939a2",
++     "physicalExamDate": "2027-08-31",
++     "scheduleCycleClosingDate": "2027-08-03",
++     "scheduleCycleStart": 2027,
++     "schedulePairId": "e84defdd-9342-428a-99e9-9a28e7838cf5",
++     "schedulingCategory": "REGULAR",
++     "schedulingWindowEnd": "2028-03-31",
++     "schedulingWindowStart": "2027-08-01",
++     "sourceRowOrder": 7,
++     "studentNumber": "99-9433-00",
++   },
++   {
++     "acceptedAt": 2027-07-02T00:00:00.000Z,
++     "displacementType": "PAIR",
++     "laboratoryAppointmentId": "5f475549-270a-4539-be9e-b355065af39d",
++     "laboratoryDate": "2027-08-27",
++     "physicalExamAppointmentId": "a9b34f29-5ef8-45fc-8e1e-b05ee3650aa6",
++     "physicalExamDate": "2027-08-31",
++     "scheduleCycleClosingDate": "2027-08-03",
++     "scheduleCycleStart": 2027,
++     "schedulePairId": "2d41fa8b-8681-4eb9-bdad-a69c48ac5d59",
++     "schedulingCategory": "REGULAR",
++     "schedulingWindowEnd": "2028-03-31",
++     "schedulingWindowStart": "2027-08-01",
++     "sourceRowOrder": 7,
++     "studentNumber": "99-9431-00",
++   },
++   {
++     "acceptedAt": 2027-07-01T00:00:00.000Z,
++     "displacementType": "PAIR",
++     "laboratoryAppointmentId": "33d9c6fa-35a9-4bbc-a19d-f87322b87686",
++     "laboratoryDate": "2027-08-30",
++     "physicalExamAppointmentId": "17826dff-38f0-4925-903c-ca7a120d0cfb",
++     "physicalExamDate": "2027-08-31",
++     "scheduleCycleClosingDate": "2027-08-03",
++     "scheduleCycleStart": 2027,
++     "schedulePairId": "bee299bf-1c97-4970-8566-852d802a04bd",
++     "schedulingCategory": "REGULAR",
++     "schedulingWindowEnd": "2028-03-31",
++     "schedulingWindowStart": "2027-08-01",
++     "sourceRowOrder": 7,
++     "studentNumber": "99-9432-00",
++   },
++   {
++     "acceptedAt": 2027-07-01T00:00:00.000Z,
++     "displacementType": "PAIR",
++     "laboratoryAppointmentId": "87e1847c-e9e3-4291-8725-71ed9398c158",
++     "laboratoryDate": "2027-08-30",
++     "physicalExamAppointmentId": "48bc26a8-0c1b-4e7d-a527-819633f834eb",
++     "physicalExamDate": "2027-09-01",
++     "scheduleCycleClosingDate": "2027-08-03",
++     "scheduleCycleStart": 2027,
++     "schedulePairId": "e89c5e00-f489-4e5b-9767-73e9315d7b0b",
++     "schedulingCategory": "REGULAR",
++     "schedulingWindowEnd": "2028-03-31",
++     "schedulingWindowStart": "2027-08-01",
++     "sourceRowOrder": 7,
++     "studentNumber": "99-9430-00",
++   },
++   {
++     "acceptedAt": 2026-10-09T12:01:15.249Z,
++     "displacementType": "PAIR",
++     "laboratoryAppointmentId": "df075072-e5a8-4c90-96e0-072391eb0105",
++     "laboratoryDate": "2027-08-30",
++     "physicalExamAppointmentId": "4f431be0-e074-4000-8df6-69c660ba344d",
++     "physicalExamDate": "2027-08-31",
++     "scheduleCycleClosingDate": "2027-08-03",
++     "scheduleCycleStart": 2027,
++     "schedulePairId": "5053a8cc-feec-4539-805e-bff9f3c294b2",
++     "schedulingCategory": "REGULAR",
++     "schedulingWindowEnd": "2028-03-31",
++     "schedulingWindowStart": "2027-08-30",
++     "sourceRowOrder": 2147483647,
++     "studentNumber": "99-9420-00",
++   },
++ ]
+
+ ❯ src/server/services/priority-displacement.integration.test.ts:655:8
+    653|       windowEnd: "2027-09-30",
+    654|       limit: 10,
+    655|     }))).resolves.toEqual([]);
+       |        ^
+    656|   });
+    657|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[58/142]⎯
+
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > keeps a Physical-only candidate eligible when only Laboratory has a draft file
+AssertionError: expected [ { …(14) }, { …(14) }, …(8) ] to deeply equal [ ObjectContaining{…} ]
+
+- Expected
++ Received
+
+  [
+    {
++     "acceptedAt": 2028-03-20T00:00:00.000Z,
++     "displacementType": "PHYSICAL_EXAM_ONLY",
++     "laboratoryAppointmentId": "44a04dc9-48c8-4c06-b2b3-822fc2e8fc2e",
++     "laboratoryDate": "2027-07-30",
++     "physicalExamAppointmentId": "644cd478-856e-466b-93f8-78f361ba8802",
++     "physicalExamDate": "2027-08-03",
++     "scheduleCycleClosingDate": "2027-08-03",
++     "scheduleCycleStart": 2027,
++     "schedulePairId": "cc21ab74-1f0c-4e1d-b3bd-25684fdaaa31",
++     "schedulingCategory": "REGULAR",
++     "schedulingWindowEnd": "2028-03-31",
++     "schedulingWindowStart": "2027-08-01",
++     "sourceRowOrder": 7,
++     "studentNumber": "99-9435-00",
++   },
++   {
++     "acceptedAt": 2028-03-20T00:00:00.000Z,
++     "displacementType": "PHYSICAL_EXAM_ONLY",
++     "laboratoryAppointmentId": "bd3e2f72-6441-4fe8-8165-65906a18a8b0",
++     "laboratoryDate": "2027-09-01",
++     "physicalExamAppointmentId": "8696bcd1-4cc6-46ee-8de7-d24dd4293b42",
++     "physicalExamDate": "2027-09-02",
++     "scheduleCycleClosingDate": "2027-08-03",
++     "scheduleCycleStart": 2027,
++     "schedulePairId": "51ba1211-6d39-46db-976b-b53cf6f2fd39",
++     "schedulingCategory": "REGULAR",
++     "schedulingWindowEnd": "2028-03-31",
++     "schedulingWindowStart": "2027-09-01",
++     "sourceRowOrder": 7,
++     "studentNumber": "99-9434-00",
++   },
++   {
++     "acceptedAt": 2028-03-20T00:00:00.000Z,
++     "displacementType": "PHYSICAL_EXAM_ONLY",
++     "laboratoryAppointmentId": "2125d9e9-eeb0-4e09-8c5d-4dd73d3f8a3a",
++     "laboratoryDate": "2027-08-30",
++     "physicalExamAppointmentId": "6c72104a-ba4c-49a6-9dfc-f20c31dcfb05",
++     "physicalExamDate": "2027-08-31",
++     "scheduleCycleClosingDate": "2027-08-03",
++     "scheduleCycleStart": 2027,
++     "schedulePairId": "537e6207-b0d7-4a43-b767-65e25c889006",
++     "schedulingCategory": "REGULAR",
++     "schedulingWindowEnd": "2028-03-31",
++     "schedulingWindowStart": "2027-08-01",
++     "sourceRowOrder": 7,
++     "studentNumber": "99-9425-00",
++   },
++   {
++     "acceptedAt": 2027-08-20T00:00:00.000Z,
++     "displacementType": "PHYSICAL_EXAM_ONLY",
++     "laboratoryAppointmentId": "cc2d74d8-9bca-4fd2-a022-ad7fb7fecd6e",
++     "laboratoryDate": "2027-09-01",
++     "physicalExamAppointmentId": "36d082f7-90fc-4c66-9ac6-cddeecc85134",
++     "physicalExamDate": "2027-09-02",
++     "scheduleCycleClosingDate": "2027-08-03",
++     "scheduleCycleStart": 2027,
++     "schedulePairId": "20411cfe-7efc-4fd8-824f-9beb6edd6b17",
++     "schedulingCategory": "REGULAR",
++     "schedulingWindowEnd": "2027-09-30",
++     "schedulingWindowStart": "2027-09-01",
++     "sourceRowOrder": 11,
++     "studentNumber": "99-9411-11",
++   },
++   {
++     "acceptedAt": 2027-08-08T01:02:03.000Z,
++     "displacementType": "PHYSICAL_EXAM_ONLY",
++     "laboratoryAppointmentId": "848e2609-e67d-4889-b185-09d8c478667c",
++     "laboratoryDate": "2027-08-30",
++     "physicalExamAppointmentId": "635ec2a8-bbd5-49e0-837f-abfe5148cb27",
++     "physicalExamDate": "2027-08-31",
++     "scheduleCycleClosingDate": "2027-08-03",
++     "scheduleCycleStart": 2027,
++     "schedulePairId": "92eed5fb-56ed-4459-bc7e-21913c92d3ab",
++     "schedulingCategory": "REGULAR",
++     "schedulingWindowEnd": "2028-03-31",
++     "schedulingWindowStart": "2027-08-15",
++     "sourceRowOrder": 17,
++     "studentNumber": "99-9405-05",
++   },
++   {
++     "acceptedAt": 2027-07-02T00:00:00.000Z,
++     "displacementType": "PHYSICAL_EXAM_ONLY",
++     "laboratoryAppointmentId": "de5c1e4c-b34e-4b0d-a49f-2b2db803e93a",
++     "laboratoryDate": "2027-08-30",
++     "physicalExamAppointmentId": "6a5beb4d-cf19-4b75-a3a3-ac27638939a2",
++     "physicalExamDate": "2027-08-31",
++     "scheduleCycleClosingDate": "2027-08-03",
++     "scheduleCycleStart": 2027,
++     "schedulePairId": "e84defdd-9342-428a-99e9-9a28e7838cf5",
++     "schedulingCategory": "REGULAR",
++     "schedulingWindowEnd": "2028-03-31",
++     "schedulingWindowStart": "2027-08-01",
++     "sourceRowOrder": 7,
++     "studentNumber": "99-9433-00",
++   },
++   {
++     "acceptedAt": 2027-07-02T00:00:00.000Z,
++     "displacementType": "PHYSICAL_EXAM_ONLY",
++     "laboratoryAppointmentId": "5f475549-270a-4539-be9e-b355065af39d",
++     "laboratoryDate": "2027-08-27",
++     "physicalExamAppointmentId": "a9b34f29-5ef8-45fc-8e1e-b05ee3650aa6",
++     "physicalExamDate": "2027-08-31",
++     "scheduleCycleClosingDate": "2027-08-03",
++     "scheduleCycleStart": 2027,
++     "schedulePairId": "2d41fa8b-8681-4eb9-bdad-a69c48ac5d59",
++     "schedulingCategory": "REGULAR",
++     "schedulingWindowEnd": "2028-03-31",
++     "schedulingWindowStart": "2027-08-01",
++     "sourceRowOrder": 7,
++     "studentNumber": "99-9431-00",
++   },
++   {
++     "acceptedAt": 2027-07-01T00:00:00.000Z,
++     "displacementType": "PHYSICAL_EXAM_ONLY",
++     "laboratoryAppointmentId": "33d9c6fa-35a9-4bbc-a19d-f87322b87686",
++     "laboratoryDate": "2027-08-30",
++     "physicalExamAppointmentId": "17826dff-38f0-4925-903c-ca7a120d0cfb",
++     "physicalExamDate": "2027-08-31",
++     "scheduleCycleClosingDate": "2027-08-03",
++     "scheduleCycleStart": 2027,
++     "schedulePairId": "bee299bf-1c97-4970-8566-852d802a04bd",
++     "schedulingCategory": "REGULAR",
++     "schedulingWindowEnd": "2028-03-31",
++     "schedulingWindowStart": "2027-08-01",
++     "sourceRowOrder": 7,
++     "studentNumber": "99-9432-00",
++   },
++   {
++     "acceptedAt": 2027-07-01T00:00:00.000Z,
++     "displacementType": "PHYSICAL_EXAM_ONLY",
++     "laboratoryAppointmentId": "87e1847c-e9e3-4291-8725-71ed9398c158",
++     "laboratoryDate": "2027-08-30",
++     "physicalExamAppointmentId": "48bc26a8-0c1b-4e7d-a527-819633f834eb",
++     "physicalExamDate": "2027-09-01",
++     "scheduleCycleClosingDate": "2027-08-03",
++     "scheduleCycleStart": 2027,
++     "schedulePairId": "e89c5e00-f489-4e5b-9767-73e9315d7b0b",
++     "schedulingCategory": "REGULAR",
++     "schedulingWindowEnd": "2028-03-31",
++     "schedulingWindowStart": "2027-08-01",
++     "sourceRowOrder": 7,
++     "studentNumber": "99-9430-00",
++   },
++   {
++     "acceptedAt": 2026-10-09T12:01:24.526Z,
++     "displacementType": "PHYSICAL_EXAM_ONLY",
++     "laboratoryAppointmentId": "ea833f95-fbdb-41ab-bb48-5800d6323e19",
++     "laboratoryDate": "2027-08-30",
+      "physicalExamAppointmentId": "6d1abecd-89d2-4854-84a0-4a667cd74666",
++     "physicalExamDate": "2027-08-31",
++     "scheduleCycleClosingDate": "2027-08-03",
++     "scheduleCycleStart": 2027,
++     "schedulePairId": "878430c2-6286-4314-8547-0897072e73af",
++     "schedulingCategory": "REGULAR",
++     "schedulingWindowEnd": "2028-03-31",
++     "schedulingWindowStart": "2027-08-31",
++     "sourceRowOrder": 2147483647,
++     "studentNumber": "99-9404-04",
+    },
+  ]
+
+ ❯ src/server/services/priority-displacement.integration.test.ts:667:8
+    665|       windowEnd: "2027-09-30",
+    666|       limit: 10,
+    667|     }))).resolves.toEqual([expect.objectContaining({
+       |        ^
+    668|       physicalExamAppointmentId: created.physicalExam.id,
+    669|     })]);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[59/142]⎯
+
+ FAIL  src/server/services/priority-displacement.integration.test.ts > priority displacement with the unified closure calendar > allows a reopened date to be allocated again
+AssertionError: expected [ { …(5) } ] to deeply equal [ ObjectContaining{…} ]
+
+- Expected
++ Received
+
+  [
+    {
+-     "laboratoryDate": "2027-09-01",
+-     "physicalExamDate": "2027-09-02",
++     "laboratoryDate": "2027-09-03",
++     "physicalExamDate": "2027-09-06",
++     "requestId": "displacement:ec708d74-e479-4786-89d8-af33cd70d846",
++     "schedulePairId": "ec708d74-e479-4786-89d8-af33cd70d846",
++     "studentNumber": "99-9402-02",
+    },
+  ]
+
+ ❯ src/server/services/priority-displacement.integration.test.ts:682:39
+    680|   it("allows a reopened date to be allocated again", async () => {
+    681|     await insertUnifiedDate("2027-09-01", true);
+    682|     await expect(publish("99-9402-02")).resolves.toEqual([
+       |                                       ^
+    683|       expect.objectContaining({ laboratoryDate: "2027-09-01", physical…
+    684|     ]);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[60/142]⎯
+
+ FAIL  src/server/services/schedule-import-lifecycle.integration.test.ts > atomic academic-year import lifecycle > allocates 101 Standard students in CSV order as 100/1 per service at the fresh defaults
+AssertionError: expected [ 100, 1 ] to deeply equal [ 100, 100 ]
+
+- Expected
++ Received
+
+  [
+    100,
+-   100,
++   1,
+  ]
+
+ ❯ src/server/services/schedule-import-lifecycle.integration.test.ts:91:96
+     89| describe("atomic academic-year import lifecycle", () => {
+     90|   it("allocates 101 Standard students in CSV order as 100/1 per servic…
+     91|     expect(capacityFixture!.originalCapacities.map((capacity) => capac…
+       |                                                                                                ^
+     92|     await cleanupAndRestoreCapacitySettings(pool, capacityFixture!.ori…
+     93|     const academicYearStart = 2094;
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[61/142]⎯
+
+ FAIL  src/server/services/schedule-import-lifecycle.integration.test.ts > atomic academic-year import lifecycle > updates demographics but skips same-cycle duplicates and permits a later cycle
+AppError: The complete import could not be assigned within the scheduling horizon.
+ ❯ src/server/repositories/schedule-imports.repository.ts:590:13
+    588|         }, client);
+    589|     if (assignments.unscheduledRequestIds.length) {
+    590|       throw new AppError(
+       |             ^
+    591|         "SCHEDULE_CAPACITY_EXHAUSTED",
+    592|         "The complete import could not be assigned within the scheduli…
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ createScheduleImport src/server/repositories/schedule-imports.repository.ts:293:18
+ ❯ acceptAndScheduleImport src/server/services/schedule-imports.service.ts:237:18
+ ❯ src/server/services/schedule-import-lifecycle.integration.test.ts:296:24
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[62/142]⎯
+
+ FAIL  src/server/services/schedule-imports.integration.test.ts > student scheduling imports > uses a soft-unblocked Laboratory date for import allocation
+AppError: The complete import could not be assigned within the scheduling horizon.
+ ❯ src/server/repositories/schedule-imports.repository.ts:590:13
+    588|         }, client);
+    589|     if (assignments.unscheduledRequestIds.length) {
+    590|       throw new AppError(
+       |             ^
+    591|         "SCHEDULE_CAPACITY_EXHAUSTED",
+    592|         "The complete import could not be assigned within the scheduli…
+ ❯ transaction src/server/db/pool.ts:20:20
+ ❯ createScheduleImport src/server/repositories/schedule-imports.repository.ts:293:18
+ ❯ acceptAndScheduleImport src/server/services/schedule-imports.service.ts:237:18
+ ❯ src/server/services/schedule-imports.integration.test.ts:596:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[63/142]⎯
+
+ FAIL  src/server/services/schedule-imports.integration.test.ts > student scheduling imports > uses the unified active-date set for both clinic allocations
+error: duplicate key value violates unique constraint "clinic_unavailable_dates_one_active_day_idx"
+ ❯ node_modules/pg-pool/index.js:45:11
+ ❯ src/server/services/schedule-imports.integration.test.ts:613:5
+    611|   it("uses the unified active-date set for both clinic allocations", a…
+    612|     const studentNumber = "99-9106-06";
+    613|     await pool.query(
+       |     ^
+    614|       `WITH closure AS (
+    615|          INSERT INTO clinic_closure_groups (
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[64/142]⎯
+
+ FAIL  src/server/services/student-email.integration.test.ts > student notifications and optional email > creates portal notifications and verified-email outbox rows through the live singular path
+AssertionError: expected Result{ command: 'SELECT', …(9) } to match object { rows: [ …(2) ] }
+(13 matching properties omitted from actual)
+
+- Expected
++ Received
+
++ Result {
++   "rows": [
++     {
++       "student_number": "99-9401-01",
++     },
++     {
++       "student_number": "99-9402-02",
++     },
++     {
++       "student_number": "99-9406-06",
++     },
++     {
++       "student_number": "99-9407-07",
++     },
++     {
++       "student_number": "99-9408-08",
++     },
+      {
+-   "rows": [
++       "student_number": "99-9411-11",
++     },
++     {
++       "student_number": "99-9422-00",
++     },
++     {
++       "student_number": "99-9423-00",
++     },
++     {
++       "student_number": "99-9424-00",
++     },
++     {
++       "student_number": "99-9490-00",
++     },
+      {
+        "student_number": "99-9505-05",
+      },
+      {
+        "student_number": "99-9506-06",
++     },
++     {
++       "student_number": "UCAL-AUTO-EXT-OVPSA",
++     },
++     {
++       "student_number": "UCAL-AUTO-EXT-SOURCE",
++     },
++     {
++       "student_number": "UCAL-AUTO-EXT-SOURCE",
++     },
++     {
++       "student_number": "UCAL-FAIL-A",
++     },
++     {
++       "student_number": "UCAL-KEEP-C",
++     },
++     {
++       "student_number": "UCAL-MIX-EMERGENCY",
++     },
++     {
++       "student_number": "UCAL-MIX-PLANNED",
++     },
++     {
++       "student_number": "UCAL-MIX-PLANNED",
++     },
++     {
++       "student_number": "UCAL-OVPSA-BOUND",
++     },
++     {
++       "student_number": "UCAL-PAIR",
++     },
++     {
++       "student_number": "UCAL-PAIR",
++     },
++     {
++       "student_number": "UCAL-PAIR",
++     },
++     {
++       "student_number": "UCAL-REUSE-A",
+      },
+    ],
+  }
+
+ ❯ src/server/services/student-email.integration.test.ts:107:6
+    105|     await expect(pool.query(
+    106|       "SELECT student_number FROM student_portal_notifications ORDER B…
+    107|     )).resolves.toMatchObject({
+       |      ^
+    108|       rows: [
+    109|         { student_number: "99-9505-05" },
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[65/142]⎯
+
+ FAIL  src/server/services/student-email.integration.test.ts > student notifications and optional email > always creates a portal notification and queues email only for a verified address
+AssertionError: expected [ '99-9401-01', '99-9402-02', …(23) ] to deeply equal [ '99-9501-01', '99-9502-02' ]
+
+- Expected
++ Received
+
+  [
++   "99-9401-01",
++   "99-9402-02",
++   "99-9406-06",
++   "99-9407-07",
++   "99-9408-08",
++   "99-9411-11",
++   "99-9422-00",
++   "99-9423-00",
++   "99-9424-00",
++   "99-9490-00",
+    "99-9501-01",
+    "99-9502-02",
++   "UCAL-AUTO-EXT-OVPSA",
++   "UCAL-AUTO-EXT-SOURCE",
++   "UCAL-AUTO-EXT-SOURCE",
++   "UCAL-FAIL-A",
++   "UCAL-KEEP-C",
++   "UCAL-MIX-EMERGENCY",
++   "UCAL-MIX-PLANNED",
++   "UCAL-MIX-PLANNED",
++   "UCAL-OVPSA-BOUND",
++   "UCAL-PAIR",
++   "UCAL-PAIR",
++   "UCAL-PAIR",
++   "UCAL-REUSE-A",
+  ]
+
+ ❯ src/server/services/student-email.integration.test.ts:172:65
+    170|       "SELECT student_number FROM student_portal_notifications ORDER B…
+    171|     );
+    172|     expect(notifications.rows.map((row) => row.student_number)).toEqua…
+       |                                                                 ^
+    173|     const outbox = await pool.query(
+    174|       "SELECT student_number,to_email,message_kind FROM email_outbox O…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[66/142]⎯
+
+ FAIL  src/server/workers/email-outbox.worker.integration.test.ts > email outbox delivery > marks SMTP success sent
+AssertionError: expected "vi.fn()" to be called with arguments: [ ObjectContaining{…} ]
+
+Received:
+
+  1st vi.fn() call:
+
+  [
+-   ObjectContaining {
++   {
+      "from": "clinic@example.test",
+-     "text": "Test body",
+-     "to": "99-9203-03@example.test",
++     "subject": "Your MedClinic schedule needs administrator resolution",
++     "text": "Student: Calendar, Unified
++ Student Number: UCAL-PAIR
++
++ Your prior schedule was affected. No replacement date has been authorized yet.
++ Previous Laboratory: 2049-08-11 at KABALAKA Clinic.
++ Previous Physical Examination: 2049-08-16 at CPU Clinic.
++ Laboratory: the prior 2049-08-11 appointment at KABALAKA Clinic was affected; a replacement date is pending administrator resolution.
++ Physical Examination: the prior 2049-08-16 appointment at CPU Clinic was affected; a replacement date is pending administrator resolution.
++ Reason: PAIR_MISSING_OR_INCONSISTENT: The current appointment statuses cannot be safely rescheduled automatically.
++ Status: Manual Resolution is open and awaiting administrator action.
++
++ Open the MedClinic student portal: /student
++
++ Schedule Notice: Your Laboratory and Physical Examination schedule may change due to priority scheduling requirements, including OJT, Tour, First Year/OVPSA scheduling, clinic closures, emergency closures, capacity adjustments, or other authorized rescheduling. Please check your verified email and the MedClinic student portal for the latest schedule.",
++     "to": "ucal.pair@example.test",
+    },
+  ]
+
+
+Number of calls: 1
+
+ ❯ src/server/workers/email-outbox.worker.integration.test.ts:127:32
+    125|     const transport = { sendMail: vi.fn().mockResolvedValue({ messageI…
+    126|     await deliverClaimedEmail(message, transport, new Date("2027-08-02…
+    127|     expect(transport.sendMail).toHaveBeenCalledWith(expect.objectConta…
+       |                                ^
+    128|       from: "clinic@example.test",
+    129|       to: "99-9203-03@example.test",
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[67/142]⎯
+
+ FAIL  src/server/workers/email-outbox.worker.integration.test.ts > email outbox delivery > uses bounded exponential retry and becomes permanent after ten attempts
+AssertionError: expected [ { …(5) }, { …(5) }, { …(5) }, …(2) ] to deeply equal [ { …(5) }, { …(5) } ]
+
+- Expected
++ Received
+
+@@ -11,6 +11,27 @@
+      "last_error": "SMTP unavailable",
+      "retry_seconds": 0,
+      "status": "PERMANENT_FAILURE",
+      "student_number": "99-9205-05",
+    },
++   {
++     "attempts": 0,
++     "last_error": null,
++     "retry_seconds": -25617543,
++     "status": "PROCESSING",
++     "student_number": "UCAL-PAIR",
++   },
++   {
++     "attempts": 0,
++     "last_error": null,
++     "retry_seconds": -25617537,
++     "status": "PROCESSING",
++     "student_number": "UCAL-PAIR",
++   },
++   {
++     "attempts": 1,
++     "last_error": null,
++     "retry_seconds": -25617531,
++     "status": "SENT",
++     "student_number": "UCAL-PAIR",
++   },
+  ]
+
+ ❯ src/server/workers/email-outbox.worker.integration.test.ts:290:23
+    288|       [now],
+    289|     );
+    290|     expect(rows.rows).toEqual([
+       |                       ^
+    291|       { student_number: "99-9204-04", status: "PENDING", attempts: 1, …
+    292|       { student_number: "99-9205-05", status: "PERMANENT_FAILURE", att…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[68/142]⎯
+
+ FAIL  src/server/workers/result-draft-cleanup.worker.integration.test.ts > result draft cleanup > retains active and finalized submissions
+AssertionError: expected [ { status: 'DRAFT' }, …(4) ] to deeply equal [ { status: 'DRAFT' }, …(1) ]
+
+- Expected
++ Received
+
+  [
+    {
+      "status": "DRAFT",
+    },
+    {
++     "status": "DRAFT",
++   },
++   {
++     "status": "DRAFT",
++   },
++   {
++     "status": "DRAFT",
++   },
++   {
+      "status": "FINALIZED",
+    },
+  ]
+
+ ❯ src/server/workers/result-draft-cleanup.worker.integration.test.ts:188:28
+    186|     await expect(cleanupExpiredResultDrafts(now, storage)).resolves.to…
+    187|     const remaining = await pool.query("SELECT status FROM student_res…
+    188|     expect(remaining.rows).toEqual([{ status: "DRAFT" }, { status: "FI…
+       |                            ^
+    189|   });
+    190|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[69/142]⎯
+
+
+ Test Files  14 failed | 59 passed (73)
+      Tests  87 failed | 538 passed (625)
+   Start at  20:00:01
+   Duration  851.86s (transform 8.86s, setup 101.70s, import 70.47s, tests 604.46s, environment 51ms)
+
+Disposable test storage residue before removal: 0 entries.
+Dropped disposable database medclinic_test_pe_final_oct9; residue=0.
+C:\Users\anula\.codex\worktrees\pe-linked-laboratory\medclinic-scheduler-v2\scripts\test-child.ts:17
+      else reject(new Error(`Test child failed: exit=${code}, signal=${signal ?? "none"}`));
+                  ^
+
+Error: Test child failed: exit=1, signal=none
+    at ChildProcess.<anonymous> (C:\Users\anula\.codex\worktrees\pe-linked-laboratory\medclinic-scheduler-v2\scripts\test-child.ts:17:19)
+    at ChildProcess.emit (node:events:509:28)
+    at ChildProcess._handle.onexit (node:internal/child_process:295:12)
+
+Node.js v24.19.0

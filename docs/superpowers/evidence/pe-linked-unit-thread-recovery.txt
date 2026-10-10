@@ -1,0 +1,14 @@
+
+> medclinic-scheduler-v2@0.1.0 test
+> node ./node_modules/vitest/vitest.mjs run src/components/settings/ClinicUnavailableCalendar.test.tsx --pool=threads --maxWorkers=1 --no-file-parallelism --testTimeout=60000 --hookTimeout=60000 --reporter=dot
+
+
+ RUN  v4.1.8 C:/Users/anula/.codex/worktrees/pe-linked-laboratory/medclinic-scheduler-v2
+
+·········
+
+ Test Files  1 passed (1)
+      Tests  9 passed (9)
+   Start at  09:40:15
+   Duration  128.15s (transform 1.09s, setup 17.48s, import 3.30s, tests 53.53s, environment 51.26s)
+

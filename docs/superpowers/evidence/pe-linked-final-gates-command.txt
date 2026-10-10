@@ -1,0 +1,47 @@
+$ErrorActionPreference = 'Stop'
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
+Set-Location -LiteralPath $repoRoot
+$env:PATH = 'C:\Users\anula\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin;' + $env:PATH
+$env:DATABASE_URL = 'postgresql://medclinic_test_admin@127.0.0.1:55440/medclinic_test_pe_browser'
+$env:JWT_SECRET = 'synthetic-browser-pe-linked-secret-at-least-32-characters'
+$env:EMAIL_OUTBOX_ENCRYPTION_KEY = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+$env:APP_URL = 'http://127.0.0.1:3100'
+$env:APP_TIMEZONE = 'Asia/Manila'
+$env:SMTP_HOST = ''
+$env:SMTP_PORT = '587'
+$env:SMTP_USER = ''
+$env:SMTP_PASS = ''
+$env:SMTP_FROM = ''
+$env:RESULT_UPLOAD_ROOT = '.data/browser-pe-linked-results'
+$env:TEST_DATABASE_DISPOSABLE = '1'
+$gateResults = [System.Collections.Generic.List[object]]::new()
+$verifiedSourceHead = '71969bac9d562c132fa0a73bb989687e604f537d'
+$actualSourceHead = (& git rev-parse HEAD).Trim()
+if ($actualSourceHead -ne $verifiedSourceHead) { throw 'Retained integration proof is for a different source commit' }
+$integrationProof = Join-Path $PSScriptRoot 'final-integration.log'
+$integrationProofHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $integrationProof).Hash
+if ($integrationProofHash -ne 'AF3739F38D0B4F17316B1EB637EA9A5B1B0AE6EE76B7FEDDC8B4A9B11C1C470B') { throw 'Retained integration log changed' }
+$priorGateResults = @(Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'final-gates-overnight-failed.json') | ConvertFrom-Json)
+$priorIntegration = @($priorGateResults | Where-Object { $_.name -eq 'integration' -and $_.exitCode -eq 0 })
+if ($priorIntegration.Count -ne 1) { throw 'Missing successful integration exit record' }
+$gateResults.Add([pscustomobject]@{ name='integration'; command=$priorIntegration[0].command; exitCode=0; startedAt=$priorIntegration[0].startedAt; durationSeconds=$priorIntegration[0].durationSeconds; sourceHead=$verifiedSourceHead; logSha256=$integrationProofHash; retainedPriorRun=$true })
+Write-Output 'Retained verified integration: 74 files / 626 tests, exit 0, same source commit and matching log SHA-256.'
+function Invoke-FinalGate([string]$Name, [string]$Executable, [string[]]$Arguments) {
+  $gateLog = Join-Path $PSScriptRoot ('final-' + $Name + '.log')
+  $gateStarted = Get-Date
+  Write-Output ('Starting ' + $Name + ': ' + $Executable + ' ' + ($Arguments -join ' '))
+  & $Executable @Arguments *> $gateLog
+  $gateExit = $LASTEXITCODE
+  $gateResults.Add([pscustomobject]@{ name=$Name; command=($Executable+' '+($Arguments -join ' ')); exitCode=$gateExit; startedAt=$gateStarted.ToString('o'); durationSeconds=[Math]::Round(((Get-Date)-$gateStarted).TotalSeconds,2); sourceHead=$actualSourceHead; logSha256=(Get-FileHash -Algorithm SHA256 -LiteralPath $gateLog).Hash })
+  $gateResults | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $PSScriptRoot 'final-gates.json')
+  Get-Content -LiteralPath $gateLog -Tail 12
+  if ($gateExit -ne 0) { Write-Output ('FAILED ' + $Name + ': ' + $gateExit); exit $gateExit }
+  Write-Output ('PASSED ' + $Name + ': exit 0')
+}
+Invoke-FinalGate 'unit' 'npm.cmd' @('test','--','--pool=threads','--maxWorkers=1','--no-file-parallelism','--testTimeout=60000','--hookTimeout=60000','--reporter=default')
+$env:TEST_DATABASE_URL = 'postgresql://medclinic_test_admin@127.0.0.1:55440/medclinic_test_pe_migrations_oct10'
+Invoke-FinalGate 'migrations' 'npm.cmd' @('run','test:migrations:empty')
+Invoke-FinalGate 'lint' 'npm.cmd' @('run','lint')
+Invoke-FinalGate 'build' 'npm.cmd' @('run','build')
+Invoke-FinalGate 'typecheck' 'npx.cmd' @('tsc','--noEmit')
+Write-Output 'All six final gates passed.'

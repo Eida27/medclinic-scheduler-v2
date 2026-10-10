@@ -1,0 +1,426 @@
+
+> medclinic-scheduler-v2@0.1.0 test:integration
+> tsx scripts/test-integration.ts --testTimeout=60000 --hookTimeout=60000 --reporter=dot
+
+Verified disposable database medclinic_test_pe_final_recovery3_oct9.
+Applied 001_extensions_and_helpers.sql
+Applied 002_users_and_reference_data.sql
+Applied 003_students_and_schedules.sql
+Applied 004_appointments_results_and_audit.sql
+Applied 005_clinic_scheduler_scoping.sql
+Applied 006_unified_student_schedule_imports.sql
+Applied 007_coordinator_import_automation.sql
+Applied 008_automated_scheduling_and_student_portal.sql
+Applied 009_remove_appointment_times.sql
+Applied 010_maximum_only_capacity.sql
+Applied 011_current_appointment_and_submission_read_indexes.sql
+Applied 012_cpu_reference_catalog.sql
+Applied 013_clinic_calendar_batch_editor.sql
+Applied 014_unified_clinic_calendar.sql
+Applied 015_appointment_result_protection.sql
+Applied 016_reports_historical_compliance.sql
+Applied 017_student_result_multi_upload_editing.sql
+Applied 018_student_result_storage_cleanup_intents.sql
+Applied 019_first_year_ovpsa_priority_scheduling.sql
+Applied 020_first_year_schedule_import_consolidation.sql
+Applied 021_clinic_closure_recovery_policy.sql
+Applied 022_schedule_import_year_category_validation.sql
+Applied 023_mandatory_student_email_verification_notifications.sql
+Applied 024_staff_account_security_onboarding_deletion.sql
+Applied 025_scheduling_integrity_hardening.sql
+Applied 026_remove_priority_groups_and_legacy_scheduling.sql
+Applied 027_staff_login_brute_force_protection.sql
+Applied 028_final_defense_clinical_workflows.sql
+Applied 029_manual_resolution_batch_requests.sql
+Applied 030_remove_safe_daily_capacity.sql
+Applied 031_retire_manual_schedule_metadata.sql
+Applied 032_default_clinic_capacity_100.sql
+Applied 001_reference_and_users.sql
+
+ RUN  v4.1.8 C:/Users/anula/.codex/worktrees/pe-linked-laboratory/medclinic-scheduler-v2
+
+··················································x··········································································stdout | scripts/db-reset.integration.test.ts > explicit developer reset CLI > resets a separately owned target twice with the full ledger and canonical reference seed
+Verified disposable database medclinic_test_reset_14c268ed44ab4777.
+
+stdout | scripts/db-reset.integration.test.ts > explicit developer reset CLI > resets a separately owned target twice with the full ledger and canonical reference seed
+Dropped disposable database medclinic_test_reset_14c268ed44ab4777; residue=0.
+
+·stdout | scripts/db-reset.integration.test.ts > explicit developer reset CLI > rolls back a failing migration and its ledger entry through the canonical executor
+Verified disposable database medclinic_test_reset_1f3bed5ec3bd43f9.
+
+stdout | scripts/db-reset.integration.test.ts > explicit developer reset CLI > rolls back a failing migration and its ledger entry through the canonical executor
+Dropped disposable database medclinic_test_reset_1f3bed5ec3bd43f9; residue=0.
+
+·······························································································stdout | src/test/test-database.integration.test.ts > disposable database ownership > refuses an existing target before fixtures and preserves its sentinel
+Verified disposable database medclinic_test_guard_61ee4575a5ad4872a91fbe91d2a24a9b.
+
+stdout | src/test/test-database.integration.test.ts > disposable database ownership > refuses an existing target before fixtures and preserves its sentinel
+Dropped disposable database medclinic_test_guard_61ee4575a5ad4872a91fbe91d2a24a9b; residue=0.
+
+·stdout | src/test/test-database.integration.test.ts > disposable database ownership > propagates callback failure and still proves target removal
+Verified disposable database medclinic_test_guard_a3004d4bfc484f709a21aedcc1a337d4.
+
+stdout | src/test/test-database.integration.test.ts > disposable database ownership > propagates callback failure and still proves target removal
+Dropped disposable database medclinic_test_guard_a3004d4bfc484f709a21aedcc1a337d4; residue=0.
+
+·stdout | src/test/test-database.integration.test.ts > disposable database ownership > reports both the fixture failure and a refused teardown, preserving ownership on identity drift
+Verified disposable database medclinic_test_guard_736898d33ef141b78a4fdc92ceb10d8f.
+stderr | src/test/test-database.integration.test.ts > disposable database ownership > reports both the fixture failure and a refused teardown, preserving ownership on identity drift
+DISPOSABLE DATABASE CLEANUP FAILED: medclinic_test_guard_736898d33ef141b78a4fdc92ceb10d8f; inspect residue before retrying.
+
+
+·················································stdout | src/server/db/predeployment-cleanup-schema.integration.test.ts > predeployment scheduling schema > refuses each unsupported 030 row atomically, then preserves supported publication evidence
+Verified disposable database medclinic_test_cleanup_guard_ff2998de2421.
+
+stdout | src/server/db/predeployment-cleanup-schema.integration.test.ts > predeployment scheduling schema > refuses each unsupported 030 row atomically, then preserves supported publication evidence
+Dropped disposable database medclinic_test_cleanup_guard_ff2998de2421; residue=0.
+
+·stdout | src/server/db/default-clinic-capacity.integration.test.ts > fresh clinic capacity defaults > seeds both services at 100, defaults omitted maximums, and preserves saved settings on replay
+Verified disposable database medclinic_test_default_capacity_80a42bc4fc5d.
+
+stdout | src/server/db/default-clinic-capacity.integration.test.ts > fresh clinic capacity defaults > seeds both services at 100, defaults omitted maximums, and preserves saved settings on replay
+Dropped disposable database medclinic_test_default_capacity_80a42bc4fc5d; residue=0.
+
+···············································································x··········································································---------------·······································································································x············································x···································
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/acceptance/browser-reports-acceptance-fixture.integration.test.ts > reports Browser acceptance fixture lifecycle
+Error: Reports acceptance cleanup residue remains: {"students":153,"snapshots":157,"appointments":164,"importGroups":4,"academicYears":2,"crudScratchYears":0,"checklists":157,"checklistItems":511,"checklistLinks":158,"certificates":3,"examinationResults":3,"physicianProfiles":2,"auditLogs":1,"stateFiles":0}.
+ ❯ assertZeroReportsAcceptanceResidue scripts/browser-reports-acceptance-fixture.ts:265:11
+    263| export function assertZeroReportsAcceptanceResidue<T extends ReportsAc…
+    264|   if (Object.values(residue).some((count) => count !== 0)) {
+    265|     throw new Error(`Reports acceptance cleanup residue remains: ${JSO…
+       |           ^
+    266|   }
+    267|   return residue;
+ ❯ cleanupReportsAcceptanceFixture scripts/browser-reports-acceptance-fixture.ts:1350:14
+ ❯ src/server/acceptance/browser-reports-acceptance-fixture.integration.test.ts:80:7
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/7]⎯
+
+ FAIL  src/server/services/schedule-imports.integration.test.ts [ src/server/services/schedule-imports.integration.test.ts ]
+error: update or delete on table "academic_years" violates foreign key constraint "student_academic_snapshots_academic_year_start_fkey" on table "student_academic_snapshots"
+ ❯ node_modules/pg-pool/index.js:45:11
+ ❯ cleanup src/server/services/schedule-imports.integration.test.ts:62:3
+     60|   );
+     61|   await pool.query("DELETE FROM clinic_closure_groups WHERE reason LIK…
+     62|   await pool.query("DELETE FROM academic_years WHERE start_year=2098");
+       |   ^
+     63| }
+     64|
+ ❯ src/server/services/schedule-imports.integration.test.ts:91:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/7]⎯
+
+ FAIL  src/server/services/schedule-imports.integration.test.ts [ src/server/services/schedule-imports.integration.test.ts ]
+error: update or delete on table "academic_years" violates foreign key constraint "student_academic_snapshots_academic_year_start_fkey" on table "student_academic_snapshots"
+ ❯ node_modules/pg-pool/index.js:45:11
+ ❯ cleanup src/server/services/schedule-imports.integration.test.ts:62:3
+     60|   );
+     61|   await pool.query("DELETE FROM clinic_closure_groups WHERE reason LIK…
+     62|   await pool.query("DELETE FROM academic_years WHERE start_year=2098");
+       |   ^
+     63| }
+     64|
+ ❯ src/server/services/schedule-imports.integration.test.ts:101:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/7]⎯
+
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/acceptance/browser-reports-acceptance-fixture.integration.test.ts > reports Browser acceptance fixture lifecycle > recovers partial fixture cleanup from the exact marker without a state file
+Error: Test timed out in 60000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ src/server/acceptance/browser-reports-acceptance-fixture.integration.test.ts:568:3
+    566|   }, 30000);
+    567|
+    568|   it("recovers partial fixture cleanup from the exact marker without a…
+       |   ^
+    569|     await setupReportsAcceptanceFixture(pool, identity);
+    570|     await removeState();
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/7]⎯
+
+ FAIL  src/server/repositories/academic-years.repository.integration.test.ts > academic-years repository > deletes an unlinked year and returns the deleted metadata
+error: duplicate key value violates unique constraint "academic_years_pkey"
+ ❯ node_modules/pg/lib/client.js:646:17
+ ❯ createAcademicYearWithClient src/server/repositories/academic-years.repository.ts:88:18
+     86|   input: { startYear: number; closingDate: string; actorUserId: string…
+     87| ): Promise<AcademicYearRecord> {
+     88|   const result = await client.query<AcademicYearRecord>(
+       |                  ^
+     89|     `INSERT INTO academic_years (start_year,closing_date,created_by,up…
+     90|      VALUES ($1,$2,$3,$3)
+ ❯ src/server/repositories/academic-years.repository.integration.test.ts:449:7
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/7]⎯
+
+ FAIL  src/server/repositories/historical-compliance-report.repository.integration.test.ts > historical compliance report service > requires a valid configured academic year before executing
+AssertionError: promise resolved "{ academicYear: { …(4) }, …(6) }" instead of rejecting
+
+- Expected
++ Received
+
+- Error {
+-   "message": "rejected promise",
++ {
++   "academicYear": {
++     "closingDate": "2099-07-31",
++     "label": "2098–2099",
++     "startYear": 2098,
++     "state": "OPEN",
++   },
++   "breakdowns": {
++     "colleges": [
++       {
++         "attentionStudents": 2,
++         "collegeId": "b8100000-0000-4000-8000-000000000001",
++         "collegeName": "Archived College of Health Sciences",
++         "complianceRate": 33.3,
++         "fullyComplied": 1,
++         "totalStudents": 3,
++       },
++       {
++         "attentionStudents": 1,
++         "collegeId": "b8100000-0000-4000-8000-000000000002",
++         "collegeName": "Former College of Community Wellness",
++         "complianceRate": 0,
++         "fullyComplied": 0,
++         "totalStudents": 1,
++       },
++     ],
++     "programs": [
++       {
++         "attentionStudents": 2,
++         "collegeId": "b8100000-0000-4000-8000-000000000001",
++         "collegeName": "Archived College of Health Sciences",
++         "complianceRate": 33.3,
++         "fullyComplied": 1,
++         "programCode": "ACS",
++         "programId": "b8200000-0000-4000-8000-000000000001",
++         "programName": "Archived Clinical Sciences",
++         "totalStudents": 3,
++       },
++       {
++         "attentionStudents": 1,
++         "collegeId": "b8100000-0000-4000-8000-000000000002",
++         "collegeName": "Former College of Community Wellness",
++         "complianceRate": 0,
++         "fullyComplied": 0,
++         "programCode": "CHW",
++         "programId": "b8200000-0000-4000-8000-000000000002",
++         "programName": "Community Health and Wellness",
++         "totalStudents": 1,
++       },
++     ],
++     "yearLevels": [
++       {
++         "attentionStudents": 0,
++         "complianceRate": 100,
++         "fullyComplied": 1,
++         "totalStudents": 1,
++         "yearLevel": 1,
++       },
++       {
++         "attentionStudents": 1,
++         "complianceRate": 0,
++         "fullyComplied": 0,
++         "totalStudents": 1,
++         "yearLevel": 2,
++       },
++       {
++         "attentionStudents": 1,
++         "complianceRate": 0,
++         "fullyComplied": 0,
++         "totalStudents": 1,
++         "yearLevel": 3,
++       },
++       {
++         "attentionStudents": 1,
++         "complianceRate": 0,
++         "fullyComplied": 0,
++         "totalStudents": 1,
++         "yearLevel": 4,
++       },
++     ],
++   },
++   "dimensions": {
++     "colleges": [
++       {
++         "id": "b8100000-0000-4000-8000-000000000001",
++         "name": "Archived College of Health Sciences",
++       },
++       {
++         "id": "b8100000-0000-4000-8000-000000000002",
++         "name": "Former College of Community Wellness",
++       },
++     ],
++     "programs": [
++       {
++         "code": "ACS",
++         "collegeId": "b8100000-0000-4000-8000-000000000001",
++         "id": "b8200000-0000-4000-8000-000000000001",
++         "name": "Archived Clinical Sciences",
++       },
++       {
++         "code": "CHW",
++         "collegeId": "b8100000-0000-4000-8000-000000000002",
++         "id": "b8200000-0000-4000-8000-000000000002",
++         "name": "Community Health and Wellness",
++       },
++     ],
++     "yearLevels": [
++       1,
++       2,
++       3,
++       4,
++     ],
++   },
++   "filters": {
++     "academicYearStart": 2098,
++     "limit": 150,
++     "offset": 0,
++     "page": 1,
++     "sort": "college_asc",
++   },
++   "items": [
++     {
++       "certificateClassification": "A",
++       "certificateIssued": true,
++       "collegeId": "b8100000-0000-4000-8000-000000000001",
++       "collegeName": "Archived College of Health Sciences",
++       "laboratoryAppointmentDate": "2098-09-01",
++       "laboratoryAppointmentId": "b8300000-0000-4000-8000-000000000160",
++       "laboratoryDocumentsFinalized": false,
++       "laboratoryStatus": "COMPLETED",
++       "overallStatus": "COMPLIED",
++       "physicalExamAppointmentDate": "2098-09-02",
++       "physicalExamAppointmentId": "b8300000-0000-4000-8000-000000000161",
++       "physicalExamStatus": "COMPLETED",
++       "programCode": "ACS",
++       "programId": "b8200000-0000-4000-8000-000000000001",
++       "programName": "Archived Clinical Sciences",
++       "studentName": "Open Year, Student 01",
++       "studentNumber": "B-RPT-0001",
++       "yearLevel": 1,
++     },
++     {
++       "certificateClassification": null,
++       "certificateIssued": false,
++       "collegeId": "b8100000-0000-4000-8000-000000000001",
++       "collegeName": "Archived College of Health Sciences",
++       "laboratoryAppointmentDate": "2098-09-03",
++       "laboratoryAppointmentId": "b8300000-0000-4000-8000-000000000162",
++       "laboratoryDocumentsFinalized": false,
++       "laboratoryStatus": "PENDING",
++       "overallStatus": "PENDING_COMPLIANCE",
++       "physicalExamAppointmentDate": null,
++       "physicalExamAppointmentId": null,
++       "physicalExamStatus": "UNSCHEDULED",
++       "programCode": "ACS",
++       "programId": "b8200000-0000-4000-8000-000000000001",
++       "programName": "Archived Clinical Sciences",
++       "studentName": "Open Year, Student 02",
++       "studentNumber": "B-RPT-0002",
++       "yearLevel": 2,
++     },
++     {
++       "certificateClassification": null,
++       "certificateIssued": false,
++       "collegeId": "b8100000-0000-4000-8000-000000000001",
++       "collegeName": "Archived College of Health Sciences",
++       "laboratoryAppointmentDate": "2098-09-04",
++       "laboratoryAppointmentId": "b8300000-0000-4000-8000-000000000163",
++       "laboratoryDocumentsFinalized": false,
++       "laboratoryStatus": "NO_SHOW",
++       "overallStatus": "PENDING_COMPLIANCE",
++       "physicalExamAppointmentDate": "2098-09-05",
++       "physicalExamAppointmentId": "b8300000-0000-4000-8000-000000000164",
++       "physicalExamStatus": "NO_SHOW",
++       "programCode": "ACS",
++       "programId": "b8200000-0000-4000-8000-000000000001",
++       "programName": "Archived Clinical Sciences",
++       "studentName": "Open Year, Student 03",
++       "studentNumber": "B-RPT-0003",
++       "yearLevel": 3,
++     },
++     {
++       "certificateClassification": null,
++       "certificateIssued": false,
++       "collegeId": "b8100000-0000-4000-8000-000000000002",
++       "collegeName": "Former College of Community Wellness",
++       "laboratoryAppointmentDate": "2098-09-06",
++       "laboratoryAppointmentId": "b8300000-0000-4000-8000-000000000165",
++       "laboratoryDocumentsFinalized": false,
++       "laboratoryStatus": "CANCELLED",
++       "overallStatus": "PENDING_COMPLIANCE",
++       "physicalExamAppointmentDate": null,
++       "physicalExamAppointmentId": null,
++       "physicalExamStatus": "UNSCHEDULED",
++       "programCode": "CHW",
++       "programId": "b8200000-0000-4000-8000-000000000002",
++       "programName": "Community Health and Wellness",
++       "studentName": "Open Year, Student 04",
++       "studentNumber": "B-RPT-0004",
++       "yearLevel": 4,
++     },
++   ],
++   "summary": {
++     "bothIncomplete": 3,
++     "certificatesIssued": 1,
++     "complianceRate": 25,
++     "didNotComply": 0,
++     "fullyComplied": 1,
++     "laboratoryDocumentsFinalized": 0,
++     "laboratoryIncomplete": 3,
++     "pendingCompliance": 3,
++     "physicalExamIncomplete": 3,
++     "totalStudents": 4,
++   },
++   "total": 4,
+  }
+
+ ❯ src/server/repositories/historical-compliance-report.repository.integration.test.ts:456:6
+    454|     await expect(getHistoricalComplianceReport(
+    455|       { academicYearStart: "2098" }, closedNow, client,
+    456|     )).rejects.toMatchObject({ code: "ACADEMIC_YEAR_NOT_FOUND", status…
+       |      ^
+    457|   });
+    458|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/7]⎯
+
+ FAIL  src/server/services/schedule-import-detail.integration.test.ts > published schedule import detail > returns compact published children without retired priority-group fields
+AppError: Select a configured academic year.
+ ❯ assertImportAcademicYear src/server/services/academic-years.service.ts:112:11
+    110|     : await getAcademicYearSchedulingBoundary(startYear);
+    111|   if (!year) {
+    112|     throw new AppError("ACADEMIC_YEAR_NOT_CONFIGURED", "Select a confi…
+       |           ^
+    113|       { academicYearStart: ["Select a configured academic year."] });
+    114|   }
+ ❯ acceptAndScheduleImport src/server/services/schedule-imports.service.ts:228:3
+ ❯ src/server/services/schedule-import-detail.integration.test.ts:34:21
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/7]⎯
+
+
+ Test Files  5 failed | 69 passed (74)
+      Tests  4 failed | 607 passed | 15 skipped (626)
+   Start at  22:15:09
+   Duration  1697.84s (transform 6.85s, setup 76.67s, import 53.63s, tests 1510.38s, environment 31ms)
+
+Disposable test storage residue before removal: 0 entries.
+Dropped disposable database medclinic_test_pe_final_recovery3_oct9; residue=0.
+C:\Users\anula\.codex\worktrees\pe-linked-laboratory\medclinic-scheduler-v2\scripts\test-child.ts:17
+      else reject(new Error(`Test child failed: exit=${code}, signal=${signal ?? "none"}`));
+                  ^
+
+Error: Test child failed: exit=1, signal=none
+    at ChildProcess.<anonymous> (C:\Users\anula\.codex\worktrees\pe-linked-laboratory\medclinic-scheduler-v2\scripts\test-child.ts:17:19)
+    at ChildProcess.emit (node:events:509:28)
+    at ChildProcess._handle.onexit (node:internal/child_process:295:12)
+
+Node.js v24.19.0

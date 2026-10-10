@@ -1,0 +1,151 @@
+
+> medclinic-scheduler-v2@0.1.0 build
+> next build
+
+▲ Next.js 16.3.5 (Turbopack)
+- Environments: .env.local
+✓ Running next.config.ts took 1836ms
+- Experiments (use with caution):
+  ✓ authInterrupts
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 95s
+  Running TypeScript ...
+  Finished TypeScript in 55s ...
+  Collecting page data using 3 workers ...
+  Generating static pages using 3 workers (0/78) ...
+  Generating static pages using 3 workers (19/78) 
+  Generating static pages using 3 workers (38/78) 
+  Generating static pages using 3 workers (58/78) 
+✓ Generating static pages using 3 workers (78/78) in 3.4s
+  Finalizing page optimization ...
+
+Route (app)
+┌ ○ /
+├ ○ /_not-found
+├ ƒ /account
+├ ƒ /account/onboarding
+├ ƒ /api/account
+├ ƒ /api/account/change-password
+├ ƒ /api/account/onboarding
+├ ƒ /api/account/onboarding/replace-temporary-password
+├ ƒ /api/account/onboarding/resend-verification
+├ ƒ /api/admin/email-deliveries
+├ ƒ /api/admin/email-deliveries/[id]/queue-current
+├ ƒ /api/admin/email-deliveries/[id]/retry
+├ ƒ /api/admin/student-result-submissions
+├ ƒ /api/admin/student-result-submissions/[submissionId]
+├ ƒ /api/admin/student-result-submissions/[submissionId]/files/[fileId]
+├ ƒ /api/admin/student-result-submissions/[submissionId]/invalidate
+├ ƒ /api/admin/student-result-submissions/[submissionId]/zip
+├ ƒ /api/appointments
+├ ƒ /api/appointments/[appointmentId]
+├ ƒ /api/appointments/[appointmentId]/complete-physical-exam
+├ ƒ /api/appointments/[appointmentId]/laboratory-checklist
+├ ƒ /api/appointments/[appointmentId]/physical-exam-certificate-preview
+├ ƒ /api/appointments/[appointmentId]/physical-exam-completion-context
+├ ƒ /api/appointments/bulk-replacements
+├ ƒ /api/appointments/bulk-replacements/preview
+├ ƒ /api/auth/forgot-password
+├ ƒ /api/auth/login
+├ ƒ /api/auth/logout
+├ ƒ /api/auth/me
+├ ƒ /api/auth/reset-password
+├ ƒ /api/clinic-calendar/occupancy
+├ ƒ /api/clinic-unavailable-dates
+├ ƒ /api/clinic-unavailable-dates/manual-cases
+├ ƒ /api/clinic-unavailable-dates/manual-cases/[caseId]/resolve
+├ ƒ /api/clinic-unavailable-dates/manual-cases/availability
+├ ƒ /api/clinic-unavailable-dates/manual-cases/bulk/preview
+├ ƒ /api/clinic-unavailable-dates/manual-cases/bulk/resolve
+├ ƒ /api/clinic-unavailable-dates/manual-cases/ovpsa-batches/[batchId]
+├ ƒ /api/clinic-unavailable-dates/manual-cases/ovpsa-batches/[batchId]/preview
+├ ƒ /api/clinic-unavailable-dates/manual-cases/ovpsa-batches/[batchId]/resolve
+├ ƒ /api/clinic-unavailable-dates/manual-cases/selection
+├ ƒ /api/clinic-unavailable-dates/preview
+├ ƒ /api/colleges
+├ ƒ /api/compliance
+├ ƒ /api/dashboard
+├ ƒ /api/medical-certificate-physicians
+├ ƒ /api/medical-certificates/[certificateId]/download
+├ ƒ /api/medical-certificates/[certificateId]/revisions
+├ ƒ /api/medical-certificates/[certificateId]/revisions/[revisionId]/download
+├ ƒ /api/medical-certificates/[certificateId]/revisions/preview
+├ ƒ /api/medical-certificates/[certificateId]/revoke
+├ ƒ /api/ovpsa-first-year-batches
+├ ƒ /api/ovpsa-first-year-batches/[batchId]
+├ ƒ /api/ovpsa-first-year-batches/[batchId]/cancel
+├ ƒ /api/ovpsa-first-year-batches/[batchId]/reschedule
+├ ƒ /api/programs
+├ ƒ /api/reports/export/pdf
+├ ƒ /api/schedule-imports
+├ ƒ /api/schedule-imports/[importId]
+├ ƒ /api/schedule-imports/academic-years
+├ ƒ /api/schedule-imports/preflight
+├ ƒ /api/schedule-imports/review
+├ ƒ /api/settings/academic-years
+├ ƒ /api/settings/capacity
+├ ƒ /api/settings/medical-certificate-physicians
+├ ƒ /api/settings/medical-certificate-physicians/[physicianId]
+├ ƒ /api/staff/email-verification/confirm
+├ ƒ /api/student-auth/login
+├ ƒ /api/student-auth/logout
+├ ƒ /api/student/email/request-verification
+├ ƒ /api/student/email/status
+├ ƒ /api/student/email/verify
+├ ƒ /api/student/medical-certificates/[certificateId]/download
+├ ƒ /api/student/notifications
+├ ƒ /api/student/result-files/[fileId]
+├ ƒ /api/student/result-submissions/[appointmentId]
+├ ƒ /api/student/result-submissions/[appointmentId]/edit
+├ ƒ /api/student/result-submissions/[appointmentId]/files
+├ ƒ /api/student/result-submissions/[appointmentId]/files/[fileId]
+├ ƒ /api/student/result-submissions/[appointmentId]/finalize
+├ ƒ /api/student/result-submissions/[appointmentId]/submit-changes
+├ ƒ /api/students
+├ ƒ /api/students/[studentNumber]
+├ ƒ /api/users
+├ ƒ /api/users/[id]
+├ ƒ /api/users/[id]/email
+├ ƒ /api/users/[id]/resend-verification
+├ ƒ /api/users/[id]/temporary-password-reset
+├ ƒ /dashboard
+├ ○ /forgot-password
+├ ƒ /laboratory
+├ ƒ /laboratory/[appointmentId]
+├ ƒ /login
+├ ƒ /physical-exam
+├ ƒ /physical-exam/[appointmentId]
+├ ƒ /reports
+├ ƒ /reset-password
+├ ƒ /settings/academic-years
+├ ƒ /settings/capacity
+├ ƒ /settings/clinic-unavailable-dates
+├ ƒ /settings/clinic-unavailable-dates/manual-resolution
+├ ƒ /settings/email-delivery
+├ ƒ /settings/medical-certificate-physicians
+├ ƒ /settings/reference-data
+├ ƒ /settings/student-result-submissions
+├ ƒ /settings/student-result-submissions/[submissionId]
+├ ƒ /settings/student-result-submissions/students/[studentNumber]
+├ ƒ /settings/users
+├ ƒ /staff/email-verification/confirm
+├ ƒ /student
+├ ƒ /student/email-verification
+├ ƒ /student/email-verification/confirm
+├ ƒ /student/login
+├ ƒ /student/notifications
+├ ƒ /student/results
+├ ƒ /student/results/[appointmentId]
+├ ƒ /students
+├ ƒ /students/[studentNumber]
+├ ƒ /students/new
+├ ƒ /students/schedule-imports/[importId]
+└ ƒ /students/schedule-imports/new
+
+
+ƒ Proxy (Middleware)
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+

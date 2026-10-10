@@ -1,0 +1,4 @@
+# Keep synthetic acceptance evidence byte-for-byte for its recorded hashes.
+docs/superpowers/evidence/pe-linked-*.json -text whitespace=cr-at-eol,-blank-at-eof
+# Raw runner output includes progress padding and terminal blank lines.
+docs/superpowers/evidence/pe-linked-*.txt -text whitespace=cr-at-eol,-blank-at-eof,-blank-at-eol

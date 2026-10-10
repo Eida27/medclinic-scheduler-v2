@@ -1,0 +1,88 @@
+
+> medclinic-scheduler-v2@0.1.0 test:integration
+> tsx scripts/test-integration.ts src/server/repositories/academic-years.repository.integration.test.ts --testTimeout=60000 --hookTimeout=60000 --reporter=dot
+
+Verified disposable database medclinic_test_pe_audit_isolation_red.
+Applied 001_extensions_and_helpers.sql
+Applied 002_users_and_reference_data.sql
+Applied 003_students_and_schedules.sql
+Applied 004_appointments_results_and_audit.sql
+Applied 005_clinic_scheduler_scoping.sql
+Applied 006_unified_student_schedule_imports.sql
+Applied 007_coordinator_import_automation.sql
+Applied 008_automated_scheduling_and_student_portal.sql
+Applied 009_remove_appointment_times.sql
+Applied 010_maximum_only_capacity.sql
+Applied 011_current_appointment_and_submission_read_indexes.sql
+Applied 012_cpu_reference_catalog.sql
+Applied 013_clinic_calendar_batch_editor.sql
+Applied 014_unified_clinic_calendar.sql
+Applied 015_appointment_result_protection.sql
+Applied 016_reports_historical_compliance.sql
+Applied 017_student_result_multi_upload_editing.sql
+Applied 018_student_result_storage_cleanup_intents.sql
+Applied 019_first_year_ovpsa_priority_scheduling.sql
+Applied 020_first_year_schedule_import_consolidation.sql
+Applied 021_clinic_closure_recovery_policy.sql
+Applied 022_schedule_import_year_category_validation.sql
+Applied 023_mandatory_student_email_verification_notifications.sql
+Applied 024_staff_account_security_onboarding_deletion.sql
+Applied 025_scheduling_integrity_hardening.sql
+Applied 026_remove_priority_groups_and_legacy_scheduling.sql
+Applied 027_staff_login_brute_force_protection.sql
+Applied 028_final_defense_clinical_workflows.sql
+Applied 029_manual_resolution_batch_requests.sql
+Applied 030_remove_safe_daily_capacity.sql
+Applied 031_retire_manual_schedule_metadata.sql
+Applied 032_default_clinic_capacity_100.sql
+Applied 001_reference_and_users.sql
+
+ RUN  v4.1.8 C:/Users/anula/.codex/worktrees/pe-linked-laboratory/medclinic-scheduler-v2
+
+x····
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/repositories/academic-years.repository.integration.test.ts > academic-years repository > returns the configured-year domain conflict when deletion locks and commits first
+AssertionError: expected { years: +0, snapshots: +0, …(3) } to deeply equal { years: +0, snapshots: +0, …(3) }
+
+- Expected
++ Received
+
+  {
+    "appointments": 0,
+-   "audits": 0,
++   "audits": 2,
+    "snapshots": 0,
+    "students": 0,
+    "years": 0,
+  }
+
+ ❯ src/server/repositories/academic-years.repository.integration.test.ts:244:30
+    242|         [reverseConcurrentYear],
+    243|       );
+    244|       expect(writes.rows[0]).toEqual({
+       |                              ^
+    245|         years: 0,
+    246|         snapshots: 0,
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 4 passed (5)
+   Start at  22:11:36
+   Duration  8.43s (transform 468ms, setup 1.86s, import 1.75s, tests 1.12s, environment 2ms)
+
+Disposable test storage residue before removal: 0 entries.
+Dropped disposable database medclinic_test_pe_audit_isolation_red; residue=0.
+C:\Users\anula\.codex\worktrees\pe-linked-laboratory\medclinic-scheduler-v2\scripts\test-child.ts:17
+      else reject(new Error(`Test child failed: exit=${code}, signal=${signal ?? "none"}`));
+                  ^
+
+Error: Test child failed: exit=1, signal=none
+    at ChildProcess.<anonymous> (C:\Users\anula\.codex\worktrees\pe-linked-laboratory\medclinic-scheduler-v2\scripts\test-child.ts:17:19)
+    at ChildProcess.emit (node:events:509:28)
+    at ChildProcess._handle.onexit (node:internal/child_process:295:12)
+
+Node.js v24.19.0

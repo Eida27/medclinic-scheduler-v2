@@ -35,6 +35,8 @@ The matching guarded cleanup passed: zero synthetic students, appointments, subm
 
 [First-Year 0/4 Pending](pe-linked-first-year-pending-browser.jpg) · [First-Year preview](pe-linked-first-year-preview-browser.jpg) · [First-Year completed](pe-linked-first-year-completed-browser.jpg) · [First-Year student Results](pe-linked-first-year-student-browser.jpg) · [Downloaded First-Year certificate](pe-linked-first-year-student-certificate.jpg) · [Laboratory list reload](pe-linked-laboratory-list-reload-browser.jpg) · [Console check](pe-linked-browser-console.json)
 
+Exact synthetic preview snapshots: [OJT before](pe-linked-ojt-preview-before.json) / [after](pe-linked-ojt-preview-after.json), and [First-Year before](pe-linked-first-year-preview-before.json) / [after](pe-linked-first-year-preview-after.json). Each pair has identical bytes and matches the SHA-256 above. Narrow `.gitattributes` rules disable line-ending conversion for these PE-linked JSON/TXT artifacts so checkout preserves their recorded hashes.
+
 ## Acceptance coverage
 
 | Requirement | Evidence |
@@ -57,9 +59,36 @@ The matching guarded cleanup passed: zero synthetic students, appointments, subm
 
 ## Final gates
 
-Pending fresh final execution after the last Browser-driven source fix: `npm test`, `npm run test:integration`, `npm run test:migrations:empty`, `npm run lint`, `npx tsc --noEmit`, `npm run build`. Earlier interrupted jobs and the stale generated `.next/dev/types/validator.ts` typecheck failure do not establish a pass. The owned acceptance server is stopped before archiving only its generated development cache and rerunning TypeScript/build.
+The final gates run after the last Browser-driven source fix, with the owned acceptance server stopped. Only its generated development cache was archived before the fresh TypeScript/build checks. Earlier interrupted jobs and the stale generated `.next/dev/types/validator.ts` typecheck failure do not establish a pass.
+
+| Gate | Executed result |
+| --- | --- |
+| `npm test -- --pool=threads --maxWorkers=1 --no-file-parallelism --testTimeout=60000 --hookTimeout=60000 --reporter=default` | **PASS:** 218 files, 1,276 tests, exit 0; no skipped files or unhandled errors |
+| `npm run test:integration -- --testTimeout=180000 --hookTimeout=180000 --reporter=dot` | **PASS:** 74 files, 626 tests, exit 0; database/storage residue 0 |
+| `npm run test:migrations:empty` | **PASS:** exact 32 migrations, replay 0, atomic DDL/history rollback; exit 0, database residue 0 |
+| `npm run lint` | **PASS:** exit 0 |
+| `npx tsc --noEmit` | **PASS:** fresh production-generated types, exit 0 |
+| `npm run build` | **PASS:** Next.js 16.3.5 production build, exit 0 |
+
+All six final gates passed against source commit `71969bac9d562c132fa0a73bb989687e604f537d`. The integration gate completed October 9 after that last test correction; the other five completed October 10. The retained integration exit record and log SHA-256 were checked before resuming. Only evidence packaging changed during this run. Superpowers recorded Task 6 complete after all six exit-zero results.
+
+The [gate manifest](pe-linked-final-gates.json) records exact commands, source commit, timestamps, durations and raw log hashes. Raw logs: [unit](pe-linked-final-unit.txt), [integration](pe-linked-final-integration.txt), [fresh migrations](pe-linked-final-migrations.txt), [lint](pe-linked-final-lint.txt), [build](pe-linked-final-build.txt) and [typecheck](pe-linked-final-typecheck.txt). The empty typecheck log is paired with its exit-zero manifest record. The [executed wrapper](pe-linked-final-gates-command.txt), [task-done output](pe-linked-task-6-gates.txt) and [execution ledger](pe-linked-execution-ledger.txt) preserve the final gate procedure and task history.
+
+The first final unit attempt passed 216 files/1,258 tests but failed with two fork-worker startup errors before the remaining files ran. Installed Vitest uses a fixed 60-second startup handshake. Both omitted files passed an isolated single-worker recovery run (two files/18 tests, exit 0), then the full serialized run above passed without worker errors. No dependency, source or assertion change was made for that runner failure.
+
+The first completed full integration run failed because the expanded synthetic cleanup tried to collect a null source-import ID from draft OVPSA batches. That rolled back cleanup and left fixtures affecting later suites. A dedicated regression reproduced the exact failure and also checks preservation of unrelated batches and re-enabled immutability triggers. Cleanup now skips absent source imports. The fresh full integration run after that helper change passed all 626 tests; the failed run is retained as recovery evidence.
+
+The [cleanup regression RED](pe-linked-cleanup-regression-red.txt) and [focused recovery GREEN](pe-linked-cleanup-recovery-green.txt) show the exact failure followed by 92 passing tests across cleanup, manual rescheduling, unified calendar and priority displacement. The owned recovery database and storage were removed with zero residue.
+
+The subsequent full unit, integration, migration and lint gates passed, but TypeScript identified an unsupported `exact` option in a newly added role query. The query now uses an anchored accessible-name matcher. All 17 schedule-list tests and the compiler passed in focused recovery. Application behavior is unchanged; the complete six-gate run repeats after this test correction, with compile checks first. Build was not reached in the failed run.
+
+The next lint/build/fresh-typecheck gates all passed, but full integration found one order-dependent existing assertion: it assumed every audit mentioning academic year 2095 belonged to its failed import. Adding two unrelated import audits reproduced the exact failure in isolation. The rollback test now compares complete audit rows before and after and still requires zero student/snapshot/appointment writes. All 20 tests across academic-year races, checklists and First-Year imports passed with zero database/storage residue. No application behavior changed; the six final gates repeat after this test-isolation correction.
+
+A further integration run exceeded the 60-second limit in the unchanged Reports partial-cleanup fixture test. Unfinished asynchronous fixture cleanup left rows that caused later failures; the failed target database and storage were still removed with zero residue. The Reports lifecycle and all four affected suites passed together with a 180-second test/hook limit (five files/76 tests). No source, assertions, ownership checks or constraints changed for this runtime recovery. The final integration command uses that larger limit; unit tests retain one worker and the 60-second limit.
 
 ## Review and decisions
+
+The October 9 overnight unit repeat ended with exit 1: the fork worker for `ClinicUnavailableCalendar.test.tsx` did not respond to the fixed startup handshake. Its 217 files/1,267 passing tests are not a passing gate. The [failed reporter output](pe-linked-unit-worker-start-failure-oct10.txt) is preserved. The [focused thread-pool recovery](pe-linked-unit-thread-recovery.txt) passed all nine omitted tests; the fresh full thread-pool run passed all 218 files/1,276 tests with exit 0. It retained one worker, default isolation and the unchanged database-free setup; no assertions, dependencies or product source changed. The integration pass remains valid for unchanged source commit `71969bac9d562c132fa0a73bb989687e604f537d` and its retained log SHA-256 is verified before the remaining gates run.
 
 The fresh whole-branch review follows the final gates. Decisions already made:
 

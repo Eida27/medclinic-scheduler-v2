@@ -1,0 +1,5 @@
+
+> medclinic-scheduler-v2@0.1.0 acceptance:pe-linked-laboratory:status
+> tsx --env-file=.env.local scripts/browser-pe-linked-laboratory-fixture.ts status
+
+{"prepared":false,"database":"medclinic_test_pe_browser"}
