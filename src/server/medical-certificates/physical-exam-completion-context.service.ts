@@ -7,12 +7,13 @@ import { loadPeLaboratoryCompletionPlan } from "@/server/laboratory/pe-linked-la
 import { currentCpuActor } from "@/server/medical-certificates/certificate.service";
 import { listPhysicians } from "@/server/medical-certificates/physician.service";
 import { getAppointmentMutationContext, getAppointmentMutationScope, getPublishedAppointment } from "@/server/repositories/appointments.repository";
-import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
+import { lockEffectiveAppointmentScopes, lockSchedulingMutationQueue } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import type { PeLaboratoryReadiness } from "@/shared/laboratory-completion";
 import type { SessionUser } from "@/types/roles";
 
 export async function loadPhysicalExamCompletionContext(appointmentId: string, actor: SessionUser) {
   const clinical = await transaction(async (client) => {
+    await lockSchedulingMutationQueue(client);
     const current = await currentCpuActor(client, actor);
     const scope = await getAppointmentMutationScope(appointmentId, client);
     if (!scope || scope.scheduleType !== "PHYSICAL_EXAM" || scope.clinicId !== current.cpuClinicId) {

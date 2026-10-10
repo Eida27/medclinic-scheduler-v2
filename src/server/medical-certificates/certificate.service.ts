@@ -13,7 +13,7 @@ import { certificateCompletionSchema, certificateCorrectionSchema, certificateRe
   type CertificateCompletionInput, type CertificateCorrectionInput } from "@/server/medical-certificates/certificate-schema";
 import { CERTIFICATE_TEMPLATE_VERSION, renderMedicalCertificate, type CertificateRenderSnapshot } from "@/server/medical-certificates/certificate-renderer";
 import { changeAppointmentStatusWithClient, getAppointmentMutationContext, getAppointmentMutationScope } from "@/server/repositories/appointments.repository";
-import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
+import { lockEffectiveAppointmentScopes, lockSchedulingMutationQueue } from "@/server/repositories/effective-appointment-scope-lock.repository";
 import { writeAudit } from "@/server/repositories/audit.repository";
 import { createStudentNotification } from "@/server/services/student-notifications.service";
 import type { SessionUser } from "@/types/roles";
@@ -71,6 +71,8 @@ async function replayRequest<T>(client: PoolClient, actor: SessionUser, requestI
 
 async function clinicalContext(client: PoolClient, appointmentId: string, input: CertificateCompletionInput,
   actor: SessionUser, certificateNumber: string, mode: "issue" | "correct" = "issue"): Promise<Context> {
+  // OVPSA lifecycle writers take this queue before batch rows and student scopes.
+  await lockSchedulingMutationQueue(client);
   const current = await currentCpuActor(client, actor);
   const anchor = (await client.query<{ id: string; studentNumber: string; scheduleType: string; schedulePairId: string | null; scheduleCycleStart: number }>(
     `SELECT id::text,student_number AS "studentNumber",schedule_type AS "scheduleType",
@@ -102,7 +104,7 @@ async function clinicalContext(client: PoolClient, appointmentId: string, input:
   if (mode === "issue" && (input.examinationDate < today || appointment.status === "NO_SHOW") && !input.lateReason?.trim()) {
     throw new AppError("LATE_EXAMINATION_REASON_REQUIRED", "Enter a reason for late examination encoding.", 422);
   }
-  const laboratoryPlan = await loadPeLaboratoryCompletionPlan(client, anchor);
+  const laboratoryPlan = await loadPeLaboratoryCompletionPlan(client, anchor, mode);
   if (!laboratoryPlan.readyForPe || (mode === "correct" && !laboratoryPlan.laboratoryCompleted)) {
     throw new AppError("LABORATORY_NOT_COMPLETED", "The effective Laboratory checklist must be complete first.", 409);
   }
@@ -210,6 +212,7 @@ export async function completePhysicalExam(appointmentId: string, raw: unknown, 
   const jpeg = await renderMedicalCertificate(prepared.render, "issued");
   const digest = createHash("sha256").update(jpeg).digest("hex");
   return transaction(async (client) => {
+    await lockSchedulingMutationQueue(client);
     await currentCpuActor(client, actor);
     const existing = await replayRequest<Outcome>(client, actor, input.requestId, "ISSUE_CERTIFICATE", hash);
     if (existing) return existing;
@@ -421,6 +424,7 @@ export async function correctMedicalCertificate(certificateId: string, raw: unkn
   const jpeg = await renderMedicalCertificate(prepared.context.render, "issued");
   const digest = createHash("sha256").update(jpeg).digest("hex");
   return transaction(async (client) => {
+    await lockSchedulingMutationQueue(client);
     await currentCpuActor(client, actor);
     const existing = await replayRequest<Outcome>(client, actor, input.requestId, "CORRECT_CERTIFICATE", hash);
     if (existing) return existing;

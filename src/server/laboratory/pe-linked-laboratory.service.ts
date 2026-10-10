@@ -31,8 +31,9 @@ function provenanceMissing(): never {
   throw new AppError("LABORATORY_PROVENANCE_MISSING", "The effective Laboratory pair has invalid immutable provenance.", 409);
 }
 
-/** Read-only. The CPU writer takes both sorted effective service scopes before calling. */
-export async function loadPeLaboratoryCompletionPlan(client: PoolClient, peAnchor: EffectivePairAnchor): Promise<PeLaboratoryCompletionPlan> {
+/** Read-only. CPU callers take the scheduling queue, then sorted service scopes before calling. */
+export async function loadPeLaboratoryCompletionPlan(client: PoolClient, peAnchor: EffectivePairAnchor,
+  mode: "issue" | "correct" = "issue"): Promise<PeLaboratoryCompletionPlan> {
   const pair = await resolveEffectiveAppointmentPair(client, peAnchor);
   if (!pair.laboratory || pair.physicalExam?.id !== peAnchor.id) {
     throw new AppError("LABORATORY_NOT_COMPLETED", "The effective Laboratory pair is missing or has been replaced.", 409);
@@ -45,6 +46,9 @@ export async function loadPeLaboratoryCompletionPlan(client: PoolClient, peAncho
   if (!["PENDING", "COMPLETED", "NO_SHOW"].includes(lab.status)
       || (lab.status === "NO_SHOW" && !isAutomaticNoShowLog(lab.latestLog))) {
     throw new AppError("LABORATORY_APPOINTMENT_INACTIVE", "The effective Laboratory appointment cannot be confirmed.", 409);
+  }
+  if (mode === "correct" && lab.status !== "COMPLETED") {
+    throw new AppError("LABORATORY_NOT_COMPLETED", "Certificate correction requires completed Laboratory evidence.", 409);
   }
   const checklist = await loadLaboratoryChecklist(client, lab.id, true);
   if (!checklist) throw new AppError("LABORATORY_CHECKLIST_MISSING", "Laboratory checklist not found.", 409);
@@ -77,21 +81,24 @@ export async function loadPeLaboratoryCompletionPlan(client: PoolClient, peAncho
               ps.id::text AS "physicalExamReservationId",ms.academic_snapshot_id::text AS "snapshotId",
               r.laboratory_location AS provider,ms.assigned_pe_reservation_id::text AS "assignedPeReservationId"
          FROM ovpsa_first_year_batches b
-         JOIN ovpsa_first_year_batch_revisions r ON r.id=b.current_revision_id AND r.batch_id=b.id
+         JOIN ovpsa_first_year_batch_revisions r ON r.id=$2 AND r.batch_id=b.id
+           AND ($11::boolean OR r.id=b.current_revision_id)
          JOIN ovpsa_first_year_active_memberships m ON m.batch_id=b.id AND m.revision_id=r.id
-           AND m.student_number=$4 AND m.schedule_cycle_start=$5 AND m.released_at IS NULL
+           AND m.student_number=$4 AND m.schedule_cycle_start=$5 AND ($11::boolean OR m.released_at IS NULL)
          JOIN ovpsa_first_year_membership_snapshots ms ON ms.batch_id=b.id AND ms.revision_id=r.id
            AND ms.student_number=m.student_number AND ms.academic_snapshot_id=$6 AND ms.year_level=1
          JOIN ovpsa_first_year_service_reservations ls ON ls.id=$7 AND ls.batch_id=b.id AND ls.revision_id=r.id
-           AND ls.schedule_type='LABORATORY' AND ls.status='ACTIVE' AND ls.reservation_date=$8::date
+           AND ls.schedule_type='LABORATORY' AND ($11::boolean OR ls.status='ACTIVE') AND ls.reservation_date=$8::date
          JOIN ovpsa_first_year_service_reservations ps ON ps.id=$9 AND ps.batch_id=b.id AND ps.revision_id=r.id
-           AND ps.schedule_type='PHYSICAL_EXAM' AND ps.status='ACTIVE' AND ps.reservation_date=$10::date
+           AND ps.schedule_type='PHYSICAL_EXAM' AND ($11::boolean OR ps.status='ACTIVE') AND ps.reservation_date=$10::date
         WHERE b.id=$1 AND r.id=$2 AND b.source_import_group_id=$3 AND b.schedule_cycle_start=$5
-          AND b.status='PUBLISHED' AND r.status='PUBLISHED' AND r.laboratory_location='ILOILO_MISSION_HOSPITAL'
+          AND ($11::boolean OR (b.status='PUBLISHED' AND r.status='PUBLISHED'))
+          AND r.published_at IS NOT NULL AND r.laboratory_location='ILOILO_MISSION_HOSPITAL'
           AND r.laboratory_date=$8::date AND ms.assigned_pe_reservation_id=ps.id
         FOR SHARE OF b,r,m,ms,ls,ps`,
       [lab.ovpsaBatchId, lab.ovpsaRevisionId, academic.sourceImportId, lab.studentNumber, lab.scheduleCycleStart,
-        academic.snapshotId, lab.ovpsaServiceReservationId, lab.appointmentDate, pe.ovpsaServiceReservationId, pe.appointmentDate],
+        academic.snapshotId, lab.ovpsaServiceReservationId, lab.appointmentDate, pe.ovpsaServiceReservationId, pe.appointmentDate,
+        mode === "correct"],
     )).rows[0] ?? null;
     if (!ovpsaIdentity) provenanceMissing();
   } else if (lab.ovpsaBatchId || pe.ovpsaBatchId || academic.importMode === "FIRST_YEAR_OVPSA") provenanceMissing();

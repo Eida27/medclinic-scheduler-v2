@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   transaction: vi.fn(), query: vi.fn(), currentCpuActor: vi.fn(), listPhysicians: vi.fn(),
   getAppointmentMutationScope: vi.fn(), getAppointmentMutationContext: vi.fn(), getPublishedAppointment: vi.fn(),
-  lockEffectiveAppointmentScopes: vi.fn(), loadPeLaboratoryCompletionPlan: vi.fn(),
+  lockEffectiveAppointmentScopes: vi.fn(), lockSchedulingMutationQueue: vi.fn(), loadPeLaboratoryCompletionPlan: vi.fn(),
 }));
 vi.mock("@/server/db/pool", () => ({ transaction: mocks.transaction }));
 vi.mock("@/server/medical-certificates/certificate.service", () => ({ currentCpuActor: mocks.currentCpuActor }));
@@ -12,7 +12,9 @@ vi.mock("@/server/repositories/appointments.repository", () => ({
   getAppointmentMutationScope: mocks.getAppointmentMutationScope, getAppointmentMutationContext: mocks.getAppointmentMutationContext,
   getPublishedAppointment: mocks.getPublishedAppointment,
 }));
-vi.mock("@/server/repositories/effective-appointment-scope-lock.repository", () => ({ lockEffectiveAppointmentScopes: mocks.lockEffectiveAppointmentScopes }));
+vi.mock("@/server/repositories/effective-appointment-scope-lock.repository", () => ({
+  lockEffectiveAppointmentScopes: mocks.lockEffectiveAppointmentScopes, lockSchedulingMutationQueue: mocks.lockSchedulingMutationQueue,
+}));
 vi.mock("@/server/laboratory/pe-linked-laboratory.service", () => ({ loadPeLaboratoryCompletionPlan: mocks.loadPeLaboratoryCompletionPlan }));
 import { loadPhysicalExamCompletionContext } from "./physical-exam-completion-context.service";
 const actor = { userId: "actor", fullName: "CPU", email: "cpu@test.local", role: "CLINIC_STAFF" as const, clinicCode: "CPU_CLINIC" };

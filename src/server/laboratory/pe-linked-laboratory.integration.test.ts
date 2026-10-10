@@ -19,6 +19,8 @@ import { getStudentPortalSchedule } from "@/server/repositories/student-portal.r
 import { getStudentResultSubmission } from "@/server/services/student-result-submissions.service";
 import { requireStudent, requireVerifiedStudent } from "@/server/auth/current-student";
 import { createStudentSessionToken } from "@/server/auth/student-session";
+import { cancelOvpsaFirstYearBatch } from "@/server/ovpsa/ovpsa-first-year.service";
+import * as ovpsaRepository from "@/server/ovpsa/ovpsa-first-year.repository";
 
 const authState = vi.hoisted(() => ({ token: "" }));
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => ({ value: authState.token }) }) }));
@@ -124,6 +126,38 @@ function pauseAfterRendering(expectedRenders = 1) {
   return { rendered, resume };
 }
 
+async function publishedBatch(f: Fixture) {
+  return (await pool.query<{ id: string; optimisticToken: string }>(
+    `SELECT b.id::text,b.optimistic_token::text AS "optimisticToken"
+       FROM appointments a JOIN ovpsa_first_year_batches b ON b.id=a.ovpsa_batch_id WHERE a.id=$1`, [f.peId],
+  )).rows[0];
+}
+
+function pauseCancellationAfterBatchLock(batchId: string) {
+  const original = ovpsaRepository.loadOvpsaBatchWithCurrentRevision;
+  let reached!: () => void;
+  let resume!: () => void;
+  const locked = new Promise<void>((resolve) => { reached = resolve; });
+  const released = new Promise<void>((resolve) => { resume = resolve; });
+  vi.spyOn(ovpsaRepository, "loadOvpsaBatchWithCurrentRevision").mockImplementation(async (...args) => {
+    const batch = await original(...args);
+    if (args[1] === batchId && args[2]) { reached(); await released; }
+    return batch;
+  });
+  return { locked, resume };
+}
+
+async function waitForBlockedPePlanner() {
+  for (let attempt = 0; attempt < 250; attempt++) {
+    const blocked = await pool.query(`SELECT 1 FROM pg_stat_activity
+      WHERE datname=current_database() AND pid<>pg_backend_pid() AND state='active' AND wait_event_type='Lock'
+        AND (query LIKE '%medclinic:schedule-import-queue%' OR query LIKE '%FROM ovpsa_first_year_batches b%') LIMIT 1`);
+    if (blocked.rowCount) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("PE operation did not reach the actual queue/batch lock barrier.");
+}
+
 beforeAll(async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date("2026-12-20T04:00:00Z"));
@@ -151,6 +185,69 @@ afterAll(async () => {
 });
 
 describe("PE-linked external Laboratory confirmation", () => {
+  it.each(["readiness", "issuance", "correction"] as const)("serializes actual batch cancellation against PE %s without a database deadlock", async (operation) => {
+    const f = await fixture("FIRST_YEAR");
+    const issued = operation === "correction" ? await completePhysicalExam(f.peId, input(), cpu) : null;
+    const batch = await publishedBatch(f);
+    const renderBarrier = operation === "readiness" ? null : pauseAfterRendering();
+    let clinical: Promise<unknown> | undefined;
+    if (operation !== "readiness") {
+      clinical = issued ? correctMedicalCertificate(issued.certificateId, input({ expectedRevisionId: issued.revisionId,
+        classification: "C", remarks: "Concurrent correction", reason: "Physician corrected the finding" }), cpu)
+        : completePhysicalExam(f.peId, input(), cpu);
+      void clinical.catch(() => undefined);
+      await renderBarrier!.rendered;
+    }
+    const cancellationBarrier = pauseCancellationAfterBatchLock(batch.id);
+    const cancellation = cancelOvpsaFirstYearBatch(batch.id, { optimisticToken: batch.optimisticToken,
+      reason: "Synthetic concurrent batch cancellation" }, admin.userId);
+    void cancellation.catch(() => undefined);
+    let settled: PromiseSettledResult<unknown>[];
+    try {
+      await cancellationBarrier.locked;
+      if (operation === "readiness") {
+        clinical = loadPhysicalExamCompletionContext(f.peId, cpu);
+        void clinical.catch(() => undefined);
+      } else renderBarrier!.resume();
+      await waitForBlockedPePlanner();
+      cancellationBarrier.resume();
+      settled = await Promise.allSettled([cancellation, clinical!]);
+    } finally {
+      cancellationBarrier.resume(); renderBarrier?.resume();
+      await Promise.allSettled([cancellation, ...(clinical ? [clinical] : [])]);
+    }
+    expect(settled!.filter((result) => result.status === "rejected" && result.reason.code === "40P01")).toEqual([]);
+    expect(settled![0].status).toBe("fulfilled");
+    if (operation === "correction") expect(settled![1].status).toBe("fulfilled");
+    else expect(settled![1]).toMatchObject({ status: "rejected", reason: { code: operation === "readiness" ? "LABORATORY_NOT_COMPLETED" : "EXAMINATION_STALE" } });
+    expect((await pool.query("SELECT status FROM ovpsa_first_year_batches WHERE id=$1", [batch.id])).rows[0].status).toBe("CANCELLED");
+  });
+
+  it("corrects a completed First-Year certificate after cancellation using unchanged historical Laboratory evidence", async () => {
+    const f = await fixture("FIRST_YEAR");
+    const issued = await completePhysicalExam(f.peId, input(), cpu);
+    const batch = await publishedBatch(f);
+    await cancelOvpsaFirstYearBatch(batch.id, { optimisticToken: batch.optimisticToken,
+      reason: "Synthetic cancellation preserves completed visits" }, admin.userId);
+    const before = await effects(f);
+    expect(before.appointments.every((row: { status: string }) => row.status === "COMPLETED")).toBe(true);
+    const released = (await pool.query(`SELECT m.released_at,s.status FROM ovpsa_first_year_active_memberships m
+      JOIN ovpsa_first_year_service_reservations s ON s.batch_id=m.batch_id WHERE m.batch_id=$1`, [batch.id])).rows;
+    expect(released.every((row) => row.released_at && row.status === "RELEASED")).toBe(true);
+    const correction = input({ expectedRevisionId: issued.revisionId, classification: "C",
+      remarks: "Follow-up required after batch cancellation", reason: "Physician corrected the finding" });
+    const preview = await previewCertificateCorrection(issued.certificateId, correction, cpu);
+    expect((await sharp(preview).metadata()).format).toBe("jpeg");
+    expect(await effects(f)).toEqual(before);
+    const corrected = await correctMedicalCertificate(issued.certificateId, correction, cpu);
+    expect(corrected.revisionId).not.toBe(issued.revisionId);
+    const after = await effects(f);
+    for (const key of ["appointments", "checklists", "items", "events", "logs", "summaries", "laboratoryResults", "submissions", "files"]) expect(after[key]).toEqual(before[key]);
+    expect(after.certificates).toHaveLength(2);
+    const snapshots = (await pool.query("SELECT examination_snapshot FROM medical_certificate_revisions WHERE certificate_id=$1 ORDER BY revision_number", [issued.certificateId])).rows;
+    expect(snapshots[1].examination_snapshot.laboratoryCompletion).toEqual(snapshots[0].examination_snapshot.laboratoryCompletion);
+  });
+
   it("shows saved First-Year confirmation in staff/student readers without creating upload work", async () => {
     const f = await fixture("FIRST_YEAR");
     expect((await getPublishedAppointment(f.labId))?.displayStatus).toBe("Awaiting confirmation at Physical Examination");
