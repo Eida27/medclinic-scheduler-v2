@@ -1,0 +1,40 @@
+- banner:
+  - img "Central Philippine University seal"
+  - generic: MedClinic Scheduler
+  - generic: CPU Health Services
+  - navigation "Student portal":
+    - link "Schedule":
+      - /url: /student
+    - link "Notifications":
+      - /url: /student/notifications
+    - link "Email verification":
+      - /url: /student/email-verification
+    - link "Results":
+      - /url: /student/results
+  - button "Sign out"
+- main:
+  - paragraph: 4 unread
+  - heading "Notifications" [level=1]
+  - heading "Current schedule" [level=2]
+  - paragraph: "Your current authoritative MedClinic schedule is shown below. Laboratory: 2092-10-20 at KABALAKA Clinic (Pending). Physical Examination: 2092-11-11 at CPU Clinic (Pending). X-ray schedule: 2092-10-13 at Iloilo Mission Hospital, 7 calendar days before your KABALAKA CBC, Urine, and Stool appointment on 2092-10-20. Contact CPU Clinic for instructions if this date has passed."
+  - paragraph: 10/12/2026, 2:40:48 PM
+  - button "Mark read"
+  - heading "Replacement schedule assigned" [level=2]
+  - paragraph: "Manual Resolution is complete and your replacement schedule is available. Laboratory: 2092-10-20 at KABALAKA Clinic (Pending). Physical Examination: 2092-11-11 at CPU Clinic (Pending). X-ray schedule: 2092-10-13 at Iloilo Mission Hospital, 7 calendar days before your KABALAKA CBC, Urine, and Stool appointment on 2092-10-20. Contact CPU Clinic for instructions if this date has passed."
+  - paragraph: 10/12/2026, 2:39:27 PM
+  - button "Mark read"
+  - heading "Schedule awaiting administrator resolution" [level=2]
+  - paragraph: "An affected schedule is awaiting administrator resolution. Laboratory: the prior 2092-10-27 appointment at KABALAKA Clinic was affected; a replacement date is pending administrator resolution. Physical Examination: 2092-11-11 at CPU Clinic (Pending). X-ray schedule at Iloilo Mission Hospital: awaiting an authorized KABALAKA appointment date."
+  - paragraph: 10/12/2026, 2:38:48 PM
+  - button "Mark read"
+  - heading "Schedule updated by an administrator" [level=2]
+  - paragraph: "An administrator authorized a schedule change. Laboratory: 2092-10-27 at KABALAKA Clinic (Pending). Physical Examination: 2092-11-11 at CPU Clinic (Pending). X-ray schedule: 2092-10-20 at Iloilo Mission Hospital, 7 calendar days before your KABALAKA CBC, Urine, and Stool appointment on 2092-10-27. Contact CPU Clinic for instructions if this date has passed."
+  - paragraph: 10/12/2026, 2:37:49 PM
+  - button "Mark read"
+  - heading "Schedule updated by an administrator" [level=2]
+  - paragraph: "An administrator authorized a schedule change. Laboratory: 2092-10-27 at KABALAKA Clinic (Pending). Physical Examination: 2092-11-04 at CPU Clinic (Pending). X-ray schedule: 2092-10-20 at Iloilo Mission Hospital, 7 calendar days before your KABALAKA CBC, Urine, and Stool appointment on 2092-10-27. Contact CPU Clinic for instructions if this date has passed."
+  - paragraph: 10/12/2026, 2:36:50 PM
+  - heading "Schedule published" [level=2]
+  - paragraph: "Your MedClinic schedule is ready. Laboratory: 2092-11-03 at KABALAKA Clinic (Pending). Physical Examination: 2092-11-04 at CPU Clinic (Pending). X-ray schedule: 2092-10-27 at Iloilo Mission Hospital, 7 calendar days before your KABALAKA CBC, Urine, and Stool appointment on 2092-11-03. Contact CPU Clinic for instructions if this date has passed."
+  - paragraph: 10/12/2026, 2:26:14 PM
+- alert

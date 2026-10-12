@@ -337,7 +337,7 @@ describe("typed schedule notification builders", () => {
 
   it("excludes prohibited student and medical data from every email body", () => {
     const secretState = {
-      ...currentState,
+      ...ojtState,
       dateOfBirth: "2004-02-03",
       laboratoryResult: "reactive",
       physicalExamResult: "medical detail",
@@ -353,7 +353,9 @@ describe("typed schedule notification builders", () => {
       buildAdministratorRescheduledNotification({ state: secretState, eventId: "6", reason: "Authorized" }),
       buildRestorationNotification({ state: secretState, eventId: "7", reason: "Restored" }),
       buildCancellationNotification({ state: secretState, eventId: "8", reason: "Cancelled" }),
-    ].map((notification) => notification.emailTextBody).join("\n");
+    ].map((notification) => JSON.stringify({
+      message: notification.message, emailTextBody: notification.emailTextBody, metadata: notification.metadata,
+    })).join("\n");
     expect(serialized).not.toContain("2004-02-03");
     expect(serialized).not.toContain("reactive");
     expect(serialized).not.toContain("medical detail");

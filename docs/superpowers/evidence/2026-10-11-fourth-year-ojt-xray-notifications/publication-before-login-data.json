@@ -1,0 +1,343 @@
+{
+  "fixtures": {
+    "ojt": {
+      "studentNumber": "91-9801-90",
+      "year": 4,
+      "category": "OJT"
+    },
+    "firstYear": {
+      "studentNumber": "91-9802-90",
+      "year": 1,
+      "category": "REGULAR"
+    },
+    "regular": {
+      "studentNumber": "91-9803-90",
+      "year": 4,
+      "category": "REGULAR"
+    },
+    "tour": {
+      "studentNumber": "91-9804-90",
+      "year": 4,
+      "category": "TOUR"
+    }
+  },
+  "appointments": [
+    {
+      "id": "1a6c5cba-c674-48eb-94fb-071dedd4d95b",
+      "student_number": "91-9801-90",
+      "schedule_type": "LABORATORY",
+      "status": "PENDING",
+      "appointment_date": "2092-11-03",
+      "is_published": true
+    },
+    {
+      "id": "8b6c336e-be23-42ee-b8fe-f0c84b798269",
+      "student_number": "91-9801-90",
+      "schedule_type": "PHYSICAL_EXAM",
+      "status": "PENDING",
+      "appointment_date": "2092-11-04",
+      "is_published": true
+    },
+    {
+      "id": "142a7419-ebd6-497c-a0aa-2ad829da28d6",
+      "student_number": "91-9802-90",
+      "schedule_type": "LABORATORY",
+      "status": "PENDING",
+      "appointment_date": "2092-11-10",
+      "is_published": true
+    },
+    {
+      "id": "4b399342-25e4-4a4f-b9eb-dd181320be60",
+      "student_number": "91-9802-90",
+      "schedule_type": "PHYSICAL_EXAM",
+      "status": "PENDING",
+      "appointment_date": "2092-11-17",
+      "is_published": true
+    },
+    {
+      "id": "5c88bf1e-935f-4945-bbd4-88d32bd989aa",
+      "student_number": "91-9803-90",
+      "schedule_type": "LABORATORY",
+      "status": "PENDING",
+      "appointment_date": "2092-11-19",
+      "is_published": true
+    },
+    {
+      "id": "d6e48ff3-8e6b-4907-a637-1a021b48f8cb",
+      "student_number": "91-9803-90",
+      "schedule_type": "PHYSICAL_EXAM",
+      "status": "PENDING",
+      "appointment_date": "2092-11-20",
+      "is_published": true
+    },
+    {
+      "id": "d159a330-ed23-43e1-9f1a-3825bbf007a3",
+      "student_number": "91-9804-90",
+      "schedule_type": "LABORATORY",
+      "status": "PENDING",
+      "appointment_date": "2092-11-19",
+      "is_published": true
+    },
+    {
+      "id": "328a040a-01b6-4b96-8ee9-8d9e97b35b2d",
+      "student_number": "91-9804-90",
+      "schedule_type": "PHYSICAL_EXAM",
+      "status": "PENDING",
+      "appointment_date": "2092-11-20",
+      "is_published": true
+    }
+  ],
+  "notices": [
+    {
+      "id": "46884739-4b09-49db-9da5-a74e3fbfb1cd",
+      "student_number": "91-9801-90",
+      "notification_type": "SCHEDULE_INITIAL_PUBLICATION",
+      "message": "Your MedClinic schedule is ready. Laboratory: 2092-11-03 at KABALAKA Clinic (Pending). Physical Examination: 2092-11-04 at CPU Clinic (Pending). X-ray schedule: 2092-10-27 at Iloilo Mission Hospital, 7 calendar days before your KABALAKA CBC, Urine, and Stool appointment on 2092-11-03. Contact CPU Clinic for instructions if this date has passed.",
+      "metadata": {
+        "sourceId": "6d538181-de4a-4145-ab20-9f6fe31651cd",
+        "sourceType": "SCHEDULE_IMPORT_GROUP",
+        "scheduleFingerprint": "4ff404ec13d20d45531ee7c575d14f95a807f0b0d34b08bf10ce2e5354ffa94e",
+        "externalXraySchedule": {
+          "provider": "Iloilo Mission Hospital",
+          "xrayDate": "2092-10-27",
+          "laboratoryDate": "2092-11-03",
+          "offsetCalendarDays": 7,
+          "anchorLaboratoryAppointmentId": "1a6c5cba-c674-48eb-94fb-071dedd4d95b"
+        }
+      },
+      "read_at": null
+    },
+    {
+      "id": "f1a9bcdf-b261-4564-a9f4-ac673231116a",
+      "student_number": "91-9802-90",
+      "notification_type": "SCHEDULE_INITIAL_PUBLICATION",
+      "message": "Your MedClinic schedule is ready. Laboratory: 2092-11-10 at Iloilo Mission Hospital (Pending). Physical Examination: 2092-11-17 at CPU Clinic (Pending).",
+      "metadata": {
+        "sourceId": "e266ffaf-7203-4385-94ec-8dcd6604139d",
+        "sourceType": "SCHEDULE_IMPORT_GROUP",
+        "scheduleFingerprint": "2895500a8d34a7a589529eec83a020fcb3dfa38c0acf86e2760ec593169b4d96"
+      },
+      "read_at": null
+    },
+    {
+      "id": "a8a530ce-8036-4b60-b7fb-bc6bd04f461e",
+      "student_number": "91-9803-90",
+      "notification_type": "SCHEDULE_INITIAL_PUBLICATION",
+      "message": "Your MedClinic schedule is ready. Laboratory: 2092-11-19 at KABALAKA Clinic (Pending). Physical Examination: 2092-11-20 at CPU Clinic (Pending).",
+      "metadata": {
+        "sourceId": "975fa309-a4c7-455b-8b55-bcbb7f924f2c",
+        "sourceType": "SCHEDULE_IMPORT_GROUP",
+        "scheduleFingerprint": "c1b288f0aafce009d9b88e22d08fc099f67d386a0234110ed365bce7fbe4f232"
+      },
+      "read_at": null
+    },
+    {
+      "id": "1ebd3c99-dba7-48d1-bd2f-89d7d2227601",
+      "student_number": "91-9804-90",
+      "notification_type": "SCHEDULE_INITIAL_PUBLICATION",
+      "message": "Your MedClinic schedule is ready. Laboratory: 2092-11-19 at KABALAKA Clinic (Pending). Physical Examination: 2092-11-20 at CPU Clinic (Pending).",
+      "metadata": {
+        "sourceId": "aca863eb-21f6-4080-bdcc-a2a641f797bd",
+        "sourceType": "SCHEDULE_IMPORT_GROUP",
+        "scheduleFingerprint": "cac734539634987bd4888a3476c3033e028db4ea0cf8162c3aa67a2b4c262112"
+      },
+      "read_at": null
+    }
+  ],
+  "protection": {
+    "appointments": [
+      {
+        "id": "142a7419-ebd6-497c-a0aa-2ad829da28d6",
+        "student_number": "91-9802-90",
+        "schedule_type": "LABORATORY",
+        "status": "PENDING",
+        "appointment_date": "2092-11-10",
+        "is_published": true
+      },
+      {
+        "id": "1a6c5cba-c674-48eb-94fb-071dedd4d95b",
+        "student_number": "91-9801-90",
+        "schedule_type": "LABORATORY",
+        "status": "PENDING",
+        "appointment_date": "2092-11-03",
+        "is_published": true
+      },
+      {
+        "id": "328a040a-01b6-4b96-8ee9-8d9e97b35b2d",
+        "student_number": "91-9804-90",
+        "schedule_type": "PHYSICAL_EXAM",
+        "status": "PENDING",
+        "appointment_date": "2092-11-20",
+        "is_published": true
+      },
+      {
+        "id": "4b399342-25e4-4a4f-b9eb-dd181320be60",
+        "student_number": "91-9802-90",
+        "schedule_type": "PHYSICAL_EXAM",
+        "status": "PENDING",
+        "appointment_date": "2092-11-17",
+        "is_published": true
+      },
+      {
+        "id": "5c88bf1e-935f-4945-bbd4-88d32bd989aa",
+        "student_number": "91-9803-90",
+        "schedule_type": "LABORATORY",
+        "status": "PENDING",
+        "appointment_date": "2092-11-19",
+        "is_published": true
+      },
+      {
+        "id": "8b6c336e-be23-42ee-b8fe-f0c84b798269",
+        "student_number": "91-9801-90",
+        "schedule_type": "PHYSICAL_EXAM",
+        "status": "PENDING",
+        "appointment_date": "2092-11-04",
+        "is_published": true
+      },
+      {
+        "id": "d159a330-ed23-43e1-9f1a-3825bbf007a3",
+        "student_number": "91-9804-90",
+        "schedule_type": "LABORATORY",
+        "status": "PENDING",
+        "appointment_date": "2092-11-19",
+        "is_published": true
+      },
+      {
+        "id": "d6e48ff3-8e6b-4907-a637-1a021b48f8cb",
+        "student_number": "91-9803-90",
+        "schedule_type": "PHYSICAL_EXAM",
+        "status": "PENDING",
+        "appointment_date": "2092-11-20",
+        "is_published": true
+      }
+    ],
+    "checklists": [
+      {
+        "checklist_id": "41cc6de3-f656-4a8d-b3e2-11e69474eecb",
+        "test_code": "CBC",
+        "verified_at": null,
+        "verified_by": null,
+        "verification_source": null
+      },
+      {
+        "checklist_id": "41cc6de3-f656-4a8d-b3e2-11e69474eecb",
+        "test_code": "STOOL",
+        "verified_at": null,
+        "verified_by": null,
+        "verification_source": null
+      },
+      {
+        "checklist_id": "41cc6de3-f656-4a8d-b3e2-11e69474eecb",
+        "test_code": "URINE",
+        "verified_at": null,
+        "verified_by": null,
+        "verification_source": null
+      },
+      {
+        "checklist_id": "41cc6de3-f656-4a8d-b3e2-11e69474eecb",
+        "test_code": "XRAY",
+        "verified_at": null,
+        "verified_by": null,
+        "verification_source": null
+      },
+      {
+        "checklist_id": "7520ddd9-3baf-40db-92ed-82d5545ee7e3",
+        "test_code": "CBC",
+        "verified_at": null,
+        "verified_by": null,
+        "verification_source": null
+      },
+      {
+        "checklist_id": "7520ddd9-3baf-40db-92ed-82d5545ee7e3",
+        "test_code": "STOOL",
+        "verified_at": null,
+        "verified_by": null,
+        "verification_source": null
+      },
+      {
+        "checklist_id": "7520ddd9-3baf-40db-92ed-82d5545ee7e3",
+        "test_code": "URINE",
+        "verified_at": null,
+        "verified_by": null,
+        "verification_source": null
+      },
+      {
+        "checklist_id": "8ab3f27a-d2f3-4f2f-a23f-ca32220ec909",
+        "test_code": "CBC",
+        "verified_at": null,
+        "verified_by": null,
+        "verification_source": null
+      },
+      {
+        "checklist_id": "8ab3f27a-d2f3-4f2f-a23f-ca32220ec909",
+        "test_code": "STOOL",
+        "verified_at": null,
+        "verified_by": null,
+        "verification_source": null
+      },
+      {
+        "checklist_id": "8ab3f27a-d2f3-4f2f-a23f-ca32220ec909",
+        "test_code": "URINE",
+        "verified_at": null,
+        "verified_by": null,
+        "verification_source": null
+      },
+      {
+        "checklist_id": "ef8239a5-674c-43af-ac4f-217f643745b9",
+        "test_code": "CBC",
+        "verified_at": null,
+        "verified_by": null,
+        "verification_source": null
+      },
+      {
+        "checklist_id": "ef8239a5-674c-43af-ac4f-217f643745b9",
+        "test_code": "STOOL",
+        "verified_at": null,
+        "verified_by": null,
+        "verification_source": null
+      },
+      {
+        "checklist_id": "ef8239a5-674c-43af-ac4f-217f643745b9",
+        "test_code": "URINE",
+        "verified_at": null,
+        "verified_by": null,
+        "verification_source": null
+      },
+      {
+        "checklist_id": "ef8239a5-674c-43af-ac4f-217f643745b9",
+        "test_code": "XRAY",
+        "verified_at": null,
+        "verified_by": null,
+        "verification_source": null
+      }
+    ],
+    "counts": {
+      "submissions": 0,
+      "files": 0,
+      "results": 0,
+      "certificates": 0,
+      "reservations": 2
+    },
+    "capacity": [
+      {
+        "id": "40000000-0000-4000-8000-000000000001",
+        "clinic_id": "60000000-0000-4000-8000-000000000002",
+        "schedule_type": "PHYSICAL_EXAM",
+        "max_daily_capacity": 100,
+        "is_active": true,
+        "created_at": "2026-10-12T06:25:56.422Z",
+        "updated_at": "2026-10-12T06:25:56.422Z"
+      },
+      {
+        "id": "40000000-0000-4000-8000-000000000002",
+        "clinic_id": "60000000-0000-4000-8000-000000000001",
+        "schedule_type": "LABORATORY",
+        "max_daily_capacity": 100,
+        "is_active": true,
+        "created_at": "2026-10-12T06:25:56.422Z",
+        "updated_at": "2026-10-12T06:25:56.422Z"
+      }
+    ]
+  },
+  "scheduleMail": []
+}

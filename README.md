@@ -116,6 +116,8 @@ npm run acceptance:student-auth -- cleanup
 
 Schedule changes and result invalidations create portal notifications in the business transaction. Authenticated students can read their own notices and mark them read before verification. A verified email also creates an outbox item; first verification retains the current-state catch-up and deduplication. Working SMTP is an installation prerequisite for staff onboarding and student Laboratory upload verification. After installation, a temporary delivery outage leaves mail queued for retry and does not block sign-in, portal reading, or authorized downloads. It can delay verification and therefore a student's first Laboratory upload; already verified uploads and unrelated scheduling/notification transactions continue.
 
+Fourth-year OJT schedule notices include the Iloilo Mission Hospital X-ray date, exactly seven calendar days before the authoritative KABALAKA CBC, Urine, and Stool appointment. Eligibility comes from the linked immutable Laboratory checklist. Publication creates the portal notice immediately; shared schedule changes and first-verification catch-up carry the current instruction into portal and verified-email content. Awaiting Manual Resolution shows a pending date, and cancelled/replaced Laboratory sources cannot supply the current X-ray date. Clinical confirmation still occurs through Physical Examination. See the [October 11 design](docs/superpowers/specs/2026-10-11-fourth-year-ojt-xray-notifications-design.md), [plan](docs/superpowers/plans/2026-10-11-fourth-year-ojt-xray-notifications.md), and [local acceptance evidence](docs/superpowers/evidence/2026-10-11-fourth-year-ojt-xray-notifications.md).
+
 To enable delivery, set:
 
 ```env

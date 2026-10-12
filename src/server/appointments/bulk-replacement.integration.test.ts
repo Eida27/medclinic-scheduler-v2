@@ -85,6 +85,57 @@ afterAll(async () => {
 });
 
 describe("atomic bulk replacement", () => {
+  it("uses each OJT student's effective Laboratory anchor and deduplicates the batch retry", async () => {
+    const sources: Array<{ id: string; expectedUpdatedAt: string }> = [];
+    for (let index = 1; index <= 2; index++) {
+      const studentNumber = `BULK-OJT-${index}`;
+      await insertTestStudent({ studentNumber, firstName: "Ojt", lastName: `Bulk ${index}`, yearLevel: 4 });
+      const source = await transaction(async (client) => {
+        const importId = await insertTestScheduleImportGroup(client, { name: "BULK fixture OJT",
+          sourceFilename: `${randomUUID()}.csv`, academicYearStart, importMode: "STANDARD", actor: admin.userId });
+        await client.query(`INSERT INTO student_academic_snapshots
+          (student_number,academic_year_start,student_name,college_id,college_name,program_id,program_code,program_name,year_level,source_import_group_id)
+          VALUES ($1,$2,'Ojt Bulk',$3,'College of Computer Studies',$4,'BSIT','BSIT',4,$5)`,
+        [studentNumber, academicYearStart, TEST_REFERENCE_IDS.college, TEST_REFERENCE_IDS.program, importId]);
+        const pairId = randomUUID();
+        const lab = await client.query<{ id: string; updatedAt: Date }>(`INSERT INTO appointments
+          (clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+           schedule_pair_id,schedule_cycle_start,scheduling_category,created_by,updated_by)
+          VALUES ($1,$2,'LABORATORY',$3,'PENDING',TRUE,$4,$5,'OJT',$6,$6)
+          RETURNING id::text,updated_at AS "updatedAt"`,
+        [TEST_REFERENCE_IDS.laboratoryClinic, studentNumber, fixtureDate(1), pairId, academicYearStart, admin.userId]);
+        await client.query(`INSERT INTO appointments
+          (clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+           schedule_pair_id,schedule_cycle_start,scheduling_category,created_by,updated_by)
+          VALUES ($1,$2,'PHYSICAL_EXAM',$3,'PENDING',TRUE,$4,$5,'OJT',$6,$6)`,
+        [TEST_REFERENCE_IDS.physicalExamClinic, studentNumber, fixtureDate(8), pairId, academicYearStart, admin.userId]);
+        await linkPublishedLaboratoryAppointments(client, [lab.rows[0].id]);
+        return { id: lab.rows[0].id, expectedUpdatedAt: lab.rows[0].updatedAt.toISOString() };
+      });
+      sources.push(source);
+    }
+    const date = fixtureDate(2);
+    const payload = { appointments: sources, replacementDate: date, reason: "OJT shared authorized date" };
+    const preview = await previewBulkReplacement(payload, admin);
+    const request = { ...payload, previewToken: preview.previewToken, requestId: randomUUID() };
+    const outcome = await commitBulkReplacement(request, admin);
+    expect(await commitBulkReplacement(request, admin)).toEqual(outcome);
+    const expectedXray = new Date(`${date}T00:00:00Z`);
+    expectedXray.setUTCDate(expectedXray.getUTCDate() - 7);
+    for (let index = 1; index <= 2; index++) {
+      const rows = (await pool.query<{ id: string; message: string; metadata: Record<string, unknown> }>(`SELECT
+        appointment.id::text,notice.message,notice.metadata FROM student_portal_notifications notice
+        JOIN appointments appointment ON appointment.student_number=notice.student_number
+          AND appointment.id=ANY($1::uuid[]) WHERE notice.student_number=$2`,
+      [outcome.appointmentIds, `BULK-OJT-${index}`])).rows;
+      expect(rows).toHaveLength(1);
+      expect(rows[0].metadata.externalXraySchedule).toEqual({ anchorLaboratoryAppointmentId: rows[0].id,
+        laboratoryDate: date, xrayDate: expectedXray.toISOString().slice(0, 10),
+        provider: "Iloilo Mission Hospital", offsetCalendarDays: 7 });
+      expect(rows[0].message).toContain(`X-ray schedule: ${expectedXray.toISOString().slice(0, 10)} at Iloilo Mission Hospital`);
+    }
+  });
+
   it("returns every selected student when one source version changed and refuses to save", async () => {
     const appointments = [
       { ...selected[0], expectedUpdatedAt: "2000-01-01T00:00:00.000Z" },

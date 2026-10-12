@@ -1,0 +1,20 @@
+{
+  "readProof": {
+    "clinicalStateUnchanged": true
+  },
+  "protectedCounts": {
+    "submissions": 0,
+    "files": 0,
+    "results": 0,
+    "certificates": 0,
+    "reservations": 2
+  },
+  "verifiedChecklistItemCount": 0,
+  "appointmentRowCount": 11,
+  "scheduleTypes": [
+    "LABORATORY",
+    "PHYSICAL_EXAM"
+  ],
+  "scheduleEmailCount": 1,
+  "originalNoticeReadAt": "2026-10-12T06:34:55.281Z"
+}
