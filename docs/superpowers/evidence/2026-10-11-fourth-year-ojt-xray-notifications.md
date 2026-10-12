@@ -62,7 +62,7 @@ Browser viewport override was reset and its temporary tab closed. The owned app/
 
 ## Execution decisions
 
-- Began per-task work after the passing focused baseline while the unchanged-main full baseline ran; unrelated baseline failures could have been discovered later. Final full regressions are still required.
+- Began per-task work after the passing focused baseline while the unchanged-main full baseline ran; unrelated baseline failures could have been discovered later. Final full unit and integration regressions subsequently passed.
 - Used saved fourth-year Regular/Tour fixtures because current import policy prohibits importing those combinations. If that policy changes, fresh import-path coverage is required.
 
 ## Final review
@@ -70,3 +70,5 @@ Browser viewport override was reset and its temporary tab closed. The owned app/
 An independent fresh-context reviewer inspected `e0c6ee9..cfb0d93`, the binding spec/plan, ledger rulings, implementation/tests, surrounding publication/replacement/delivery code and acceptance evidence. All five review-focus areas were assessed. Critical: none. Important: none. Minor: none. Declined to judge: none. Assessment: ready to merge; no code changes required.
 
 Typecheck and lint were reconfirmed after the final integration-test adjustment and documentation updates, both exit 0. The final focused task-completion command passed all 18 lifecycle/bulk cases and disposed its target with zero residue. The implementation worktree is retained for the user's integration choice; ordinary application data and `main` are preserved.
+
+Final cleanup verified zero remaining owned databases before stopping the dedicated PostgreSQL cluster. Ports 55483, 4318 and 4320 have no listener. The private acceptance manifest/logs, private cluster directory and this plan's ignored scratch workspace were removed; committed evidence remains available.
