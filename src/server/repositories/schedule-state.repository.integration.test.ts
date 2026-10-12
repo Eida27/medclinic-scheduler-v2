@@ -2,7 +2,8 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { pool } from "@/server/db/pool";
-import { TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
+import { insertTestAcademicSnapshot, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
+import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import {
   buildCurrentStateNotification,
   fingerprintScheduleState,
@@ -10,6 +11,75 @@ import {
 import { loadAuthoritativeScheduleState } from "./schedule-state.repository";
 
 describe("authoritative schedule-state repository", () => {
+  it.each([
+    [4, "OJT", true], [4, "REGULAR", false], [4, "TOUR", false], [3, "OJT", false], [1, "REGULAR", false],
+  ] as const)("uses the linked saved cohort for year %s category %s", async (year, category, eligible) => {
+    const client = await pool.connect();
+    await client.query("BEGIN");
+    try {
+      const studentNumber = `SCH-XRAY-${category}-${year}`;
+      await client.query(`INSERT INTO students
+        (student_number,first_name,last_name,college_id,program_id,year_level)
+        VALUES ($1,'Saved','Cohort',$2,$3,$4)`,
+      [studentNumber, TEST_REFERENCE_IDS.college, TEST_REFERENCE_IDS.program, year]);
+      await client.query(`INSERT INTO academic_years(start_year,closing_date,created_by,updated_by)
+        VALUES (2092,'2093-07-31',$1,$1) ON CONFLICT (start_year) DO NOTHING`, [TEST_REFERENCE_IDS.adminUser]);
+      await insertTestAcademicSnapshot(client, { studentNumber, academicYearStart: 2092,
+        importName: `SCH-XRAY ${studentNumber}`, actor: TEST_REFERENCE_IDS.adminUser });
+      const pairId = randomUUID();
+      const rows = (await client.query<{ id: string; schedule_type: string }>(`INSERT INTO appointments
+        (clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+         schedule_pair_id,schedule_cycle_start,scheduling_category)
+        VALUES ($1,$3,'LABORATORY','2092-08-20','PENDING',TRUE,$4,2092,$5),
+               ($2,$3,'PHYSICAL_EXAM','2092-09-03','PENDING',TRUE,$4,2092,$5)
+        RETURNING id::text,schedule_type`,
+      [TEST_REFERENCE_IDS.laboratoryClinic, TEST_REFERENCE_IDS.physicalExamClinic, studentNumber, pairId, category])).rows;
+      const labId = rows.find((row) => row.schedule_type === "LABORATORY")!.id;
+      const peId = rows.find((row) => row.schedule_type === "PHYSICAL_EXAM")!.id;
+      // Missing context remains usable during publication, before the caller establishes the link.
+      const beforeLink = await loadAuthoritativeScheduleState(client, studentNumber);
+      expect(beforeLink?.laboratory?.id).toBe(labId);
+      expect(beforeLink).not.toHaveProperty("externalXraySchedule");
+      await linkPublishedLaboratoryAppointments(client, [labId]);
+      const saved = await loadAuthoritativeScheduleState(client, studentNumber);
+      const detail = { anchorLaboratoryAppointmentId: labId, laboratoryDate: "2092-08-20",
+        xrayDate: "2092-08-13", provider: "Iloilo Mission Hospital", offsetCalendarDays: 7 };
+      if (eligible) expect(saved?.externalXraySchedule).toEqual(detail);
+      else expect(saved).not.toHaveProperty("externalXraySchedule");
+      await client.query("UPDATE students SET year_level=3 WHERE student_number=$1", [studentNumber]);
+      const changedProfile = await loadAuthoritativeScheduleState(client, studentNumber);
+      if (eligible) expect(changedProfile?.externalXraySchedule).toEqual(detail);
+      else expect(changedProfile).not.toHaveProperty("externalXraySchedule");
+      if (!eligible) return;
+
+      await client.query("UPDATE appointments SET status='RESCHEDULED' WHERE id=$1", [labId]);
+      const replacement = await client.query<{ id: string }>(`INSERT INTO appointments
+        (clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+         schedule_pair_id,schedule_cycle_start,scheduling_category,rescheduled_from)
+        VALUES ($1,$2,'LABORATORY','2092-08-27','PENDING',TRUE,$3,2092,'OJT',$4) RETURNING id::text`,
+      [TEST_REFERENCE_IDS.laboratoryClinic, studentNumber, pairId, labId]);
+      const replacementId = replacement.rows[0].id;
+      await linkPublishedLaboratoryAppointments(client, [replacementId]);
+      const replacedDetail = { ...detail, anchorLaboratoryAppointmentId: replacementId,
+        laboratoryDate: "2092-08-27", xrayDate: "2092-08-20" };
+      expect((await loadAuthoritativeScheduleState(client, studentNumber))?.externalXraySchedule).toEqual(replacedDetail);
+
+      await client.query("UPDATE appointments SET status='RESCHEDULED' WHERE id=$1", [peId]);
+      await client.query(`INSERT INTO appointments
+        (clinic_id,student_number,schedule_type,appointment_date,status,is_published,
+         schedule_pair_id,schedule_cycle_start,scheduling_category,rescheduled_from)
+        VALUES ($1,$2,'PHYSICAL_EXAM','2092-09-10','PENDING',TRUE,$3,2092,'OJT',$4)`,
+      [TEST_REFERENCE_IDS.physicalExamClinic, studentNumber, pairId, peId]);
+      expect((await loadAuthoritativeScheduleState(client, studentNumber))?.externalXraySchedule).toEqual(replacedDetail);
+      await client.query("UPDATE appointments SET status='AWAITING_RESCHEDULE' WHERE id=$1", [replacementId]);
+      expect((await loadAuthoritativeScheduleState(client, studentNumber))?.externalXraySchedule)
+        .toEqual({ ...replacedDetail, laboratoryDate: null, xrayDate: null });
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
+  });
+
   it("loads current state and open Manual Resolution through the caller's transaction", async () => {
     const client = await pool.connect();
     await client.query("BEGIN");
@@ -183,6 +253,8 @@ describe("authoritative schedule-state repository", () => {
         physicalExam: { id: "10000000-0000-4000-8000-000000000102" },
         openManualResolutionIds: [],
       });
+      expect(laboratory).not.toHaveProperty("externalXraySchedule");
+      expect(physical).not.toHaveProperty("externalXraySchedule");
       expect(fingerprintScheduleState(laboratory!)).toBe(
         "4d6d6a211d79178c9439b5785ba5f0880614ca7a2102e76fb8a722de11259ed3",
       );
@@ -203,9 +275,16 @@ describe("authoritative schedule-state repository", () => {
 
   it("returns null for an inactive or unknown student", async () => {
     const client = await pool.connect();
+    await client.query("BEGIN");
     try {
+      await client.query(`INSERT INTO students
+        (student_number,first_name,last_name,college_id,program_id,is_active)
+        VALUES ('SCH-STATE-INACTIVE','Inactive','Student',$1,$2,FALSE)`,
+      [TEST_REFERENCE_IDS.college, TEST_REFERENCE_IDS.program]);
+      await expect(loadAuthoritativeScheduleState(client, "SCH-STATE-INACTIVE")).resolves.toBeNull();
       await expect(loadAuthoritativeScheduleState(client, "SCH-STATE-MISSING")).resolves.toBeNull();
     } finally {
+      await client.query("ROLLBACK");
       client.release();
     }
   });

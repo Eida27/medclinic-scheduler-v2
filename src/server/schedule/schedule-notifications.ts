@@ -2,6 +2,7 @@ import "server-only";
 import { createHash } from "node:crypto";
 import { SCHEDULE_NOTICE } from "@/lib/schedule-notice";
 import type { StudentNotificationInput } from "@/server/repositories/student-notifications.repository";
+import type { OjtExternalXraySchedule } from "./ojt-external-xray";
 
 export type AppointmentStatus =
   | "DRAFT"
@@ -29,6 +30,7 @@ export type AuthoritativeScheduleState = {
   laboratory: AuthoritativeScheduleAppointment | null;
   physicalExam: AuthoritativeScheduleAppointment | null;
   openManualResolutionIds: string[];
+  externalXraySchedule?: OjtExternalXraySchedule;
 };
 
 export type PreviousScheduleState = {
