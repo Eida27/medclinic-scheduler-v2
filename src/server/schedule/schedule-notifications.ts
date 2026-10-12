@@ -59,6 +59,15 @@ export function fingerprintScheduleState(state: AuthoritativeScheduleState) {
         appointment.location,
       ]),
     openManualResolutionIds: [...state.openManualResolutionIds].sort(),
+    ...(state.externalXraySchedule ? {
+      externalXraySchedule: [
+        state.externalXraySchedule.anchorLaboratoryAppointmentId,
+        state.externalXraySchedule.laboratoryDate,
+        state.externalXraySchedule.xrayDate,
+        state.externalXraySchedule.provider,
+        state.externalXraySchedule.offsetCalendarDays,
+      ],
+    } : {}),
   };
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
@@ -86,9 +95,16 @@ function appointmentLine(appointment: AuthoritativeScheduleAppointment) {
 }
 
 function currentLines(state: AuthoritativeScheduleState) {
-  return [state.laboratory, state.physicalExam]
+  const lines = [state.laboratory, state.physicalExam]
     .filter((appointment): appointment is AuthoritativeScheduleAppointment => Boolean(appointment))
     .map(appointmentLine);
+  const xray = state.externalXraySchedule;
+  if (xray) {
+    lines.push(xray.xrayDate && xray.laboratoryDate
+      ? `X-ray schedule: ${xray.xrayDate} at Iloilo Mission Hospital, 7 calendar days before your KABALAKA CBC, Urine, and Stool appointment on ${xray.laboratoryDate}. Contact CPU Clinic for instructions if this date has passed.`
+      : "X-ray schedule at Iloilo Mission Hospital: awaiting an authorized KABALAKA appointment date.");
+  }
+  return lines;
 }
 
 function previousLines(previous?: PreviousScheduleState) {
@@ -155,6 +171,7 @@ function notificationBase(input: {
       sourceType: input.sourceType,
       sourceId: input.sourceId,
       scheduleFingerprint,
+      ...(input.state.externalXraySchedule ? { externalXraySchedule: input.state.externalXraySchedule } : {}),
     },
     eventKey: input.eventKey,
     emailSubject: input.emailSubject,

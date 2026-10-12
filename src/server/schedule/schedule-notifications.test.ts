@@ -36,6 +36,103 @@ const currentState: AuthoritativeScheduleState = {
   openManualResolutionIds: [],
 };
 
+const xrayDetail = {
+  anchorLaboratoryAppointmentId: "lab-1",
+  laboratoryDate: "2026-08-20",
+  xrayDate: "2026-08-13",
+  provider: "Iloilo Mission Hospital" as const,
+  offsetCalendarDays: 7 as const,
+};
+const ojtState: AuthoritativeScheduleState = {
+  ...currentState,
+  laboratory: { ...currentState.laboratory!, date: "2026-08-20", location: "KABALAKA Clinic" },
+  externalXraySchedule: xrayDetail,
+};
+const datedLine = "X-ray schedule: 2026-08-13 at Iloilo Mission Hospital, 7 calendar days before your KABALAKA CBC, Urine, and Stool appointment on 2026-08-20. Contact CPU Clinic for instructions if this date has passed.";
+const pendingLine = "X-ray schedule at Iloilo Mission Hospital: awaiting an authorized KABALAKA appointment date.";
+
+describe("OJT X-ray content in shared schedule notices", () => {
+  const builders = [
+    ["initial", (state: AuthoritativeScheduleState) => buildInitialPublicationNotification({ state, sourceType: "IMPORT", sourceId: "import-1" })],
+    ["current", buildCurrentStateNotification],
+    ...[
+      ["priority", buildPriorityDisplacementNotification],
+      ["closure", buildClosureRescheduledNotification],
+      ["awaiting", buildAwaitingResolutionNotification],
+      ["manual", buildManualResolutionCompletedNotification],
+      ["administrator", buildAdministratorRescheduledNotification],
+      ["restoration", buildRestorationNotification],
+      ["cancellation", buildCancellationNotification],
+    ].map(([label, builder]) => [
+      label,
+      (state: AuthoritativeScheduleState) => (builder as typeof buildAdministratorRescheduledNotification)({
+        state, eventId: "event-xray", reason: "Authorized change",
+        previous: { laboratory: { date: "2026-08-12", location: "KABALAKA Clinic" } },
+      }),
+    ]),
+  ] as Array<[string, (state: AuthoritativeScheduleState) => ReturnType<typeof buildCurrentStateNotification>]>;
+
+  it.each(builders)("appends matching portal/email detail through the %s builder", (_name, builder) => {
+    const notice = builder(ojtState);
+    const ordinary = builder({ ...ojtState, externalXraySchedule: undefined });
+    expect(notice.message).toContain(datedLine);
+    expect(notice.emailTextBody).toContain(datedLine);
+    expect(notice.metadata?.externalXraySchedule).toEqual(xrayDetail);
+    expect(notice.notificationType).toBe(ordinary.notificationType);
+    expect(notice.title).toBe(ordinary.title);
+    // Current-state keys intentionally use the extended fingerprint; all other event families stay identical.
+    if (_name !== "current") expect(notice.eventKey).toBe(ordinary.eventKey);
+    expect(ordinary.metadata).not.toHaveProperty("externalXraySchedule");
+    expect(ordinary.message).not.toContain("X-ray schedule");
+  });
+
+  it("presents pending X-ray text while keeping the affected date as history only", () => {
+    const state: AuthoritativeScheduleState = {
+      ...ojtState,
+      laboratory: { ...ojtState.laboratory!, date: null, status: "AWAITING_RESCHEDULE", affectedDate: "2026-08-20" },
+      openManualResolutionIds: ["manual-1"],
+      externalXraySchedule: { ...xrayDetail, laboratoryDate: null, xrayDate: null },
+    };
+    const notice = buildAwaitingResolutionNotification({ state, eventId: "pending", reason: "Clinic closure" });
+    expect(notice.message).toContain(pendingLine);
+    expect(notice.emailTextBody).toContain(pendingLine);
+    expect(notice.message).not.toContain("X-ray schedule: 2026-08-13");
+    expect(notice.emailTextBody).not.toContain(datedLine);
+    expect(notice.metadata?.externalXraySchedule).toEqual({ ...xrayDetail, laboratoryDate: null, xrayDate: null });
+    expect(fingerprintScheduleState(state)).not.toBe(fingerprintScheduleState(ojtState));
+    expect(fingerprintScheduleState({ ...state })).toBe(fingerprintScheduleState(state));
+  });
+
+  it("omits a cancelled Laboratory but retains an unaffected Laboratory after PE cancellation", () => {
+    const cancelled = buildCancellationNotification({
+      state: { ...ojtState, laboratory: null, externalXraySchedule: undefined },
+      eventId: "cancel-lab", reason: "Authorized cancellation",
+    });
+    expect(cancelled.metadata).not.toHaveProperty("externalXraySchedule");
+    expect(cancelled.message).not.toContain("X-ray schedule");
+    const surviving = buildCancellationNotification({
+      state: { ...ojtState, physicalExam: null }, eventId: "cancel-pe", reason: "Authorized cancellation",
+    });
+    expect(surviving.message).toContain(datedLine);
+  });
+
+  it("extends only eligible fingerprints using ordered detail values", () => {
+    const hash = fingerprintScheduleState(ojtState);
+    expect(hash).not.toBe(fingerprintScheduleState({ ...ojtState, externalXraySchedule: undefined }));
+    expect(fingerprintScheduleState({
+      ...ojtState,
+      externalXraySchedule: { offsetCalendarDays: 7, provider: "Iloilo Mission Hospital",
+        xrayDate: "2026-08-13", laboratoryDate: "2026-08-20", anchorLaboratoryAppointmentId: "lab-1" },
+    })).toBe(hash);
+    for (const change of [
+      { anchorLaboratoryAppointmentId: "replacement-lab" },
+      { laboratoryDate: "2026-08-27", xrayDate: "2026-08-20" },
+    ]) expect(fingerprintScheduleState({ ...ojtState, externalXraySchedule: { ...xrayDetail, ...change } })).not.toBe(hash);
+    expect(fingerprintScheduleState({ ...currentState, externalXraySchedule: undefined }))
+      .toBe("fd13b94a7f23689f836e5c616d7346e74be98e22b4b87f1b88bc0fbbe7aa3cd4");
+  });
+});
+
 describe("authoritative schedule fingerprints", () => {
   it("uses a stable literal SHA-256 value and ignores display object insertion order", () => {
     expect(fingerprintScheduleState(currentState)).toBe(
