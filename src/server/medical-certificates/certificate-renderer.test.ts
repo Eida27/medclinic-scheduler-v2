@@ -7,18 +7,12 @@ async function snapshot(): Promise<CertificateRenderSnapshot> {
   return {
     certificateNumber: "MC-2026-000001",
     studentName: "María Ñ. Dela Cruz Jr.",
-    studentNumber: "2026-0001",
-    collegeName: "College of Arts and Sciences",
-    programName: "Bachelor of Science in Biology",
-    yearLevel: 4,
     age: 21,
     sex: "Female",
     examinationDate: "2026-09-22",
     classification: "B",
     remarks: "Correctible vision limitation.\nFollow-up in three months.",
     physicianName: "Dr. Ada Reyes",
-    physicianLicense: "PRC 1234",
-    physicianSpecialty: "General Medicine",
     signatureBytes: await sharp({ create: { width: 200, height: 80, channels: 4, background: "#ffffff" } }).png().toBuffer(),
   };
 }
@@ -38,6 +32,22 @@ describe("medical certificate renderer", () => {
     const preview = await renderMedicalCertificate(data, "preview");
     const issued = await renderMedicalCertificate(data, "issued");
     expect(preview.equals(issued)).toBe(false);
+  });
+
+  it("uses the reference border and purple stamp and marks the recorded class", async () => {
+    const data = await snapshot();
+    const pixel = async (image: Buffer, x: number, y: number) =>
+      [...await sharp(image).extract({ left: x, top: y, width: 1, height: 1 }).removeAlpha().raw().toBuffer()];
+    const classB = await renderMedicalCertificate(data, "issued");
+    const classC = await renderMedicalCertificate({ ...data, classification: "C" }, "issued");
+
+    expect(await pixel(classB, 124, 900)).toEqual([0, 0, 0]);
+    const [red, green, blue] = await pixel(classB, 2941, 1276);
+    expect(red).toBeGreaterThan(100);
+    expect(green).toBeLessThan(30);
+    expect(blue).toBeGreaterThan(220);
+    expect((await pixel(classB, 645, 1453))[0]).toBeLessThan(50);
+    expect((await pixel(classC, 645, 1453))[0]).toBeGreaterThan(240);
   });
 
   it("rejects text that cannot fit the fixed layout", async () => {
@@ -64,7 +74,7 @@ describe("medical certificate renderer", () => {
     await expect(renderMedicalCertificate(physician, "issued")).rejects.toMatchObject({ code: "CERTIFICATE_LAYOUT_OVERFLOW" });
   });
 
-  it("rejects inline details that extend beyond the right margin", async () => {
+  it("rejects sex text that cannot fit the field", async () => {
     const details = await snapshot();
     details.sex = "Ж".repeat(80);
     await expect(renderMedicalCertificate(details, "issued")).rejects.toMatchObject({ code: "CERTIFICATE_LAYOUT_OVERFLOW" });
