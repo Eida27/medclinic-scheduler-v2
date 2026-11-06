@@ -20,11 +20,13 @@ Migration 030 removes the obsolete safe-capacity column and enforces a positive 
 
 Migration 012 and the seed establish the canonical 13-college/48-program CPU catalog for fresh installation. The old catalog-conversion command is retired; historical migration notices do not authorize conversion or deletion of developer data.
 
-For a developer-owned disposable local database only, reset with:
+Developer reset destroys and recreates the public schema. Set both variables in the shell for an existing disposable local database you own.
 
 ```powershell
-$env:ALLOW_DB_RESET="true"
+$env:ALLOW_DB_RESET = "true"
+$env:DB_RESET_DATABASE_URL = "postgresql://test_role:your_local_password@127.0.0.1:5432/medclinic_test_reset"
 npm run db:reset
+Remove-Item Env:ALLOW_DB_RESET, Env:DB_RESET_DATABASE_URL
 ```
 
-Reset recreates the public schema, runs the canonical per-migration transactional executor, then seeds references. It is not the installation or deployment path. `db:reset` refuses to run against the `postgres`, `template0`, or `template1` databases.
+Reset reads its target only from `DB_RESET_DATABASE_URL` in the shell. It requires a loopback `medclinic_test_*` database and an explicit PostgreSQL role, and rejects URL query parameters, fragments, and inherited `PG*` environment variables. It verifies the live database, loopback address, and port before dropping the schema, then runs the canonical per-migration transactional executor and reference seed.

@@ -3,8 +3,8 @@ import { mkdir, readdir, readFile, rename, rm, rmdir, writeFile } from "node:fs/
 import { dirname, isAbsolute, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool, type PoolClient } from "pg";
-import { SCHEDULE_NOTICE } from "../src/lib/schedule-notice";
-import { encryptEmailOutboxSensitiveBody } from "../src/server/email/verification-body-encryption";
+import { SCHEDULE_NOTICE } from "../../src/lib/schedule-notice";
+import { encryptEmailOutboxSensitiveBody } from "../../src/server/email/verification-body-encryption";
 
 const LOOPBACK_DATABASE_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 const EXCLUSIVE_FLAG = "STUDENT_EMAIL_NOTIFICATIONS_ACCEPTANCE_EXCLUSIVE_DATABASE";

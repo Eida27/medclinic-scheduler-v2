@@ -11,7 +11,7 @@ assertSafeReportsAcceptanceDatabase,
 cleanupReportsAcceptanceFixture,
 getReportsAcceptanceFixtureStatus,
 setupReportsAcceptanceFixture
-} from "../../../scripts/browser-reports-acceptance-fixture";
+} from "../../../scripts/acceptance/browser-reports-acceptance-fixture";
 
 const STATE_DIRECTORY = resolve(".data/browser-reports-acceptance");
 const STATE_FILE = resolve(STATE_DIRECTORY, "state.json");

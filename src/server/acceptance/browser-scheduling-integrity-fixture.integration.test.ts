@@ -5,7 +5,7 @@ import {
   SCHEDULING_INTEGRITY_FIXTURE,
   assertSafeSchedulingIntegrityStatus,
   runSchedulingIntegrityFixtureOperation,
-} from "../../../scripts/browser-scheduling-integrity-fixture";
+} from "../../../scripts/acceptance/browser-scheduling-integrity-fixture";
 
 const { Pool } = pg;
 const databaseUrl = process.env.DATABASE_URL;

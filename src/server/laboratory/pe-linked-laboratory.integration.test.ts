@@ -31,6 +31,14 @@ const cpuId = "97000000-0000-4000-8000-000000000031";
 const cpu: SessionUser = { userId: cpuId, fullName: "PE Linked CPU", email: "pe-linked-cpu@test.local", role: "CLINIC_STAFF", clinicId: ids.physicalExamClinic, clinicCode: "CPU_CLINIC", credentialVersion: 1 };
 let sequence = 0;
 let externalSequence = 0;
+let cycle: {
+  startYear: number;
+  closingDate: string;
+  laboratoryDate: string;
+  physicalExamDate: string;
+  examinationDate: string;
+  firstYearLaboratoryMonday: Date;
+};
 let physicianId: string;
 let createdYear = false;
 type Fixture = { studentNumber: string; labId: string; peId: string };
@@ -40,9 +48,13 @@ async function fixture(mode: "OJT" | "FIRST_YEAR" | "STANDARD" = "OJT", category
     const n = ++externalSequence;
     const studentNumber = `89-92${String(n).padStart(2, "0")}-91`;
     const contents = `Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth\n${studentNumber},External,PeLinked,Maria,,College of Computer Studies,BSIT,1,2006-01-01`;
+    // Each active batch needs its own weekday Laboratory reservation.
+    const laboratoryDate = new Date(cycle.firstYearLaboratoryMonday);
+    const weekdayIndex = n - 1;
+    laboratoryDate.setUTCDate(laboratoryDate.getUTCDate() + weekdayIndex + 2 * Math.floor(weekdayIndex / 5));
     await acceptAndScheduleImport({ fileName: `PELC first-year ${n}.csv`, fileSize: Buffer.byteLength(contents), contents,
-      importMode: "FIRST_YEAR_OVPSA", studentCategory: "REGULAR", academicYearStart: 2026,
-      preferredMonth: null, firstYearLaboratoryDate: `2026-11-${String(2 + n).padStart(2, "0")}` }, admin);
+      importMode: "FIRST_YEAR_OVPSA", studentCategory: "REGULAR", academicYearStart: cycle.startYear,
+      preferredMonth: null, firstYearLaboratoryDate: laboratoryDate.toISOString().slice(0, 10) }, admin);
     const rows = (await pool.query<{ id: string; schedule_type: string }>(
       "SELECT id::text,schedule_type FROM appointments WHERE student_number=$1 AND is_published=TRUE", [studentNumber],
     )).rows;
@@ -52,16 +64,16 @@ async function fixture(mode: "OJT" | "FIRST_YEAR" | "STANDARD" = "OJT", category
   const schedulingCategory = mode === "OJT" ? "OJT" : category;
   await insertTestStudent({ studentNumber, firstName: "PeLinked", lastName: "Student", yearLevel: year, dateOfBirth: "2005-01-01" });
   return transaction(async (client) => {
-    const importId = await insertTestScheduleImportGroup(client, { name: "PELC fixture", sourceFilename: `${randomUUID()}.csv`, academicYearStart: 2026, importMode: "STANDARD", actor: admin.userId });
+    const importId = await insertTestScheduleImportGroup(client, { name: "PELC fixture", sourceFilename: `${randomUUID()}.csv`, academicYearStart: cycle.startYear, importMode: "STANDARD", actor: admin.userId });
     await client.query(`INSERT INTO student_academic_snapshots
       (student_number,academic_year_start,student_name,college_id,college_name,program_id,program_code,program_name,year_level,source_import_group_id)
-      VALUES ($1,2026,'PeLinked Student',$2,'College of Computer Studies',$3,'BSIT','BSIT',$4,$5)`, [studentNumber, ids.college, ids.program, year, importId]);
+      VALUES ($1,$2,'PeLinked Student',$3,'College of Computer Studies',$4,'BSIT','BSIT',$5,$6)`, [studentNumber, cycle.startYear, ids.college, ids.program, year, importId]);
     const pairId = randomUUID();
     const rows = (await client.query<{ id: string; schedule_type: string }>(`INSERT INTO appointments
       (clinic_id,student_number,schedule_type,appointment_date,status,is_published,schedule_pair_id,schedule_cycle_start,scheduling_category,created_by,updated_by)
-      VALUES ($1,$3,'LABORATORY','2026-09-22','PENDING',TRUE,$4,2026,$5,$6,$6),
-             ($2,$3,'PHYSICAL_EXAM','2026-09-23','PENDING',TRUE,$4,2026,$5,$6,$6) RETURNING id::text,schedule_type`,
-    [ids.laboratoryClinic, ids.physicalExamClinic, studentNumber, pairId, schedulingCategory, admin.userId])).rows;
+      VALUES ($1,$3,'LABORATORY',$4,'PENDING',TRUE,$6,$7,$8,$9,$9),
+             ($2,$3,'PHYSICAL_EXAM',$5,'PENDING',TRUE,$6,$7,$8,$9,$9) RETURNING id::text,schedule_type`,
+    [ids.laboratoryClinic, ids.physicalExamClinic, studentNumber, cycle.laboratoryDate, cycle.physicalExamDate, pairId, cycle.startYear, schedulingCategory, admin.userId])).rows;
     const labId = rows.find((r) => r.schedule_type === "LABORATORY")!.id;
     await linkPublishedLaboratoryAppointments(client, [labId]);
     return { studentNumber, labId, peId: rows.find((r) => r.schedule_type === "PHYSICAL_EXAM")!.id };
@@ -75,7 +87,7 @@ async function manual(f: Fixture, codes: Array<"CBC" | "URINE" | "STOOL"> = ["CB
 }
 
 function input(extra: Record<string, unknown> = {}) {
-  return { requestId: randomUUID(), physicianId, physicianVersion: 1, examinationDate: "2026-12-20", sex: "Female", classification: "A", attested: true, ...extra };
+  return { requestId: randomUUID(), physicianId, physicianVersion: 1, examinationDate: cycle.examinationDate, sex: "Female", classification: "A", attested: true, ...extra };
 }
 
 async function effects(f: Fixture) {
@@ -106,7 +118,7 @@ async function replaceLaboratory(f: Fixture) {
     ]);
     const current = await getAppointmentMutationContext(f.labId, client);
     if (!current) throw new Error("Missing Laboratory fixture");
-    return rescheduleAppointmentWithClient(client, current, "2026-09-22", "Synthetic replacement", admin.userId);
+    return rescheduleAppointmentWithClient(client, current, cycle.laboratoryDate, "Synthetic replacement", admin.userId);
   });
 }
 
@@ -159,10 +171,26 @@ async function waitForBlockedPePlanner() {
 }
 
 beforeAll(async () => {
+  // Imports use PostgreSQL's Manila day; the fake clinical clock cannot make an old import valid.
+  const { today } = (await pool.query<{ today: string }>(
+    "SELECT (clock_timestamp() AT TIME ZONE 'Asia/Manila')::date::text AS today",
+  )).rows[0];
+  const databaseYear = Number(today.slice(0, 4));
+  const startYear = today < `${databaseYear}-11-01` ? databaseYear : databaseYear + 1;
+  const firstYearLaboratoryMonday = new Date(`${startYear}-11-01T00:00:00Z`);
+  firstYearLaboratoryMonday.setUTCDate(1 + (8 - firstYearLaboratoryMonday.getUTCDay()) % 7);
+  cycle = {
+    startYear,
+    closingDate: `${startYear + 1}-07-31`,
+    laboratoryDate: `${startYear}-09-22`,
+    physicalExamDate: `${startYear}-09-23`,
+    examinationDate: `${startYear}-12-20`,
+    firstYearLaboratoryMonday,
+  };
   vi.useFakeTimers({ toFake: ["Date"] });
-  vi.setSystemTime(new Date("2026-12-20T04:00:00Z"));
+  vi.setSystemTime(new Date(`${cycle.examinationDate}T04:00:00Z`));
   createdYear = Boolean((await pool.query(`INSERT INTO academic_years(start_year,closing_date,created_by,updated_by)
-    VALUES(2026,'2027-07-31',$1,$1) ON CONFLICT DO NOTHING RETURNING start_year`, [admin.userId])).rowCount);
+    VALUES($1,$2,$3,$3) ON CONFLICT DO NOTHING RETURNING start_year`, [cycle.startYear, cycle.closingDate, admin.userId])).rowCount);
   await pool.query(`INSERT INTO users(id,full_name,email,password_hash,role,clinic_id,email_verified_at,must_change_password)
     VALUES($1,'PE Linked CPU','pe-linked-cpu@test.local','fixture','CLINIC_STAFF',$2,clock_timestamp(),FALSE)`, [cpuId, ids.physicalExamClinic]);
   const signatureBytes = await sharp({ create: { width: 200, height: 80, channels: 4, background: "white" } }).png().toBuffer();
@@ -180,7 +208,7 @@ afterAll(async () => {
     await client.query("ALTER TABLE medical_certificate_physician_revisions ENABLE TRIGGER medical_certificate_physician_revisions_immutable");
   });
   await pool.query("DELETE FROM users WHERE id=$1", [cpuId]);
-  if (createdYear) await pool.query("DELETE FROM academic_years WHERE start_year=2026");
+  if (createdYear) await pool.query("DELETE FROM academic_years WHERE start_year=$1", [cycle.startYear]);
   await pool.end();
 });
 
@@ -252,7 +280,7 @@ describe("PE-linked external Laboratory confirmation", () => {
     const f = await fixture("FIRST_YEAR");
     expect((await getPublishedAppointment(f.labId))?.displayStatus).toBe("Awaiting confirmation at Physical Examination");
     const staff = await listAppointments({ scheduleType: "LABORATORY", studentNumber: f.studentNumber,
-      isPublished: true, page: 1, limit: 150, offset: 0 });
+      academicYearStart: cycle.startYear, isPublished: true, page: 1, limit: 150, offset: 0 });
     expect(staff.items.find((row) => row.id === f.labId)?.displayStatus).toBe("Awaiting confirmation at Physical Examination");
     const student = await getStudentPortalSchedule(f.studentNumber);
     expect(student?.emailVerifiedAt).toBeNull();
@@ -348,11 +376,11 @@ describe("PE-linked external Laboratory confirmation", () => {
 
   it("protects recorded OJT progress from a concurrent automatic no-show sweep", async () => {
     const f = await fixture();
-    await Promise.all([markOverdueAppointmentsNoShow(new Date("2026-12-20T04:00:00Z"), "Asia/Manila"),
+    await Promise.all([markOverdueAppointmentsNoShow(new Date(), "Asia/Manila"),
       setLaboratoryTestVerification(f.labId, { testCode: "CBC", checked: true, expectedVersion: 1,
         reason: "The student attended; correct an automatic no-show if it raced this verification" }, labStaff)]);
     expect(await getLaboratoryChecklist(f.labId, admin)).toMatchObject({ appointmentStatus: "PENDING", verifiedCount: 1 });
-    await markOverdueAppointmentsNoShow(new Date("2026-12-20T04:00:00Z"), "Asia/Manila");
+    await markOverdueAppointmentsNoShow(new Date(), "Asia/Manila");
     expect((await getLaboratoryChecklist(f.labId, admin)).appointmentStatus).toBe("PENDING");
   });
 
@@ -530,11 +558,14 @@ describe("PE-linked external Laboratory confirmation", () => {
     const f = await fixture();
     await manual(f);
     const before = await effects(f);
-    await pool.query("UPDATE academic_years SET closing_date='2026-12-19' WHERE start_year=2026");
+    const { rows: [year] } = await pool.query<{ closingDate: string }>(
+      'SELECT closing_date::text AS "closingDate" FROM academic_years WHERE start_year=$1', [cycle.startYear],
+    );
+    await pool.query("UPDATE academic_years SET closing_date=$1 WHERE start_year=$2", [`${cycle.startYear}-12-19`, cycle.startYear]);
     try {
       await expect(completePhysicalExam(f.peId, input(), cpu)).rejects.toMatchObject({ code: "ACADEMIC_YEAR_ENDED" });
       expect(await effects(f)).toEqual(before);
-    } finally { await pool.query("UPDATE academic_years SET closing_date='2027-07-31' WHERE start_year=2026"); }
+    } finally { await pool.query("UPDATE academic_years SET closing_date=$1 WHERE start_year=$2", [year.closingDate, cycle.startYear]); }
     await pool.query("UPDATE medical_certificate_physicians SET active=FALSE WHERE id=$1", [physicianId]);
     try {
       await expect(completePhysicalExam(f.peId, input(), cpu)).rejects.toMatchObject({ code: "PHYSICIAN_STALE" });
@@ -543,14 +574,14 @@ describe("PE-linked external Laboratory confirmation", () => {
   });
 
   it.each([
-    { examinationDate: "2026-12-21", code: "EXAMINATION_DATE_INVALID" },
-    { examinationDate: "2026-09-21", lateReason: "Synthetic late visit", code: "EXAMINATION_DATE_INVALID" },
-    { physicianId: "97000000-0000-4000-8000-000000000099", code: "PHYSICIAN_STALE" },
-  ])("rejects invalid dates or physicians without partial confirmation: $code", async ({ code, ...extra }) => {
+    { extra: () => ({ examinationDate: `${cycle.startYear}-12-21` }), code: "EXAMINATION_DATE_INVALID" },
+    { extra: () => ({ examinationDate: `${cycle.startYear}-09-21`, lateReason: "Synthetic late visit" }), code: "EXAMINATION_DATE_INVALID" },
+    { extra: () => ({ physicianId: "97000000-0000-4000-8000-000000000099" }), code: "PHYSICIAN_STALE" },
+  ])("rejects invalid dates or physicians without partial confirmation: $code", async ({ code, extra }) => {
     const f = await fixture();
     await manual(f);
     const before = await effects(f);
-    await expect(completePhysicalExam(f.peId, input(extra), cpu)).rejects.toMatchObject({ code });
+    await expect(completePhysicalExam(f.peId, input(extra()), cpu)).rejects.toMatchObject({ code });
     expect(await effects(f)).toEqual(before);
   });
 

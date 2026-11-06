@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   scheduleImportYearCategoryCsvFiles,
   scheduleImportYearCategoryStudentNumbers,
-} from "../../scripts/browser-schedule-import-year-category-fixture";
+} from "../../scripts/acceptance/browser-schedule-import-year-category-fixture";
 
 const headers = "Student ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth";
 

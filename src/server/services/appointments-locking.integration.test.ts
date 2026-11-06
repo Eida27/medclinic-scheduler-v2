@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { manilaCalendarDate } from "@/lib/academic-year";
 import { pool, transaction } from "@/server/db/pool";
 import { linkPublishedLaboratoryAppointments } from "@/server/laboratory/laboratory-checklist.repository";
 import { lockEffectiveAppointmentScopes } from "@/server/repositories/effective-appointment-scope-lock.repository";
@@ -8,6 +9,7 @@ import { getPublishedAppointment, listAppointments } from "@/server/repositories
 import { cleanupTestFixtures, insertTestAcademicSnapshot, insertTestStudent, TEST_REFERENCE_IDS } from "@/test/integration-fixtures";
 import type { SessionUser } from "@/types/roles";
 import { updateAppointment } from "./appointments.service";
+import { addCalendarDays } from "./clinic-calendar-planner";
 import { getStudentResultSubmission } from "./student-result-submissions.service";
 
 const admin: SessionUser = {
@@ -24,13 +26,22 @@ const laboratoryStaff: SessionUser = {
   role: "CLINIC_STAFF",
   clinicId: TEST_REFERENCE_IDS.laboratoryClinic,
 };
-let createdAcademicYear = false;
+const today = manilaCalendarDate(new Date());
+const currentYear = Number(today.slice(0, 4)) - (today.slice(5) < "08-01" ? 1 : 0);
+const currentCycle = { startYear: currentYear, sourceDate: `${currentYear}-10-18` };
+// Use the next cycle for the replacement cases so its dates are future all year.
+const replacementYear = currentYear + 1;
+const septemberStart = `${replacementYear}-09-01`;
+const daysUntilMonday = (8 - new Date(`${septemberStart}T00:00:00Z`).getUTCDay()) % 7;
+const replacementCycle = { startYear: replacementYear, sourceDate: addCalendarDays(septemberStart, daysUntilMonday) };
+const replacementDate = addCalendarDays(replacementCycle.sourceDate, 1);
+const createdAcademicYears: number[] = [];
 
 async function cleanup() {
   await cleanupTestFixtures("LOCK-%", "LOCK-%", "LOCK-%");
 }
 
-async function createAppointment(studentNumber: string) {
+async function createAppointment(studentNumber: string, cycle = currentCycle) {
   await insertTestStudent({
     studentNumber,
     firstName: "Appointment",
@@ -39,15 +50,15 @@ async function createAppointment(studentNumber: string) {
   });
   return transaction(async (client) => {
     await insertTestAcademicSnapshot(client, { studentNumber,
-      academicYearStart: 2026, importName: `LOCK-${studentNumber}`,
+      academicYearStart: cycle.startYear, importName: `LOCK-${studentNumber}`,
       actor: TEST_REFERENCE_IDS.adminUser });
     const result = await client.query<{ id: string }>(
     `INSERT INTO appointments (
        clinic_id,student_number,schedule_type,appointment_date,status,is_published,
        schedule_cycle_start,scheduling_category,created_by,updated_by
-     ) VALUES ($1,$2,'LABORATORY','2026-10-18','PENDING',TRUE,2026,'REGULAR',$3,$3)
+     ) VALUES ($1,$2,'LABORATORY',$3,'PENDING',TRUE,$4,'REGULAR',$5,$5)
      RETURNING id::text`,
-    [TEST_REFERENCE_IDS.laboratoryClinic, studentNumber, TEST_REFERENCE_IDS.adminUser],
+    [TEST_REFERENCE_IDS.laboratoryClinic, studentNumber, cycle.sourceDate, cycle.startYear, TEST_REFERENCE_IDS.adminUser],
     );
     await linkPublishedLaboratoryAppointments(client, [result.rows[0].id]);
     return result.rows[0].id;
@@ -95,20 +106,20 @@ async function waitForBlockedResultMutation() {
 
 beforeAll(async () => {
   await cleanup();
-  const academicYear = await pool.query<{ start_year: number }>(
-    `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
-     VALUES (2026,'2027-07-31',$1,$1)
-     ON CONFLICT (start_year) DO NOTHING
-     RETURNING start_year`,
-    [TEST_REFERENCE_IDS.adminUser],
-  );
-  createdAcademicYear = academicYear.rowCount === 1;
+  for (const { startYear } of [currentCycle, replacementCycle]) {
+    const academicYear = await pool.query<{ start_year: number }>(
+      `INSERT INTO academic_years (start_year,closing_date,created_by,updated_by)
+       VALUES ($1,$2,$3,$3)
+       ON CONFLICT (start_year) DO NOTHING
+       RETURNING start_year`,
+      [startYear, `${startYear + 1}-07-31`, TEST_REFERENCE_IDS.adminUser],
+    );
+    if (academicYear.rowCount === 1) createdAcademicYears.push(startYear);
+  }
 });
 afterAll(async () => {
   await cleanup();
-  if (createdAcademicYear) {
-    await pool.query("DELETE FROM academic_years WHERE start_year=2026");
-  }
+  await pool.query("DELETE FROM academic_years WHERE start_year=ANY($1::int[])", [createdAcademicYears]);
   await pool.end();
 });
 
@@ -188,7 +199,7 @@ describe("appointment locking and inheritance", () => {
   });
 
   it("inherits a lock with the actual clinic-staff rescheduling actor", async () => {
-    const appointmentId = await createAppointment("LOCK-INHERIT");
+    const appointmentId = await createAppointment("LOCK-INHERIT", replacementCycle);
     const initial = await getPublishedAppointment(appointmentId);
     if (!initial) throw new Error("Expected a published fixture appointment.");
     await updateAppointment(appointmentId, {
@@ -198,7 +209,7 @@ describe("appointment locking and inheritance", () => {
     }, admin);
 
     const replacement = await updateAppointment(appointmentId, {
-      appointmentDate: "2026-10-19",
+      appointmentDate: replacementDate,
       notes: "Clinic staff selected a replacement",
     }, laboratoryStaff);
     expect(replacement).toMatchObject({
@@ -349,7 +360,7 @@ describe("appointment locking and inheritance", () => {
   });
 
   it("rolls back the source transition and inherited lock when replacement insertion fails", async () => {
-    const appointmentId = await createAppointment("LOCK-ROLLBACK");
+    const appointmentId = await createAppointment("LOCK-ROLLBACK", replacementCycle);
     const initial = await getPublishedAppointment(appointmentId);
     if (!initial) throw new Error("Expected a published fixture appointment.");
     await updateAppointment(appointmentId, {
@@ -372,7 +383,7 @@ describe("appointment locking and inheritance", () => {
     `);
     try {
       await expect(updateAppointment(appointmentId, {
-        appointmentDate: "2026-10-20",
+        appointmentDate: replacementDate,
         notes: "This replacement must fail",
       }, admin)).rejects.toThrow(/TEST inherited replacement failure/);
     } finally {

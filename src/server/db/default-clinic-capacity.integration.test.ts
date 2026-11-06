@@ -17,7 +17,7 @@ describe("fresh clinic capacity defaults", () => {
       try {
         await client.connect();
         await runMigrations(client, await sqlFiles(join(process.cwd(), "database/migrations")), () => {});
-        const seed = await readFile(join(process.cwd(), "database/seeds/001_reference_and_users.sql"), "utf8");
+        const seed = await readFile(join(process.cwd(), "database/seeds/001_reference_data.sql"), "utf8");
         await client.query(seed);
         const capacity = await client.query(
           `SELECT clinic.code, setting.schedule_type, setting.max_daily_capacity

@@ -24,7 +24,7 @@ import {
   type CleanupManifest,
   type CleanupProgress,
   type CleanupResidue,
-} from "../../scripts/browser-clinic-scheduler-ux-fixture";
+} from "../../scripts/acceptance/browser-clinic-scheduler-ux-fixture";
 
 const csv = [
   "\uFEFFStudent ID,Surname,First Name,Middle Name,Suffix,College,Course,Year,Date of Birth,,",

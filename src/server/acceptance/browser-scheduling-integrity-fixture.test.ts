@@ -10,7 +10,7 @@ import {
   assertSchedulingIntegrityStorageTarget,
   assertZeroSchedulingIntegrityResidue,
   normalizeSchedulingIntegrityDatabaseIdentity,
-} from "../../../scripts/browser-scheduling-integrity-fixture";
+} from "../../../scripts/acceptance/browser-scheduling-integrity-fixture";
 
 describe("scheduling integrity Browser acceptance fixture", () => {
   it("normalizes a credential-free loopback database identity", () => {

@@ -7,7 +7,7 @@ import {
   assertSafeAppointmentProtectionAcceptanceDatabase,
   assertZeroAppointmentProtectionResidue,
   normalizeAppointmentProtectionDatabaseIdentity,
-} from "../../../scripts/browser-appointment-protection-fixture";
+} from "../../../scripts/acceptance/browser-appointment-protection-fixture";
 
 describe("appointment protection Browser acceptance fixture", () => {
   it("normalizes a credential-free loopback database identity", () => {

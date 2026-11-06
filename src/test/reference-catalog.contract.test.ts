@@ -81,7 +81,7 @@ function insertBody(sql: string, table: string) {
 
 describe("CPU reference catalog seed", () => {
   it("contains the exact 13-college workbook catalog", async () => {
-    const seed = await readFile(resolve("database/seeds/001_reference_and_users.sql"), "utf8");
+    const seed = await readFile(resolve("database/seeds/001_reference_data.sql"), "utf8");
     const body = insertBody(seed, "colleges");
     expect(body.match(/\('10000000-/gu)).toHaveLength(13);
     for (const [id, code, name] of colleges) {
@@ -90,7 +90,7 @@ describe("CPU reference catalog seed", () => {
   });
 
   it("contains the exact 48 college-scoped workbook programs", async () => {
-    const seed = await readFile(resolve("database/seeds/001_reference_and_users.sql"), "utf8");
+    const seed = await readFile(resolve("database/seeds/001_reference_data.sql"), "utf8");
     const body = insertBody(seed, "programs");
     expect(body.match(/\('20000000-/gu)).toHaveLength(48);
     for (const [id, parentId, code, name] of programs) {

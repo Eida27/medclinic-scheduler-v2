@@ -9,7 +9,7 @@ import {
   findEmptyFutureWeekday,
   validateLaboratoryStatusAcceptanceFixture,
   validateQuickStatusAcceptanceFixture,
-} from "../../scripts/browser-clinic-scheduler-ux-fixture";
+} from "../../scripts/acceptance/browser-clinic-scheduler-ux-fixture";
 
 const ids = {
   import: "d2100000-0000-4000-8000-000000000001",

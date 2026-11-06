@@ -181,31 +181,34 @@ Migration 012 establishes the canonical CPU catalog on the supported fresh-insta
 
 Migration 030 removes the obsolete safe-capacity column and enforces a positive maximum. Migration 031 requires category/year provenance and an authoritative service date, permits only published/cancelled generic batches and scheduled items, and removes manual override/week/failed-validation metadata. It refuses unsupported existing rows atomically with `UNSUPPORTED_PREDEPLOYMENT_SCHEDULING_DATA`; do not reset, rewrite or delete application data to bypass that refusal. Successful validation/publication evidence and OVPSA transaction states remain intact.
 
-Developer reset is destructive, uses the same transactional migration runner, and is only for an explicitly disposable database:
+Developer reset destroys and recreates the public schema of a disposable local database. Set both variables in the shell to authorize the reset and identify its target.
 
 ```powershell
-$env:ALLOW_DB_RESET="true"
+$env:ALLOW_DB_RESET = "true"
+$env:DB_RESET_DATABASE_URL = "postgresql://test_role:your_local_password@127.0.0.1:5432/medclinic_test_reset"
 npm run db:reset
+Remove-Item Env:ALLOW_DB_RESET, Env:DB_RESET_DATABASE_URL
 ```
 
-The reset command refuses to operate on `postgres`, `template0`, or `template1`.
+Reset reads its target only from `DB_RESET_DATABASE_URL` in the shell. It requires an existing `medclinic_test_*` database on loopback and an explicit PostgreSQL role. URL query parameters, fragments, and inherited `PG*` environment variables are rejected. Reset verifies the live database, loopback address, and port before dropping the schema, then runs the canonical transactional migrations and reference seed.
 
 ## Verification
 
 ```powershell
-npm test -- --maxWorkers=1 --no-file-parallelism --testTimeout=15000 --hookTimeout=30000
+npm test -- --maxWorkers=1 --no-file-parallelism --testTimeout=15000 --hookTimeout=30000 --reporter=verbose
 npm run lint
 npm run build
 ```
 
 `npm test` and `npm run test:watch` run database-free unit/component tests with public synthetic configuration. They do not load `.env.local`, and unexpected database access fails immediately.
+Use `.test.ts` for Node unit tests and `.test.tsx` for tests that need jsdom.
 
 Database tests require a local PostgreSQL role with `CREATEDB` and an explicit, **new** database name beginning with `medclinic_test_`:
 
 ```powershell
 $env:TEST_DATABASE_URL = "postgresql://test_role:your_local_password@127.0.0.1:5432/medclinic_test_integration"
 $env:TEST_DATABASE_DISPOSABLE = "1"
-npm run test:integration
+npm run test:integration -- --testTimeout=60000 --hookTimeout=60000 --reporter=verbose
 
 # Uses a separate fresh target and the real production migration CLI:
 $env:TEST_DATABASE_URL = "postgresql://test_role:your_local_password@127.0.0.1:5432/medclinic_test_migrations"

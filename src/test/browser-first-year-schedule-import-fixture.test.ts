@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   FIRST_YEAR_IMPORT_ACCEPTANCE,
   firstYearAcceptanceCsvContents,
-} from "../../scripts/browser-first-year-ovpsa-fixture";
+} from "../../scripts/acceptance/browser-first-year-ovpsa-fixture";
 
 describe("First Year import Browser fixture", () => {
   it("builds 280 ordered Year-1 members with an exact 150/130 multi-college boundary", () => {

@@ -18,7 +18,7 @@ async function stateExists() {
 async function operation(mode: "setup" | "cleanup", referenceDate?: string) {
   return await new Promise<{ code: number | null; output: string }>((success, failure) => {
     const child = spawn(process.execPath, ["--import", "tsx",
-      "scripts/browser-first-year-ovpsa-fixture.ts", mode,
+      "scripts/acceptance/browser-first-year-ovpsa-fixture.ts", mode,
       ...(referenceDate ? [`--reference-date=${referenceDate}`] : [])], {
       env: { ...process.env, OVPSA_FIRST_YEAR_ACCEPTANCE_EXCLUSIVE_DATABASE: "1" },
       windowsHide: true,

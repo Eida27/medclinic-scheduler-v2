@@ -7,7 +7,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { pool } from "./pool";
 
 const migrationsDirectory = join(process.cwd(), "database", "migrations");
-const seedPath = join(process.cwd(), "database", "seeds", "001_reference_and_users.sql");
+const seedPath = join(process.cwd(), "database", "seeds", "001_reference_data.sql");
 
 const ADMIN_ID = "02600000-0000-4000-8000-000000000001";
 const STUDENT_NUMBER = "99-2601-01";

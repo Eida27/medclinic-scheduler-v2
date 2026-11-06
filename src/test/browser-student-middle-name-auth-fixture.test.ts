@@ -6,7 +6,7 @@ import {
   assertZeroStudentAuthAcceptanceResidue,
   createMissingMiddleNameCsv,
   normalizeStudentAuthAcceptanceDatabaseIdentity,
-} from "../../scripts/browser-student-middle-name-auth-fixture";
+} from "../../scripts/acceptance/browser-student-middle-name-auth-fixture";
 
 describe("student middle-name Browser acceptance fixture", () => {
   it("rejects remote databases and requires an explicit exclusive-database opt-in", () => {

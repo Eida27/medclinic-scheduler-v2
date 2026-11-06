@@ -6,7 +6,7 @@ import {
   staffAccountSecurityAcceptanceDatabaseIdentity,
   staffAccountSecurityAcceptanceSchemaUrl,
   type StaffAccountSecurityResidue,
-} from "../../../scripts/browser-staff-account-security-fixture";
+} from "../../../scripts/acceptance/browser-staff-account-security-fixture";
 
 const zero: StaffAccountSecurityResidue = {
   users: 0,

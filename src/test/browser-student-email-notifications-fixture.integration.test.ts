@@ -11,7 +11,7 @@ assertZeroStudentEmailNotificationsResidue,
 cleanupStudentEmailNotificationsFixture,
 getStudentEmailNotificationsFixtureStatus,
 prepareStudentEmailNotificationsFixture
-} from "../../scripts/browser-student-email-notifications-fixture";
+} from "../../scripts/acceptance/browser-student-email-notifications-fixture";
 
 const EXCLUSIVE_FLAG = "STUDENT_EMAIL_NOTIFICATIONS_ACCEPTANCE_EXCLUSIVE_DATABASE";
 const TEST_ENCRYPTION_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";

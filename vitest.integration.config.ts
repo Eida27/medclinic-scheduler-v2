@@ -15,7 +15,6 @@ export default defineConfig({
   test: {
     environment: "node",
     globalSetup: ["./vitest.global-setup.ts"],
-    setupFiles: ["./vitest.setup.ts"],
     include: ["src/**/*.integration.test.{ts,tsx}", "scripts/**/*.integration.test.ts"],
     maxWorkers: 1,
     fileParallelism: false,

@@ -3,8 +3,8 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { validateTestDatabase } from "./test-database";
-import type { SessionUser } from "../src/types/roles";
+import { validateTestDatabase } from "../test-database";
+import type { SessionUser } from "../../src/types/roles";
 
 const stateFile = resolve(".data/browser-pe-linked-laboratory/state.json");
 const marker = "BROWSER-PE-LINKED-LABORATORY-V1";
@@ -42,11 +42,11 @@ async function run(action: string) {
     });
     return;
   }
-  const { pool, transaction } = await import("../src/server/db/pool");
-  const { cleanupTestFixtures, insertTestStudent, insertTestAcademicSnapshot, TEST_REFERENCE_IDS: ids } = await import("../src/test/integration-fixtures");
-  const { linkPublishedLaboratoryAppointments } = await import("../src/server/laboratory/laboratory-checklist.repository");
-  const { acceptAndScheduleImport } = await import("../src/server/services/schedule-imports.service");
-  const { savePhysicianRevision } = await import("../src/server/medical-certificates/physician.service");
+  const { pool, transaction } = await import("../../src/server/db/pool");
+  const { cleanupTestFixtures, insertTestStudent, insertTestAcademicSnapshot, TEST_REFERENCE_IDS: ids } = await import("../../src/test/integration-fixtures");
+  const { linkPublishedLaboratoryAppointments } = await import("../../src/server/laboratory/laboratory-checklist.repository");
+  const { acceptAndScheduleImport } = await import("../../src/server/services/schedule-imports.service");
+  const { savePhysicianRevision } = await import("../../src/server/medical-certificates/physician.service");
   const live = (await pool.query<Identity>(`SELECT current_database() AS database,host(inet_server_addr()) AS address,
     inet_server_port() AS port,(SELECT oid FROM pg_database WHERE datname=current_database()) AS oid,current_user AS role`)).rows[0];
   if (live.database !== target.database || !["127.0.0.1", "::1"].includes(live.address)

@@ -2,7 +2,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool, type PoolClient } from "pg";
-import { requiredLaboratoryTests } from "../src/server/laboratory/laboratory-requirements";
+import { requiredLaboratoryTests } from "../../src/server/laboratory/laboratory-requirements";
 
 const DIRECTORY = resolve(".data/browser-first-year-ovpsa");
 const STATE_FILE = resolve(DIRECTORY, "state.json");

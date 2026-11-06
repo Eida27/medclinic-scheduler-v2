@@ -6,7 +6,7 @@ import {
   assertSafeReportsAcceptanceDatabase,
   assertZeroReportsAcceptanceResidue,
   normalizeReportsAcceptanceDatabaseIdentity,
-} from "../../../scripts/browser-reports-acceptance-fixture";
+} from "../../../scripts/acceptance/browser-reports-acceptance-fixture";
 describe("reports Browser acceptance fixture guards", () => {
   it("requires an explicitly opted-in loopback PostgreSQL database without leaking credentials", () => {
     expect(() => assertSafeReportsAcceptanceDatabase(

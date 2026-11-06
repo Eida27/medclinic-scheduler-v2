@@ -3,12 +3,12 @@ import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool, type PoolClient } from "pg";
-import { AUTOMATIC_NO_SHOW_NOTE } from "../src/server/appointments/automatic-no-show";
+import { AUTOMATIC_NO_SHOW_NOTE } from "../../src/server/appointments/automatic-no-show";
 import {
   parseStudentImportCsv,
   STUDENT_IMPORT_HEADERS,
   type ImportedStudentRow,
-} from "../src/server/services/student-import-csv";
+} from "../../src/server/services/student-import-csv";
 
 export const APPROVED_CSV_PATH =
   "C:\\endless_refinement\\microsoft_docs\\Physical_Laboratory_Scheduling.csv";

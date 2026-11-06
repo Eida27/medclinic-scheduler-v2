@@ -3,7 +3,7 @@ import {
   assertSafeStudentEmailNotificationsAcceptanceDatabase,
   assertZeroStudentEmailNotificationsResidue,
   normalizeStudentEmailNotificationsDatabaseIdentity,
-} from "../../scripts/browser-student-email-notifications-fixture";
+} from "../../scripts/acceptance/browser-student-email-notifications-fixture";
 const EXCLUSIVE_FLAG = "STUDENT_EMAIL_NOTIFICATIONS_ACCEPTANCE_EXCLUSIVE_DATABASE";
 describe("student email notifications Browser acceptance fixture guards", () => {
   it("rejects remote databases and requires explicit exclusive-database consent", () => {

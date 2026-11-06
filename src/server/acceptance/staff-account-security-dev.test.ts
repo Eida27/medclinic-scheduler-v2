@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertNoStaffAccountSecurityAcceptanceAddressOverrides,
   assertPreparedStaffAccountSecurityAcceptanceState,
-} from "../../../scripts/browser-staff-account-security-dev";
+} from "../../../scripts/acceptance/browser-staff-account-security-dev";
 
 describe("staff account security acceptance dev launcher", () => {
   it("requires the prepared isolated schema state", () => {

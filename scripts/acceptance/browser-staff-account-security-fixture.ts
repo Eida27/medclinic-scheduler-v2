@@ -2,8 +2,8 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Pool, type PoolClient } from "pg";
-import { decryptEmailOutboxSensitiveBody } from "../src/server/email/verification-body-encryption";
-import { projectPath, sqlFiles } from "./db-common";
+import { decryptEmailOutboxSensitiveBody } from "../../src/server/email/verification-body-encryption";
+import { projectPath, sqlFiles } from "../db-common";
 
 const EXCLUSIVE_FLAG = "STAFF_ACCOUNT_SECURITY_ACCEPTANCE_EXCLUSIVE_DATABASE";
 const ACCEPTANCE_SCHEMA = "staff_account_security_acceptance_20260825";
@@ -426,7 +426,7 @@ async function seedHistoricalAttribution(client: PoolClient, bootstrapAdministra
 
 async function setup(
   client: PoolClient,
-  bootstrapFirstAdministrator: typeof import("../src/server/services/staff-bootstrap.service").bootstrapFirstAdministrator,
+  bootstrapFirstAdministrator: typeof import("../../src/server/services/staff-bootstrap.service").bootstrapFirstAdministrator,
   installation: { migrationCount: number; referenceSeedVerified: true },
 ) {
   if (await readState()) throw new Error("A staff account security Browser fixture state already exists. Run cleanup first.");
@@ -606,8 +606,8 @@ async function main() {
         await migrationPool.end();
       }
       process.env.DATABASE_URL = schemaUrl;
-      const { bootstrapFirstAdministrator } = await import("../src/server/services/staff-bootstrap.service");
-      const { pool: servicePool } = await import("../src/server/db/pool");
+      const { bootstrapFirstAdministrator } = await import("../../src/server/services/staff-bootstrap.service");
+      const { pool: servicePool } = await import("../../src/server/db/pool");
       const serviceClient = await servicePool.connect();
       try {
         result = await setup(serviceClient, bootstrapFirstAdministrator, installation);

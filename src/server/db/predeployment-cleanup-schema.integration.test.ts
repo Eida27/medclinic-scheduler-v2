@@ -63,7 +63,7 @@ describe("predeployment scheduling schema", () => {
       try {
         const migrations = await sqlFiles(join(process.cwd(), "database/migrations"));
         await runMigrations(client, migrations.filter(file => Number(file.name.slice(0, 3)) <= 30), () => {});
-        await client.query(await readFile(join(process.cwd(), "database/seeds/001_reference_and_users.sql"), "utf8"));
+        await client.query(await readFile(join(process.cwd(), "database/seeds/001_reference_data.sql"), "utf8"));
         const actor = randomUUID();
         await client.query("INSERT INTO users (id,full_name,email,password_hash,role) VALUES ($1,'Cleanup Guard','guard@example.test','hash','ADMIN')", [actor]);
         await client.query("INSERT INTO students (student_number,first_name,last_name,college_id,program_id,year_level) VALUES ('99-3101-01','Cleanup','Guard',$1,$2,3)", [TEST_REFERENCE_IDS.college, TEST_REFERENCE_IDS.program]);
